@@ -1,0 +1,105 @@
+#if os(iOS) || os(macOS)
+#if os(iOS)
+import UIKit
+#else
+import AppKit
+#endif
+import XCTest
+@testable import ExactKit
+
+/// `saveFile(id, text=…, suggestedName=…)` writes the text to a scratch file
+/// for the panel or picker to copy from; that file holds the app's text, so
+/// it is gone once the save ends, saved or cancelled.
+///   bun host/apple/build.mjs --test --only SaveTextTests   (--ios for the picker)
+final class SaveTextTests: XCTestCase {
+    private var session: ExactSession?
+    #if os(iOS)
+    private var window: UIWindow?
+    #else
+    private var window: NSWindow?
+    #endif
+
+    override func tearDown() {
+        session?.destroy()
+        session = nil
+        #if os(iOS)
+        window?.isHidden = true
+        #else
+        window?.close()
+        #endif
+        window = nil
+        super.tearDown()
+    }
+
+    private func booted() throws -> ExactSession {
+        let plan = try fixturePlan("SAVE_TEXT")
+        let session = ExactApp.shared.makeSession(label: "save-text")
+        self.session = session
+        let size = CGSize(width: 400, height: 300)
+        #if os(iOS)
+        let window = UIWindow(frame: CGRect(origin: .zero, size: size))
+        let host = UIViewController()
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        let view = ExactView(session: session)
+        view.frame = host.view.bounds
+        host.view.addSubview(view)
+        #else
+        _ = NSApplication.shared
+        let window = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = ExactView(session: session)
+        #endif
+        self.window = window
+        XCTAssertNil(session.boot(plan: plan, size: size).error)
+        return session
+    }
+
+    /// The scratch directories `save` writes text into.
+    private func scratch() -> Set<String> {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: FileManager.default.temporaryDirectory.path)) ?? []
+        return Set(names.filter { $0.hasPrefix("exact-text-") })
+    }
+
+    private func save(_ session: ExactSession) {
+        session.picker.save(["export-file", NSNull(), "notes.txt", "the exported notes"])
+    }
+
+    #if os(macOS)
+    /// The panel's sheet holds the scratch file while it shows, and a
+    /// cancel takes it.
+    func testACancelledPanelLeavesNoScratchCopy() throws {
+        let session = try booted()
+        let before = scratch()
+        save(session)
+        let sheet = try XCTUnwrap(window?.attachedSheet, "the save panel's sheet")
+        let made = scratch().subtracting(before)
+        XCTAssertEqual(made.count, 1, "the text is written for the panel to copy")
+        window?.endSheet(sheet, returnCode: .cancel)
+        let deadline = Date().addingTimeInterval(5)
+        while !scratch().isDisjoint(with: made), Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+        XCTAssertTrue(scratch().isDisjoint(with: made), "the scratch copy outlived the panel")
+        XCTAssertTrue(session.agent(#"{"op":"logs"}"#).contains("saveFile: cancelled"))
+    }
+    #else
+    /// The exporting picker reads only its own staged copy, so the text's
+    /// scratch file goes as the picker is shown.
+    func testTheExportingPickerKeepsNoScratchCopyOfTheText() throws {
+        let session = try booted()
+        let before = scratch()
+        save(session)
+        let staged = session.picker.exports.values.map(\.1)
+        defer {
+            staged.forEach { try? FileManager.default.removeItem(at: $0) }
+            session.picker.exports.removeAll()
+            window?.rootViewController?.presentedViewController?.dismiss(animated: false)
+        }
+        XCTAssertEqual(staged.count, 1, "the exporting picker is shown: \(session.agent(#"{"op":"logs"}"#))")
+        XCTAssertTrue(staged.allSatisfy { FileManager.default.fileExists(atPath: $0.path) }, "its staged copy")
+        XCTAssertEqual(scratch(), before, "the text's scratch copy outlived the picker's staging")
+    }
+    #endif
+}
+#endif

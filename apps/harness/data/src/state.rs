@@ -9,7 +9,7 @@ use exact_runner::Native;
 
 // The seam's records are the generated ones (LLP 1101.002 P9); the
 // helpers below are this crate's own.
-pub use crate::shapes::{Approval, Block, Entry, Line, ModelChoice, Run};
+pub use crate::shapes::{Approval, Block, Line, LogEntry as Entry, ModelChoice, Run};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
@@ -230,6 +230,13 @@ pub struct State {
     /// Which transcript this is: `/clear` starts a new one, and the screen
     /// keys its log by it, so an inline terminal clears too.
     pub epoch: f64,
+    /// An error entry was added since the last turn started; the screen
+    /// declares the failure as its head's `status` (LLP 1101.003 D8).
+    pub failed: bool,
+    /// The host's output cannot change once written (`exactViewport().update`
+    /// is `none`, a run from the command line): nobody can answer an
+    /// approval or press a key (LLP 1101.003 D8).
+    pub unattended: bool,
 }
 
 impl State {
@@ -369,8 +376,10 @@ impl State {
         })
     }
 
-    /// Add an error entry (settled).
+    /// Add an error entry (settled). The session has failed until the next
+    /// turn starts.
     pub fn error(&mut self, message: &str) -> String {
+        self.failed = true;
         self.push(Entry {
             kind: "error".into(),
             blocks: vec![Block::p(vec![Run::plain(message)])],

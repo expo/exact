@@ -65,14 +65,12 @@ package enum Capture {
         // is up from the bottom: the first row in memory is then the top.
         ctx.translateBy(x: 0, y: CGFloat(h))
         ctx.scaleBy(x: scale, y: -scale)
-        // A subtree painted through its canvas composites at alpha 0; paint
-        // it opaque into the bitmap regardless.
+        // A canvas chooses its child's opacity. The filter still belongs
+        // to the captured pixels, even when CSS opacity is ignored here.
         // A placed canvas child is drawn as its writers asked (`asAsked`).
+        let rootOpacity = rootOpacity(of: view.layer)
         let elsewhere = (view.layer as? NodeLayer)?.drawnElsewhere ?? false
         (view.layer as? NodeLayer)?.drawnElsewhere = false
-        // Its alpha raised to 1 and put back is no author's change (`passing`).
-        let alpha = view.alpha, node = view.layer as? NodeLayer
-        if let node { node.passing { view.alpha = 1 } } else { view.alpha = 1 }
         // A canvas nested under this one that is painted through its own
         // surface: its picture comes by readback (its draw), not from its
         // overlay's views, which the render would paint regardless of their
@@ -101,13 +99,36 @@ package enum Capture {
             picture.render(in: ctx)
             (picture.isHidden, picture.opacity) = (hidden, opacity)
         } else {
-            paintOrderLayer(of: view, root: view.layer).render(in: ctx)
+            let copy = paintOrderLayer(of: view, root: view.layer)
+            copy.opacity = rootOpacity
+            copy.render(in: ctx)
         }
         UIGraphicsPopContext()
         capturing = false
         for o in hidden { o.isHidden = false }
-        if let node { node.passing { view.alpha = alpha } } else { view.alpha = alpha }
-        node?.drawnElsewhere = elsewhere
+        (view.layer as? NodeLayer)?.drawnElsewhere = elsewhere
+    }
+
+    /// The canvas owns CSS opacity; feedback and the filter stay in its texture.
+    static func rootOpacity(of layer: CALayer) -> Float {
+        let model = (layer as? NodeLayer)?.ownOpacity ?? layer.opacity
+        let node = layer.delegate as? NodeView, base = node?.ownOpacity ?? model
+        let factor = node?.filterOpacityFactor ?? 1
+        // A fully transparent CSS root has no ratio to undo. Capture its
+        // unattenuated contents, as for an unfiltered transparent root.
+        guard base > 0 else { return factor }
+        func animatesOpacity(_ animation: CAAnimation) -> Bool {
+            if let group = animation as? CAAnimationGroup { return group.animations?.contains(where: animatesOpacity) == true }
+            return (animation as? CAPropertyAnimation)?.keyPath == "opacity"
+        }
+        let animated = (layer.animationKeys() ?? []).contains { layer.animation(forKey: $0).map(animatesOpacity) == true }
+        guard animated, model > 0 else { return factor }
+        // Placed children composite at 1. Apply their presentation delta to
+        // the retained model before removing CSS opacity from the texture.
+        let delta = (layer.presentation()?.opacity ?? layer.opacity) - layer.opacity
+        // A batch can capture before the new filter factor reaches the
+        // layer. Normalize the feedback against its retained model first.
+        return (model + delta) / model * factor
     }
 }
 

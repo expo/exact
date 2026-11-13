@@ -124,10 +124,11 @@ impl Client {
     /// given, under `base` — the platform's data directory — at
     /// `<base>/exact/<app id>/update`, subject to the dev overrides above.
     /// `assets_root` is where the binary's own assets live by name (the
-    /// bundle, `EXACT_ASSETS`). Refused when the file names no cohort, or
-    /// when it says this binary links no store (`store.L` of `0`).
+    /// bundle, `EXACT_ASSETS`). Refused when the file names no cohort, when
+    /// it says this binary links no store (`store.L` of `0`), or when there
+    /// is no `base` and no override names a directory.
     pub fn open(
-        base: &Path,
+        base: Option<&Path>,
         assets_root: &Path,
         compat: &str,
         plan: &[u8],
@@ -135,7 +136,7 @@ impl Client {
         let origin = std::env::var("EXACT_UPDATE_ORIGIN")
             .ok()
             .filter(|s| !s.is_empty());
-        Client::open_at(base, assets_root, compat, plan, origin.as_deref())
+        Client::open_in(base, assets_root, compat, plan, origin.as_deref())
     }
 
     /// [`Client::open`] with the `EXACT_UPDATE_ORIGIN` override given, not
@@ -147,11 +148,21 @@ impl Client {
         plan: &[u8],
         origin: Option<&str>,
     ) -> Result<Client, String> {
+        Client::open_in(Some(base), assets_root, compat, plan, origin)
+    }
+
+    fn open_in(
+        base: Option<&Path>,
+        assets_root: &Path,
+        compat: &str,
+        plan: &[u8],
+        origin: Option<&str>,
+    ) -> Result<Client, String> {
         let baked = Baked::from_compat(compat, plan)?;
         if !baked.store_linked {
             return Err("this binary links no update store (L = 0)".into());
         }
-        let dir = store_dir(base, &baked.embedded.app_id);
+        let dir = store_dir(base, &baked.embedded.app_id)?;
         let mut store = Store::open(&dir, baked.embedded.clone())?;
         store.hold_staged(baked.activate == Activate::AppDecides);
         let head_url = baked.head_url(origin);
@@ -351,17 +362,18 @@ impl Client {
 
 /// The store's directory: `EXACT_UPDATE_DIR`, else a fresh temporary
 /// directory under `EXACT_AGENT=1`, else `<base>/exact/<app id>/update`.
-fn store_dir(base: &Path, app_id: &str) -> PathBuf {
+fn store_dir(base: Option<&Path>, app_id: &str) -> Result<PathBuf, String> {
     if let Some(dir) = std::env::var_os("EXACT_UPDATE_DIR").filter(|v| !v.is_empty()) {
-        return PathBuf::from(dir);
+        return Ok(PathBuf::from(dir));
     }
     if std::env::var_os("EXACT_AGENT").is_some() {
         let dir = std::env::temp_dir().join(format!("exact-update-agent-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        return dir;
+        return Ok(dir);
     }
+    let base = base.ok_or("no data directory for the update store")?;
     let id = if app_id.is_empty() { "app" } else { app_id };
-    base.join("exact").join(id).join("update")
+    Ok(base.join("exact").join(id).join("update"))
 }
 
 /// The asset the binary embeds under `name`, hashed, or `None`. The
@@ -472,7 +484,7 @@ mod tests {
         serde_json::to_vec(&serde_json::json!({
             "exact": 1, "app": {"id": "com.exact.t"},
             "plan": {"url": "./app.plan", "sha256": sha256_hex(plan), "bytes": plan.len()},
-            "assets": [], "stream": {"channel": "prod", "compatibilityId": "abc", "seq": seq}
+            "stream": {"channel": "prod", "compatibilityId": "abc", "seq": seq}
         }))
         .unwrap()
     }
@@ -525,6 +537,48 @@ mod tests {
         let _ = std::fs::remove_dir_all(base);
     }
 
+    /// A check whose record write fails stages nothing, in this process or
+    /// the next: what `status` reports matches the record on disk.
+    #[test]
+    #[cfg(unix)]
+    fn a_check_whose_record_write_fails_stages_nothing() {
+        use std::os::unix::fs::PermissionsExt;
+        let base = temp("record-write");
+        let mut client = Client::open_at(&base, &base, COMPAT, b"embedded", Some(ORIGIN)).unwrap();
+        let downloaded = client.begin_check().unwrap().fetch(&mut |url| {
+            Ok(if url.ends_with("exact.json") {
+                head(1, b"one")
+            } else {
+                b"one".to_vec()
+            })
+        });
+        let dir = client.dir().to_path_buf();
+        let mode = |bits| std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(bits));
+        mode(0o555).unwrap();
+        let outcome = client.finish_check(downloaded);
+        mode(0o755).unwrap();
+        assert!(
+            matches!(&outcome, Outcome::Refused(why) if why.contains("cannot write")),
+            "{outcome}"
+        );
+        assert!(!client.status().staged);
+        assert_eq!(client.status().selected_seq, 0);
+        // The same head stages once the record can be written.
+        let downloaded = client.begin_check().unwrap().fetch(&mut |url| {
+            Ok(if url.ends_with("exact.json") {
+                head(1, b"one")
+            } else {
+                b"one".to_vec()
+            })
+        });
+        assert!(matches!(
+            client.finish_check(downloaded),
+            Outcome::Staged { seq: 1, .. }
+        ));
+        assert_eq!(client.status().selected_seq, 1);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     #[test]
     fn a_stripped_binary_and_a_bad_file_open_no_store() {
         let base = temp("stripped");
@@ -534,6 +588,12 @@ mod tests {
             .contains("L = 0"));
         assert!(Client::open_at(&base, &base, "{}", b"", Some(ORIGIN)).is_err());
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn no_data_directory_opens_no_store() {
+        let refused = Client::open_in(None, Path::new("."), COMPAT, b"", Some(ORIGIN)).unwrap_err();
+        assert_eq!(refused, "no data directory for the update store");
     }
 
     #[test]

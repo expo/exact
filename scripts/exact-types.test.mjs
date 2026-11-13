@@ -1,7 +1,7 @@
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 
@@ -88,3 +88,89 @@ test('contract build regenerates app.contract.d.ts when a signature changed, and
   assert.deepEqual([r.stdout, r.stderr], ['[]\n', '']);
   assert.equal(readFileSync(types, 'utf8'), saved);
 }), 600_000); // The first call may compile the compiler.
+
+
+const backendApp = dir => {
+  writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Backend', app: { id: 'test.backend', name: 'Backend' } }));
+  writeFileSync(resolve(dir, 'app.contract'), 'component App\n  view\n    text "Ready"\n');
+  writeFileSync(resolve(dir, 'app.ts'), "export const grants = ''; export const answer = () => 'Ready';\n");
+};
+
+test('backend refusals identify the selection before the TypeScript check', () => inDir(dir => {
+  backendApp(dir);
+  const root = resolve(import.meta.dir, '..'), origin = 'https://backend.example';
+  writeFileSync(resolve(dir, 'exact.mjs'), `import {run} from ${JSON.stringify(resolve(root, 'scripts/app-cli.mjs'))};
+process.exit(await run({dir: import.meta.dir, name: 'backend', exact2: ${JSON.stringify(root)}, args: process.argv.slice(2)}));`);
+  const base = { ...process.env, EXACT_APP_DIR: dir, EXACT_FEEDBACK: '0' };
+  delete base.EXACT_BACKEND_ORIGIN; delete base.EXACT_BACKEND_PROVENANCE;
+  mkdirSync(resolve(dir, '.exact'));
+  for (const selector of ['EXACT_BACKEND_ORIGIN', '.exact/backend-origin', '--backend', 'verify --backend']) {
+    rmSync(resolve(dir, '.exact/backend-origin'), { force: true });
+    const env = { ...base };
+    if (selector === 'EXACT_BACKEND_ORIGIN') env.EXACT_BACKEND_ORIGIN = origin;
+    if (selector === '.exact/backend-origin') writeFileSync(resolve(dir, '.exact/backend-origin'), origin);
+    const args = selector === '--backend'
+      ? [resolve(dir, 'exact.mjs'), 'agent', 'web', '--backend', origin, 'tree']
+      : selector === 'verify --backend' ? ['scripts/verify.mjs', 'web', '--app', dir, '--backend', origin]
+      : ['host/web-js/build.mjs', 'backend', '--check', '--out', resolve(dir, 'dist')];
+    const r = spawnSync(process.execPath, args, { cwd: root, env, encoding: 'utf8', timeout: 60000 });
+    const report = r.stdout + r.stderr;
+    assert.equal(r.status, 1, report);
+    assert.ok(report.includes(`error [backend-selection]: ${selector === 'verify --backend' ? '--backend' : selector}:`), report);
+    assert.match(report, /const origin/);
+    assert.match(report, /import\.meta\.env\.NAME/);
+    assert.doesNotMatch(report, /failed the type check/);
+  }
+}), 60000);
+
+test('contract JSON preserves the backend-selection diagnostic id', () => inDir(dir => {
+  backendApp(dir);
+  const env = { ...process.env, EXACT_BACKEND_ORIGIN: 'https://backend.example', EXACT_APP_DIR: dir };
+  delete env.EXACT_BACKEND_PROVENANCE;
+  const r = spawnSync(process.execPath, [resolve(import.meta.dir, 'exact.mjs'), 'contract', 'build', 'app.contract', '--json'], { cwd: dir, env, encoding: 'utf8', timeout: 60000 });
+  assert.equal(r.status, 1, r.stderr);
+  assert.equal(r.stderr, '');
+  const errors = JSON.parse(r.stdout).filter(d => d.severity === 'error');
+  assert.equal(errors.length, 1, r.stdout);
+  assert.equal(errors[0].id, 'backend-selection');
+  assert.equal(errors[0].file, 'app.ts');
+  assert.match(errors[0].message, /^EXACT_BACKEND_ORIGIN:/);
+}), 60000);
+
+test('a native bake preserves backend flag provenance through its Cargo environment', () => {
+  const root = resolve(import.meta.dir, '..'), dir = mkdtempSync(resolve(root, 'target/backend-native-'));
+  try {
+    backendApp(dir);
+    mkdirSync(resolve(dir, 'linux/src'), { recursive: true });
+    writeFileSync(resolve(dir, 'Cargo.toml'), '[workspace]\nmembers=["linux"]\nresolver="2"\n');
+    writeFileSync(resolve(dir, 'linux/Cargo.toml'), '[package]\nname="backend-linux"\nversion="0.1.0"\nedition="2021"\n');
+    writeFileSync(resolve(dir, 'linux/src/main.rs'), 'fn main() {}\n');
+    writeFileSync(resolve(dir, 'check.mjs'), `import {configure} from ${JSON.stringify(resolve(root, 'js/bake/src/typescript.mjs'))};
+import {parseSync} from 'rolldown/utils';
+try { configure(import.meta.dir, false, parseSync); }
+catch (error) { console.error('error [' + error.code + ']: ' + error.message); process.exit(1); }
+`);
+    writeFileSync(resolve(dir, 'linux/build.rs'), `fn main() {
+  let status = std::process::Command::new(std::env::var("BUN").unwrap())
+    .arg(${JSON.stringify(resolve(dir, 'check.mjs'))}).status().unwrap();
+  std::process::exit(status.code().unwrap_or(1));
+}\n`);
+    writeFileSync(resolve(dir, 'bake.mjs'), `import {buildBake, bakeTarget} from ${JSON.stringify(resolve(root, 'scripts/app.mjs'))};
+import {selectBackendOrigin} from ${JSON.stringify(resolve(root, 'js/bake/src/typescript.mjs'))};
+const dir = import.meta.dir, env = { EXACT_UPDATE_TRUST: 'development' };
+selectBackendOrigin('https://chosen.example', env);
+const app = { dir, workspace: dir, target: dir + '/target', name: 'backend', id: 'test.backend',
+  manifest: { app: { id: 'test.backend', name: 'Backend' }, rust: false }, crate: kind => 'backend-' + kind };
+try { buildBake(app, 'linux', bakeTarget('linux'), { profile: 'dev', output: dir + '/bakes', env }); }
+catch (error) { console.error(error.message); process.exit(1); }
+`);
+    mkdirSync(resolve(dir, '.exact'));
+    for (const saved of [false, true]) {
+      if (saved) writeFileSync(resolve(dir, '.exact/backend-origin'), 'https://saved.example');
+      const r = spawnSync(process.execPath, [resolve(dir, 'bake.mjs')], { cwd: root, env: process.env, encoding: 'utf8', timeout: 60000 });
+      assert.equal(r.status, 1, r.stdout + r.stderr);
+      assert.match(r.stdout + r.stderr, /error \[backend-selection\]: --backend:.*const origin/);
+      assert.doesNotMatch(r.stdout + r.stderr, /failed the type check/);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 60000);

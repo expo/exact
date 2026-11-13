@@ -10,7 +10,7 @@ import { standIns } from './stand-ins.mjs';
 import { fileURLToPath } from 'node:url';
 
 const dir = mkdtempSync(resolve(tmpdir(), 'exact-js-fragment-'));
-const REAL = ['rt.js', 'held.js', 'font-family.js', 'observers.js', 'grid.js', 'overlay.js', 'roster.js', 'router.js', 'route-pattern.js', 'schedule.js', 'budget.js', 'elements.js'];
+const REAL = ['rt.js', 'clock.js', 'resources.js', 'tree.js', 'events.js', 'pieces.js', 'mount.js', 'strings.js', 'request-send.js', 'shape.js', 'held.js', 'font-family.js', 'observers.js', 'grid.js', 'overlay.js', 'roster.js', 'router.js', 'route-pattern.js', 'schedule.js', 'budget.js', 'elements.js'];
 for (const f of REAL) copyFileSync(resolve(fileURLToPath(new URL(`../../web-js/${f}`, import.meta.url))), resolve(dir, f));
 for (const [file, source] of standIns(REAL)) writeFileSync(resolve(dir, file), source);
 writeFileSync(resolve(dir, 'fragment.js'), `const asked = globalThis.fragmentAsked;
@@ -30,7 +30,7 @@ test('a fragment scrolls for a navigation a landed commit assigns the router, on
     await import(resolve(dir, 'fragment.js')); // loaded, so router.js's own import of it answers in a turn
     rt.routes([['home', '/', null, true, false], ['item', '/item/:id', 0, false, false]]);
     const nav = rt.sig(rt.launch('/item/7#moves'), null, 'nav');
-    rt.router(nav, { apply: op => applied.push(op), project() {}, personScrolls: 0 });
+    rt.router(nav, { apply: op => applied.push(op), project() {}, holdLink() { return null; }, personScrolls: 0 });
     await until(() => asked.length >= 2);
     expect(asked).toEqual([['arm', 'moves', 1], ['scroll', 'moves', 1]]); // the launch's
     const moves = () => rt.x_go(nav(), '/item/7#moves');

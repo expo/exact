@@ -85,6 +85,44 @@ export function timelineEasing(timing,p) {
   }
   return `linear(${points.map(([x,y])=>`${+y.toPrecision(12)} ${+(x*100).toPrecision(12)}%`).join(', ')})`;
 }
+// The box a translate percentage is of (CSS Transforms 1 §5, `transform-box`), untransformed: getBoundingClientRect()
+// would include the element's own scale and rotate and its ancestors' transforms. A CSS box's is its content box for
+// `content-box` and `fill-box`, else its border box; an SVG element's, which has no CSS box, is its viewport's view
+// box, or its bounding box for `fill-box` (`stroke-box` adds the stroke), as the kernel's (svg/scene.rs).
+export function referenceBox(el,cs=getComputedStyle(el)) {
+  const n=v=>parseFloat(v)||0;
+  if(el instanceof SVGElement&&el.ownerSVGElement) {
+    const box=cs.transformBox;
+    if(box!=='view-box'&&el.getBBox) {
+      const b=el.getBBox(),stroke=(box==='stroke-box'||box==='border-box')&&cs.stroke!=='none'?n(cs.strokeWidth):0;
+      return [b.width+stroke,b.height+stroke];
+    }
+    const v=el.nearestViewportElement??el.ownerSVGElement,view=v.viewBox?.baseVal;
+    if(view?.width>0&&view?.height>0) return [view.width,view.height];
+    return v.ownerSVGElement?[v.width.baseVal.value,v.height.baseVal.value]:[v.clientWidth,v.clientHeight];
+  }
+  const edges=(a,b)=>n(cs[`padding${a}`])+n(cs[`padding${b}`])+n(cs[`border${a}Width`])+n(cs[`border${b}Width`]);
+  const sides=[edges('Left','Right'),edges('Top','Bottom')],content=cs.transformBox==='content-box'||cs.transformBox==='fill-box';
+  // `width` is the content box's, or the border box's under `box-sizing: border-box`; one that is not a length (an
+  // inline box's `auto`) leaves the layout's border box.
+  const border=cs.width.endsWith('px')?[n(cs.width),n(cs.height)].map((v,i)=>cs.boxSizing==='border-box'?v:v+sides[i]):[el.offsetWidth??0,el.offsetHeight??0];
+  return content?border.map((v,i)=>Math.max(0,v-sides[i])):border;
+}
+// A computed `translate` in px per axis, NaN for one it cannot read. An axis with a length and a percentage computes
+// as one `calc()`, its terms in any order (the glue writes `calc(Apx + B%)`; Chrome gives `calc(B% + Apx)`), so its
+// terms are summed.
+export function translation(el,text,cs) {
+  if(text==='none') return [0,0];
+  const axes=text.match(/calc\([^)]*\)|\S+/g)??[];
+  let box=null;
+  return [0,1].map(i=>{
+    let v=0,terms=0;
+    for(const [,sign,number,unit] of (axes[i]??'0px').matchAll(/([+-]?)\s*([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)(px|%)/gi)) {
+      v+=(sign==='-'?-1:1)*Number(number)*(unit==='%'?(box??=referenceBox(el,cs))[i]/100:1);terms++;
+    }
+    return terms?v:NaN;
+  });
+}
 export function motionController({views,now,generation,request,applyBatch,inert,releaseInteraction=()=>{},ready=()=>true}) {
   const properties=['translate','scale','rotate','opacity','height'];
   // What motion writes over the author's style, which `restore` puts back: the lift's `z-index` and `position`, the
@@ -155,17 +193,26 @@ export function motionController({views,now,generation,request,applyBatch,inert,
   // declaring element whose nearest scope of the name, itself included, is
   // that scope; none or several are an inactive timeline (null), but `all`
   // declares only the names below it. No timeline in scope is undefined.
+  // @ref LLP 1057.003 D5 — a scroll or view timeline (css.rs's
+  // `--exact-scroll-timeline`, `--exact-view-timeline`, before a drag's on
+  // one element) is the browser's own, as is `scroll()` or `view()`: 'css'.
   const scopes=(el,name)=>{const s=el.style.getPropertyValue('--exact-timeline-scope').trim();return s==='all'?2:s.split(/\s*,\s*/).includes(name)?1:0;};
+  const declarations=`${timelineSources},[style*="--exact-scroll-timeline"],[style*="--exact-view-timeline"]`;
+  const declared=(el,name)=>['--exact-scroll-timeline','--exact-view-timeline'].some(p=>el.style.getPropertyValue(p).trim()===name)?'css':timelineName(el)[0]===name?el:undefined;
   const timelineSource=(consumer,name)=>{
+    if(!name.startsWith('--'))return 'css';
     for(let el=consumer;el?.style;el=el.parentElement) {
-      if(timelineName(el)[0]===name)return el;
+      const own=declared(el,name);
+      if(own)return own;
       const scope=scopes(el,name);
       if(!scope)continue;
-      const found=[...el.querySelectorAll(timelineSources)].filter(s=>{if(timelineName(s)[0]!==name)return false;while(!scopes(s,name))s=s.parentElement;return s===el;});
-      if(found.length===1)return found[0];
+      const found=[...el.querySelectorAll(declarations)].filter(s=>{if(!declared(s,name))return false;while(!scopes(s,name))s=s.parentElement;return s===el;});
+      if(found.length===1)return declared(found[0],name);
       if(found.length||scope===1)return null;
     }
   };
+  // Whether the browser runs scroll and view timelines itself.
+  const cssTimelines=typeof CSS!=='undefined'&&typeof CSS.supports==='function'&&CSS.supports('animation-timeline','scroll()');
   const inactive=new WeakMap();
   let timelineFrame=0;
   const kickTimelines=()=>{if(!timelineFrame&&typeof requestAnimationFrame==='function'&&typeof document!=='undefined'&&document.querySelector(timelineSources))
@@ -200,8 +247,7 @@ export function motionController({views,now,generation,request,applyBatch,inert,
       let v=[...held.values()].find(h=>h.el===el&&h.property==='translate'&&local(h))?.value;
       let moving=false;
       if(!v) {
-        const t=getComputedStyle(el).translate.trim().split(/\s+/);
-        v=t[0]==='none'?[0,0]:[parseFloat(t[0]),parseFloat(t[1]??'0')];
+        v=translation(el,getComputedStyle(el).translate);
         moving=el.getAnimations().some(a=>a.playState==='running');
       }
       sources.set(el,{value:axis==='x'?v[0]:v[1],moving});
@@ -209,21 +255,37 @@ export function motionController({views,now,generation,request,applyBatch,inert,
     let moving=false;
     for(const el of document.querySelectorAll('[style*="--exact-animation-timeline"]')) {
       const name=el.style.getPropertyValue('--exact-animation-timeline').trim();
-      const range=el.style.getPropertyValue('--exact-animation-range').trim().split(/\s+/).map(parseFloat);
-      if(range.length!==2||range[1]===range[0])continue;
       // No timeline in scope: the animations keep the time they have (0 if
       // new), as Chrome's and the engine's do.
       const source=timelineSource(el,name);
       if(source===undefined)continue;
+      const parked=inactive.get(el)??[],live=el.getAnimations().filter(a=>a.animationName!==undefined);
+      // A scroll or view timeline the browser runs: a name is handed to it
+      // as CSS's own row (css.rs writes `scroll()` and `view()` so), its
+      // animations played again if this glue held them or an inactive
+      // timeline parked them. A browser without one would play it on the
+      // clock: it is out of effect there, as an inactive timeline's, so the
+      // node's own values show.
+      const handed=el.style.getPropertyValue('animation-timeline').trim();
+      if(source==='css'&&cssTimelines) {
+        if(name.startsWith('--')&&handed!==name){el.style.setProperty('animation-timeline',name);el.style.setProperty('animation-play-state','running');
+          for(const a of live)if(a.playState==='paused')a.play();}
+        if(parked.length){inactive.delete(el);const names=getComputedStyle(el).animationName.split(/,\s*/);
+          for(const a of parked)if(names.includes(a.animationName)&&!live.some(b=>b.animationName===a.animationName))a.play();}
+        continue;
+      }
+      // A name the browser ran that now finds a drag, or nothing: this glue's again.
+      if(handed&&name.startsWith('--')){el.style.removeProperty('animation-timeline');el.style.setProperty('animation-play-state','paused');}
+      if(!source||source==='css'){for(const a of live)a.cancel();inactive.set(el,[...parked,...live]);continue;}
+      const range=el.style.getPropertyValue('--exact-animation-range').trim().split(/\s+/).map(parseFloat);
+      if(range.length!==2||range[1]===range[0])continue;
       // Unclamped, and over the delay and active interval together, as a CSS
       // scroll timeline maps them; an endless animation holds its start
       // (motion's `seek_timeline`).
       const resolved=sources.get(source),p=(resolved?.value-range[0])/(range[1]-range[0]);
-      // An inactive timeline: not in effect, whatever the fill (Chrome's
-      // unresolved time). Cancelled, and revived when the name resolves
-      // again, unless its CSS has since dropped or replaced it.
-      const parked=inactive.get(el)??[],live=el.getAnimations().filter(a=>a.animationName!==undefined);
-      if(!source){for(const a of live)a.cancel();inactive.set(el,[...parked,...live]);continue;}
+      // An inactive timeline (above): not in effect, whatever the fill
+      // (Chrome's unresolved time). Cancelled, and revived when the name
+      // resolves again, unless its CSS has since dropped or replaced it.
       inactive.delete(el);
       const names=parked.length?getComputedStyle(el).animationName.split(/,\s*/):[];
       const basis=[...live,...parked.filter(a=>names.includes(a.animationName)&&!live.some(b=>b.animationName===a.animationName))];
@@ -329,11 +391,7 @@ export function motionController({views,now,generation,request,applyBatch,inert,
   }
   function sample(el,property) {
     const text=getComputedStyle(el).getPropertyValue(cssProperty(el,property)), numbers=text.trim().split(/\s+/);
-    if(property==='translate') {
-      if(text==='none') return [0,0];
-      const box=el.getBoundingClientRect();
-      return [0,1].map(i=>numbers[i]?.endsWith('%')?parseFloat(numbers[i])*[box.width,box.height][i]/100:parseFloat(numbers[i]??'0'));
-    }
+    if(property==='translate') return translation(el,text);
     if(property==='scale' && numbers.length>1 && Number(numbers[0])!==Number(numbers[1])) return null;
     return [text==='none'?(property==='scale'?1:0):parseFloat(text),0];
   }

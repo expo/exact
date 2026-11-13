@@ -3,12 +3,15 @@
 import { test, expect } from 'bun:test';
 import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { pollUntil } from './agent-launch.mjs';
-import { reverseRoot } from './agent-android.mjs';
+import { androidJavaEnv, androidSdk, androidSdkPackages, androidScreenState, reverseRoot } from './agent-android.mjs';
+
+const screenFixtures = resolve(import.meta.dir, 'fixtures/android-screen');
+const screenDump = (state, kind) => readFileSync(resolve(screenFixtures, `${state}.${kind}.txt`), 'utf8');
 
 test('the Android reader variable filter and activity allowlist include the auth fixture; loopback URLs select ports', async () => {
   const { readerVariables, reversedPorts } = await import('./agent-android.mjs');
@@ -23,12 +26,15 @@ test('the Android reader variable filter and activity allowlist include the auth
 });
 
 // The stand-in device reaches the fixture only while its reverse mapping exists.
-function androidDriveFixture(reader, destination = null, reacquire = false, failedRemoval = null, stuckShell = false) {
+function androidDriveFixture(reader, destination = null, reacquire = false, failedRemoval = null, stuckShell = false, screen = {}) {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-adb-')), calls = resolve(dir, 'calls'), mappings = resolve(dir, 'mappings');
   writeFileSync(mappings, JSON.stringify(destination ? { 'tcp:4791': destination } : {}));
-  let disconnected; const closed = new Promise(done => { disconnected = done; });
+  const display = resolve(dir, 'display');
+  writeFileSync(display, JSON.stringify({ wakefulness: 'Awake', showing: false, secure: false, ...screen }));
+  let disconnected, connection; const closed = new Promise(done => { disconnected = done; });
+  const connected = new Promise(done => { connection = done; });
   const server = Bun.listen({ hostname: '127.0.0.1', port: 0, socket: {
-    open(socket) { socket.write('{"ready":true}\n'); },
+    open(socket) { connection(); if (screen.ready !== false) socket.write('{"ready":true}\n'); },
     data(socket) { socket.write(JSON.stringify({ fixture: JSON.parse(readFileSync(mappings, 'utf8'))['tcp:4791'] === 'tcp:4791' }) + '\n'); },
     close() { disconnected(); },
   } });
@@ -40,6 +46,32 @@ import { createInterface } from 'node:readline';
 const args = process.argv.slice(2);
 appendFileSync(${JSON.stringify(calls)}, JSON.stringify(args) + '\\n');
 const cmd = args.slice(2);
+const display = ${JSON.stringify(display)}, screen = JSON.parse(readFileSync(display, 'utf8'));
+if (cmd[0] === 'shell' && cmd[1] === 'dumpsys') {
+  if (screen.failDump === cmd[2]) { console.error('dump failed'); process.exit(1); }
+  if (cmd[2] === 'power' && screen.waking) {
+    screen.wakefulness = 'Awake'; screen.waking = false; writeFileSync(display, JSON.stringify(screen));
+  }
+  if (screen.dumpMsAfterWake && screen.wakefulness === 'Awake') await Bun.sleep(screen.dumpMsAfterWake);
+  const state = screen.wakefulness === 'Asleep' ? (screen.showing ? (screen.secure ? 'asleep-pin' : 'asleep-swipe') : 'asleep-no-lock')
+    : screen.showing ? (screen.secure ? 'awake-pin' : 'awake-swipe') : screen.dismissals ? 'awake-dismissed' : 'awake-unlocked';
+  if (cmd[2] === 'power') process.stdout.write(screen.power ?? readFileSync(${JSON.stringify(screenFixtures)} + '/' + state + '.power.txt', 'utf8'));
+  if (cmd[2] === 'window' && cmd[3] === 'policy') {
+    if (screen.largePolicy) process.stdout.write('Window policy details\\n'.repeat(100000));
+    let policy = screen.window ?? readFileSync(${JSON.stringify(screenFixtures)} + '/' + state + '.policy.txt', 'utf8');
+    if (screen.delegateState) policy = policy.replace('KeyguardServiceDelegate\\n', 'KeyguardServiceDelegate state:\\n');
+    process.stdout.write(policy);
+  }
+}
+if (cmd[0] === 'shell' && cmd[1] === 'input' && cmd[3] === 'KEYCODE_WAKEUP') {
+  screen.waking = true; writeFileSync(display, JSON.stringify(screen));
+}
+if (cmd[0] === 'shell' && cmd[1] === 'wm' && cmd[2] === 'dismiss-keyguard' && !screen.secure && screen.wakefulness === 'Awake') {
+  if (screen.dismissMs) await Bun.sleep(screen.dismissMs);
+  screen.dismissals = (screen.dismissals ?? 0) + 1;
+  if (screen.dismissals >= (screen.dismissAfter ?? 1)) screen.showing = false;
+  writeFileSync(display, JSON.stringify(screen));
+}
 if (cmd[0] === 'reverse') {
   const file = ${JSON.stringify(mappings)}, gate = file + '.' + cmd[1];
   if (existsSync(gate + '.hold')) {
@@ -84,7 +116,7 @@ if (cmd[0] === 'shell' && cmd[1] === '-T') {
   const env = { ...process.env, ANDROID_HOME: dir, ANDROID_SERIAL: serial,
     XDG_CACHE_HOME: resolve(dir, 'cache'), EXACT_AGENT: '1', EXACT_AUTH_FIXTURE: 'http://127.0.0.1:4791' };
   for (const name of ['EXACT_DEV_PLAN', 'EXACT_PLAN', 'EXACT_WORLD', 'EXACT_LAUNCH_URL']) delete env[name];
-  return { port: server.port, app: { id: 'dev.exact.fixture', dir }, bin, env, closed,
+  return { port: server.port, app: { id: 'dev.exact.fixture', dir }, bin, env, closed, connected,
     commands: () => readFileSync(calls, 'utf8').trim().split('\n').map(JSON.parse),
     mappings: () => JSON.parse(readFileSync(mappings, 'utf8')), stopSocket: () => server.stop(true),
     replace: destination => writeFileSync(mappings, JSON.stringify(destination ? { 'tcp:4791': destination } : {})),
@@ -100,6 +132,155 @@ if (cmd[0] === 'shell' && cmd[1] === '-T') {
     dispose() { server.stop(true); rmSync(dir, { recursive: true, force: true }); rmSync(reverseRoot(serial), { recursive: true, force: true }); },
   };
 }
+test('Android screen dumps recognize both delegate headings and stop at the next section', () => {
+  for (const [name, wakefulness, showing, secure] of [
+    ['awake-unlocked', 'Awake', false, false], ['asleep-no-lock', 'Asleep', false, false],
+    ['asleep-swipe', 'Asleep', true, false], ['awake-swipe', 'Awake', true, false],
+    ['asleep-pin', 'Asleep', true, true], ['awake-pin', 'Awake', true, true],
+    ['awake-dismissed', 'Awake', false, false],
+  ]) {
+    const power = screenDump(name, 'power'), policy = screenDump(name, 'policy');
+    const expected = { wakefulness, showing, secure };
+    expect(androidScreenState(power, policy)).toEqual(expected);
+    // The captured API 36 image uses the bare heading; AOSP also uses this heading.
+    expect(androidScreenState(power, policy.replace('KeyguardServiceDelegate\n', 'KeyguardServiceDelegate state:\n')
+      + '    AnotherSection\n      showing=true\n      secure=true\n')).toEqual(expected);
+  }
+  const power = screenDump('awake-unlocked', 'power');
+  expect(androidScreenState(power, 'isKeyguardShowing=true\nisKeyguardSecure=true')).toEqual({ wakefulness: 'Awake', showing: true, secure: true });
+  expect(androidScreenState(power, 'mShowingLockscreen=false')).toEqual({ wakefulness: 'Awake', showing: false, secure: null });
+  expect(androidScreenState(power, 'some other showing=true')).toEqual({ wakefulness: 'Awake', showing: null, secure: null });
+  expect(() => androidScreenState('mIsPowered=true', '')).toThrow('dumpsys power has no mWakefulness');
+});
+
+for (const wakefulness of ['Asleep', 'Awake']) test(`the Android reader checks an ${wakefulness} screen before launching`, async () => {
+  const { androidDeploy } = await import('./agent-android.mjs');
+  const fixture = androidDriveFixture(true, null, false, null, false, { wakefulness, showing: wakefulness === 'Asleep' });
+  let child;
+  try {
+    child = androidDeploy(fixture.app, fixture.bin, fixture.env).spawn();
+    const closed = once(child, 'close');
+    child.stdout.once('data', () => child.stdin.end('{"op":"quit"}\n'));
+    expect(await closed).toEqual([0, null]);
+    const commands = fixture.commands().map(args => args.slice(2));
+    const launch = commands.findIndex(args => args[0] === 'shell' && args[1].startsWith('am start '));
+    const screenCalls = commands.filter(args => args[0] === 'shell' && ['dumpsys', 'input', 'wm'].includes(args[1]));
+    const check = [['shell', 'dumpsys', 'power'], ['shell', 'dumpsys', 'window', 'policy']];
+    expect(screenCalls).toEqual(wakefulness === 'Awake' ? check : [
+      ...check, ['shell', 'input', 'keyevent', 'KEYCODE_WAKEUP'], ...check, ['shell', 'wm', 'dismiss-keyguard'], ...check,
+    ]);
+    expect(commands.indexOf(screenCalls.at(-1))).toBeLessThan(launch);
+  } finally {
+    if (child?.exitCode === null) { const closed = once(child, 'close'); child.kill(); await closed; }
+    fixture.dispose();
+  }
+});
+
+for (const [name, screen, dismissals] of [
+  ['a large policy dump', { largePolicy: true }, 0],
+  ['an asleep screen without a lock', { wakefulness: 'Asleep' }, 0],
+  ['a delegate state heading', { showing: true, delegateState: true }, 1],
+  ['slow dumps after waking a swipe lock', { wakefulness: 'Asleep', showing: true, dumpMsAfterWake: 1100 }, 1],
+  ['a keyguard that needs another dismissal', { showing: true, dismissAfter: 2 }, 2],
+  ['a dismissal longer than the poll deadline', { showing: true, dismissMs: 2100 }, 1],
+  ['slow dismissals that need another observation budget', { showing: true, dismissMs: 2100, dismissAfter: 2 }, 2],
+]) test(`the Android reader launches after ${name}`, async () => {
+  const { androidDeploy } = await import('./agent-android.mjs');
+  const fixture = androidDriveFixture(true, null, false, null, false, screen);
+  let child;
+  try {
+    child = androidDeploy(fixture.app, fixture.bin, fixture.env).spawn();
+    const closed = once(child, 'close'); let error = '';
+    child.stderr.on('data', data => { error += data; });
+    child.stdout.once('data', () => child.stdin.end('{"op":"quit"}\n'));
+    expect({ closed: await closed, error }).toEqual({ closed: [0, null], error: expect.stringContaining('keyguard hidden') });
+    const commands = fixture.commands().map(args => args.slice(2));
+    expect(commands.filter(args => args[1] === 'wm')).toHaveLength(dismissals);
+    expect(commands).toContainEqual(['shell', 'dumpsys', 'window', 'policy']);
+    expect(commands).not.toContainEqual(['shell', 'dumpsys', 'window']);
+    const launch = commands.findIndex(args => args[0] === 'shell' && args[1].startsWith('am start '));
+    const lastDismissal = commands.findLastIndex(args => args[1] === 'wm');
+    expect(launch).toBeGreaterThan(lastDismissal);
+    expect(commands.slice(lastDismissal + 1, launch)).toContainEqual(['shell', 'dumpsys', 'power']);
+  } finally {
+    if (child?.exitCode === null) { const closed = once(child, 'close'); child.kill(); await closed; }
+    fixture.dispose();
+  }
+}, 15000);
+
+for (const wakefulness of ['Asleep', 'Awake']) test(`the Android reader refuses an ${wakefulness} secure lock screen before launching`, async () => {
+  const { androidDeploy } = await import('./agent-android.mjs');
+  const fixture = androidDriveFixture(true, null, false, null, false, { wakefulness, showing: true, secure: true });
+  let child;
+  try {
+    child = androidDeploy(fixture.app, fixture.bin, fixture.env).spawn();
+    const closed = once(child, 'close'); let error = '';
+    child.stderr.on('data', data => { error += data; });
+    child.stdout.once('data', () => child.stdin.end('{"op":"quit"}\n'));
+    expect((await closed)[0]).not.toBe(0);
+    expect(error).toContain('secure lock screen');
+    expect(error).toContain('unlock the device and run the drive again');
+    const commands = fixture.commands().map(args => args.slice(2));
+    expect(commands.some(args => args[0] === 'shell' && args[1].startsWith('am start '))).toBe(false);
+    expect(commands).not.toContainEqual(['shell', 'wm', 'dismiss-keyguard']);
+    expect(fixture.mappings()).toEqual({});
+  } finally {
+    if (child?.exitCode === null) { const closed = once(child, 'close'); child.kill(); await closed; }
+    fixture.dispose();
+  }
+});
+
+for (const dump of ['power', 'window']) test(`the Android reader reports a failed ${dump} dump before launching`, async () => {
+  const { androidDeploy } = await import('./agent-android.mjs');
+  const fixture = androidDriveFixture(true, null, false, null, false, { failDump: dump });
+  let child;
+  try {
+    child = androidDeploy(fixture.app, fixture.bin, fixture.env).spawn();
+    const closed = once(child, 'close'); let error = '';
+    child.stderr.on('data', data => { error += data; });
+    expect((await closed)[0]).not.toBe(0);
+    expect(error).toContain(`Android screen state: adb shell dumpsys ${dump}${dump === 'window' ? ' policy' : ''}: dump failed`);
+    expect(fixture.commands().some(args => args[2] === 'shell' && args[3].startsWith('am start '))).toBe(false);
+    expect(fixture.mappings()).toEqual({});
+  } finally {
+    if (child?.exitCode === null) { const closed = once(child, 'close'); child.kill(); await closed; }
+    fixture.dispose();
+  }
+});
+
+test('an Android readiness timeout includes the screen state observed before launch', async () => {
+  const fixture = androidDriveFixture(true, null, false, null, false, { wakefulness: 'Asleep', ready: false });
+  writeFileSync(resolve(fixture.app.dir, 'app.json'), JSON.stringify({ name: 'fixture', app: { id: fixture.app.id, name: 'Fixture' } }));
+  writeFileSync(resolve(fixture.app.dir, 'app.contract'), 'component App\n  view\n    text "Fixture"\n');
+  let driver;
+  try {
+    driver = spawn(process.execPath, ['--eval', `
+      import { openStdio } from ${JSON.stringify(resolve(import.meta.dir, 'agent-stdio.mjs'))};
+      const timer = globalThis.setTimeout;
+      let expire;
+      globalThis.setTimeout = (fn, ms, ...args) => {
+        if (ms === 60000) { expire = fn; process.send('armed'); return null; }
+        return timer(fn, ms, ...args);
+      };
+      process.on('message', () => expire());
+      try { await openStdio({ host: 'android', app: ${JSON.stringify(fixture.app.dir)} }); process.exit(0); }
+      catch (error) { console.error(error.message); process.exit(1); }
+    `], { env: { ...fixture.env, EXACT_ANDROID_BIN: fixture.bin }, stdio: ['pipe', 'pipe', 'pipe', 'ipc'] });
+    const closed = once(driver, 'close'), armed = once(driver, 'message');
+    let error = '';
+    driver.stderr.on('data', data => { error += data; });
+    await Promise.all([armed, fixture.connected]);
+    driver.send('expire readiness deadline');
+    expect((await closed)[0]).toBe(1);
+    expect(error).toContain('the app never became ready;');
+    expect(error).toContain('Android screen before launch: Asleep, keyguard hidden → Awake, keyguard hidden');
+    expect(fixture.mappings()).toEqual({});
+  } finally {
+    if (driver?.exitCode === null) { const closed = once(driver, 'close'); driver.kill(); await closed; }
+    fixture.dispose();
+  }
+}, 15000);
+
 for (const reader of [false, true]) for (const present of [false, true]) test(`the Android ${reader ? 'reader' : 'headless'} drive ${present ? 'keeps an existing reverse' : 'adds and removes its reverse'} and passes the fixture`, async () => {
     const { androidDeploy } = await import('./agent-android.mjs');
     const fixture = androidDriveFixture(reader, present ? 'tcp:4791' : null, reader && !present); let child;
@@ -112,7 +293,7 @@ for (const reader of [false, true]) for (const present of [false, true]) test(`t
       await once(child.stdout, 'data');
       child.stdin.end('{"op":"quit"}\n');
       expect(await closed).toEqual([0, null]);
-      expect(error).toBe(''); expect(out.trim()).toBe('{"ready":true}');
+      expect(error).toBe(reader ? 'Android screen before launch: Awake, keyguard hidden\n' : ''); expect(out.trim()).toBe('{"ready":true}');
       const commands = fixture.commands();
       expect(commands.every(args => args[0] === '-s' && args[1] === fixture.env.ANDROID_SERIAL)).toBe(true);
       const reverse = commands.map(args => args.slice(2)).filter(args => args[0] === 'reverse');
@@ -122,6 +303,8 @@ for (const reader of [false, true]) for (const present of [false, true]) test(`t
       expect(fixture.mappings()).toEqual(present ? { 'tcp:4791': 'tcp:4791' } : reader ? { 'tcp:4791': 'tcp:9000' } : {});
       const launch = commands.find(args => args[2] === 'shell' && (reader ? args[3].startsWith('am start ') : args[3] === '-T'));
       expect(launch.at(-1)).toContain(reader ? "--es x_auth_fixture 'http://127.0.0.1:4791'" : "EXACT_AUTH_FIXTURE='http://127.0.0.1:4791'");
+      // The reader launches in a new task: whatever the last drive left in the app's task goes with it.
+      if (reader) expect(launch.at(-1)).toStartWith('am start -W --activity-clear-task -n ');
     } finally {
       if (child && child.exitCode === null) { const closed = once(child, 'close'); child.kill(); await closed; }
       fixture.dispose();
@@ -559,4 +742,229 @@ for (const failure of ['retained', 'replaced']) test(`the Android reader retries
     if (child && child.exitCode === null) { const closed = once(child, 'close'); child.kill(); await closed; }
     fixture.dispose();
   }
+});
+
+test.skipIf(process.platform === 'win32')('Android tries PATH after an unusable Studio JDK but honors JAVA_HOME', async () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-jdk-fallback-'));
+  try {
+    const studio = resolve(dir, 'Studio Home'), pathJdk = resolve(dir, 'path-jdk');
+    for (const [home, version] of [[studio, 16], [pathJdk, 17]]) {
+      mkdirSync(resolve(home, 'bin'), { recursive: true });
+      writeFileSync(resolve(home, 'bin/java'), `#!/bin/sh\necho 'openjdk version "${version}.0.1"' >&2\n`, { mode: 0o755 });
+      writeFileSync(resolve(home, 'bin/javac'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    }
+    const env = { PATH: resolve(pathJdk, 'bin') };
+    expect(androidJavaEnv(env, 'darwin', studio)).toBe(env);
+    expect(androidJavaEnv({ ...env, JAVA_HOME: studio }, 'darwin', pathJdk)).toBeNull();
+    expect(androidJavaEnv({ PATH: '' }, 'darwin', studio)).toBeNull();
+    writeFileSync(resolve(studio, 'bin/java'), `#!/bin/sh\necho 'openjdk version "21.0.1"' >&2\n`, { mode: 0o755 });
+    rmSync(resolve(studio, 'bin/javac'));
+    expect(androidJavaEnv(env, 'darwin', studio)).toBe(env);
+    expect(androidJavaEnv({ ...env, JAVA_HOME: studio }, 'darwin', pathJdk)).toBeNull();
+    const { androidJavaFix } = await import('./agent-android.mjs');
+    expect(androidJavaFix({ PATH: '' }, 'darwin', studio)).toContain(studio);
+    expect(androidJavaFix({ ...env, JAVA_HOME: pathJdk }, 'darwin', studio)).toContain(pathJdk);
+    expect(androidJavaFix({ ...env, JAVA_HOME: pathJdk }, 'darwin', studio)).not.toContain(studio);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+const releaseJavaEnv = androidJavaEnv(process.env);
+const releaseSdk = androidSdk(process.env);
+test.skipIf(process.platform !== 'darwin' || !releaseJavaEnv ||
+  !androidSdkPackages().every(pkg => existsSync(resolve(releaseSdk, pkg.path))))('Android release metadata and signing reach Gradle without patching its source', async () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-android-release-'));
+  try {
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ app: { id: 'dev.exact.ci', name: 'CI' } }));
+    writeFileSync(resolve(dir, 'upload.jks'), 'configuration fixture');
+    const init = resolve(dir, 'inspect.gradle');
+    writeFileSync(init, `allprojects { repositories { maven { url = uri('https://127.0.0.1:9/unused-ci-mirror') } } }
+    gradle.projectsEvaluated {
+      def app = gradle.rootProject.project(':app')
+      app.tasks.register('inspectRelease') {
+        doLast {
+          def android = app.extensions.getByName('android')
+          def signing = android.buildTypes.release.signingConfig
+          println('EXACT_RELEASE=' + groovy.json.JsonOutput.toJson([
+            code: android.defaultConfig.versionCode, version: android.defaultConfig.versionName,
+            signing: signing.name, store: signing.storeFile.name,
+            passwords: signing.storePassword == 'store-secret' && signing.keyPassword == 'key-secret',
+            alias: signing.keyAlias]))
+        }
+      }
+    }`);
+    const result = spawnSync(resolve(import.meta.dir, '../host/android/gradlew'), ['--no-daemon', '--console=plain', '-I', init,
+      ':app:inspectRelease', '-Papp=ci', `-PappDir=${dir}`, `-PappBuildDir=${dir}/app`, `-PcanvasBuildDir=${dir}/canvas`, '--project-cache-dir', `${dir}/cache`],
+    { cwd: resolve(import.meta.dir, '../host/android'), encoding: 'utf8', timeout: 180000,
+      env: { ...releaseJavaEnv, ANDROID_HOME: releaseSdk,
+        EXACT_BUILD_NUMBER: '42', EXACT_VERSION: '2.3.4', EXACT_KEYSTORE: resolve(dir, 'upload.jks'),
+        EXACT_KEYSTORE_PASSWORD: 'store-secret', EXACT_KEY_ALIAS: 'upload', EXACT_KEY_PASSWORD: 'key-secret' } });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    const line = result.stdout.split('\n').find(line => line.startsWith('EXACT_RELEASE='));
+    expect(JSON.parse(line.slice('EXACT_RELEASE='.length))).toEqual({ code: 42, version: '2.3.4', signing: 'upload', store: 'upload.jks', passwords: true, alias: 'upload' });
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 200000);
+
+// The package suites read the roster, manifest and APK from apkBuildDir; under the reader's own build directory an
+// outside app's were never found.
+test("apkBuildDir holds the APK build --apk makes: an outside app's own target, a checkout app's the reader's", async () => {
+  const { androidBinary, apkBuildDir } = await import('./agent-android.mjs');
+  const { resolveApp } = await import('./app.mjs');
+  const before = { EXACT_APP_DIR: process.env.EXACT_APP_DIR, EXACT_ANDROID_READER: process.env.EXACT_ANDROID_READER, CARGO_TARGET_DIR: process.env.CARGO_TARGET_DIR };
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-apk-dir-'));
+  try {
+    delete process.env.EXACT_APP_DIR; delete process.env.CARGO_TARGET_DIR;
+    process.env.EXACT_ANDROID_READER = '1';
+    writeFileSync(resolve(dir, 'app.contract'), 'component Fixture\n  view\n    text "fixture"\n');
+    const outside = resolveApp(dir);
+    expect(apkBuildDir(dir)).toBe(resolve(outside.target, 'android/app'));
+    expect(androidBinary(outside)).toBe(resolve(apkBuildDir(dir), 'outputs/apk/release/app-release.apk'));
+    const root = resolve(import.meta.dir, '..');
+    expect(apkBuildDir('caltrain')).toBe(resolve(root, 'host/android/app/build/caltrain'));
+    expect(androidBinary(resolveApp('caltrain'))).toBe(resolve(apkBuildDir('caltrain'), 'outputs/apk/release/app-release.apk'));
+  } finally {
+    for (const [name, value] of Object.entries(before)) if (value === undefined) delete process.env[name]; else process.env[name] = value;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('Android distribution refuses bad metadata and incomplete credentials before compiling', async () => {
+  const { androidReleaseEnvironment } = await import('./agent-android.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-upload-'));
+  try {
+    const store = resolve(dir, 'upload.jks'); writeFileSync(store, 'fixture');
+    const signed = { EXACT_KEYSTORE: store, EXACT_KEYSTORE_PASSWORD: 'secret', EXACT_KEY_ALIAS: 'upload', EXACT_KEY_PASSWORD: 'secret' };
+    expect(androidReleaseEnvironment({}, false).EXACT_BUILD_NUMBER).toBe('1');
+    expect(androidReleaseEnvironment(signed, true).EXACT_KEYSTORE).toBe(store);
+    expect(() => androidReleaseEnvironment({}, true)).toThrow('EXACT_KEYSTORE');
+    for (const key of Object.keys(signed)) {
+      const partial = { ...signed }; delete partial[key];
+      expect(() => androidReleaseEnvironment(partial)).toThrow(key);
+    }
+    for (const code of ['0', '-1', '1.2', '2100000001', '', ' 42', '1e2']) {
+      expect(() => androidReleaseEnvironment({ EXACT_BUILD_NUMBER: code })).toThrow('EXACT_BUILD_NUMBER');
+    }
+    expect(() => androidReleaseEnvironment({ ...signed, EXACT_KEYSTORE: store + '.missing' })).toThrow('EXACT_KEYSTORE');
+    expect(() => androidReleaseEnvironment({ EXACT_VERSION: '' })).toThrow('EXACT_VERSION');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a production Android build with the Linux bake store on and no stream is refused before compiling (#48)', async () => {
+  const { androidStreamRefusal } = await import('./agent-android.mjs');
+  const production = { EXACT_UPDATE_TRUST: 'production' };
+  expect(androidStreamRefusal('a', {}, production)).toContain('deploy.store.linux to "0"');
+  expect(androidStreamRefusal('a', { deploy: { store: { android: '0' } } }, production)).toContain('deploy.store.android does not');
+  expect(androidStreamRefusal('a', { deploy: { store: { linux: '0' } } }, production)).toBeNull();
+  expect(androidStreamRefusal('a', {}, {})).toBeNull();
+  expect(androidStreamRefusal('a', {}, { ...production, EXACT_UPDATE_GENESIS: '1' })).toBeNull();
+  expect(androidStreamRefusal('a', {}, { ...production, EXACT_UPDATE_RECEIPT: '/receipt.json' })).toBeNull();
+  expect(androidStreamRefusal('a', {}, { ...production, EXACT_BAKE_ANALYSIS: '1' })).toBeNull();
+  // The verb says it in its first second: `--bundle` bakes production trust, and this app's store is on.
+  const env = { ...process.env };
+  for (const key of ['EXACT_UPDATE_TRUST', 'EXACT_UPDATE_RECEIPT', 'EXACT_UPDATE_GENESIS', 'EXACT_BAKE_ANALYSIS']) delete env[key];
+  const r = spawnSync(process.execPath, [resolve(import.meta.dir, 'agent-android.mjs'), 'build', 'auth-fixture', '--bundle'], { encoding: 'utf8', env, timeout: 30000 });
+  expect(r.status).toBe(1);
+  expect(r.stderr).toContain('set deploy.store.linux to "0" in app.json');
+});
+
+test('Android bundles and unattended APKs have explicit command flags', async () => {
+  const { guardFlags } = await import('./help.mjs');
+  expect(guardFlags('android', ['--bundle', '--json'])).toEqual(['--bundle', '--json']);
+  expect(guardFlags('android', ['--no-install', '--release'])).toEqual(['--no-install', '--release']);
+  for (const flags of [['--bundle', '--run'], ['--bundle', '--headless'], ['--no-install', '--run']]) {
+    const r = spawnSync(process.execPath, [resolve(import.meta.dir, 'agent-android.mjs'), 'build', 'absent-app', ...flags], { encoding: 'utf8' });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain('takes');
+    expect(r.stderr).not.toContain('no app at');
+  }
+});
+
+test('an APK carries each GPU library the bake built, by the name Cargo gave it, unstripped (#306)', async () => {
+  const { bakeGpuLibraries, carriesGpu, stageGpuLibraries } = await import('./agent-android.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-apk-gpu-'));
+  try {
+    const app = { hasGpu: true, manifest: { gpu: { modules: { extra: ['extra'] } } } };
+    expect(carriesGpu(app)).toBe(true);
+    // An app whose surfaces are all in named modules has no primary, and still bakes them.
+    expect(carriesGpu({ ...app, hasGpu: false })).toBe(true);
+    expect(carriesGpu({ hasGpu: false, manifest: {} })).toBe(false);
+    // The named module's crate sets `[lib] name = "extra"`: Cargo builds libextra.so, not libfiddl_gpu_extra.so.
+    const products = ['libfiddl_gpu.so', 'libextra.so'].map((file) => resolve(dir, file));
+    let asked;
+    const bake = (...args) => { asked = args; for (const product of products) expect(args[3].prepareGpu(product)).toBe(product); };
+    const libraries = bakeGpuLibraries(app, { profile: 'release', env: { A: '1' } }, bake);
+    expect(libraries).toEqual(products);
+    expect(asked.slice(0, 3)).toEqual([app, 'linux', 'aarch64-linux-android']);
+    expect(asked[3]).toMatchObject({ profile: 'release', env: { A: '1' }, kind: 'android' });
+    for (const library of libraries) writeFileSync(library, library);
+    const jniLibs = resolve(dir, 'jniLibs/arm64-v8a');
+    mkdirSync(jniLibs, { recursive: true });
+    expect(stageGpuLibraries(libraries, jniLibs)).toEqual(['-PgpuModules=libfiddl_gpu.so,libextra.so']);
+    for (const library of libraries) expect(readFileSync(resolve(jniLibs, library.split('/').pop()), 'utf8')).toBe(library);
+    expect(stageGpuLibraries([], jniLibs)).toEqual([]);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('locks are written in a Gradle home with nothing resolved, keeping its configuration and the wrapper', async () => {
+  const { coldGradleHome } = await import('./agent-android.mjs');
+  const warm = mkdtempSync(resolve(tmpdir(), 'exact-warm-gradle-')), bare = mkdtempSync(resolve(tmpdir(), 'exact-bare-gradle-'));
+  try {
+    mkdirSync(resolve(warm, 'caches/modules-2/files-2.1/org.junit/junit-bom'), { recursive: true });
+    mkdirSync(resolve(warm, 'wrapper/dists/gradle-9.8.0-bin/abc'), { recursive: true });
+    mkdirSync(resolve(warm, 'init.d'));
+    writeFileSync(resolve(warm, 'gradle.properties'), 'systemProp.https.proxyHost=proxy.invalid\n');
+    writeFileSync(resolve(warm, 'init.d/mirror.gradle'), '// a mirror\n');
+    writeFileSync(resolve(warm, 'init.gradle'), '// credentials\n');
+    writeFileSync(resolve(warm, 'init.gradle.kts'), '// a repository\n');
+    const home = coldGradleHome({ GRADLE_USER_HOME: warm });
+    expect(existsSync(resolve(home, 'caches'))).toBe(false);
+    expect(readFileSync(resolve(home, 'gradle.properties'), 'utf8')).toContain('proxy.invalid');
+    expect(existsSync(resolve(home, 'init.d/mirror.gradle'))).toBe(true);
+    expect(readFileSync(resolve(home, 'init.gradle'), 'utf8')).toContain('credentials');
+    expect(readFileSync(resolve(home, 'init.gradle.kts'), 'utf8')).toContain('repository');
+    expect(existsSync(resolve(home, 'wrapper/dists/gradle-9.8.0-bin/abc'))).toBe(true);
+    // Removing the home leaves the distributions it linked.
+    rmSync(home, { recursive: true, force: true });
+    expect(existsSync(resolve(warm, 'wrapper/dists/gradle-9.8.0-bin/abc'))).toBe(true);
+    // A home without distributions gets the directory the wrapper downloads into.
+    rmSync(coldGradleHome({ GRADLE_USER_HOME: bare }), { recursive: true, force: true });
+    expect(existsSync(resolve(bare, 'wrapper/dists'))).toBe(true);
+  } finally {
+    rmSync(warm, { recursive: true, force: true });
+    rmSync(bare, { recursive: true, force: true });
+  }
+});
+
+test('a locked Gradle failure keeps its output and names lock repair only for dependency failures', async () => {
+  const { runGradle, androidLockCommand } = await import('./agent-android.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-gradle-advice-'));
+  try {
+    const script = resolve(dir, 'gradle.mjs'), app = { dir, name: 'fixture' };
+    writeFileSync(script, `process.stdout.write('task progress\\n'); const [message, code] = process.argv.slice(2); process.stderr.write(message.slice(0, 9), () => process.stderr.write(message.slice(9) + '\\n', () => { process.exitCode = Number(code); }));`);
+    const advice = `fixture: Gradle locks or verification metadata do not match its dependencies; for an intended graph change, run ${androidLockCommand(app)}, then review and commit gradle.lockfile and gradle-verification.xml`;
+    for (const [message, code, expected] of [
+      ['Dependency verification failed for configuration releaseRuntimeClasspath', 1, true],
+      ['Resolved a module which is not part of the dependency lock state', 1, true],
+      ['Did not resolve a module which is part of the dependency lock state', 1, true],
+      ['Strict dependency locking is enabled and no lock state exists', 1, true],
+      ['Compilation failed: unresolved reference', 1, false],
+      ['Timeout waiting to lock the build cache', 1, false],
+      ['Dependency verification failed in an expected fixture', 0, false],
+    ]) {
+      let result;
+      const passed = runGradle(['--dependency-verification=strict'], { env: process.env }, process.platform, {
+        lockAdvice: advice,
+        run(command, args, options) {
+          // Run the actual stream relay with a Gradle stand-in; no JDK, SDK or network is involved.
+          const payload = [process.execPath, ['--no-env-file', script, message, String(code)], advice];
+          const childArgs = args[0] === '--no-env-file' ? [...args.slice(0, -1), JSON.stringify(payload)] : ['--no-env-file', script, message, String(code)];
+          result = spawnSync(process.execPath, childArgs, { ...options, stdio: 'pipe', encoding: 'utf8' });
+          return result;
+        },
+      });
+      expect(passed).toBe(code === 0);
+      expect(result.stdout).toBe('task progress\n');
+      expect(result.stderr).toContain(message);
+      expect(result.stderr.includes(advice)).toBe(expected);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

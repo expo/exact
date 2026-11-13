@@ -215,10 +215,12 @@ textAlign = "middle"
 textBaseline = "top"
 textBaseline = "TOP"
 ? textBaseline => top
-? direction => ltr
+? direction => inherit
 direction = "rtl"
 direction = "sideways"
 ? direction => rtl
+direction = "inherit"
+? direction => inherit
 fontKerning = "none"
 font = "13px serif"
 ? fontKerning => none
@@ -334,6 +336,20 @@ fill(new Path2D("M0 0 h 10 v10 H0 z m 2 2 C1 1 2 2 3 3 S 4 4 5 5 Q 6 6 7 7 T 8 8
 stroke(new Path2D("M0 0 L 5 5"))
 clip(new Path2D("M0 0 L 5 5 L 0 5 Z"))
 fill()
+
+## fillText and strokeText draw nothing with an infinite maxWidth
+fillText("X", 10, 60, Infinity)
+strokeText("X", 10, 60, Infinity)
+fillText("X", 10, 60, 100)
+
+## clip under a singular matrix is ignored, as Chrome ignores it
+beginPath()
+rect(0, 0, 10, 10)
+setTransform(0, 0, 0, 0, 0, 0)
+clip()
+clip(new Path2D("M0 0 h 10 v 10 H0 z"))
+setTransform(1, 0, 0, 1, 0, 0)
+fillRect(50, 50, 10, 10)
 
 ## CSS predefined rec2020
 fillStyle = "green"

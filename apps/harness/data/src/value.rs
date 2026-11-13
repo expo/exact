@@ -131,6 +131,7 @@ pub fn session(st: &State, entries: usize) -> Value {
         retired: st.retired,
         queued: st.queue.iter().map(|q| c(q)).collect(),
         epoch: st.epoch,
+        failed: st.failed,
     }
     .to_value()
 }

@@ -70,4 +70,34 @@ class FilesTest {
         assertEquals("new", fresh.readText())
         assertTrue(Files.regular(fresh))
     }
+
+    /** The camera app's photo (`takePhotoWithCameraApp`): the one file the app hands out for writing is made empty and
+     * writable until the app takes it back; any other file stays read-only. */
+    @Test fun onlyAFileHandedOutForWritingIsWritableAndOnlyUntilItIsTakenBack() {
+        val photo = File(dir.root, "cache/exact.camera-app/photo.jpg")
+        val other = File(dir.root, "cache/temporary/camera/2.jpg").apply { parentFile!!.mkdirs(); writeText("kept") }
+        assertFalse(Files.writes(photo))
+
+        assertTrue(Files.openForWrite(photo))
+        assertTrue(photo.isFile)
+        assertEquals(0L, photo.length())
+        assertTrue(Files.writes(photo))
+        assertFalse(Files.writes(other))
+
+        Files.endWrite(photo)
+        assertFalse(Files.writes(photo))
+        assertEquals("kept", other.readText())
+    }
+
+    /** A link planted where the photo goes is not handed out, and what it names is unchanged. */
+    @Test fun aLinkWhereThePhotoGoesIsNotHandedOutForWriting() {
+        val databases = File(dir.root, "databases").apply { mkdirs() }
+        File(databases, "app.db").writeText("kept")
+        val photo = File(dir.root, "cache/exact.camera-app/photo.jpg").apply { parentFile!!.mkdirs() }
+        java.nio.file.Files.createSymbolicLink(photo.toPath(), File(databases, "app.db").toPath())
+
+        assertFalse(Files.openForWrite(photo))
+        assertFalse(Files.writes(File(databases, "app.db")))
+        assertEquals("kept", File(databases, "app.db").readText())
+    }
 }

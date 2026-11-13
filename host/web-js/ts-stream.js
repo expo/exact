@@ -9,10 +9,10 @@ import { failureCode, failureReason } from './shape.js';
 import { bodyFromRefusal, methodOf, readBodyFile } from './ts-body-from.js';
 import { refuseStreamBody } from './uploads.js';
 
-const KINDS = ['Response', 'Network', 'Refused', 'Unsupported', 'Aborted', , , , , , 'Timeout'], said = new TextDecoder();
-// Hermes's checks and words on `init` (js/src/prelude.js `fetch`): a
+const KINDS = ['Response', 'Network', 'Refused', 'Unsupported', 'Aborted', , , , , , 'Timeout'], said = new TextDecoder(), utf8 = new TextEncoder();
+// Hermes's checks and words on `init` (js/src/fetch.js `request`): a
 // refusal ends the stream with that message, which fails the answer.
-function request(input, init, redirect) {
+function request(input, init, redirect, protocols) {
   if (typeof init.exactStream !== 'function') throw new TypeError('exactStream maps each event to the answer: (event) => value');
   const independent = init.exactIndependentHttp?.maxResponseBytes;
   if (independent !== undefined && (!Number.isInteger(independent) || independent <= 0 || independent > 67108864))
@@ -40,7 +40,7 @@ function request(input, init, redirect) {
   const idle = init.exactIdleTimeout;
   if (idle !== undefined && (!Number.isInteger(idle) || idle < 1 || idle > 3600000)) throw new TypeError('exactIdleTimeout must be an integer number of milliseconds from 1 to 3600000');
   if (idle !== undefined && (upload || init.exactLongPoll !== undefined || !/^wss?:/i.test(url))) throw new TypeError('exactIdleTimeout: only a WebSocket stream takes an idle timeout');
-  return { method, url, signal, headers: [...new Headers(init.headers ?? request?.headers ?? [])], raw, bodyFrom, cache: init.cache ?? request?.cache, mode: init.mode ?? request?.mode, redirect, maxResponseBytes: independent ?? 1048576, longPoll: longPollOf(init.exactLongPoll, method, url), upload, timeoutMs, idleTimeoutMs: idle };
+  return { method, url, signal, headers: [...new Headers(init.headers ?? request?.headers ?? [])], raw, bodyFrom, cache: init.cache ?? request?.cache, mode: init.mode ?? request?.mode, redirect, maxResponseBytes: independent ?? 1048576, longPoll: longPollOf(init.exactLongPoll, method, url), upload, timeoutMs, idleTimeoutMs: idle, protocols };
 }
 // `exactUploadProgress` (LLP 1016.000 D10), as js/src/binary.js `uploadOf` checks it.
 function uploadOf(init, method, url, redirect) {
@@ -54,7 +54,7 @@ function uploadOf(init, method, url, redirect) {
   if (redirect !== undefined && redirect !== 'follow') throw new TypeError('exactUploadProgress: an upload follows its redirects');
   return true;
 }
-// `exactLongPoll` (LLP 1016.000 D8), as js/src/prelude.js `longPollOf` checks it.
+// `exactLongPoll` (LLP 1016.000 D8), as js/src/binary.js `longPollOf` checks it.
 function longPollOf(poll, method, url) {
   if (poll === undefined) return undefined;
   if (/^wss?:/i.test(url)) throw new TypeError('exactLongPoll: a long poll is HTTP, not a WebSocket');
@@ -172,9 +172,9 @@ function handle(transport, owner) {
 // (http-body.js `received`) through the mapper to the commit, and the stub
 // decode the mapper calls. A page with no agent has none of it.
 const gate = () => globalThis.exact?.streamGate;
-export function open({ input, init, redirect }, conv, grantSet, deliver, controller) {
+export function open({ input, init, redirect, protocols }, conv, grantSet, deliver, controller) {
   let req;
-  try { req = request(input, init, redirect); req.forced = !!controller.forced; } catch (e) { return Promise.resolve({ error: String(e?.message ?? e), code: failureCode(e), reason: failureReason(e) }); }
+  try { req = request(input, init, redirect, protocols); req.forced = !!controller.forced; } catch (e) { return Promise.resolve({ error: String(e?.message ?? e), code: failureCode(e), reason: failureReason(e) }); }
   // The caller's signal ends the stream too, before a body is read from a file
   // or after. The stream hears it, while it lasts, through a signal of its own
   // (ts-fetch.js `ownSignal`), whose abort event the app's listeners on the
@@ -204,17 +204,20 @@ export function open({ input, init, redirect }, conv, grantSet, deliver, control
     const turn = socket && frame ? answering.mapper = { owner: controller, socketOps: null, overload: null } : null;
     // The call is the mapper's in every turn, and no answer's (ts-fetch.js `answering.mapperCall`).
     const outer = { call: answering.call, mapperCall: answering.mapperCall };
-    answering.call = null; answering.mapperCall = controller;
+    answering.call = null;
+    // Settled once it has answered or its stream was let go: entropy is then refused (ts-fetch.js `answerOnly`).
+    let ended = false;
+    const call = answering.mapperCall = { get settled() { return ended || controller.active?.() === false; } };
     try {
       const v = map(event, socket);
       if (turn?.overload) throw turn.overload;
       // A socket no resource owns (a mutation's stream) takes none, as natively.
       if (turn?.socketOps?.length && !controller.resource) throw new DOMException('the socket is not open', 'InvalidStateError');
       const ops = turn?.socketOps, effects = ops?.length ? [Object.assign(() => { try { publish(ops)(); } catch (e) { refused(e?.message ?? e); } }, { refused })] : null;
-      if (!v || typeof v.then !== 'function') return effects ? { v: conv(v), effects } : { v: conv(v) };
+      if (!v || typeof v.then !== 'function') { ended = true; return effects ? { v: conv(v), effects } : { v: conv(v) }; }
       effects?.[0]();
-      return Promise.resolve(v).then(v => controller.active?.() === false ? { error: 'the stream was let go', code: 'error' } : { v: conv(v) }).catch(e => failed(e));
-    } catch (e) { return failed(e, turn); } finally { if (turn) answering.mapper = null; Object.assign(answering, outer); }
+      return Promise.resolve(v).then(v => controller.active?.() === false ? { error: 'the stream was let go', code: 'error' } : { v: conv(v) }).catch(e => failed(e)).finally(() => { ended = true; });
+    } catch (e) { ended = true; return failed(e, turn); } finally { if (turn) answering.mapper = null; Object.assign(answering, outer); }
   };
   // A later frame's mapper call waits for an earlier one's promise, and so
   // does the end: `behind` is the last call still settling.
@@ -228,14 +231,44 @@ export function open({ input, init, redirect }, conv, grantSet, deliver, control
   // A long poll's reply that is no event (`exact:reply`, LLP 1016.000 D8) reaches no mapper, nor an upload's start
   // (`exact:sending`), which, as any bytes sent, says it reached the network (rt.js); its bytes sent are a `progress`
   // event, as XMLHttpRequest's.
-  const event = m => req.upload && m.event === 'exact:progress' ? { type: 'progress', ...JSON.parse(m.data), lengthComputable: true, data: '', lastEventId: '', coalesced: m.coalesced } : { type: m.event || 'message', data: m.data, lastEventId: m.id, coalesced: m.coalesced };
-  const message = m => (controller.sent ||= !!req.upload, req.longPoll && m.event === 'exact:reply' || req.upload && m.event === 'exact:sending')
-    ? undefined : void inOrder(() => settled(value(event(m), true), r => deliver({ ...r, coalesced: m.coalesced })));
+  const event = m => req.upload && m.event === 'exact:progress' ? { type: 'progress', ...JSON.parse(m.data), lengthComputable: true, data: '', lastEventId: '', coalesced: m.coalesced } : { type: m.event || 'message', data: m.data, lastEventId: m.id, coalesced: m.coalesced, protocol: m.protocol };
+  // Messages that arrive together (`more`, http-body.js) are mapped one by one, each after the last one's promise,
+  // and their last value commits once (LLP 1016.000 D4); a failure ends them there. A mapper that answers now is
+  // called in a loop, so a read of any number of events takes no stack.
+  let batch = [];
+  const each = (ms, i = 0) => {
+    for (;; i++) {
+      const r = value(event(ms[i]), true), at = i, last = r => r.error !== undefined || at === ms.length - 1;
+      const done = r => last(r) ? deliver({ ...r, coalesced: ms[at].coalesced, messages: at + 1 }) : each(ms, at + 1);
+      if (r && typeof r.then === 'function') return r.then(done);
+      if (last(r)) return done(r);
+    }
+  };
+  // What waits behind a mapper that awaits, as natively (mapper_turns.rs): at most 4096 messages, or 64 MiB of
+  // their data; one more ends the stream (D4: never queue without limit).
+  let held = 0, heldBytes = 0, fellBehind = false;
+  const bytesOf = m => typeof m.data === 'string' ? utf8.encode(m.data).length : m.data.byteLength;
+  const message = m => {
+    controller.sent ||= !!req.upload;
+    if (fellBehind || req.longPoll && m.event === 'exact:reply' || req.upload && m.event === 'exact:sending') return;
+    batch.push(m);
+    if (m.more) return;
+    const ms = batch; batch = [];
+    if (!behind) { inOrder(() => each(ms)); return behind; }
+    const bytes = ms.reduce((n, m) => n + bytesOf(m), 0);
+    if (held + ms.length > 4096 || heldBytes + bytes > 64 << 20) {
+      fellBehind = true;
+      return void deliver({ error: `the stream's mapper fell behind: ${held} messages (${heldBytes} bytes) waited for its turns, and ${ms.length} more arrived`, code: 'error' });
+    }
+    held += ms.length; heldBytes += bytes;
+    inOrder(() => { held -= ms.length; heldBytes -= bytes; return each(ms); });
+    return behind;
+  };
   const timed = m => {
     const g = gate();
     if (!g) return message(m);
     g.enter(controller.streamName, m.received);
-    try { message(m); } finally { g.leave(); }
+    try { return message(m); } finally { g.leave(); }
   };
   return streamed(req, grantSet, timed, controller, (path, set) => readBodyFile(path, set, controller), protocol)
     .then(o => {

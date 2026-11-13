@@ -465,110 +465,28 @@ pub(super) fn subst_stmts(
 /// Add the names free in `e` (a call's head included: substitution
 /// replaces it too), skipping those `bound` holds.
 fn free_names(e: &Expr, bound: &mut Vec<String>, out: &mut BTreeSet<String>) {
-    let mut name = |n: &str, bound: &Vec<String>| {
-        if !bound.iter().any(|b| b == n) {
-            out.insert(n.to_owned());
+    if let Expr::Ident(n, _) | Expr::Call(n, _, _) = e {
+        if !bound.contains(n) {
+            out.insert(n.clone());
         }
-    };
-    match e {
-        Expr::Ident(n, _) => name(n, bound),
-        Expr::Call(n, args, _) => {
-            name(n, bound);
-            for a in args {
-                free_names(a, bound, out);
-            }
-        }
-        Expr::List(items, _) => {
-            for x in items {
-                free_names(x, bound, out);
-            }
-        }
-        Expr::Member(o, _, _)
-        | Expr::NamedArg(_, o, _)
-        | Expr::Typed(o, _, _)
-        | Expr::Some(o, _)
-        | Expr::Unary(_, o, _) => free_names(o, bound, out),
-        Expr::Binary(_, a, b, _) => {
-            free_names(a, bound, out);
-            free_names(b, bound, out);
-        }
-        Expr::Ternary(a, b, c, _) => {
-            free_names(a, bound, out);
-            free_names(b, bound, out);
-            free_names(c, bound, out);
-        }
-        Expr::Match {
-            subject,
-            var,
-            some,
-            none,
-            ..
-        } => {
-            free_names(subject, bound, out);
-            free_names(none, bound, out);
-            bound.push(var.clone());
-            free_names(some, bound, out);
-            bound.pop();
-        }
-        Expr::Let {
-            name: n,
-            value,
-            body,
-            ..
-        } => {
-            free_names(value, bound, out);
-            bound.push(n.clone());
-            free_names(body, bound, out);
-            bound.pop();
-        }
-        Expr::Arrow { params, body, .. } => {
-            bound.extend(params.iter().cloned());
-            free_names(body, bound, out);
-            bound.truncate(bound.len() - params.len());
-        }
-        Expr::Template(parts, _) => {
-            for p in parts {
-                if let TemplatePart::Expr(x) = p {
-                    free_names(x, bound, out);
-                }
-            }
-        }
-        Expr::Number(..) | Expr::Str(..) | Expr::Bool(..) | Expr::None(_) => {}
+    }
+    for (child, binds) in e.scoped_operands() {
+        let depth = bound.len();
+        bound.extend(binds.iter().map(String::from));
+        free_names(child, bound, out);
+        bound.truncate(depth);
     }
 }
 
 /// Whether `name` is written anywhere in `e`, free or bound.
 fn occurs(e: &Expr, name: &str) -> bool {
-    match e {
-        Expr::Ident(n, _) => n == name,
-        Expr::Call(n, args, _) => n == name || args.iter().any(|a| occurs(a, name)),
-        Expr::List(items, _) => items.iter().any(|a| occurs(a, name)),
-        Expr::Member(o, _, _)
-        | Expr::NamedArg(_, o, _)
-        | Expr::Typed(o, _, _)
-        | Expr::Some(o, _)
-        | Expr::Unary(_, o, _) => occurs(o, name),
-        Expr::Binary(_, a, b, _) => occurs(a, name) || occurs(b, name),
-        Expr::Ternary(a, b, c, _) => occurs(a, name) || occurs(b, name) || occurs(c, name),
-        Expr::Match {
-            subject,
-            var,
-            some,
-            none,
-            ..
-        } => var == name || occurs(subject, name) || occurs(some, name) || occurs(none, name),
-        Expr::Let {
-            name: n,
-            value,
-            body,
-            ..
-        } => n == name || occurs(value, name) || occurs(body, name),
-        Expr::Arrow { params, body, .. } => params.iter().any(|p| p == name) || occurs(body, name),
-        Expr::Template(parts, _) => parts
-            .iter()
-            .any(|p| matches!(p, TemplatePart::Expr(x) if occurs(x, name))),
-        Expr::Number(..) | Expr::Str(..) | Expr::Bool(..) | Expr::None(_) => false,
-    }
+    let here = match e {
+        Expr::Ident(n, _) | Expr::Call(n, _, _) => n == name,
+        _ => false,
+    };
+    here || e
+        .scoped_operands()
+        .any(|(child, binds)| binds.contains(name) || occurs(child, name))
 }
 
 pub(super) fn stmt_occurs(st: &Stmt, name: &str) -> bool {

@@ -16,13 +16,14 @@ use crate::boundary::HostError;
 extern "C" {
     fn ibex2_darwin_keychain_prepare(service: *const c_char, out_error: *mut *mut c_char) -> c_int;
     /// 0 found (`out_value`/`out_len` set, freed with `ibex2_darwin_free`),
-    /// 1 not found, -1 failed (`out_error` set).
+    /// 1 not found, -1 failed (`out_error` set). A null keychain uses the bundle's policy.
     fn ibex2_darwin_keychain_get(
         service: *const c_char,
         name: *const c_char,
         out_value: *mut *mut c_uchar,
         out_len: *mut usize,
         out_error: *mut *mut c_char,
+        keychain: *const c_void,
     ) -> c_int;
     /// 0 kept, -1 failed (`out_error` set).
     fn ibex2_darwin_keychain_set(
@@ -31,12 +32,14 @@ extern "C" {
         value: *const c_uchar,
         len: usize,
         out_error: *mut *mut c_char,
+        keychain: *const c_void,
     ) -> c_int;
     /// 0 forgotten (or never kept), -1 failed (`out_error` set).
     fn ibex2_darwin_keychain_forget(
         service: *const c_char,
         name: *const c_char,
         out_error: *mut *mut c_char,
+        keychain: *const c_void,
     ) -> c_int;
     /// The main bundle's identifier, or null when there is no bundle; freed
     /// with `ibex2_darwin_free`.
@@ -125,6 +128,7 @@ impl SecretStore for KeychainStore {
                 &mut value,
                 &mut len,
                 &mut error,
+                std::ptr::null(),
             )
         };
         match rc {
@@ -152,6 +156,7 @@ impl SecretStore for KeychainStore {
                 value.as_ptr(),
                 value.len(),
                 &mut error,
+                std::ptr::null(),
             )
         };
         if rc == 0 {
@@ -166,7 +171,12 @@ impl SecretStore for KeychainStore {
         let mut error: *mut c_char = std::ptr::null_mut();
         // SAFETY: as above.
         let rc = unsafe {
-            ibex2_darwin_keychain_forget(self.service.as_ptr(), account.as_ptr(), &mut error)
+            ibex2_darwin_keychain_forget(
+                self.service.as_ptr(),
+                account.as_ptr(),
+                &mut error,
+                std::ptr::null(),
+            )
         };
         if rc == 0 {
             Ok(())

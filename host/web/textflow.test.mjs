@@ -638,7 +638,7 @@ browserTest('flowed links keep press ownership and native Enter activation', asy
 // for a Contract action; both hosts' actual listener functions run unchanged.
 browserTest('same-target capture precedes a key registered first in both web runtimes', async () => {
   expect(await inChrome(targetKeyFixture, ['/glue.js'], {
-    '/rt.js': fileURLToPath(new URL('../web-js/rt.js', import.meta.url)),
+    '/events.js': fileURLToPath(new URL('../web-js/events.js', import.meta.url)),
   })).toEqual([
     [['capture', 'key'], ['capture']],
     [['capture', 'key'], ['capture']],
@@ -646,11 +646,11 @@ browserTest('same-target capture precedes a key registered first in both web run
 }, 60000);
 
 async function targetKeyFixture() {
-  const [glue, rt] = await Promise.all(['/glue.js', '/rt.js'].map(url => fetch(url).then(r => r.text())));
+  const [glue, rt] = await Promise.all(['/glue.js', '/events.js'].map(url => fetch(url).then(r => r.text())));
   const attach = await fetch('/wasm-input.js').then(r => r.text());
   const on = rt.slice(rt.indexOf('export function on('), rt.indexOf('// Each event family')).replace('export ', '');
-  // onKey hears a key with nothing focused through atBody, the line before it (0c3cf4405f).
-  const onKey = [rt.split('\n').find(line => line.startsWith('let BodyHeard;')), rt.split('\n').find(line => line.startsWith('export const onKey =')).replace('export ', '')].join('\n');
+  // onKey hears a key with nothing focused through atBody, declared before it (0c3cf4405f).
+  const onKey = rt.slice(rt.indexOf('let BodyHeard;'), rt.indexOf('export function onMIDI')).replace('export ', '');
   const bindWasm = new Function('el', 'heard', `
     let keyEvent = null, bodyHeard; // glue.js declares both; attach reads them (0c3cf4405f)
     const views = new Map([[1, el]]), retiredViews = new WeakSet(), inputReady = true, page = null;
@@ -1149,7 +1149,7 @@ browserTest('a flowed paragraph is trimmed to its own font\'s cap height, whatev
     const cut = textBoxCut({ textBoxTrim: 'trim-both', textBoxEdge: 'cap alphabetic' }, { font: '20px Arabic' }, 30, context);
     return { cap: baseline - cut.top, fallbackInk: m.actualBoundingBoxAscent };
   };
-  const { cap, fallbackInk } = await inChrome(fixture, ['/textflow-glue.js', '/timer-glue.js'], { '/arabic.ttf': new URL('../linux/tests/fonts/NotoSansArabic.ttf', import.meta.url) });
+  const { cap, fallbackInk } = await inChrome(fixture, ['/textflow-glue.js', '/timer-glue.js'], { '/arabic.ttf': new URL('../painted/tests/fonts/NotoSansArabic.ttf', import.meta.url) });
   expect(Math.abs(cap - 20 * 0.416)).toBeLessThan(0.5);
   expect(Math.abs(fallbackInk - 20 * 0.416)).toBeGreaterThan(1); // the fallback's H is not the font's cap height
 }, 20000);
@@ -1201,7 +1201,7 @@ async function flowWidthFixture() {
 // percentage computed style gives, and a percentage with no keyword keeps ordinary layout.
 browserTest('a flowed paragraph is measured and painted at the width CSS gives it', async () => {
   const { between, condensedClamp, condensedHyphen, ...got } = await inChrome(flowWidthFixture, ['/textflow-glue.js', '/timer-glue.js'],
-    { '/flex.ttf': new URL('../linux/tests/fonts/RobotoFlex-subset.ttf', import.meta.url) });
+    { '/flex.ttf': new URL('../painted/tests/fonts/RobotoFlex-subset.ttf', import.meta.url) });
   for (const [name, { css, measured, painted }] of Object.entries(got)) {
     expect([name, Math.abs(measured - css) < 0.5, Math.abs(painted - css) < 0.5]).toEqual([name, true, true]);
   }

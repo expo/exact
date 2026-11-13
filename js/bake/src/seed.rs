@@ -14,6 +14,7 @@ use std::path::Path;
 /// by name.
 pub struct Seed {
     values: BTreeMap<String, Result<exact_plan::Value, String>>,
+    pub(crate) rust_sources: Vec<String>,
 }
 
 impl Seed {
@@ -51,7 +52,10 @@ impl Seed {
                 ))
             });
         }
-        Ok(Seed { values })
+        Ok(Seed {
+            values,
+            rust_sources: rust_sources.to_vec(),
+        })
     }
 
     /// From the files on disk, when both exist; `None` otherwise.
@@ -177,6 +181,10 @@ impl exact_runner::DataSourceWrapper for Seeded<'_> {
     fn app_id(&self) -> &str {
         self.module.app_id()
     }
+    fn preloads(&self) -> &[exact_runner::request::Preload] {
+        self.module.preloads()
+    }
+
     fn grants(&self) -> &str {
         self.module.grants()
     }

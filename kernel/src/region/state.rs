@@ -881,7 +881,7 @@ fn validate(arena: &NodeArena, b: ContentRegion) -> Result<(), LayoutError> {
             }
         }
     }
-    if !s.unpadded(arena.env()) {
+    if !s.unpadded(&arena.env_of(b.owner.index)) {
         return Err(bad());
     }
     members(arena, b.content)?;

@@ -22,6 +22,9 @@ pub(crate) struct Open {
 struct Rendered {
     id: u32,
     complete: bool,
+    /// The surface drew a complete frame of its picture (`frame_ready`),
+    /// which `complete` cannot say on the web, where every frame is shown.
+    drawn: bool,
     /// Its drawable, presented after the submit; `None` when the surface
     /// failed after recording — then only kept alive until the submit, since
     /// the recorded commands still name its texture, and discarded.
@@ -256,6 +259,7 @@ impl Module {
         open.canvases.push(Rendered {
             id,
             complete: ready,
+            drawn: inst.surface.frame_ready() && failure.is_none(),
             texture,
             failed,
             request: off_thread && wants && ready,
@@ -277,13 +281,12 @@ impl Module {
         let timing = self.timing(id, frame.now_ms);
         let gpu = self.gpu.as_ref()?;
         let inst = self.instances.get_mut(&id)?;
-        if inst
-            .ring
-            .as_ref()
-            .is_some_and(|r| r.size != (w.max(1), h.max(1)))
-        {
-            inst.ring = crate::buffers::Ring::new(gpu, w, h, inst.offscreen_format());
-        }
+        let (size, format) = ((w.max(1), h.max(1)), inst.offscreen_format());
+        inst.presented.refit(
+            &mut inst.ring,
+            |r| r.size == size,
+            || crate::buffers::Ring::new(gpu, w, h, format),
+        );
         // The GPU's word on the frames it has finished, before counting them.
         let _ = gpu.device.poll(wgpu::PollType::Poll);
         let ring = inst.ring.as_mut()?;
@@ -343,6 +346,7 @@ impl Module {
         open.canvases.push(Rendered {
             id,
             complete: ready,
+            drawn: ready && failure.is_none(),
             texture: None,
             failed: None,
             request: false,
@@ -377,15 +381,34 @@ impl Module {
         // canvas frame, as an `MTKView` draw is. Not when a surface failed
         // after recording: its drawable is in the submit, and must not be
         // shown.
-        // Canvases whose first frame this is (`Module::seen`).
-        let first: Vec<Arc<AtomicBool>> = open
+        // Canvases whose first frame this is (`Module::seen`), or the first
+        // of their current picture (`presented`). A frame in a buffer is
+        // presented when the reader is handed it (`Module::buffer`), once the
+        // GPU has finished it, not here.
+        let first: Vec<First> = open
             .canvases
             .iter()
             .filter(|c| c.complete && (c.texture.is_some() || c.buffer.is_some_and(|(_, p)| p)))
-            .filter_map(|c| self.instances.get(&c.id))
-            .filter(|i| !i.seen.load(Ordering::Acquire))
-            .map(|i| i.seen.clone())
+            .filter_map(|c| {
+                let i = self.instances.get(&c.id)?;
+                let first = First {
+                    seen: (!i.seen.load(Ordering::Acquire)).then(|| i.seen.clone()),
+                    presented: (c.drawn && c.texture.is_some())
+                        .then(|| i.presented.pending())
+                        .flatten(),
+                };
+                (first.seen.is_some() || first.presented.is_some()).then_some(first)
+            })
             .collect();
+        // Canvases whose HUD reads `cpuSubmitMs`: only then is the submit timed.
+        let timed: Vec<u32> = (open.canvases.iter())
+            .map(|c| c.id)
+            .filter(|id| (self.instances.get(id)).is_some_and(|i| i.performance.enabled()))
+            .collect();
+        let submit = |encoder: wgpu::CommandEncoder| {
+            let commands = encoder.finish();
+            crate::performance::time(!timed.is_empty(), || gpu.queue.submit([commands])).1
+        };
         #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
         let mut first = first;
         #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
@@ -398,18 +421,24 @@ impl Module {
             let before = ride
                 .then(|| ride_next_submit(&gpu.queue, std::mem::take(&mut first)))
                 .flatten();
-            gpu.queue.submit([open.encoder.finish()]);
+            let submit_ms = submit(open.encoder);
             // Every drawable of the frame, or none: a surface that drew
             // nothing into its target is in no command buffer, and then each
             // is presented the ordinary way (one already scheduled is not
             // scheduled twice).
-            before.is_some_and(|n| presented_with_submit(&gpu.queue) == Some(n + drawn))
+            let rode = before.is_some_and(|n| presented_with_submit(&gpu.queue) == Some(n + drawn));
+            (rode, submit_ms)
         };
         #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "tvos")))]
-        let rode = {
-            gpu.queue.submit([open.encoder.finish()]);
-            false
-        };
+        let rode = (false, submit(open.encoder));
+        let (rode, submit_ms) = rode;
+        if let Some(ms) = submit_ms {
+            for id in &timed {
+                if let Some(i) = self.instances.get_mut(id) {
+                    i.performance.submitted(ms);
+                }
+            }
+        }
         let mut ok = true;
         for c in open.canvases {
             // Android presents a canvas that asks for its next texture on its
@@ -450,7 +479,8 @@ impl Module {
             };
             #[cfg(target_os = "android")]
             if let (Some((slot, publish)), Some(ring)) = (c.buffer, inst.ring.as_mut()) {
-                ring.submitted(slot, publish, &gpu.queue);
+                let shown = publish.then(|| inst.presented.pending()).flatten();
+                ring.submitted(slot, publish, &gpu.queue, shown);
             }
             #[cfg(not(target_os = "android"))]
             let _ = c.buffer;
@@ -711,8 +741,9 @@ fn fs(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
 }
 ";
 
-/// The presenter's callback for a canvas's first frame (`gpu_on_presented`),
-/// as an address; 0 when none is registered. On Metal it runs on the thread
+/// The presenter's callback for a canvas's first frame, or the first of its
+/// current picture (`gpu_on_presented`), as an address; 0 when none is
+/// registered. On Metal it runs on the thread
 /// that scheduled the frame's command buffer.
 static SHOWN: AtomicUsize = AtomicUsize::new(0);
 
@@ -722,11 +753,23 @@ pub(crate) fn on_presented(callback: Option<extern "C" fn()>) {
     SHOWN.store(callback.map_or(0, |f| f as usize), Ordering::SeqCst);
 }
 
+/// A canvas's frame that is the first it presents, or the first of its
+/// current picture.
+pub(crate) struct First {
+    seen: Option<Arc<AtomicBool>>,
+    presented: Option<crate::presented::Shown>,
+}
+
 /// These canvases' first frames are with the compositor: say so, and tell
 /// the presenter.
-fn shown(first: Vec<Arc<AtomicBool>>) {
-    for seen in first {
-        seen.store(true, Ordering::Release);
+fn shown(first: Vec<First>) {
+    for f in first {
+        if let Some(seen) = f.seen {
+            seen.store(true, Ordering::Release);
+        }
+        if let Some(presented) = f.presented {
+            presented.shown();
+        }
     }
     let address = SHOWN.load(Ordering::SeqCst);
     if address != 0 {
@@ -742,7 +785,7 @@ fn shown(first: Vec<Arc<AtomicBool>>) {
 /// drawables it has presented that way so far. `None` off Metal, with
 /// `first` shown at once.
 #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
-fn ride_next_submit(queue: &wgpu::Queue, first: Vec<Arc<AtomicBool>>) -> Option<usize> {
+fn ride_next_submit(queue: &wgpu::Queue, first: Vec<First>) -> Option<usize> {
     // SAFETY: a flag, a callback and a counter of the queue wgpu owns;
     // nothing is encoded.
     let Some(q) = (unsafe { queue.as_hal::<wgpu::hal::api::Metal>() }) else {

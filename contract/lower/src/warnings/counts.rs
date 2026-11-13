@@ -152,20 +152,6 @@ impl Counts<'_> {
                 self.expr(yes, scope, chosen);
                 self.expr(no, scope, chosen);
             }
-            Expr::Binary(_, a, b, _) => {
-                self.expr(a, scope, chosen);
-                self.expr(b, scope, chosen);
-            }
-            Expr::Unary(_, inner, _)
-            | Expr::Some(inner, _)
-            | Expr::NamedArg(_, inner, _)
-            | Expr::Typed(inner, _, _)
-            | Expr::Member(inner, _, _) => self.expr(inner, scope, chosen),
-            Expr::Call(_, items, _) | Expr::List(items, _) => {
-                for x in items {
-                    self.expr(x, scope, chosen);
-                }
-            }
             Expr::Match {
                 subject,
                 var,
@@ -202,7 +188,10 @@ impl Counts<'_> {
                 );
                 self.expr(body, &inner, chosen);
             }
-            Expr::Number(..) | Expr::Str(..) | Expr::Bool(..) | Expr::None(_) | Expr::Ident(..) => {
+            _ => {
+                for x in e.operands() {
+                    self.expr(x, scope, chosen);
+                }
             }
         }
     }

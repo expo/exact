@@ -125,7 +125,8 @@ impl<D: DataSource> Runner<D> {
                                 exact_kernel::svg::scene::content_box(&self.kernel, &up).2
                             });
                         let resolved = self.kernel.resolved_padding(key);
-                        content_rect(&node, arena.env(), block, resolved, self.stitched(key))
+                        let env = arena.env_of(key.index);
+                        content_rect(&node, &env, block, resolved, self.stitched(key))
                     });
                 let last = self
                     .resized

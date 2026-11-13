@@ -94,23 +94,86 @@ enum DateValue {
         f.dateFormat = pattern
         return f
     }
-    private static let date = formatter("yyyy-MM-dd"), time = formatter("HH:mm"), seconds = formatter("HH:mm:ss"),
-                       local = formatter("yyyy-MM-dd'T'HH:mm"), localSeconds = formatter("yyyy-MM-dd'T'HH:mm:ss")
+    private static let date = formatter("yyyy-MM-dd"), clock = formatter("HH:mm:ss")
+    private static let calendar: Calendar = {
+        var calendar = Calendar(identifier: .iso8601)
+        calendar.timeZone = utc
+        return calendar
+    }()
 
+    /// `s` by HTML's value grammar for `kind`, as the kernel holds a value to
+    /// it (`ControlKind::valid_value`): a date `yyyy-mm-dd` (the year four or
+    /// more digits, never 0), a time `hh:mm` with optional `:ss` and one to
+    /// three fraction digits, a local date and time the two joined by `T` or
+    /// a space, and nothing after. A value HTML's sanitization would empty is
+    /// nil.
     static func parse(_ kind: String, _ s: String) -> Date? {
-        switch kind {
-        case "date": return date.date(from: s)
-        case "time": return time.date(from: s) ?? seconds.date(from: String(s.prefix(8)))
-        default: return local.date(from: s) ?? localSeconds.date(from: String(s.prefix(19)))
+        let digits = { (part: Substring, count: ClosedRange<Int>) -> Int? in
+            count.contains(part.count) && part.allSatisfy({ ("0"..."9").contains($0) }) ? Int(part) : nil
         }
+        var day: Substring?, clock: Substring?
+        switch kind {
+        case "date": day = s[...]
+        case "time": clock = s[...]
+        default:
+            guard let at = s.firstIndex(where: { $0 == "T" || $0 == " " }) else { return nil }
+            day = s[..<at]
+            clock = s[s.index(after: at)...]
+        }
+        var fields = DateComponents(year: 1970, month: 1, day: 1, hour: 0, minute: 0, second: 0, nanosecond: 0)
+        if let day {
+            let f = day.split(separator: "-", omittingEmptySubsequences: false)
+            guard f.count == 3, let y = digits(f[0], 4...Int.max), y > 0, let m = digits(f[1], 2...2), let d = digits(f[2], 2...2) else { return nil }
+            fields.year = y
+            fields.month = m
+            fields.day = d
+        }
+        if let clock {
+            let f = clock.split(separator: ":", omittingEmptySubsequences: false)
+            guard (2...3).contains(f.count), let h = digits(f[0], 2...2), h < 24, let m = digits(f[1], 2...2), m < 60 else { return nil }
+            fields.hour = h
+            fields.minute = m
+            if f.count == 3 {
+                let second = f[2].split(separator: ".", omittingEmptySubsequences: false)
+                guard second.count <= 2, let whole = digits(second[0], 2...2), whole < 60 else { return nil }
+                fields.second = whole
+                if second.count == 2 {
+                    guard let fraction = digits(second[1], 1...3) else { return nil }
+                    fields.nanosecond = fraction * [100_000_000, 10_000_000, 1_000_000][second[1].count - 1]
+                }
+            }
+        }
+        // A day the month does not have (February's 30th) is not a date.
+        guard fields.isValidDate(in: calendar) else { return nil }
+        return calendar.date(from: fields)
     }
 
+    /// `d` as HTML's normalized value for `kind`, as `el.value` reads a local
+    /// date and time: seconds only when they or the fraction are not zero,
+    /// and the fraction, in whole milliseconds, in as few digits as it needs.
     static func format(_ kind: String, _ d: Date) -> String {
-        switch kind {
-        case "date": return date.string(from: d)
-        case "time": return time.string(from: d)
-        default: return local.string(from: d)
+        // Whole milliseconds, rounded: a Date's binary fraction reads .5 as .4999….
+        let (q, r) = Int64((d.timeIntervalSince1970 * 1000).rounded()).quotientAndRemainder(dividingBy: 1000)
+        let second = Date(timeIntervalSince1970: Double(r < 0 ? q - 1 : q)), fraction = r < 0 ? r + 1000 : r
+        if kind == "date" { return date.string(from: second) }
+        var time = clock.string(from: second)
+        if fraction != 0 {
+            time += "." + String(String(format: "%03d", fraction).reversed().drop(while: { $0 == "0" }).reversed())
+        } else if time.hasSuffix(":00") {
+            time.removeLast(3)
         }
+        return kind == "time" ? time : date.string(from: second) + "T" + time
+    }
+
+    /// What a picker showing `d` reads after the agent's `type` gave it
+    /// `typed`: `typed`, the value the app heard, while the picker still
+    /// shows that value, else what an action wrote over it. A picker shows
+    /// no finer than a minute and UIKit's may drop the seconds it is given,
+    /// so the minute is what is compared.
+    static func shown(_ kind: String, typed: String, _ d: Date) -> String {
+        let minute = { (d: Date) in (d.timeIntervalSince1970 / 60).rounded(.down) }
+        guard let value = parse(kind, typed), minute(value) == minute(d) else { return format(kind, d) }
+        return typed
     }
 
     /// The wall clock's fields in the picker's zone-free representation,
@@ -187,6 +250,9 @@ struct ButtonFace: Equatable {
     var leading = true
     var label: String?
     var fits = true
+    /// A tab's badge (LLP 1075.003 §9.9): the text of the filled box beside
+    /// its face, which the kernel reads from the tab's children.
+    var badge: String?
     var style: String?
     var ios = ButtonFace.unsaid
     var iosBefore26 = ButtonFace.unsaid
@@ -212,6 +278,7 @@ struct ButtonFace: Equatable {
         leading = o["leading"] as? Bool ?? true
         label = o["label"] as? String
         fits = o["fits"] as? Bool ?? true
+        badge = o["badge"] as? String
         style = o["style"] as? String
         ios = o["ios"] as? String ?? ios
         iosBefore26 = o["iosBefore26"] as? String ?? iosBefore26

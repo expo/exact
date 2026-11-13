@@ -16,6 +16,15 @@ import UIKit
 /// it, with its own symbols (`ExactRadio`, RadioIOS.swift). VoiceOver reads
 /// a checkbox as it reads UIKit's own toggles (`updateAccessibility`).
 class ExactCheckbox: UIControl {
+    /// Where the surface draws it, inside a placed canvas child (PlacedAccessibilityIOS.swift).
+    override var accessibilityFrame: CGRect {
+        get { placedAccessibilityFrame ?? super.accessibilityFrame }
+        set { super.accessibilityFrame = newValue }
+    }
+    override var accessibilityActivationPoint: CGPoint {
+        get { placedActivationPoint(from: super.accessibilityActivationPoint) ?? super.accessibilityActivationPoint }
+        set { super.accessibilityActivationPoint = newValue }
+    }
     var isOn = false { didSet { if isOn != oldValue { setNeedsDisplay(); updateAccessibility() } } }
     var ariaUnavailable = false { didSet { if ariaUnavailable != oldValue { updateAccessibility() } } }
     var accent: UIColor? { didSet { setNeedsDisplay() } }
@@ -127,6 +136,8 @@ final class ControlHost: NSObject {
     var kinds: [UInt32: String] = [:]
     /// The size last reported per control, so each is published once.
     private var reported: [UInt32: CGSize] = [:]
+    /// Sizes measured and not yet reported (`reportMeasured`).
+    private var measured: [(UInt32, CGSize?)] = []
     /// A select's menu as last built, so a batch that leaves it alone does not rebuild it.
     var menus: [UInt32: SelectMenu] = [:]
     /// A range's last reported value while it moves, so each is sent once.
@@ -186,10 +197,13 @@ final class ControlHost: NSObject {
         // tvOS has no UISwitch; a checkbox stands in.
         case "switch": made = ExactCheckbox(frame: .zero)
         #else
-        case "switch": made = UISwitch()
+        case "switch": made = ExactSwitch()
         #endif
         case "checkbox": made = ExactCheckbox(frame: .zero)
-        case "radio": made = ExactRadio(frame: .zero) // x2apps survey #2
+        case "radio":
+            let radio = ExactRadio(frame: .zero)
+            radio.owner = node
+            made = radio
         case "button": made = makeNativeButton(node) // LLP 1069.011
         default: made = makeValueControl(kind, node.id)
         }
@@ -378,16 +392,30 @@ final class ControlHost: NSObject {
                 sizes.append((owner.id, natural))
             }
         }
-        // Published outside the batch being applied, as images' are; a
-        // control destroyed before then reports nothing.
         if !sizes.isEmpty {
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                let live = sizes.filter { self.controls[$0.0] != nil && self.presenter.views[$0.0] != nil }
-                if !live.isEmpty { self.presenter.onIntrinsic?(live) }
-            }
+            measured += sizes
+            DispatchQueue.main.async { [weak self] in self?.presenter.session?.reportMeasured() }
         }
         syncProgress()
+    }
+
+    /// Sizes measured and not yet reported.
+    var owesSizes: Bool { !measured.isEmpty }
+
+    /// Lays out with the sizes measured since the last report, when the session
+    /// says (`ExactSession.reportMeasured`): once the batch being applied is,
+    /// before its frame shows, so a box under a layout transition never shows
+    /// where the default size put it (#134); else, for a sync outside a batch,
+    /// on the next turn or once the owner's earlier batches land. A control
+    /// destroyed before then reports nothing. A layout can size a control
+    /// again (a select's wrapped title): a few rounds, as it settles.
+    func reportMeasured() {
+        for _ in 0..<3 where !measured.isEmpty {
+            var latest: [UInt32: CGSize?] = [:]
+            for (id, size) in measured where controls[id] != nil && presenter.views[id] != nil { latest[id] = size }
+            measured = []
+            if !latest.isEmpty { presenter.onIntrinsic?(latest.map { ($0.key, $0.value) }) }
+        }
     }
 
     /// Configures `control` from its owner: its accent as UIKit's tint

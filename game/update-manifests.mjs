@@ -4,7 +4,7 @@ import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { pathFrom } from '../scripts/app.mjs';
 
 const ROOT = resolve(import.meta.dir, '..');
-const hosts = ['exact-apple', 'exact-apple-update', 'exact-linux', 'exact-linux-update', 'exact-windows'];
+const hosts = ['exact-apple', 'exact-apple-update', 'exact-linux', 'exact-painted', 'exact-linux-update', 'exact-windows'];
 const tableAt = (doc, keys) => keys.reduce((value, key) => value?.[key], doc);
 const keyText = keys => keys.map(key => /^[\w-]+$/.test(key) ? key : JSON.stringify(key)).join('.');
 

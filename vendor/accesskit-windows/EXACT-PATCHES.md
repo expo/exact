@@ -5,7 +5,8 @@
 - Archive SHA-256: `498668b90da9995302a0055aaecad4756932333da2ddef6baee1c00844c430fc`
 - VCS revision: `f3026222559c7f5f46d8f25cb7404de68eb149f0`,
   `adapters/windows`, from the archive's `.cargo_vcs_info.json`.
-- Licenses: Apache-2.0 or MIT; the upstream licenses remain in this copy.
+- Licenses: Apache-2.0 or MIT. The archive has no license files; this copy
+  adds `LICENSE-APACHE` and `LICENSE-MIT` from the repository at that revision.
 - Selection: the root `[patch.crates-io]`; no feature or dependency change.
   Neither `game/` nor `snapback4/` depends on this crate.
 - Packaging omissions: `.cargo_vcs_info.json`, `CHANGELOG.md`, `Cargo.lock`

@@ -11,9 +11,9 @@
 //!   (five seconds at most), where the text has URBs reaped by a thread with `USBDEVFS_DISCARDURB` for a call let go.
 //! - The painted presenter draws no chooser (D2): `requestDevice` fails `NotSupportedError`.
 //!
-//! The package names only `exact_linux` and `std`, so the ioctls and their structures are declared here.
+//! The package names only `exact_painted` and `std`, so the ioctls and their structures are declared here.
 
-use exact_linux::package::{json, Context, Json, Package, Reply};
+use exact_painted::package::{json, Context, Json, Package, Reply};
 use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
 use std::io::ErrorKind;
@@ -71,11 +71,25 @@ fn hex(p: &Path) -> u64 {
 fn dec(p: &Path) -> u64 {
     text(p).and_then(|v| v.parse().ok()).unwrap_or(0)
 }
+/// The device's `bcdUSB`, from sysfs's `version`, which prints it as `"%2x.%02x"` (` 2.10` is 0x0210): sysfs has no
+/// `bcdUSB` file (`version_show`, drivers/usb/core/sysfs.c).
+fn bcd_usb(p: &Path) -> u64 {
+    let v = text(&p.join("version")).unwrap_or_default();
+    let (major, minor) = v.split_once('.').unwrap_or_default();
+    let field = |f: &str| u64::from_str_radix(f, 16).unwrap_or(0) & 0xFF;
+    field(major) << 8 | field(minor)
+}
+/// The device's active configuration, none while it is unconfigured (`bConfigurationValue` 0 or empty).
+fn configured(p: &Path) -> Option<u64> {
+    Some(dec(&p.join("bConfigurationValue"))).filter(|&v| v > 0)
+}
 
 #[derive(Clone)]
 struct Device {
     id: String,
     node: String,
+    /// Its sysfs directory, `/sys/bus/usb/devices/1-2`.
+    sys: PathBuf,
     record: Json,
 }
 
@@ -119,8 +133,8 @@ fn devices() -> Vec<Device> {
             continue;
         }
         let (bus, num) = (dec(&p.join("busnum")), dec(&p.join("devnum")));
-        let (usb, bcd) = (hex(&p.join("bcdUSB")), hex(&p.join("bcdDevice")));
-        let configuration = dec(&p.join("bConfigurationValue"));
+        let (usb, bcd) = (bcd_usb(&p), hex(&p.join("bcdDevice")));
+        let configuration = configured(&p);
         let id = format!("{:04x}:{:04x}@{}", hex(&p.join("idVendor")), hex(&p.join("idProduct")), e.file_name().to_string_lossy());
         let node = format!("/dev/bus/usb/{bus:03}/{num:03}");
         let granted = OpenOptions::new().read(true).write(true).open(&node).map_or_else(|e| e.kind() != ErrorKind::PermissionDenied, |_| true);
@@ -130,11 +144,11 @@ fn devices() -> Vec<Device> {
             "deviceClass": hex(&p.join("bDeviceClass")), "deviceSubclass": hex(&p.join("bDeviceSubClass")), "deviceProtocol": hex(&p.join("bDeviceProtocol")),
             "deviceVersionMajor": bcd >> 8, "deviceVersionMinor": (bcd >> 4) & 0xF, "deviceVersionSubminor": bcd & 0xF,
             "manufacturerName": text(&p.join("manufacturer")).unwrap_or_default(), "productName": text(&p.join("product")).unwrap_or_default(),
-            "serialNumber": text(&p.join("serial")), "configuration": (configuration > 0).then_some(configuration),
-            "configurations": [{ "configurationValue": configuration.max(1), "configurationName": text(&p.join("configuration")), "interfaces": interfaces(&p) }],
+            "serialNumber": text(&p.join("serial")), "configuration": configuration,
+            "configurations": [{ "configurationValue": configuration.unwrap_or(1), "configurationName": text(&p.join("configuration")), "interfaces": interfaces(&p) }],
             "connected": true, "granted": granted,
         });
-        out.push(Device { id, node, record });
+        out.push(Device { id, node, sys: p, record });
     }
     out.sort_by(|a, b| a.id.cmp(&b.id));
     out
@@ -364,7 +378,7 @@ impl Package for Usb {
                 }
             }
             "usbConnection" => match self.handle(args) {
-                Ok((h, _, o)) => json!({ "open": true, "connected": true, "configuration": null, "claimed": o.claims.iter().filter(|(_, c)| **c == h).map(|(n, _)| *n).collect::<Vec<_>>() }),
+                Ok((h, c, o)) => json!({ "open": true, "connected": true, "configuration": configured(&c.device.sys), "claimed": o.claims.iter().filter(|(_, c)| **c == h).map(|(n, _)| *n).collect::<Vec<_>>() }),
                 Err(_) => json!({ "open": false, "connected": false, "configuration": null, "claimed": [] }),
             },
             "selectConfiguration" => self.uint(args, SETCONFIGURATION, args["configurationValue"].as_u64().unwrap_or(1) as u32),
@@ -448,5 +462,27 @@ impl Package for Usb {
             _ => json!({ "error": "NotSupportedError" }),
         };
         reply.send(if answer.is_null() { json!({}) } else { answer });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_usb_version_and_configuration_are_read_as_sysfs_writes_them() {
+        let dir = std::env::temp_dir().join(format!("exact-usb-sysfs-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let read = |version: &str, configuration: &str| {
+            std::fs::write(dir.join("version"), version).unwrap();
+            std::fs::write(dir.join("bConfigurationValue"), configuration).unwrap();
+            (bcd_usb(&dir), configured(&dir))
+        };
+        assert_eq!(read(" 2.00\n", "1\n"), (0x0200, Some(1)));
+        assert_eq!(read(" 2.10\n", "2\n"), (0x0210, Some(2)));
+        assert_eq!(read(" 1.10\n", "\n"), (0x0110, None), "a device with no active configuration");
+        assert_eq!(read(" 3.20\n", "0\n"), (0x0320, None));
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!((bcd_usb(&dir), configured(&dir)), (0, None));
     }
 }

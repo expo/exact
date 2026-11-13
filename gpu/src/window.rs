@@ -449,7 +449,12 @@ impl Module {
         // Start offscreen rendering before waiting for the swapchain. Otherwise
         // the acquisition wait serializes the previous GPU frame with this
         // frame's simulation, scene uploads and command encoding.
-        gpu.queue.submit([encoder.finish()]);
+        let commands = encoder.finish();
+        let timed = inst.as_ref().is_some_and(|i| i.performance.enabled());
+        let (_, submit_ms) = crate::performance::time(timed, || gpu.queue.submit([commands]));
+        if let (Some(ms), Some(inst)) = (submit_ms, inst.as_mut()) {
+            inst.performance.submitted(ms);
+        }
         if let Some(inst) = inst.as_mut() {
             inst.surface.submitted();
             // Rendering can publish messages or errors even if no drawable is
@@ -496,6 +501,9 @@ impl Module {
         if let Some(inst) = inst {
             inst.dirty = false;
             inst.seen.store(true, Ordering::Release);
+            if inst.surface.frame_ready() {
+                inst.presented.now();
+            }
         }
         gpu.queue.present(drawable);
         Ok(())

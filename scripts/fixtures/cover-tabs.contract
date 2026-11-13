@@ -1,0 +1,42 @@
+// #223: a system tab bar under a `viewport-fit="cover"` root, whose routes
+// keep the bar's cover. `home`'s last in-flow child is a scroller with nothing
+// under it, drawn on under the bar (PageEdgesIOSTests). `shape` picks a variant:
+// `bare` (the issue's), `padded` (the route padded by env(safe-area-inset-bottom)),
+// `footer` (a caption under the scroller: no band), `short` (content that fits)
+// and `list` (a virtualized list). The buttons that pick one are placed
+// absolutely, out of flow.
+routes nav
+  tab home "/"
+  tab other "/other"
+
+component CoverTabs
+  state shape = "bare"
+  action pick(name: string)
+    nav = select(nav, name)
+  action use(s: string)
+    shape = s
+  view
+    main viewport-fit="cover" navigationKey=`${top(nav).id}` testId="app" width="100%" height="100%"
+      for t in nav.tabs key=t.name
+        column role="tabpanel" id=`panel-${t.name}` position="absolute" inset=0
+          for e in t.stack key=e.id
+            column navigationKey=`${e.id}` testId=`route-${e.name}` position="absolute" inset=0 display="flex" flex-direction="column" padding-bottom=(shape == "padded" ? "env(safe-area-inset-bottom)" : "0px")
+              if shape == "list"
+                list testId="list" appearance="none" virtualized=true flex=1 min-height=0
+                  for i in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20] key=i
+                    text `Row ${i}` testId=`row-${i}` padding=24
+              else
+                scroll testId="list" flex=1 min-height=0
+                  for c in (shape == "short" ? ["red"] : ["red", "orange", "green", "blue", "purple", "teal", "brown", "gray"]) key=c
+                    view height=160 background-color=c
+                  text "end" testId="end"
+              if shape == "footer"
+                text "Signed in as Ada" testId="footer" padding=16
+              row position="absolute" top=80 right=8 gap=4
+                for s in ["bare", "padded", "footer", "short", "list"] key=s
+                  button press=use(s) testId=`use-${s}`
+                    text s
+      row role="tablist"
+        for t in nav.tabs key=t.name
+          button role="tab" aria-controls=`panel-${t.name}` aria-selected=(nav.tab == t.name) press=pick(t.name) testId=`tab-${t.name}`
+            text t.name

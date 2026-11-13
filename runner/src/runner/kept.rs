@@ -91,19 +91,23 @@ pub(super) fn refuse(
         .push((i, super::lines::kept_refused(name, Some(&json(kept)), &why)));
 }
 
-/// The store name a resource's kept answer lives under.
-/// The kept entries in `snapshot` no declared reader of `plan` seeds. A
+/// The kept entries in `names` no declared reader of `plan` seeds. A
 /// cold boot seeds a first frame only from declared readers' kept answers,
 /// so any other entry (a reader made `transient`, a resource removed) is
 /// forgotten on disk, not carried forever. A reload's carried readers are
 /// checked for compatibility instead.
-pub(super) fn obsolete(plan: &exact_plan::Plan, snapshot: &[(String, Vec<u8>)]) -> Vec<String> {
-    snapshot
-        .iter()
-        .filter_map(|(name, _)| {
+pub(super) fn obsolete<'n>(
+    plan: &exact_plan::Plan,
+    names: impl Iterator<Item = &'n String>,
+) -> Vec<String> {
+    names
+        .filter_map(|name| {
             let resource = name.strip_prefix(Store::KEPT)?;
             (!(0..plan.resources.len()).any(|i| {
-                (plan.resources[i].reader || kept_module(plan, i))
+                (kept_surface(plan, i)
+                    || kept_module(plan, i)
+                    || plan.resources[i].reader
+                        && !exact_plan::runner_owned_source(plan.str(plan.resources[i].source)))
                     && !plan.resources[i].transient
                     && plan.str(plan.resources[i].name) == resource
             }))
@@ -128,16 +132,16 @@ pub(super) fn transient<'n>(
         .collect()
 }
 
-/// Every kept entry in `snapshot`: what an app that keeps no answers
+/// Every kept entry in `names`: what an app that keeps no answers
 /// forgets (LLP 1069.008.000 D7).
-pub(super) fn all(snapshot: &[(String, Vec<u8>)]) -> Vec<String> {
-    snapshot
-        .iter()
-        .filter(|(name, _)| name.starts_with(Store::KEPT))
-        .map(|(name, _)| name.clone())
+pub(super) fn all<'n>(names: impl Iterator<Item = &'n String>) -> Vec<String> {
+    names
+        .filter(|name| name.starts_with(Store::KEPT))
+        .cloned()
         .collect()
 }
 
+/// The store name a resource's kept answer lives under.
 pub(super) fn kept_name(resource: &str) -> String {
     let mut name = String::from(Store::KEPT);
     name.push_str(resource);
@@ -312,35 +316,44 @@ impl<D: DataSource> Runner<D> {
         let name = self.plan.str(row.name);
         let entry = self.store.kept(&kept_name(name))?;
         let identity = row.args.len as usize - usize::from(row.context);
-        let seed = decode(entry)
-            .filter(|(args, value)| args.len() == identity && self.check_shape(i, value).is_ok());
+        let seed = decode(entry).and_then(|(mut args, value)| {
+            if kept_surface(&self.plan, i) {
+                let surface = crate::surface_record::surface_name(&self.plan, &row)?;
+                if args.pop() != Some(crate::surface_record::keep_signature(&self.plan, row.ty)?)
+                    || args.as_slice() != [Value::str(surface)]
+                {
+                    return None;
+                }
+            }
+            (args.len() == identity && self.check_shape(i, &value).is_ok()).then_some((args, value))
+        });
         if seed.is_none() {
             let line = super::lines::kept_refused(name, None, "it no longer decodes or fits");
             self.keeping.refused.push((i, line));
+            if row.keep {
+                self.store.forget_kept(&kept_name(name));
+            }
         }
         seed
     }
 
-    /// Before the source is ready, each store reader is asked again at
-    /// `data_ready`, and shows the answer kept from the last launch where it
-    /// still fits (`seeded`: a document's answers already seeded it). A
-    /// launch that begins with a presence secret locked or pending shows
-    /// none (LLP 1133.010 D5): a kept answer is the account's content, and
-    /// the person has not passed the check yet.
-    pub(super) fn seed_kept(&mut self, seeded: &[bool], device_state: bool) {
+    /// Before the source is ready, each row the bake marked `reader` is
+    /// asked again at `data_ready`, and shows the answer kept from the last
+    /// launch where it still fits. A row a page's answer seeded (`seeded`)
+    /// is left to the page, whose checkpoint says whether it is asked again
+    /// ([`Runner::seed_checkpoint`]). A launch that begins with a presence
+    /// secret locked or pending shows none (LLP 1133.010 D5): a kept answer
+    /// is the account's content, and the person has not passed the check yet.
+    pub(super) fn seed_kept(&mut self, seeded: &[bool]) {
         let locked = self.store.opened_locked();
         if locked {
             self.log("kept answers not shown: the launch begins with a presence secret locked (LLP 1133.010 D5)");
         }
         for (i, &taken) in seeded.iter().enumerate() {
-            if !self.resource_row(i).reader
+            if taken
+                || !self.resource_row(i).reader
                 || exact_plan::runner_owned_source(self.plan.str(self.resource_row(i).source))
             {
-                continue;
-            }
-            // An answer the runtime already has isn't asked again when
-            // the module loads, unless the device's store may change it.
-            if taken && !device_state {
                 continue;
             }
             self.resources[i].stale = true;
@@ -366,17 +379,32 @@ impl<D: DataSource> Runner<D> {
 
     /// The first frame's kept answers: a store reader's while the data
     /// source is not ready, and a kept module source's always.
-    pub(super) fn seed_at_boot(
-        &mut self,
-        seeded: &[bool],
-        device_state: bool,
-        ready: bool,
-        private: bool,
-    ) {
+    pub(super) fn seed_at_boot(&mut self, seeded: &[bool], ready: bool, private: bool) {
         if !ready {
-            self.seed_kept(seeded, device_state);
+            self.seed_kept(seeded);
         }
         self.seed_kept_modules(ready, private);
+        if !private && !self.store.opened_locked() {
+            for i in 0..self.plan.resources.len() {
+                if !kept_surface(&self.plan, i) || self.resources[i].state.is_some() {
+                    continue;
+                }
+                if let Some((args, value)) = self.kept_seed(i) {
+                    self.resources[i].state = Some(ResourceState {
+                        inspection_generation: 0,
+                        args,
+                        value: crate::held::Held::new(value),
+                        store_revision: self.store.revision(),
+                        placeholder: false,
+                        kept_seed: true,
+                        answered_for: None,
+                        asleep: false,
+                        slept: false,
+                        origin: 0,
+                    });
+                }
+            }
+        }
     }
 
     /// Each resource reading a kept module source (LLP 1133.015 D4) shows
@@ -409,7 +437,7 @@ impl<D: DataSource> Runner<D> {
                 origin: 0,
             });
             match ready {
-                true => self.refresh_next.push(i),
+                true => self.ask_at_launch(i),
                 false => self.resources[i].stale = true,
             }
         }
@@ -422,7 +450,11 @@ impl<D: DataSource> Runner<D> {
         if self.member(i).is_some() {
             return;
         }
-        let module = self.keeping.modules && kept_module(&self.plan, i);
+        let surface = self.keeping.modules
+            && kept_surface(&self.plan, i)
+            && crate::surface_record::surface_name(&self.plan, self.resource_row(i))
+                .is_some_and(|name| self.surface_records.contains_key(name));
+        let module = surface || self.keeping.modules && kept_module(&self.plan, i);
         if !module && (!self.keeping.on || !self.resources[i].store_reader)
             || self.resource_row(i).transient
         {
@@ -430,13 +462,39 @@ impl<D: DataSource> Runner<D> {
         }
         // @ref LLP 1039 D3 / LLP 1030 D7 — runner facts are never kept answers.
         let source = self.plan.str(self.resource_row(i).source);
-        if exact_plan::runner_owned_source(source) {
+        if exact_plan::runner_owned_source(source) && !surface {
             return;
         }
         // @ref LLP 1027.005 D6 — context reaches the source but does not
         // enter the kept entry or its budget.
         let row = self.resource_row(i).clone();
         let args = &args[..row.args.len as usize - usize::from(row.context)];
+        // The record the module published, without the host's own members
+        // (`presented`, LLP 1009 D9): those are this launch's.
+        let published;
+        let value = if surface {
+            let record = crate::surface_record::surface_name(&self.plan, &row)
+                .and_then(|name| self.surface_records.get(name));
+            let Some(Ok(v)) = record
+                .map(|text| crate::surface_record::decode_published(&self.plan, row.ty, text))
+            else {
+                return;
+            };
+            published = v;
+            &published
+        } else {
+            value
+        };
+        let surface_args;
+        let args = if surface {
+            let Some(signature) = crate::surface_record::keep_signature(&self.plan, row.ty) else {
+                return;
+            };
+            surface_args = [args.to_vec(), vec![signature]].concat();
+            surface_args.as_slice()
+        } else {
+            args
+        };
         let name = kept_name(self.plan.str(row.name));
         if !fits(args, value) {
             // An older answer kept for it would show stale at the next launch: forget it (with the commit), and
@@ -608,6 +666,21 @@ impl<D: DataSource> Runner<D> {
         result
     }
 
+    /// After a cold boot, the kept entries the host has and left out of the
+    /// snapshot (past [`Store::KEPT_TOTAL_BYTES`]): those the boot would
+    /// have forgotten had they been read are forgotten, which needs no
+    /// value. A name the store holds was read, and the boot judged it.
+    pub fn forget_unread_kept(&mut self, names: &[String]) {
+        let unread = names.iter().filter(|name| self.store.kept(name).is_none());
+        let forgotten = match crate::device::keeps_no_answers(self.data.grants()) {
+            true => all(unread),
+            false => obsolete(&self.plan, unread),
+        };
+        for name in &forgotten {
+            self.store.forget_unread_kept(name);
+        }
+    }
+
     fn restore_store(
         &mut self,
         snapshot: Vec<(String, Vec<u8>)>,
@@ -630,14 +703,12 @@ impl<D: DataSource> Runner<D> {
         Ok(change)
     }
 
+    /// The resources a change to the store asks again.
     pub(super) fn store_readers(&self) -> Vec<usize> {
-        crate::vm::Column::rows(&self.resources, |row| &row.store_reader)
-            .iter()
-            .enumerate()
-            .filter_map(|(i, reads)| {
-                (*reads
-                    && !exact_plan::runner_owned_source(self.plan.str(self.resource_row(i).source)))
-                .then_some(i)
+        (0..self.resources.len())
+            .filter(|&i| {
+                self.asks_on_store_change(i)
+                    && !exact_plan::runner_owned_source(self.plan.str(self.resource_row(i).source))
             })
             .collect()
     }
@@ -659,6 +730,17 @@ impl<D: DataSource> Runner<D> {
         &mut self,
         change: crate::StoreChange,
     ) -> Result<Option<CommitReceipt>, RunnerError> {
+        let result = self.activate(change);
+        self.launch.clear();
+        result
+    }
+
+    /// The asks it makes are the launch's own (`launch`), but for a resource
+    /// a refresh already waits to ask.
+    fn activate(
+        &mut self,
+        change: crate::StoreChange,
+    ) -> Result<Option<CommitReceipt>, RunnerError> {
         if !self.data.ready() {
             self.log("data_ready: the data source is not ready");
             return Ok(None);
@@ -674,6 +756,9 @@ impl<D: DataSource> Runner<D> {
         let stale: Vec<usize> = (0..self.resources.len())
             .filter(|i| self.resources[*i].stale || readers.contains(i))
             .collect();
+        let launch: Vec<usize> = (stale.iter().copied())
+            .filter(|i| !self.refresh_next.contains(i))
+            .collect();
         // Writes made before the source was ready are overlaid from here
         self.resources
             .iter_mut()
@@ -684,6 +769,7 @@ impl<D: DataSource> Runner<D> {
                 return Ok(None);
             }
             self.owe(&stale);
+            self.launch = launch;
             return (self.reasking(|r| r.commit_again(stale, "data_ready"))).map(Some);
         }
         let what = format!(
@@ -693,6 +779,7 @@ impl<D: DataSource> Runner<D> {
         );
         let was_poisoned = self.poisoned;
         let checkpoint = self.checkpoint();
+        self.launch = launch;
         self.refresh_next.extend(&stale);
         self.owe(&stale);
         let result = if self.poisoned {
@@ -801,6 +888,8 @@ impl<D: DataSource> Runner<D> {
                 self.mutation_requests += 1;
                 let answer = if Self::activity_send(&source) {
                     self.activity_request(&source, &args)
+                } else if self.plan.fetch_named(&source).is_some() {
+                    self.fetch_answer(&source, &args)
                 } else {
                     self.store.set_clock_ms(self.now_ms);
                     let answer = self
@@ -852,6 +941,24 @@ impl<D: DataSource> Runner<D> {
             self.refused_unsent.push((target, self.asked_write(target)));
             self.end_write(target, None);
         }
+    }
+}
+
+/// A public surface reader is the sole host fact allowed a kept launch answer.
+pub(super) fn kept_surface(plan: &exact_plan::Plan, i: usize) -> bool {
+    let row = &plan.resources[i];
+    row.keep
+        && !row.transient
+        && plan.str(row.source) == crate::surface_record::SOURCE
+        && crate::surface_record::surface_name(plan, row)
+            .is_some_and(|name| plan.surfaces.iter().any(|s| plan.str(s.name) == name))
+}
+
+impl<D: DataSource> Runner<D> {
+    pub(super) fn surface_seed_waiting(&self, i: usize) -> bool {
+        kept_surface(&self.plan, i)
+            && crate::surface_record::surface_name(&self.plan, self.resource_row(i))
+                .is_some_and(|name| !self.surface_records.contains_key(name))
     }
 }
 

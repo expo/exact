@@ -51,6 +51,7 @@ mod presented_height;
 mod reader;
 mod regions;
 mod rem;
+mod size_cache;
 mod symbol;
 mod symbol_color;
 mod table;

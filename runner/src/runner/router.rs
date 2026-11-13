@@ -115,6 +115,19 @@ pub fn routing(plan: &Plan) -> Result<Option<Box<dyn Routing>>, RunnerError> {
     Ok(RouterContext::from_plan(plan)?.map(|r| Box::new(r) as Box<dyn Routing>))
 }
 
+/// Whether a launch at `location` lands on a route, asked before boot so a
+/// command line refuses a location before anything starts (LLP 1101.003
+/// D3): a declared pattern matches it, or the table declares `notfound`.
+/// A plan with no router has one location, `/`, with any query.
+pub fn launch_matches(plan: &Plan, location: &str) -> Result<bool, RunnerError> {
+    match RouterContext::from_plan(plan)? {
+        Some(router) => {
+            Ok(router.matches_pattern(location) || router.table.routes.iter().any(|r| r.notfound))
+        }
+        None => Ok(exact_route::canonical(location).split(['?', '#']).next() == Some("/")),
+    }
+}
+
 /// The checked table and shape metadata shared by the runner's VM evaluations.
 /// Constructed by boot from the plan; no additional declaration authority.
 pub struct RouterContext {
@@ -868,20 +881,30 @@ impl<D: DataSource> Runner<D> {
         }
         // @ref LLP 1060 D4 — the locale slot is the last one lowered, and an
         // initializer may call `t`: it is filled first.
+        // The format slot reads it, and is filled next (LLP 1054.000.003 D6).
         let locale = self.plan.locale.map(|s| s.0 as usize);
-        let rest = (0..self.plan.slots.len()).filter(|i| Some(*i) != locale);
-        for i in locale.into_iter().chain(rest) {
+        let format = self.plan.format.map(|s| s.0 as usize);
+        let rest = (0..self.plan.slots.len()).filter(|i| Some(*i) != locale && Some(*i) != format);
+        for i in locale.into_iter().chain(format).chain(rest) {
             let row = &self.plan.slots[i];
             if row.owner.is_some() || row.late || self.plan.router == Some(SlotsId(i as u32)) {
                 continue;
             }
             self.init_slot(i, carried)?;
-            // Where the viewer is, known at launch (`launching_with`): the
-            // locale `set_place` writes, before any initializer calls `t`.
-            if Some(i) == locale && crate::time::launch_place().is_some() {
-                if let Some(resolved) = self.plan.resolve_locale(&self.place.locale) {
-                    self.slots[i] = Value::str(resolved);
+            // The language the app chose (`setLocale`), else where the
+            // viewer is, known at launch (`launching_with`): the locale
+            // `set_place` writes, before any initializer calls `t`.
+            if Some(i) == locale {
+                let chosen = self.chosen_locale();
+                if chosen.is_some() || crate::time::launch_place().is_some() {
+                    let requested = chosen.unwrap_or_else(|| self.place.locale.clone());
+                    if let Some(resolved) = self.plan.resolve_locale(&requested) {
+                        self.slots[i] = Value::str(resolved);
+                    }
                 }
+            }
+            if let (Some(i), Some(locale)) = (format.filter(|f| *f == i), locale) {
+                self.slots[i] = Value::str(&self.format_locale_of(locale));
             }
         }
         Ok(())

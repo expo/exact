@@ -32,6 +32,8 @@ mod intersection;
 #[cfg(test)]
 mod modal_tests;
 #[cfg(test)]
+mod placement_tests;
+#[cfg(test)]
 mod top_layer_tests;
 pub(crate) use intersection::{intersection, Root as IntersectionRoot};
 
@@ -177,6 +179,18 @@ impl Scrolled {
         }
     }
 
+    /// `view`'s offset as last noted, or the page's for `None`; zero for a
+    /// node with none noted.
+    pub fn shown(&self, kernel: &Kernel, view: Option<ViewId>) -> (f64, f64) {
+        match view {
+            None => self.page,
+            Some(view) => kernel
+                .arena()
+                .key_of(view)
+                .map_or((0.0, 0.0), |key| self.offset(key)),
+        }
+    }
+
     /// One scroller's offset, zero for a node with none noted.
     fn offset(&self, key: NodeKey) -> (f64, f64) {
         self.boxes
@@ -246,7 +260,7 @@ impl Scrolled {
     /// the root's parent unless the host holds the block beside it, as
     /// UIKit's tab container holds a tab's route beside its panel; the
     /// root is then shown in `within` directly, as the host's hierarchy
-    /// shows it, and the boxes between move nothing of it.
+    /// shows it, and the boxes between neither move nor clip it.
     /// An offset names a scrollport, even at zero: it moves the root and its
     /// subtree while the allocation's clip stays put. No offset means a pane.
     /// An absent placement forgets the rectangle. The root keeps its place
@@ -1113,7 +1127,7 @@ fn kernel_shown(kernel: &Kernel, scrolled: &Scrolled, view: ViewId, _: bool) -> 
 /// tested in its own space, so a turned box answers its own shape, not its
 /// bounding box, as DOM's hit test does, and grown by its hit slop
 /// (`StyleProps::hit_slop`); a scroller or a box that clips cuts
-/// its descendants to its padding box; `pointer-events: none` and
+/// its rendering descendants to its padding box; `pointer-events: none` and
 /// `visibility` other than `visible` (both inherited) are passed over, and
 /// `display: none` takes its subtree.
 fn kernel_point(kernel: &Kernel, scrolled: &Scrolled, x: f64, y: f64) -> Option<ViewId> {
@@ -1131,6 +1145,20 @@ fn kernel_hits(
     y: f64,
     first_only: bool,
 ) -> Vec<ViewId> {
+    let arena = kernel.arena();
+    let mut escapes = std::collections::HashSet::new();
+    for entry in &scrolled.placed {
+        let Some(slot) = arena.resolve(entry.key) else {
+            continue;
+        };
+        let Some((_, holder)) = scrolled.placed_block(kernel, slot) else {
+            continue;
+        };
+        escapes.extend(
+            std::iter::successors(arena.parent(slot), |&p| arena.parent(p))
+                .take_while(|&p| p != holder),
+        );
+    }
     let ranks: std::collections::HashMap<ViewId, i64> = kernel
         .paint_order()
         .into_iter()
@@ -1139,11 +1167,11 @@ fn kernel_hits(
     let walk = Point {
         kernel,
         scrolled,
+        escapes,
         ranks,
         at: (x, y),
         first_only,
     };
-    let arena = kernel.arena();
     let page = shift(-scrolled.page.0, -scrolled.page.1);
     let mut hits = Vec::new();
     // Only the open presentation and what is open above it are read
@@ -1166,7 +1194,14 @@ fn kernel_hits(
         let Some(inherited) = inherited_hit_state(kernel, slot) else {
             continue;
         };
-        walk.hits(slot, shown, inherited, true, &mut Vec::new(), &mut hits);
+        walk.hits(
+            slot,
+            Some(shown),
+            inherited,
+            true,
+            &mut Vec::new(),
+            &mut hits,
+        );
         if first_only && !hits.is_empty() {
             return hits;
         }
@@ -1179,7 +1214,7 @@ fn kernel_hits(
         let placed = mul(page, shift(f64::from(f.x), f64::from(f.y)));
         walk.hits(
             root,
-            placed,
+            Some(placed),
             (PointerEvents::Auto, Visibility::Visible),
             false,
             &mut Vec::new(),
@@ -1235,27 +1270,31 @@ fn modal_dialog(kernel: &Kernel, slot: u32) -> bool {
 struct Point<'a> {
     kernel: &'a Kernel,
     scrolled: &'a Scrolled,
+    // Logical ancestors a placement skips on its way to its holder.
+    escapes: std::collections::HashSet<u32>,
     ranks: std::collections::HashMap<ViewId, i64>,
     at: (f64, f64),
     first_only: bool,
 }
 
 impl Point<'_> {
-    /// `slot`'s hit, `placed` mapping its untransformed border box (its
-    /// top left at the origin) to the viewport, and `above` the boxes the
-    /// walk came through, each with the map from its local coordinates to
-    /// the viewport, which a placed block's root shown in one of them
-    /// (`shown_in`) starts from. Every clip above it holds the point, or the
-    /// walk would not have come here.
+    /// `placed` maps the border box to the viewport, or is absent when a
+    /// rendering ancestor clips the point. `above` keeps each ancestor's
+    /// map after clipping, so a placed root starts from its actual holder.
+    /// Only paths to roots that escape a clip keep walking through it;
+    /// logical order, inheritance and subtree suppression still apply.
     fn hits(
         &self,
         slot: u32,
-        placed: Affine,
+        placed: Option<Affine>,
         inherited: (PointerEvents, Visibility),
         lifted: bool,
-        above: &mut Vec<(u32, Affine)>,
+        above: &mut Vec<(u32, Option<Affine>)>,
         hits: &mut Vec<ViewId>,
     ) {
+        if placed.is_none() && !self.escapes.contains(&slot) {
+            return;
+        }
         let arena = self.kernel.arena();
         let style = arena.style(slot);
         let flags = arena.flags(slot);
@@ -1288,31 +1327,43 @@ impl Point<'_> {
             inherited.1
         };
         let f = native.unwrap_or_else(|| arena.frame(slot));
-        // A block's root and its subtree are reached only inside the block
-        // its host shows them in
-        if let Some(b) = block_clip(self.kernel, self.scrolled, slot, f) {
-            let at = unmap(placed, self.at);
-            if !at.is_some_and(|(x, y)| b[0] <= x && x < b[2] && b[1] <= y && y < b[3]) {
-                return;
-            }
+        let placed = placed.filter(|&m| {
+            block_clip(self.kernel, self.scrolled, slot, f).is_none_or(|b| {
+                unmap(m, self.at)
+                    .is_some_and(|(x, y)| b[0] <= x && x < b[2] && b[1] <= y && y < b[3])
+            })
+        });
+        if placed.is_none() && !self.escapes.contains(&slot) {
+            return;
         }
-        let m = mul(
-            placed,
-            if native.is_some() {
-                own_transform(style, f)
-            } else {
-                intersection::placed_transform(self.kernel, self.scrolled, slot, f)
-            },
-        );
-        let local = unmap(m, self.at);
+        let m = placed.map(|placed| {
+            mul(
+                placed,
+                if native.is_some() {
+                    own_transform(style, f)
+                } else {
+                    intersection::placed_transform(self.kernel, self.scrolled, slot, f)
+                },
+            )
+        });
+        let local = m.and_then(|m| unmap(m, self.at));
         let (width, height) = (f64::from(f.width), f64::from(f.height));
         let inside = |b: [f64; 4]| {
             local.is_some_and(|(x, y)| b[0] <= x && x < b[2] && b[1] <= y && y < b[3])
         };
         // The padding box on each axis that clips: `clip` beside `visible`
-        // clips its own axis alone (CSS Overflow 3 §3.1).
-        let border = style.border_widths_in(arena.env()).map(f64::from);
-        let (ox, oy) = (style.overflow_x, style.overflow_y);
+        // clips its own axis alone (CSS Overflow 3 §3.1). A `scroll` or
+        // `list` with no `overflow-y` row scrolls on y, as the engine lays
+        // it out (`style.rs`).
+        let env = arena.env_of(slot);
+        let border = style.border_widths_in(&env).map(f64::from);
+        let ox = style.overflow_x;
+        let oy =
+            if !style.mask.has(StyleId::OverflowY) && arena.node_type(slot).scrolls_by_default() {
+                Overflow::Auto
+            } else {
+                style.overflow_y
+            };
         let (x_clips, y_clips) = (
             ox.computed(oy) != Overflow::Visible,
             oy.computed(ox) != Overflow::Visible,
@@ -1325,7 +1376,7 @@ impl Point<'_> {
             (clip[1], clip[3]) = (f64::NEG_INFINITY, f64::INFINITY);
         }
         let clipped = (x_clips || y_clips) && !inside(clip);
-        if !clipped && native.is_none() {
+        if (!clipped || self.escapes.contains(&slot)) && native.is_none() {
             let mut children: Vec<(i64, usize, u32)> = arena
                 .children(slot)
                 .iter()
@@ -1336,7 +1387,7 @@ impl Point<'_> {
                 })
                 .collect();
             children.sort_unstable();
-            above.push((slot, m));
+            above.push((slot, m.filter(|_| !clipped)));
             for &(_, _, child) in children.iter().rev() {
                 // Where the child is shown, in this box or the one above that
                 // holds it; a top-layer child is tested in the top layer instead
@@ -1349,7 +1400,14 @@ impl Point<'_> {
                     continue;
                 };
                 let inherited = (pointer, visibility);
-                self.hits(child, mul(from, local), inherited, false, above, hits);
+                self.hits(
+                    child,
+                    from.map(|from| mul(from, local)),
+                    inherited,
+                    false,
+                    above,
+                    hits,
+                );
                 if self.first_only && !hits.is_empty() {
                     above.pop();
                     return;
@@ -1360,7 +1418,7 @@ impl Point<'_> {
         // Its own box grows by its hit slop, tested after its children and
         // before what is behind it, as a front box's slop takes the pointer
         // from a back box (Charlie, 2026-11-10).
-        let [t, r, b, l] = style.hit_slop(arena.env()).map(f64::from);
+        let [t, r, b, l] = style.hit_slop(&env).map(f64::from);
         let hit = inside([-l, -t, width + r, height + b])
             && pointer != PointerEvents::None
             && visibility == Visibility::Visible

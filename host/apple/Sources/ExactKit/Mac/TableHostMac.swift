@@ -21,6 +21,12 @@ final class TableHost {
     private var pressContact: PressNode?
     private weak var pressCell: TableRowCell?
 
+    /// A row's view renewed for another item (RenewMac.swift): a press of
+    /// it, or of a node in it, was the old item's.
+    func renewed(_ node: NodeView) {
+        if let pressed = pressContact?.node, pressed === node || pressed.isDescendant(of: node) { cancelPress() }
+    }
+
     func cancelPress() {
         pressContact?.node?.pressed = false
         pressContact = nil

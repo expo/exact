@@ -265,7 +265,7 @@ export function presenceLoader(load, root, apply, log) {
 }
 // The agent's browser clock (LLP 1012): author-paused animations keep their
 // own time (LLP 1055 D10); every other animation follows the runner's clock.
-export function animationClock(now, settled, synced) {
+export function animationClock(now, settled, synced, early = () => undefined) {
   const starts = new WeakMap(), held = new WeakSet(), clocks = animationClocks(document);
   // A scroll-driven animation follows its scroll, not a clock.
   const timed = () => document.getAnimations().filter((a) => !a.timeline || a.timeline instanceof DocumentTimeline);
@@ -274,14 +274,18 @@ export function animationClock(now, settled, synced) {
       clocks.commit();
       for (const a of timed()) {
         if (!starts.has(a)) {
-          starts.set(a, clocks.start(a, t) ?? t);
-          if (a.playState === "paused") {
-            held.add(a);
-          }
+          const at = early(a);
+          starts.set(a, clocks.start(a, at ?? t) ?? at ?? t);
+          if (a.playState === "paused" && at === undefined) held.add(a);
+        } else if (held.has(a) && a.playState !== "paused") {
+          // A prefetched play resumes at reveal, keeping any time held by its author.
+          held.delete(a);
+          starts.set(a, clocks.start(a, t) ?? t - (a.currentTime ?? 0));
         }
       }
     },
-    seek(to) {
+    runs: a => (!a.timeline || a.timeline instanceof DocumentTimeline) && (starts.has(a) ? !held.has(a) : a.playState !== "paused" || early(a) !== undefined),
+    seek(to, sync = true) {
       for (const a of timed()) {
         const timing = a.effect?.getComputedTiming();
         if (!timing) {
@@ -297,7 +301,18 @@ export function animationClock(now, settled, synced) {
           a.currentTime = t;
         }
       }
-      synced();
+      if (sync) synced();
+    },
+    // A picture holds finite motion just before its end, without firing its end event (LLP 1116.003 D8).
+    hold() {
+      let n = 0;
+      for (const a of timed()) {
+        const t = a.effect?.getComputedTiming();
+        if (!t || held.has(a) || !(t.activeDuration > 0) || t.activeDuration === Infinity) continue;
+        const at = a.currentTime ?? 0, end = t.delay + t.activeDuration;
+        if (at >= t.delay && at < end - 0.5) { a.currentTime = end - 0.5; n++; }
+      }
+      return n;
     },
     // The springs' engine knows its end; browser animations report theirs.
     settle() {

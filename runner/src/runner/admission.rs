@@ -282,6 +282,24 @@ impl<D: DataSource> Runner<D> {
         ))
     }
 
+    /// [`Self::release_failed`] as a commit of the request's origin,
+    /// invocation and causes, as its reply's refused commit was (LLP
+    /// 1133.002 D12, LLP 1133.035 D16 item 6): what the release refreshes
+    /// is asked as the request's, so a wake's failed reply reaches no
+    /// app-only source.
+    pub(super) fn release_failed_as_asked(
+        &mut self,
+        ticket: u64,
+        target: Target,
+        why: Failure,
+    ) -> Result<Option<CommitReceipt>, RunnerError> {
+        let (origin, id) = (self.ticket_origin(ticket), self.ticket_id(ticket));
+        let causes = self.ticket_causes(ticket);
+        self.as_invocation_caused(origin, id, causes, |r| {
+            r.release_failed(ticket, target, why)
+        })
+    }
+
     /// A reply the source failed to take (it threw, ran over its budget, or
     /// answered outside its shape). The refused commit's rollback restored
     /// the request to the pending set, but the host has already delivered

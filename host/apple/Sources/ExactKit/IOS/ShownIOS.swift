@@ -10,13 +10,29 @@
 #if os(iOS) || os(tvOS)
 import UIKit
 
+/// Whether a frame has shown a view where it is (`Presenter.showed`).
+enum Shown {
+    /// Core Animation has had no copy of it since it was made as its node.
+    case uncopied
+    /// No commit has shown it where it is since it was last unshown.
+    case unshown
+    /// A commit showed it where it is, in a window, not hidden.
+    case showed
+}
+
 extension Presenter {
+    /// `view` is made as a node: a new view, or one lent to another node.
+    func made(_ view: NodeView) {
+        view.shown = .uncopied
+        unshown(view)
+    }
+
     /// `view` is not shown by the last frame: made, put in a window, taken
     /// out of one, or shown again (`isHidden`). Core Animation's next commit
     /// shows it if it is in a window then, not hidden; one out of a window
     /// waits for the commit after it moves into one (`didMoveToWindow`).
     func unshown(_ view: NodeView) {
-        view.showed = false
+        if view.shown == .showed || view.layer.presentation() != nil { view.shown = .unshown }
         guard view.window != nil else { return }
         if awaitingFrame.isEmpty {
             // After Core Animation's commit (order 2000000), as `NativeViews.activateAfterCommit`
@@ -35,14 +51,35 @@ extension Presenter {
     /// explicit transaction holds back: no copy, or an old one from an
     /// earlier time in a window, hidden or elsewhere) waits for a later turn
     /// while its window is one a scene shows, the only windows on screen.
+    /// A view `shown(_:)` found shown earlier in the turn stays shown,
+    /// though an animation may since have moved its copy.
     private func committed() {
         let waiting = awaitingFrame
         awaitingFrame = []
         for entry in waiting {
-            guard let view = entry.view, let window = view.window, !view.isHidden else { continue }
-            if let shown = view.layer.presentation(), !shown.isHidden, shown.position == view.layer.position, shown.bounds == view.layer.bounds { view.showed = true }
+            guard let view = entry.view, view.shown != .showed, let window = view.window, !view.isHidden else { continue }
+            if Self.committedInPlace(view) { view.shown = .showed }
             else if window.windowScene != nil, !window.isHidden { unshown(view) }
         }
+    }
+
+    /// What Core Animation has of `view` is where it is, shown.
+    private static func committedInPlace(_ view: NodeView) -> Bool {
+        guard let shown = view.layer.presentation() else { return false }
+        return !shown.isHidden && shown.position == view.layer.position && shown.bounds == view.layer.bounds
+    }
+
+    /// Whether a commit has shown `view` where it is. One Core Animation had
+    /// no copy of is shown by the first commit that has it in place, even one
+    /// before `committed`, as that copy can only be the commit's: UIKit
+    /// commits the turn's layers as it brings up the keyboard, then lays the
+    /// window out for the keys inside their animation. It stays shown while
+    /// that animation moves it, so its subviews move with it. A view that had
+    /// a copy (put back, in another cell, shown again) may have one of another
+    /// place, and waits for `committed`.
+    private func shown(_ view: NodeView) -> Bool {
+        if view.shown == .uncopied, Self.committedInPlace(view) { view.shown = .showed }
+        return view.shown == .showed
     }
 
     /// `view` is shown again (`isHidden` lifted): unshown if the last commit
@@ -57,7 +94,7 @@ extension Presenter {
     func showed(_ view: NodeView) -> Bool {
         var at: UIView? = view
         while let v = at {
-            if let node = v as? NodeView, !node.showed || node.isHidden { return false }
+            if let node = v as? NodeView, node.isHidden || !shown(node) { return false }
             at = v.superview
         }
         return true

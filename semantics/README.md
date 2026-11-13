@@ -58,6 +58,15 @@ routes, and what their fields name — not every shape the checker knows, so a
 compiler shape the program never reaches (an event's) does not make an app
 embedding stale when it is added.
 
+The embedding shares the plan lowerer's `delete=` expansion: an admitted
+list row includes its generated Delete button and suffixed `testId`, with
+`disabled` belonging to that button. Admission reads grouped-row layout
+before descending and keeps enum prop ascriptions as the plan does.
+Emission omits literal ascriptions that add no Lean type information;
+enums emit as strings.
+The plain embedding used to compare component expansion keeps the view
+before this lowering step.
+
 **Differential testing.** For each case, `difftest` compiles the program to a
 plan and boots it on the runner, delivers the script's events, and prints a
 canonical observation after every step: the outcome, the commits attempted, every root slot, derive
@@ -929,7 +938,9 @@ All without `sorry` or axioms beyond Lean's own (`propext`,
   event from a reachable configuration, whatever the oracle answers,
   commit or fail for a `Legitimate` reason — never a type error, an
   unbound name or a `pending` read — and every reachable configuration is
-  well typed.**
+  well typed.** The checks at a derive, a slot written and a slot
+  initialized report a value of another type as a type error (`unfit`),
+  so the theorem says they refuse only a number that is not finite.
 - Numbers (`Binary64Facts.lean`). A finite double `y` is the integer
   `y.scaled` times `2^-1074`, and an operation's exact result `±a / (d *
   2^1074)`, so distances are compared in integers. `round_nearest`: the
@@ -986,7 +997,7 @@ the host presents no frames (the harness never does): due at
 ## Formatting and localized text
 
 `formatTime`, `formatDate`, `formatDay` and `formatNumber` (`Contract/Format.lean`) are
-the runner's (`runner/src/stdlib.rs`, `runner/src/format.rs`) transcribed:
+the runner's (`runner/src/stdlib.rs`, `runner/src/format/`) transcribed:
 `en-US` at the fixed UTC offset the call names, the wall time truncated
 then shifted and held to years 1–9999 (else `""`), the calendar by
 Hinnant's `civil_from_days` over integers, compact numbers from the
@@ -1002,6 +1013,22 @@ locale slot, the key, then each name and its value through `toString`;
 `{$name}`/`{name}` and the `\{`, `\}`, `\\` escapes. The host's `place`
 event (a viewer locale other than the base) is not delivered by the
 harness, so only the base table is read there.
+
+Each takes the format locale last (LLP 1054.000.003 D6), as the embedding
+writes the call: `""` in a program whose tables all format as `en` does,
+which is the `en-US` above, else the format slot (`#format`, initialized to
+the base table's name after the locale slot and left out of the
+observation, as the runner's and the JS target's are). Its table's record
+(`contract/lower/src/formats.rs`) rides in that table's (key, text) pairs
+under `Format.formatKey`, a key no table can hold, and `Format.recordOf`,
+`styledIn`, `compactIn`, `dateIn`, `timeIn` and `dayIn` are
+`runner/src/format/locale.rs` transcribed over it. The corpus's
+`localized-formats` reads a German base, and `localized-formats-at` a base named
+with an extension (`de-AT-u-nu-latn`) whose money has its own symbols.
+Outside the semantics: a localized
+formatter in a `fn`, whose body the compiler expands where it is called and
+so reads the format slot there, while the semantics evaluates a `fn` closed
+over its parameters (as it does `t` there, which reads the locale slot).
 
 ## Queued sends and gated tasks (LLP 1092)
 

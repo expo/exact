@@ -134,7 +134,7 @@ pub(crate) fn style_json_rows(
         let size = matches!(name, "width" | "height");
         if matches!(
             name,
-            "translate" | "scale" | "rotate" | "opacity" | "animation"
+            "translate" | "translate_velocity" | "scale" | "rotate" | "opacity" | "animation"
         ) || !keep.has(id) && (presenter_ignores(name) || size)
         {
             // A size is layout's and an animation the engine's; that its
@@ -366,6 +366,12 @@ pub(crate) fn style_json_rows(
                     true
                 }
             },
+            // The timelines' axes are the host's to place (timeline_scroll.rs).
+            RowValue::Enum(_)
+                if matches!(id, StyleId::ScrollTimelineAxis | StyleId::ViewTimelineAxis) =>
+            {
+                false
+            }
             RowValue::Enum(e) => {
                 out.push('"');
                 out.push_str(e);
@@ -398,11 +404,14 @@ pub(crate) fn style_json_rows(
                 true
             }
             RowValue::Transitions(_) => false, // the engine's, not the presenter's
-            // @ref LLP 1057.003 D2 — drag timelines are the engine's too.
+            // @ref LLP 1057.003 D2, D5 — timelines are the engine's too,
+            // placed by the host (timeline_scroll.rs).
             RowValue::DragTimeline(_)
             | RowValue::AnimationTimeline(_)
             | RowValue::AnimationRange(_)
-            | RowValue::TimelineScope(_) => false,
+            | RowValue::TimelineScope(_)
+            | RowValue::TimelineName(_)
+            | RowValue::ViewTimelineInset(_) => false,
             // @ref LLP 1055 D4/D7 — the `svg` scene and CA specs carry these.
             RowValue::Paint(_)
             | RowValue::DashArray(_)
@@ -488,6 +497,16 @@ pub(crate) fn style_json_rows(
             out.push(',');
         }
         let _ = write!(out, "\"written\":[{written}]");
+        first = false;
+    }
+    // @ref LLP 1123 D3 — the edges whose padding clears its own inset: what
+    // a route's scroller credits where UIKit's inset is its clearance.
+    let credit = env.map_or(0, |e| exact_kernel::credited_edges(style, e));
+    if credit != 0 {
+        if !first {
+            out.push(',');
+        }
+        let _ = write!(out, "\"inset_credit\":{credit}");
     }
     out.push('}');
     (out, skipped)

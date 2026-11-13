@@ -15,6 +15,7 @@ fn entry_plan() -> Vec<u8> {
         props: "Props".into(),
         refresh: "refresh".into(),
         preview: serde_json::json!({"title": "Hello"}),
+        configuration: None,
     };
     let src = "shape Props\n  title: string\ncomponent Card\n  props\n    title: string\n  view\n    text title\n";
     contract::snapshot::compile(src, &widget).unwrap().encode()
@@ -33,7 +34,7 @@ fn an_entry_plan_boots_by_its_kind_and_a_running_boot_refuses_it() {
     put(rt, &bytes);
     let refused = out(
         rt,
-        handles::exact_boot_entry(rt, plan.len(), 5, 0, 200.0, 100.0),
+        handles::exact_boot_entry(rt, plan.len(), 5, 0, 0, 200.0, 100.0),
     );
     assert!(refused.contains("WrongEntry"), "{refused}");
 
@@ -42,7 +43,7 @@ fn an_entry_plan_boots_by_its_kind_and_a_running_boot_refuses_it() {
     put(rt, &bytes);
     let batch = out(
         rt,
-        handles::exact_boot_entry(rt, plan.len(), 4, 0, 200.0, 100.0),
+        handles::exact_boot_entry(rt, plan.len(), 4, 0, 0, 200.0, 100.0),
     );
     assert!(batch.contains("\"text\":\"Hello\""), "{batch}");
     assert!(batch.contains("\"error\":null"), "{batch}");

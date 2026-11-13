@@ -4,9 +4,9 @@
 // storage capability without its drops and pastes on the wasm page (the module 404'd; conform's synthetic-file-drag).
 import { expect, test } from 'bun:test';
 import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { webHostFiles } from './app.mjs';
-import { buildHostGlue } from '../host/web-js/glue.mjs';
+import { buildHostGlue, MODULE_PRELUDE } from '../host/web-js/glue.mjs';
 import { glueDeclarations } from '../host/web/tests/glue-fixture.mjs';
 import { fileURLToPath } from 'node:url';
 
@@ -24,6 +24,8 @@ test.each([false, true])('built wasm host admits agent parameters only in develo
     const read = new Function('location', `${declarations}\nreturn agentMode;`);
     expect(read({ href: 'https://example.test/?agent' })).toBe(!production);
     const navigation = await import(join(root, 'navigation.js'));
+    const admission = await import(join(root, 'grant-admission.js'));
+    expect(admission.socketProtocols(['chat.v2', 'chat.v1'])).toEqual(['chat.v2', 'chat.v1']);
     const params = new URLSearchParams('agent&epoch=1&seed=3&locale=de&timeZone=UTC');
     const platform = {
       Date: class extends Date { static now() { return 1000; } getTimezoneOffset() { return 60; } },
@@ -87,6 +89,11 @@ test('concurrent host builds preserve modules already opened by a reader', async
       writeFileSync(join(out, name), 'export const previous = true;\n');
       held.push(openSync(join(out, name), 'r'));
     }
+    // The module realm's prelude, joined from its scripts.
+    for (const file of MODULE_PRELUDE) {
+      mkdirSync(dirname(join(root, file)), { recursive: true });
+      writeFileSync(join(root, file), `// ${file}\n`);
+    }
     // A copy can open a published file before another build replaces it.
     await Promise.all([buildHostGlue(root), buildHostGlue(root)]);
     for (const fd of held) {
@@ -95,6 +102,7 @@ test('concurrent host builds preserve modules already opened by a reader', async
     expect(staticImports(readFileSync(join(out, 'glue.js'), 'utf8'))).toEqual(['navigation.js']);
     expect((await import(join(out, 'glue.js'))).value).toBe('complete');
     expect((await import(join(out, 'grant-admission.js'))).grant).toBe(true);
+    expect(readFileSync(join(out, 'module-prelude.js'), 'utf8')).toBe(MODULE_PRELUDE.map(file => `// ${file}\n`).join('\n'));
   } finally {
     for (const fd of held) closeSync(fd);
     rmSync(root, { recursive: true, force: true });

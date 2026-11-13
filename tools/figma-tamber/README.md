@@ -72,4 +72,5 @@ Pencil's `.pen` files, kept in the repo, also import directly (*tamber/1.17*): `
 ## Tests
 
 `bun test tools/figma-tamber/src/` covers the mapping, and covers the main thread against an in-memory stand-in for
-the Figma Variables API. The real-Figma run is the stage 10b gate's evidence.
+the Figma Variables API, including full document restoration after refused pulls and partial writes.
+The real-Figma undo history, 40-character name limit and mode-limit checks remain assigned to the stage 10b manual gate.

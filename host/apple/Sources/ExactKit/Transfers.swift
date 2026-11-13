@@ -144,7 +144,7 @@ public enum TransferCarrier {
         case "abort":
             guard let r = records[id], r.package == package, !r.ended else { return false }
             session(r.discretionary).getAllTasks { tasks in
-                for t in tasks where t.taskDescription?.hasPrefix(id + " ") == true { t.cancel() }
+                for t in tasks where belongs(t.taskDescription, to: id) { t.cancel() }
             }
             return true
         case "retire":
@@ -318,8 +318,16 @@ public enum TransferCarrier {
         }
     }
 
-    private static func which(_ task: URLSessionTask) -> (String, Int)? {
-        guard let d = task.taskDescription, let space = d.lastIndex(of: " "), let index = Int(d[d.index(after: space)...]) else { return nil }
+    private static func which(_ task: URLSessionTask) -> (String, Int)? { which(task.taskDescription) }
+
+    /// Whether a task of this description is one of registration `id`'s:
+    /// `"album 2 0"` is `"album 2"`'s, not `"album"`'s.
+    static func belongs(_ description: String?, to id: String) -> Bool { which(description)?.0 == id }
+
+    /// The registration id and request index a task's description names
+    /// (`"<id> <index>"`); the id may hold spaces.
+    private static func which(_ description: String?) -> (String, Int)? {
+        guard let d = description, let space = d.lastIndex(of: " "), let index = Int(d[d.index(after: space)...]) else { return nil }
         return (String(d[..<space]), index)
     }
 

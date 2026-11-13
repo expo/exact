@@ -201,26 +201,10 @@ fn carried(
     component_ids: &BTreeMap<&str, usize>,
 ) -> Vec<BTreeSet<String>> {
     fn used(nodes: &[Node], component_ids: &BTreeMap<&str, usize>, out: &mut BTreeSet<usize>) {
-        for node in nodes {
-            match node {
-                Node::Element { children, .. } => used(children, component_ids, out),
-                Node::Use { name, children, .. } => {
-                    used(children, component_ids, out);
-                    if let Some(&target) = component_ids.get(name.as_str()) {
-                        out.insert(target);
-                    }
-                }
-                Node::Children { .. } => {}
-                Node::When {
-                    then, otherwise, ..
-                } => {
-                    used(then, component_ids, out);
-                    used(otherwise, component_ids, out);
-                }
-                Node::Each { body, .. } => used(body, component_ids, out),
-                Node::Match { some, none, .. } => {
-                    used(&some.1, component_ids, out);
-                    used(none, component_ids, out);
+        for node in Node::walk(nodes) {
+            if let Node::Use { name, .. } = node {
+                if let Some(&target) = component_ids.get(name.as_str()) {
+                    out.insert(target);
                 }
             }
         }

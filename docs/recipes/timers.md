@@ -2,8 +2,7 @@
 
 A `task`, the root's ([a child's](timer-in-a-component.md)), is the only timer: `every(ms,
 action)` repeats, `after(ms, action)` fires once, `when cond` arms it while it holds, so
-start and stop are a state. A countdown, its readout and button outside the list the
-route scrolls, so they stay put:
+start and stop are a state. A countdown, its readout and button in the list's first row:
 
 ```contract
 routes nav
@@ -40,12 +39,13 @@ component Tea
           display="flex" flex-direction="column"
           header display="flex" align-items="center" padding="8px 16px"
             text "Tea" role="heading" aria-level=1
-          column align-items="center" gap=12 padding=16
-            text mmss(left) font-size="4.5rem" font-variant-numeric="tabular-nums" testId="left"
-            text (finished ? "Ready" : running ? "Steeping" : " ") testId="status"
-            button press=toggle buttonStyle="bordered-prominent" testId="start-stop"
-              text (running ? "Stop" : "Start")
           list id="presets" appearance="auto" listStyle="inset-grouped" flex=1 min-height=0
+            section
+              column align-items="center" gap=12 padding=16
+                text mmss(left) font-size="4.5rem" font-variant-numeric="tabular-nums" testId="left"
+                text (finished ? "Ready" : running ? "Steeping" : " ") testId="status"
+                button press=toggle buttonStyle="bordered-prominent" testId="start-stop"
+                  text (running ? "Stop" : "Start")
             section
               for m in [1, 3, 5, 10] key=m
                 button press=choose(m) disabled=running testId=`min-${m}`
@@ -69,4 +69,4 @@ test "a countdown ends at zero"
 - `key=x` restarts a task when `x` changes. A test's `clock +N` fires the timers it passes.
 - `performanceNow()` restarts at launch. Store `time.epochAtZero + performanceNow()` for one that survives a quit ([recipe](timer-that-survives-relaunch.md)).
 
-For deferrable work, use `every(5000, tick, wait=scrollend, max=1000)` or `after(800, save, wait=idle)`. `wait=frame` joins the next frame; `wait=update` joins existing frame demand. For wake coalescing, use `tolerance=500` instead of `wait=`. See [options](../reference.md#timer-options).
+Deferrable work: `every(5000, tick, wait=scrollend, max=1000)` or `after(800, save, wait=idle)`. `wait=frame` joins the next frame; `wait=update` joins existing frame demand. To coalesce wakes, `tolerance=500` instead of `wait=`. [Options](../reference.md#timer-options).

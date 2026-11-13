@@ -703,6 +703,31 @@ impl Batch {
                     }
                     write!(s, "}}")
                 }
+                // LLP 1096 D14: only the values the call gave.
+                SoundOp::Set {
+                    id,
+                    at,
+                    gain,
+                    playback_rate,
+                    pan,
+                    ramp,
+                } => {
+                    let _ = write!(
+                        s,
+                        "{{\"op\":\"set\",\"id\":{id},\"at\":{}",
+                        exact_runner::agent::num(*at)
+                    );
+                    for (name, v) in [
+                        ("gain", gain),
+                        ("playbackRate", playback_rate),
+                        ("pan", pan),
+                    ] {
+                        if let Some(v) = v {
+                            let _ = write!(s, ",\"{name}\":{}", exact_runner::agent::num(*v));
+                        }
+                    }
+                    write!(s, ",\"ramp\":{}}}", exact_runner::agent::num(*ramp))
+                }
                 SoundOp::End { id, at } => write!(
                     s,
                     "{{\"op\":\"end\",\"id\":{id},\"at\":{}}}",
@@ -743,6 +768,17 @@ impl Batch {
         if let Some(op) = exact_runner::midi::batch_op(&runner.take_midi(), uses) {
             self.ops.push(op);
         }
+    }
+
+    /// `{"op":"renew","id":…}` — the view now shows another list item (LLP
+    /// 1078): the presenter drops what it keeps for it beyond its props,
+    /// style and presented values (a press, a hover, a nested scroller's
+    /// offset, a picture of another source, its scene and animations), as a
+    /// new view has none of it. It comes before the batch's props and style
+    /// for the view. Its presented values stay the engine's: a renewed node
+    /// at rest keeps them, and one forgotten is presented whole, as new.
+    pub fn renew(&mut self, id: u32) {
+        self.ops.push(format!("{{\"op\":\"renew\",\"id\":{id}}}"));
     }
 
     /// `{"op":"destroy","id":…}`.
@@ -882,11 +918,14 @@ impl Batch {
         self.ops.push(format!("{{\"op\":\"block\",\"id\":{id}}}"));
     }
 
-    /// `{"op":"content","id":…,"w":…,"h":…}` — natural scrollable extent;
-    /// the platform presenter applies its client-size minimum.
-    pub fn content(&mut self, id: u32, w: f32, h: f32) {
+    /// Scrollable extent, with an independent natural height for a fitted
+    /// detent. The presenter applies its client-size minimum to the extent.
+    pub fn content(&mut self, id: u32, w: f32, h: f32, fit_height: Option<f32>) {
+        let fitted = fit_height
+            .map(|h| format!(",\"fitHeight\":{}", crate::style::num(h)))
+            .unwrap_or_default();
         self.ops.push(format!(
-            "{{\"op\":\"content\",\"id\":{id},\"w\":{},\"h\":{}}}",
+            "{{\"op\":\"content\",\"id\":{id},\"w\":{},\"h\":{}{fitted}}}",
             crate::style::num(w),
             crate::style::num(h)
         ));
@@ -1166,7 +1205,7 @@ mod finish_bytes_tests {
                             batch.style(1, "{\"opacity\":0.5}");
                             batch.children(1, &[2, 3]);
                             batch.frame(1, -0., 0.1, 200., 400.);
-                            batch.content(1, 200., 800.);
+                            batch.content(1, 200., 800., None);
                             batch.present(1, "translate", -0., 0.125);
                             batch.surface(&exact_runner::SurfaceUpdate {
                                 view: 1,

@@ -28,7 +28,10 @@ enum FrameHealthReport {
     fileprivate static var encoding = false
     fileprivate static var nextAgentReport: Double = 0
 
-    static func snapshot(health: FrameHealth, session: ExactSession?, now: Double = CACurrentMediaTime()) -> [String: Any] {
+    /// The report of `health`'s frames. `beside` is the source the card's Share gives as a report of its own, where the
+    /// card measures the screen.
+    static func snapshot(health: FrameHealth, session: ExactSession?, now: Double = CACurrentMediaTime(),
+                         beside: FrameHealth? = nil) -> [String: Any] {
         health.expireCapture(at: now)
         let snapshot = health.snapshot(), history = health.historyStatus(), timestamp = FrameHealth.nanoseconds(now)
         var expired = 0
@@ -117,16 +120,22 @@ enum FrameHealthReport {
                 "expiredAtRead": expired, "overwrittenSinceClear": String(history.overwritten),
                 "eventsSinceClear": String(history.total), "automaticDiskBytes": 0, "maximumReportBytes": maximumBytes,
                 "omittedForBudget": 0, "selection": "newest"],
-            "coreSinceReload": coreSinceReload(snapshot, screen: health.screenFrames),
+            "coreSinceReload": coreSinceReload(health, snapshot),
             // The screen's frames have no frame times, which a passive observer cannot tell from idle time
             "unobserved": (health.screenFrames ? ["frame times"] : []) + ["presentation", "GPU execution", "CPU-versus-descheduled time",
                 "other main-thread work", "native-only animations", "uncaptured owner work", "app input latency"],
             "columns": health.screenFrames ? screenColumns : columns,
             "hitches": rows]
-        if let root = session?.frameHealth {
-            let others = [root, root.nativeHealth].compactMap { $0 }.filter { $0 !== health }
+        let root = session?.frameHealth
+        if root != nil || beside != nil {
+            var others: [FrameHealth] = []
+            for other in [root, root?.nativeHealth, beside].compactMap({ $0 }) where other !== health && !others.contains(where: { $0 === other }) {
+                others.append(other)
+            }
             packet["otherSources"] = others.map { ["source": $0.source, "retainedEvents": $0.historyStatus().retained] as [String: Any] }
-            packet["selection"] = "one-source; request app or scroll explicitly for another source"
+            // An agent can ask for another source; a production bake takes no agent, and its card's Share gives the other
+            packet["selection"] = beside.map { "one-source; the card's Share gives \($0.source) as a report of its own" }
+                ?? "one-source; request app or scroll explicitly for another source"
         }
         if var time = packet["time"] as? [String: Any] { time["clamped"] = clamped; packet["time"] = time }
         return packet
@@ -161,28 +170,35 @@ enum FrameHealthReport {
         return encoded
     }
 
-    /// The counts since the collector's last reset. The screen's frames have no frame times, so their intervals, active
-    /// time, period and missed frames are null, and their lateness, by UIKit's deadlines, holds on the simulator too.
-    private static func coreSinceReload(_ snapshot: ExactFrameHealthSnapshot, screen: Bool) -> [String: Any] {
+    /// The counts since the collector's last reset, and the bounds of its frame times' and work's median, p99 and maximum.
+    /// The screen's frames have no frame times, so their intervals, active time, period and missed frames are null, and
+    /// their lateness, by UIKit's deadlines, holds on the simulator too.
+    private static func coreSinceReload(_ health: FrameHealth, _ snapshot: ExactFrameHealthSnapshot) -> [String: Any] {
+        let screen = health.screenFrames
         let timed = { (value: Any) -> Any in screen ? NSNull() : value }
+        let sample = FrameHealthMetrics.read(health)
         return ["callbacks": String(snapshot.callbacks), "heldCallbacks": String(snapshot.held),
             "frameIntervals": timed(String(snapshot.intervals)), "activeNs": timed(String(snapshot.active_ns)),
             "maximumFrameIntervalNs": timed(String(snapshot.max_interval_ns)), "scheduledPeriodNs": timed(snapshot.period_ns),
             "missedFrames": timed(String(snapshot.missed_frames)),
             "lateFrames": screen || FrameHealthAssessment.deadlinesObserved ? String(snapshot.late) as Any : NSNull(),
+            "frameTimeBoundsNs": timed(FrameHealthMetrics.bounds(sample.intervals, count: sample.snapshot.intervals,
+                overflows: sample.snapshot.histogram_overflows)),
+            "workBoundsNs": FrameHealthMetrics.bounds(sample.work, count: sample.snapshot.worked, overflows: sample.snapshot.histogram_overflows),
             "detailMayHaveBeenOff": true]
     }
 
     /// Copy bounded evidence on the main thread, then encode it on a utility worker, one export at a time so that no
     /// encoding backlog builds.
-    static func prepare(health: FrameHealth, session: ExactSession?, now: Double = CACurrentMediaTime(), completion: @escaping (Data) -> Void) {
+    static func prepare(health: FrameHealth, session: ExactSession?, now: Double = CACurrentMediaTime(), beside: FrameHealth? = nil,
+                        completion: @escaping (Data) -> Void) {
         guard !health.reportInFlight, !encoding else {
             completion(Data("{\"format\":\"exact.frame-health/2\",\"available\":false,\"error\":\"report-busy\",\"retryAfterMs\":1000}".utf8))
             return
         }
         health.reportInFlight = true
         encoding = true
-        let packet = snapshot(health: health, session: session, now: now)
+        let packet = snapshot(health: health, session: session, now: now, beside: beside)
         DispatchQueue.global(qos: .utility).async {
             let data = encode(packet)
             DispatchQueue.main.async { [weak health] in

@@ -14,6 +14,15 @@ import UIKit
 /// UIKit's button, as a native button's control: never a UIKit focus item
 /// (the node is the focus owner, D4).
 final class NativeButtonIOS: UIButton {
+    /// Where the surface draws it, inside a placed canvas child (PlacedAccessibilityIOS.swift).
+    override var accessibilityFrame: CGRect {
+        get { placedAccessibilityFrame ?? super.accessibilityFrame }
+        set { super.accessibilityFrame = newValue }
+    }
+    override var accessibilityActivationPoint: CGPoint {
+        get { placedActivationPoint(from: super.accessibilityActivationPoint) ?? super.accessibilityActivationPoint }
+        set { super.accessibilityActivationPoint = newValue }
+    }
     weak var owner: NodeView?
     override init(frame: CGRect) {
         super.init(frame: frame)

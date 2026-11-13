@@ -52,8 +52,11 @@ function client({ exports: e, session, writer, reader, encode, ABI }) {
 
 const MOUNT = 1, ARGS = 2, SIZE = 4, FRAME = 8, IMAGE = 16, FONT = 32, STYLE = 64;
 let lifetimes = 1;
+// The engine serving exact.wasm owns the page's style subscriptions.
+let stopRestyling;
 
 export function engine(rt) {
+  stopRestyling?.();
   const { data, clock, inflight, journal, After } = rt;
   const x = globalThis.exact;
   const records = new Map(); // view id -> record
@@ -174,19 +177,35 @@ export function engine(rt) {
   };
   wasm.exact_canvas_fonts = () => { for (const r of records.values()) if (r.text) r.causes |= FONT; drawAll(); return 0; };
   // A canvas whose colour or direction changes draws again, cause "style" (LLP 1056 D4): after a commit, in a microtask,
-  // once its host commands (`setScheme`) and the modes it resolves have applied; and on the window's scheme, the root's
-  // own style (a development page's held scheme), an app's mode tuple (`data-x-modes`) and a colour transition's end.
+  // once its host commands (`setScheme`) and the modes it resolves have applied; and on the window's scheme or
+  // contrast, the root's own style (a development page's held scheme), an app's mode tuple (`data-x-modes`) and a colour transition's end.
+  let restyling = true;
   const restyle = () => {
+    if (!restyling) return;
     for (const r of records.values()) if (r.drawnIn && r.drawnIn !== drawnIn(colour(r.c.e), rtlOf(r.c.e))) r.causes |= STYLE;
     drawAll();
   };
-  After.push(() => queueMicrotask(restyle));
-  globalThis.matchMedia?.('(prefers-color-scheme: dark)').addEventListener?.('change', restyle);
-  document.addEventListener?.('transitionend', (e) => { if (e.propertyName === 'color') restyle(); }, true);
+  const after = () => queueMicrotask(restyle), transitioned = e => { if (e.propertyName === 'color') restyle(); };
+  After.push(after);
+  const media = ['(prefers-color-scheme: dark)', ...['more', 'less', 'custom'].map(value => `(prefers-contrast: ${value})`)].map(q => globalThis.matchMedia?.(q));
+  for (const q of media) q?.addEventListener?.('change', restyle);
+  document.addEventListener?.('transitionend', transitioned, true);
+  const observers = [];
   if (typeof MutationObserver === 'function') {
-    new MutationObserver(restyle).observe(document.documentElement, { attributes: true, attributeFilter: ['style'] });
-    new MutationObserver(restyle).observe(document.documentElement, { attributes: true, subtree: true, attributeFilter: ['data-x-modes'] });
+    for (const options of [{ attributes: true, attributeFilter: ['style'] }, { attributes: true, subtree: true, attributeFilter: ['data-x-modes'] }]) {
+      const observer = new MutationObserver(restyle);
+      observer.observe(document.documentElement, options);
+      observers.push(observer);
+    }
   }
+  stopRestyling = () => {
+    restyling = false;
+    for (const q of media) q?.removeEventListener?.('change', restyle);
+    document.removeEventListener?.('transitionend', transitioned, true);
+    for (const observer of observers) observer.disconnect();
+    const index = After.indexOf(after);
+    if (index !== -1) After.splice(index, 1);
+  };
   x.send ??= () => {};
   function frame() {
     for (const r of records.values()) if (r.frames && r.framedAt !== clock.now) r.causes |= FRAME;
@@ -204,11 +223,13 @@ export function engine(rt) {
   host();
   // The module arrives after first pixel (rust-data.js); until then causes wait.
   const ready = () => {
-    module = client(data.logic);
+    // No `data.logic`: the Rust module did not load (the entry says why in the journal).
+    module = data.logic && client(data.logic);
     if (!module) {
       // Each canvas here names a surface no GPU module registers (the build's routing), so nothing draws it: said, and
       // its state's error, rather than a canvas pending blank.
-      undrawn = 'no GPU module registers this surface, and the Rust module draws no Canvas 2D surface (exact_logic_abi::export_draw!)';
+      undrawn = data.logic ? 'no GPU module registers this surface, and the Rust module draws no Canvas 2D surface (exact_logic_abi::export_draw!)'
+        : 'the Rust module that draws this surface did not load';
       sayUndrawn();
     }
     drawAll();

@@ -4,7 +4,7 @@ import * as fs from 'node:fs';
 import {tmpdir, homedir} from 'node:os';
 import {resolve, relative} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {classifyArtifacts} from './app.mjs';
+import {bakedEntryAssets, classifyArtifacts} from './app.mjs';
 import {spawnSync as realSpawnSync} from 'node:child_process';
 import {channelOf} from './deploy.mjs';
 import {filesystem, filesystemRead} from './filesystem.mjs';
@@ -13,33 +13,34 @@ import {filesystem, filesystemRead} from './filesystem.mjs';
 // root whose cohort's binary has prelude runtime 4 and whose baked module
 // needs `runtime` (its receipt's). Bun's native subprocess import bypasses
 // module mocks; explicit bindings also isolate deployment tests.
-function harness(classify=()=>({bundle:true}), runtime=4, {bake, cohortRuntime=4, grants=''}={}) {
+function harness(classify=()=>({bundle:true}), runtime=4, {bake, cohortRuntime=4, grants='', watch=fs.watch}={}) {
   const root=fs.mkdtempSync(resolve(tmpdir(),'exact-push-profile-'));
   const app={id:'fixture',name:'fixture',dir:root,target:root,manifest:{app:{origin:root},deploy:{signing:{keys:{test:'public'}}}}};
   const compat={id:'a'.repeat(32),target:'fixture',inputs:{app:'fixture',platform:'linux',store:{L:'A'},rustMode:'native',grantCeiling:grants,keys:{test:'public'},typescriptRuntime:cohortRuntime}};
   const graph={artifacts:[{name:'app.plan',requires:{sources:{}},sha256:'plan'}]};
   const cohort={version:1,compat,binary:'binary',sources:{}};
   const build={trust:'production',compat,graph};
-  const calls=[], published=[], destinations=[], rows=[];
+  const calls=[], published=[], bundles=[], destinations=[], rows=[];
   const sealed=(name,env)=>{
     calls.push(name);
     expect(env?.EXACT_GAME_PROOF_PROFILE,`${name} shipping profile`).toBe('release');
     expect(env?.EXACT_UPDATE_TRUST,`${name} production trust`).toBe('production');
   };
   const bindings={
-    ...Object.fromEntries(['existsSync','readFileSync','writeFileSync','mkdtempSync','rmSync','watch'].map(name=>[name,fs[name]])),
+    ...Object.fromEntries(['existsSync','readFileSync','writeFileSync','mkdtempSync','rmSync'].map(name=>[name,fs[name]])), watch,
     filesystem, filesystemRead,
     channelOf,validateChannel,resolve,relative,homedir,ROOT:fileURLToPath(new URL('..',import.meta.url)),
     process:{env:{EXACT_GAME_PROOF_PROFILE:'gpu-dev',EXACT_UPDATE_TRUST:'development'}},
     console:{log(){}},Refusal:Error,refuse(message){throw Error(message)},
     loadSigner:()=>({keyId:'test'}),resolveApp:()=>app,readBuilds:()=>[build],
+    bakedEntryAssets,bakeOutput:()=>resolve(root,'bake'),
     cohortReceipt:()=>cohort,classifyArtifacts:classify,
     openOrigin:mock(spec=>({writable:true,list:async path=>{destinations.push({origin:spec,path});return []},describe:()=>spec})),
     channelOrigin,sha256:()=> 'digest',blobPath:x=>x,streamPath:()=> 'stream',
-    defaultRelease:()=> 'r-fixture',inspectHead(){throw Error('unexpected head')},
+    defaultRelease:()=> 'r-fixture',admitHead(){throw Error('unexpected head')},
     requireReleasePins(){}, // the release pins' gate (game/inputs.mjs), not what this seals
-    async publishStream({build,row}){
-      expect(build.trust).toBe('production');calls.push('publish');published.push(build);rows.push(row);
+    async publishStream({build,bundle,row}){
+      expect(build.trust).toBe('production');calls.push('publish');published.push(build);bundles.push(bundle);rows.push(row);
       return {action:'current',platform:'linux',compatibilityId:compat.id};
     },
     RustBaker:class {constructor(app,env){sealed('resident',env)}close(){calls.push('close')}},
@@ -65,7 +66,7 @@ function harness(classify=()=>({bundle:true}), runtime=4, {bake, cohortRuntime=4
   const functions=source.slice(source.indexOf('function parseArgs('),source.indexOf('\nif (process.argv[1]'))
     .replace('export async function pusher','async function pusher');
   const pusher=new Function(...Object.keys(bindings),functions+'\nreturn pusher;')(...Object.values(bindings));
-  return {root,app,calls,published,destinations,rows,bindings,pusher};
+  return {root,app,build,calls,published,bundles,destinations,rows,bindings,pusher};
 }
 
 test.each([
@@ -123,6 +124,31 @@ test('push sends a TypeScript module that uses nothing newer to an older binary'
   } finally {fs.rmSync(root,{recursive:true,force:true})}
 });
 
+// A TypeScript app with a Live Activity: its production bake lists the activity's plan and schema and the module pair
+// (bake/src/widgets.rs), which exist only in the bake's output, beside the receipt readBuilds reads.
+test('push starts a stream for a TypeScript app with a Live Activity from what its bake made, listing one module pair', async () => {
+  const {root,build,published,bundles,pusher}=harness(classifyArtifacts);
+  try {
+    fs.writeFileSync(resolve(root,'app.ts'),'');
+    const made={'plans/departure.plan':'activity plan','activities/departure.schema.json':'{}','typescript/app.hbc':'baked bytecode','typescript/app.module.json':'{}'};
+    const entries=resolve(root,'bake',`${build.compat.inputs.platform}-${build.compat.target}.entries`);
+    for(const [name,text] of Object.entries(made)){
+      fs.mkdirSync(resolve(entries,name,'..'),{recursive:true});fs.writeFileSync(resolve(entries,name),text);
+      build.graph.artifacts.push({name,sha256:sha256(Buffer.from(text)),bytes:text.length,kind:'bundle',requires:{}});
+    }
+    expect(await pusher({_:[root],origin:root,keys:root})).toBe(0);
+    const names=['activities/departure.schema.json','app.plan','plans/departure.plan','typescript/app.hbc','typescript/app.module.json'];
+    expect(published[0].graph.artifacts.map(a=>a.name).sort()).toEqual(names);
+    expect(bundles[0].assets.map(a=>a.name).sort()).toEqual(names.filter(n=>n!=='app.plan'));
+    // The plans are the bake's; the pair is the one push baked.
+    const bytes=Object.fromEntries(bundles[0].assets.map(a=>[a.name,a.bytes.toString()]));
+    expect([bytes['plans/departure.plan'],bytes['typescript/app.hbc']]).toEqual(['activity plan','bytecode']);
+    // A file the bake no longer holds as it listed it refuses.
+    fs.writeFileSync(resolve(entries,'plans/departure.plan'),'edited');
+    await expect(pusher({_:[root],origin:root,keys:root})).rejects.toThrow(/plans\/departure\.plan: .* is not the file the linux bake listed/);
+  } finally {fs.rmSync(root,{recursive:true,force:true})}
+});
+
 test('push refuses a TypeScript module that needs a newer prelude than the cohort has', async () => {
   const {root,calls,pusher}=harness(classifyArtifacts,5);
   try {
@@ -158,6 +184,25 @@ export const answer: Answer = (source, args, store, storage) => sources[source](
     expect(calls).not.toContain('publish');
   } finally {fs.rmSync(root,{recursive:true,force:true})}
 }, 120000);
+
+test('push --watch publishes after a save to what a push reads, and not to what a tool writes', async () => {
+  let listener;
+  const { root, rows, pusher } = harness(undefined, 4, { watch: (dir, options, saved) => { listener = saved; } });
+  const settle = () => new Promise(ok => setTimeout(ok, 200));
+  try {
+    pusher({ _: [root], keys: root, watch: true });
+    while (!listener) await settle();
+    const pushes = async (file) => { const before = rows.length; listener('change', file); await settle(); return rows.length - before; };
+    // The design, and an asset or a deck's file of any type (`carriedAssets`)
+    for (const file of ['app.contract', 'app.tamber', 'assets/logo.png', 'assets/Inter.ttf', 'assets/chime.wav', 'assets/clip.mov', 'deck/deck.js']) {
+      expect([file, await pushes(file)]).toEqual([file, 1]);
+    }
+    // What the app's own state, a build or the Finder writes
+    for (const file of ['.exact/sent.json', '.exact/shells/Cargo.toml', 'target/debug/x.rs', 'assets/.DS_Store', 'notes.txt']) {
+      expect([file, await pushes(file)]).toEqual([file, 0]);
+    }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
 
 test('push refuses incomplete values and reserved channels before publishing', () => {
   const source = fs.readFileSync(new URL('./push.mjs', import.meta.url), 'utf8');

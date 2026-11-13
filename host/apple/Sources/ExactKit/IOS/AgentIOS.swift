@@ -379,7 +379,8 @@ extension Agent {
         let vp = presenter.viewport
         let rect = { (r: CGRect) -> [String: Any] in ["x": Agent.r2(r.origin.x), "y": Agent.r2(r.origin.y), "w": Agent.r2(r.width), "h": Agent.r2(r.height)] }
         let local = presenter.inlineText(UInt32(id)).map { host.inlineBounds($0) ?? .zero } ?? host.bounds
-        let b = presenter.inlineFrame(UInt32(id)) ?? box(host, region: local)
+        let shift = PresentedScrolls(vp).shift(of: host) // a running scroll shows it there (LLP 1012 `layout`)
+        let b = (presenter.inlineFrame(UInt32(id)) ?? box(host, region: local)).offsetBy(dx: shift.x, dy: shift.y)
         var space: [String: Any] = ["viewport": rect(b), "local": ["w": Agent.r2(local.width), "h": Agent.r2(local.height)],
                                     "capture": ["scale": Agent.r2(vp.window?.screen.scale ?? vp.traitCollection.displayScale)]]
         if let w = host.window {
@@ -413,12 +414,12 @@ extension Agent {
             if inertBy == nil, !s.isUserInteractionEnabled { inertBy = describe(s) }
             if let sv = s as? ScrollView, let route = sv.superview?.next as? RouteController, route.contentViewport === sv {
                 let port = box(sv, region: sv.bounds.inset(by: sv.adjustedContentInset))
-                chain.append(["route": Int(route.node.id), "sx": Agent.r2(sv.contentOffset.x), "sy": Agent.r2(sv.contentOffset.y),
-                              "port": [port.minX, port.minY, port.width, port.height].map(Agent.r2)].merging(Agent.range(of: sv)) { a, _ in a })
+                chain.append(["route": Int(route.node.id), "port": [port.minX, port.minY, port.width, port.height].map(Agent.r2)]
+                    .merging(Agent.offset(of: sv)) { a, _ in a }.merging(Agent.range(of: sv)) { a, _ in a })
                 clippers.append((sv, route.node.id, "viewport"))
             }
             if let n = s as? NodeView {
-                if let sv = n.scrollView { chain.append(["id": Int(n.id), "sx": Agent.r2(sv.contentOffset.x), "sy": Agent.r2(sv.contentOffset.y + n.scrollTopInset(sv)), "port": port(of: n, sv)].merging(Agent.range(of: sv)) { a, _ in a }) } // CSS scrollTop, as `tree` reads it
+                if let sv = n.scrollView { chain.append(["id": Int(n.id), "port": port(of: n, sv)].merging(Agent.offset(of: sv, top: n.scrollTopInset(sv))) { a, _ in a }.merging(Agent.range(of: sv)) { a, _ in a }) } // CSS scrollTop, as `tree` reads it
                 else if n.scrollDormant { chain.append(["id": Int(n.id), "sx": 0.0, "sy": 0.0, "rx": 0.0, "ry": 0.0]) }
                 if n.clipsToBounds || n.clipBox != nil { clippers.append((n, n.id, "overflow")) }
                 if n.clipPath != nil { clippers.append((n, n.id, "clip-path")) }
@@ -428,7 +429,7 @@ extension Agent {
         // The viewport's scrolling, or none: a presentation's mount does not scroll (LLP 1123 D2)
         let popoverLayer = PopoverLayer.containing(host)
         let inViewport = popoverLayer.map { presenter.inDocument($0) } ?? (presenter.port(of: host) === vp)
-        var scroll: [[String: Any]] = [inViewport ? ["viewport": true, "sx": Agent.r2(vp.contentOffset.x), "sy": Agent.r2(vp.contentOffset.y)].merging(Agent.range(of: vp)) { a, _ in a }
+        var scroll: [[String: Any]] = [inViewport ? ["viewport": true].merging(Agent.offset(of: vp)) { a, _ in a }.merging(Agent.range(of: vp)) { a, _ in a }
                                                   : ["presentation": true, "sx": 0.0, "sy": 0.0, "rx": 0.0, "ry": 0.0]]
         scroll.append(contentsOf: chain.reversed())
         var clip: [[String: Any]] = []

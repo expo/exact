@@ -5,7 +5,8 @@
 //!
 //! Where a block ends is decided here by the same line rules the parser
 //! (`markdown-parse`) uses, over complete lines only. The parser keeps no
-//! state from one block to the next, so parsing a finished block's lines
+//! state from one block to the next (raw HTML would, as images, so
+//! `markdown` has it read as written), so parsing a finished block's lines
 //! alone gives exactly the blocks the whole reply gives there.
 
 use crate::highlight::CodeHighlighter;
@@ -617,6 +618,22 @@ mod tests {
             assert_eq!(joined, whole, "token size {size}");
             if size < 1000 {
                 assert!(before >= 8, "only {before} settled at size {size}");
+            }
+        }
+    }
+
+    #[test]
+    fn raw_html_settles_as_the_whole_reply_reads_it() {
+        for reply in [
+            "<img src=\"https://x.test/a.png\"\n  alt=\"The logo\">\n\nAfter.",
+            "<p align=\"center\">\n<img src=\"https://x.test/a.png\" alt=\"Logo\">\n</p>\n\nAfter.",
+            "<img src=\"https://x.test/a.png\" alt=\"Logo\"> Exact\nis a framework.\n\nAfter.",
+            "Text\n<b>x</b>\nmore\n\n<details>\n<summary>S</summary>\n\nbody\n</details>\n\nAfter.",
+        ] {
+            let whole = markdown::blocks(reply);
+            for size in [1, 7, 1000] {
+                let (groups, _) = stream(reply, size);
+                assert_eq!(groups.concat(), whole, "{reply:?} at token size {size}");
             }
         }
     }

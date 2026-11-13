@@ -132,33 +132,16 @@ fn nodes(
     list: &mut [Node],
 ) -> Result<(), SyntaxError> {
     for node in list {
-        match node {
-            Node::Element {
-                attrs: a, children, ..
-            } => {
-                attrs(names, locals, a)?;
+        if let Node::Element { attrs: a, .. } = node {
+            attrs(names, locals, a)?;
+        }
+        for (children, binds) in node.scoped_child_lists_mut() {
+            if binds.is_empty() {
                 nodes(names, locals, children)?;
-            }
-            Node::Use { children, .. } => nodes(names, locals, children)?,
-            Node::Children { .. } => {}
-            Node::When {
-                then, otherwise, ..
-            } => {
-                nodes(names, locals, then)?;
-                nodes(names, locals, otherwise)?;
-            }
-            Node::Each {
-                var, index, body, ..
-            } => {
+            } else {
                 let mut inner = locals.clone();
-                inner.extend(std::iter::once(&*var).chain(index.as_ref()).cloned());
-                nodes(names, &inner, body)?;
-            }
-            Node::Match { some, none, .. } => {
-                let mut inner = locals.clone();
-                inner.insert(some.0.clone());
-                nodes(names, &inner, &mut some.1)?;
-                nodes(names, locals, none)?;
+                inner.extend(binds.iter().map(String::from));
+                nodes(names, &inner, children)?;
             }
         }
     }

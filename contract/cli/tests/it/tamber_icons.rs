@@ -49,6 +49,309 @@ fn a_literal_icon_is_written_as_its_source_form() {
 }
 
 #[test]
+fn independently_declared_icons_with_identical_sources_are_refused() {
+    for (name, targets, first, second) in [
+        (
+            "duplicate-svg",
+            "\"ios\": {}, \"web\": {}",
+            "icon(svg \"icons/reply.svg\")",
+            "icon(svg \"icons/reply.svg\")",
+        ),
+        (
+            "duplicate-sources",
+            "\"ios\": {}, \"web\": {}",
+            "icon(sf \"bubble.left\", svg \"icons/reply.svg\")",
+            "icon(svg \"icons/reply.svg\", material \"chat_bubble\", sf \"bubble.left\")",
+        ),
+        (
+            "duplicate-sf",
+            "\"ios\": {}",
+            "icon(sf \"bubble.left\")",
+            "icon(sf \"bubble.left\")",
+        ),
+    ] {
+        let design = format!("  icon.reply = {first}\n  icon.respond = {second}\n");
+        let path = app(name, targets, &design, &view("symbol:icon.respond"));
+        let Err(errors) = contract::compile_path_all(&path, false) else {
+            panic!("{name}: independently declared duplicate sources compiled");
+        };
+        assert_eq!(errors.len(), 1, "{name}: {errors:?}");
+        let error = &errors[0];
+        assert_eq!(error.id, "tamber-icon-duplicate", "{name}: {error:?}");
+        assert_eq!(error.span.line, 8, "{name}: {error:?}");
+        assert!(
+            error.message.contains("`icon.reply`")
+                && error.message.contains("`icon.respond`")
+                && error.message.contains("icon.respond = icon.reply"),
+            "{name}: {error:?}"
+        );
+    }
+    let path = app(
+        "duplicate-after-alias",
+        "\"ios\": {}, \"web\": {}",
+        "  icon.alias = icon.reply\n  icon.reply = icon(svg \"icons/reply.svg\")\n  icon.respond = icon(svg \"icons/reply.svg\")\n",
+        &view("symbol:icon.alias"),
+    );
+    let error = contract::compile_path(&path).unwrap_err();
+    assert_eq!(error.id, "tamber-icon-duplicate", "{error:?}");
+    assert_eq!(error.span.line, 9, "{error:?}");
+    assert_eq!(
+        error.message,
+        "`icon.reply` and `icon.respond` have identical icon sources: alias one to the other (`icon.respond = icon.reply`)"
+    );
+}
+
+#[test]
+fn icons_with_different_platform_sources_build() {
+    for (name, first, second) in [
+        (
+            "different-sf",
+            "icon(sf \"bubble.left\", svg \"icons/reply.svg\")",
+            "icon(sf \"bubble.right\", svg \"icons/reply.svg\")",
+        ),
+        (
+            "different-svg",
+            "icon(sf \"bubble.left\", svg \"icons/reply.svg\")",
+            "icon(sf \"bubble.left\", svg \"icons/respond.svg\")",
+        ),
+        (
+            "different-svg-only",
+            "icon(svg \"icons/reply.svg\")",
+            "icon(svg \"icons/respond.svg\")",
+        ),
+        (
+            "different-apple-source",
+            "icon(sf \"bubble.left\", svg \"icons/reply.svg\")",
+            "icon(svg \"icons/reply.svg\")",
+        ),
+    ] {
+        let design = format!("  icon.reply = {first}\n  icon.respond = {second}\n");
+        let path = app(
+            name,
+            "\"ios\": {}, \"web\": {}",
+            &design,
+            "component App\n  view\n    column\n      image \"symbol:icon.reply\"\n      image \"symbol:icon.respond\"\n",
+        );
+        std::fs::write(
+            path.parent().unwrap().join("assets/icons/respond.svg"),
+            REPLY.replace("M760", "M740"),
+        )
+        .unwrap();
+        let plan = contract::compile_path(&path).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        assert_eq!(plan.icons.len(), 2, "{name}");
+    }
+}
+
+#[test]
+fn icon_alias_chains_build_in_either_declaration_order() {
+    let owner = "  icon.reply = icon(svg \"icons/reply.svg\")\n";
+    let aliases = "  icon.respond = icon.answer\n  icon.answer = icon.reply\n";
+    for (name, design) in [
+        ("aliases-first", format!("{aliases}{owner}")),
+        ("aliases-last", format!("{owner}{aliases}")),
+    ] {
+        let path = app(
+            name,
+            "\"ios\": {}, \"web\": {}",
+            &design,
+            "component App\n  state icon = \"icon.respond\"\n  view\n    image `symbol:${icon}`\n",
+        );
+        let plan = contract::compile_path(&path).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        assert_eq!(plan.icons.len(), 3, "{name}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn icon_svg_sources_are_relative_to_their_package() {
+    let path = app(
+        "duplicate-package-paths",
+        "\"ios\": {}, \"web\": {}",
+        "  icon.reply = icon(sf \"bubble.left\", svg \"icons/reply.svg\")\n",
+        "use Card from \"@acme/reading\"\ncomponent App\n  view\n    column\n      image \"symbol:icon.reply\"\n      Card()\n",
+    );
+    let root = path.parent().unwrap();
+    let design = "tamber reading\n\nicons\n  reading.reply = icon(sf \"bubble.left\", svg \"icons/reply.svg\")\n";
+    super::tamber_package_params::package(
+        root,
+        "reading",
+        "component Card\n  view\n    image \"symbol:reading.reply\"\n",
+        design,
+    );
+    let package = root.join("node_modules/@acme/reading");
+    std::fs::create_dir_all(package.join("assets/icons")).unwrap();
+    std::fs::write(
+        package.join("assets/icons/reply.svg"),
+        REPLY.replace("M760", "M740"),
+    )
+    .unwrap();
+    let plan = contract::compile_path(&path).unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(plan.icons.len(), 2);
+
+    let design_file = package.join("reading.tamber");
+    std::fs::write(
+        &design_file,
+        format!("{design}  reading.respond = icon(sf \"bubble.left\", svg \"icons/reply.svg\")\n"),
+    )
+    .unwrap();
+    let error = contract::compile_path(&path).unwrap_err();
+    assert_eq!(error.id, "tamber-icon-duplicate", "{error:?}");
+    assert_eq!(error.span.line, 5, "{error:?}");
+    let reported = error.file.as_deref().map(|f| f.canonicalize().unwrap());
+    assert_eq!(reported, Some(design_file.canonicalize().unwrap()));
+    assert!(
+        error.message.contains("reading.respond = reading.reply"),
+        "{error:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_shared_svg_across_roots_requires_an_alias() {
+    let path = app(
+        "shared-svg",
+        "\"ios\": {}, \"web\": {}",
+        "  icon.reply = icon(svg \"icons/reply.svg\")\n",
+        "use Card from \"@acme/reading\"\ncomponent App\n  view\n    column\n      image \"symbol:icon.reply\"\n      Card()\n",
+    );
+    let root = path.parent().unwrap();
+    super::tamber_package_params::package(
+        root,
+        "reading",
+        "component Card\n  view\n    image \"symbol:reading.reply\"\n",
+        "tamber reading\n\nicons\n  reading.reply = icon(svg \"icons/reply.svg\")\n",
+    );
+    let asset = root.join("node_modules/@acme/reading/assets/icons/reply.svg");
+    std::fs::create_dir_all(asset.parent().unwrap()).unwrap();
+    std::fs::write(&asset, REPLY).unwrap();
+    let link = root.join("assets/icons/reply.svg");
+    std::fs::remove_file(&link).unwrap();
+    std::os::unix::fs::symlink(&asset, &link).unwrap();
+
+    let error = contract::compile_path(&path).unwrap_err();
+    assert_eq!(error.id, "tamber-icon-duplicate", "{error:?}");
+    assert!(
+        error.message.contains("`icon.reply`") && error.message.contains("`reading.reply`"),
+        "{error:?}"
+    );
+    std::fs::write(
+        root.join("app.tamber"),
+        "tamber t\n\nicons\n  icon.reply = reading.reply\n",
+    )
+    .unwrap();
+    let plan = contract::compile_path(&path).unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(plan.icons.len(), 2);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[test]
+fn icon_duplicates_across_roots_compare_the_emitted_form() {
+    let path = app(
+        "package-source-forms",
+        "\"ios\": {}, \"web\": {}",
+        "",
+        "use Card from \"@acme/reading\"\nuse Note from \"@acme/writing\"\ncomponent App\n  view\n    column\n      Card()\n      Note()\n",
+    );
+    let root = path.parent().unwrap();
+    for (ns, component) in [("reading", "Card"), ("writing", "Note")] {
+        super::tamber_package_params::package(
+            root,
+            ns,
+            &format!("component {component}\n  view\n    image \"symbol:{ns}.reply\"\n"),
+            &format!("tamber {ns}\n\nicons\n  {ns}.reply = icon(svg \"icons/reply.svg\")\n"),
+        );
+        let assets = root.join(format!("node_modules/@acme/{ns}/assets/icons"));
+        std::fs::create_dir_all(&assets).unwrap();
+        std::fs::write(assets.join("reply.svg"), REPLY).unwrap();
+        std::fs::write(assets.join("respond.svg"), REPLY).unwrap();
+    }
+    let second = root.join("node_modules/@acme/writing");
+    for (case, svg, source, duplicate) in [
+        (
+            "same bytes",
+            REPLY.to_string(),
+            "svg \"icons/reply.svg\"",
+            true,
+        ),
+        (
+            "same template",
+            REPLY.replace("<path ", "<path fill=\"#f00\" "),
+            "svg \"icons/reply.svg\"",
+            true,
+        ),
+        (
+            "path",
+            REPLY.replace("M760", "M740"),
+            "svg \"icons/reply.svg\"",
+            false,
+        ),
+        (
+            "viewBox",
+            REPLY.replace("960 960", "480 480"),
+            "svg \"icons/reply.svg\"",
+            false,
+        ),
+        (
+            "fill rule",
+            REPLY.replace("<path ", "<path fill-rule=\"evenodd\" "),
+            "svg \"icons/reply.svg\"",
+            false,
+        ),
+        (
+            "sf",
+            REPLY.to_string(),
+            "sf \"bubble.left\", svg \"icons/reply.svg\"",
+            false,
+        ),
+        (
+            "relative filename",
+            REPLY.to_string(),
+            "svg \"icons/respond.svg\"",
+            false,
+        ),
+    ] {
+        std::fs::write(second.join("assets/icons/reply.svg"), svg).unwrap();
+        std::fs::write(
+            second.join("writing.tamber"),
+            format!("tamber writing\n\nicons\n  writing.reply = icon({source})\n"),
+        )
+        .unwrap();
+        let result = contract::compile_path(&path);
+        if duplicate {
+            let error = result.unwrap_err();
+            assert_eq!(error.id, "tamber-icon-duplicate", "{case}: {error:?}");
+            assert!(
+                error.message.contains("`reading.reply`")
+                    && error.message.contains("`writing.reply`")
+                    && error.message.contains("writing.reply = reading.reply"),
+                "{case}: {error:?}"
+            );
+        } else {
+            let plan = result.unwrap_or_else(|e| panic!("{case}: {e:?}"));
+            assert_eq!(plan.icons.len(), 2, "{case}");
+            assert_ne!(
+                exact_runner::icon_of(&plan, &plan.icons[0]),
+                exact_runner::icon_of(&plan, &plan.icons[1]),
+                "{case}"
+            );
+        }
+    }
+    std::fs::write(
+        root.join("app.tamber"),
+        "tamber t\n\nicons\n  writing.reply = reading.reply\n",
+    )
+    .unwrap();
+    let plan = contract::compile_path(&path).unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(plan.icons.len(), 2);
+    assert_eq!(
+        exact_runner::icon_of(&plan, &plan.icons[0]),
+        exact_runner::icon_of(&plan, &plan.icons[1]),
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn a_shipped_target_without_a_source_is_refused() {
     let path = app(
         "missing",

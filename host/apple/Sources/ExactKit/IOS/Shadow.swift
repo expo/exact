@@ -223,7 +223,11 @@ package final class Shadow {
         } else if shadow.mask != nil {
             shadow.mask = nil
         }
-        if opaque { if shadow.opacity != 1 { shadow.opacity = 1 }; if shadow.isHidden { shadow.isHidden = false } }
+        if opaque {
+            let opacity = Capture.rootOpacity(of: layer)
+            if shadow.opacity != opacity { shadow.opacity = opacity }
+            if shadow.isHidden { shadow.isHidden = false }
+        }
         // A placed child under the captured root is its surface's to draw.
         else if (layer as? NodeLayer)?.drawnElsewhere == true, !shadow.isHidden { shadow.isHidden = true }
         let view = layer.delegate as? UIView

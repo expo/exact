@@ -190,7 +190,7 @@ impl exact_runner::DataSource for NoData {
     }
 }
 
-fn logs(r: &exact_runner::Runner<NoData>) -> String {
+fn logs<D: exact_runner::DataSource>(r: &exact_runner::Runner<D>) -> String {
     exact_runner::agent::handle(r, r#"{"op":"logs"}"#)
 }
 
@@ -247,7 +247,10 @@ fn an_unbound_module_answers_its_default_or_the_preferred_value() {
 
 /// The host's part, as a native host plays it: each request dispatched (a
 /// held one parked), released work run, and each outcome fulfilled.
-fn pump(r: &mut exact_runner::Runner<NoData>, parked: &mut Vec<(u64, u64)>) {
+fn pump<D: exact_runner::DataSource>(
+    r: &mut exact_runner::Runner<D>,
+    parked: &mut Vec<(u64, u64)>,
+) {
     for out in r.take_requests() {
         let token = out
             .request
@@ -264,14 +267,18 @@ fn pump(r: &mut exact_runner::Runner<NoData>, parked: &mut Vec<(u64, u64)>) {
     r.apply_announced();
 }
 
-fn run(r: &mut exact_runner::Runner<NoData>, ticket: u64, dispatch: exact_runner::Dispatch) {
+fn run<D: exact_runner::DataSource>(
+    r: &mut exact_runner::Runner<D>,
+    ticket: u64,
+    dispatch: exact_runner::Dispatch,
+) {
     if let exact_runner::Dispatch::Run(exact_runner::Work::Now(work)) = dispatch {
         r.fulfill(ticket, work()).unwrap();
     }
 }
 
-fn answer(
-    r: &mut exact_runner::Runner<NoData>,
+fn answer<D: exact_runner::DataSource>(
+    r: &mut exact_runner::Runner<D>,
     op: &str,
     capability: &str,
     answer: &str,
@@ -400,64 +407,98 @@ fn a_position_ticket_times_out_on_the_agent_clock() {
     );
 }
 
-/// LLP 1133.002 D10 through the substitute: precise location for a task.
-/// While `granted` and `approximate` the send waits on a `precision` ticket;
-/// `allow` raises `accuracy` and the send answers the status; declined, it
-/// answers the status unchanged, never a failure; once `precise`, at once.
+struct LocationData(&'static str);
+impl exact_runner::DataSource for LocationData {
+    fn query(
+        &mut self,
+        source: &str,
+        args: &[exact_runner::Value],
+    ) -> Result<exact_runner::Value, exact_runner::DataError> {
+        NoData.query(source, args)
+    }
+    fn grants(&self) -> &str {
+        self.0
+    }
+}
+
+/// LLP 1133.002 D7, D10, D14: only the full grant can raise precision.
 #[test]
-fn a_precision_ticket_raises_the_status_or_answers_it_unchanged() {
+fn a_precision_request_respects_the_grant_ceiling_and_ticket_answers() {
     let app = App::new("precision");
     let head = "use requestPreciseLocation from \"@exact/geolocation\"\n";
     let body = format!("{head}component App\n  resource status = geolocationStatus() as shape GeolocationStatus\n  mutation raised as shape GeolocationStatus\n  action raise\n    send raised = requestPreciseLocation(purposeKey=\"forecastPurpose\")\n  view\n    text status.accuracy\n");
     let plan = app.compile(&body).unwrap_or_else(|e| panic!("{e:?}"));
-    let mut r = exact_runner::Runner::boot(
-        plan,
-        NoData,
-        exact_kernel::Kernel::with_monospace(),
-        Default::default(),
-        "/",
-    )
-    .unwrap();
-    let mut parked = Vec::new();
-    let show = |r: &exact_runner::Runner<NoData>, name: &str| {
-        format!("{:?}", r.resource(name).or(r.slot(name)))
-    };
-    r.act("raise", Vec::new()).unwrap();
-    pump(&mut r, &mut parked);
-    answer(&mut r, "tap", "permission", "allow");
-    pump(&mut r, &mut parked);
-    assert!(
-        show(&r, "status").contains("\"approximate\""),
-        "{}",
-        show(&r, "status")
-    );
-    answer(&mut r, "tap", "precision", "deny");
-    pump(&mut r, &mut parked);
-    assert!(
-        show(&r, "raised").contains("\"approximate\""),
-        "declined is the status unchanged: {}",
-        show(&r, "raised")
-    );
-    r.act("raise", Vec::new()).unwrap();
-    pump(&mut r, &mut parked);
-    answer(&mut r, "tap", "precision", "allow");
-    pump(&mut r, &mut parked);
-    assert!(
-        show(&r, "raised").contains("\"precise\""),
-        "{}",
-        show(&r, "raised")
-    );
-    assert!(
-        show(&r, "status").contains("\"precise\""),
-        "{}",
-        show(&r, "status")
-    );
-    r.act("raise", Vec::new()).unwrap();
-    pump(&mut r, &mut parked);
-    assert!(
-        r.device_holds().is_empty(),
-        "precise already: answered at once"
-    );
+    for (grant, accuracy) in [
+        (
+            "device.geolocation-approximate locationPurpose",
+            "approximate",
+        ),
+        ("device.geolocation locationPurpose", "precise"),
+    ] {
+        let mut r = exact_runner::Runner::boot(
+            plan.clone(),
+            LocationData(grant),
+            exact_kernel::Kernel::with_monospace(),
+            Default::default(),
+            "/",
+        )
+        .unwrap();
+        let mut parked = Vec::new();
+        let show = |r: &exact_runner::Runner<LocationData>, name: &str| {
+            format!("{:?}", r.resource(name).or(r.slot(name)))
+        };
+        r.act("raise", Vec::new()).unwrap();
+        pump(&mut r, &mut parked);
+        answer(&mut r, "tap", "permission", "allow");
+        pump(&mut r, &mut parked);
+        assert!(
+            r.device_holds().is_empty(),
+            "{grant}: {:?}",
+            r.device_holds()
+        );
+        assert!(
+            show(&r, "raised").contains(&format!("\"{accuracy}\"")),
+            "{}",
+            show(&r, "raised")
+        );
+        if accuracy == "precise" {
+            r.extension_agent(r#"{"op":"prefer","extension":{"geolocation.geolocationStatus":{"available":true,"accuracy":"approximate"}}}"#)
+                .unwrap().1.unwrap();
+            for choice in ["deny", "cancel", "allow"] {
+                r.act("raise", Vec::new()).unwrap();
+                pump(&mut r, &mut parked);
+                answer(&mut r, "tap", "precision", choice);
+                pump(&mut r, &mut parked);
+                let expected = if choice == "allow" {
+                    "precise"
+                } else {
+                    "approximate"
+                };
+                assert!(
+                    show(&r, "raised").contains(&format!("\"{expected}\"")),
+                    "{choice}: {}",
+                    show(&r, "raised")
+                );
+                assert!(
+                    show(&r, "status").contains(&format!("\"{expected}\"")),
+                    "{choice}: {}",
+                    show(&r, "status")
+                );
+            }
+        }
+        r.act("raise", Vec::new()).unwrap();
+        pump(&mut r, &mut parked);
+        assert!(r.device_holds().is_empty(), "{grant}: answered at once");
+        r.set_module_target("web");
+        r.act("raise", Vec::new()).unwrap();
+        pump(&mut r, &mut parked);
+        assert!(r.device_holds().is_empty());
+        assert!(
+            logs(&r).contains("geolocation.requestPreciseLocation: NotSupportedError"),
+            "{}",
+            logs(&r)
+        );
+    }
 }
 
 /// LLP 1133.002 D6, D13: an app that reads or sends a module's name writes
@@ -956,5 +997,61 @@ fn a_modules_shapes_may_take_names_rust_predefines() {
             .filter(|(at, _)| !rust[..*at].ends_with(|c: char| c == ':' || c.is_alphanumeric()))
             .count();
         assert_eq!(unqualified, 0, "bare `{bare}` in:\n{rust}");
+    }
+}
+
+/// A package written into `app`'s `node_modules` as `@scratch/<name>`.
+fn scratch_package(app: &App, name: &str, declaration: &str) {
+    let package = app.0.join("node_modules/@scratch").join(name);
+    std::fs::create_dir_all(&package).unwrap();
+    let manifest = format!(
+        r#"{{"name": "@scratch/{name}", "version": "1.0.0", "exports": {{".": "./exact.json"}}}}"#
+    );
+    std::fs::write(package.join("package.json"), manifest).unwrap();
+    std::fs::write(package.join("exact.json"), declaration).unwrap();
+}
+
+#[test]
+fn a_value_passed_whole_as_json_may_be_a_list_and_binds_in_rust_as_json() {
+    // `json<T>` holds any JSON value's type a declaration may name (#316).
+    let app = App::new("rust-json");
+    let declaration = |records: &str| {
+        format!(
+            r#"{{
+  "kind": "interface", "name": "@scratch/cloud", "version": "1.0.0",
+  "shapes": {{ "CloudRecordWrite": {{ "key": "string" }}, "Done": {{ "ok": "bool" }} }},
+  "names": [
+    {{ "send": "write", "request": true, "contract": false, "answers": "json<CloudRecordWrite[]>",
+       "options": {{ "records": "{records}", "extra": "option<json<CloudRecordWrite>[]>" }} }},
+    {{ "send": "flush", "request": true, "answers": "Done" }}
+  ]
+}}"#
+        )
+    };
+    scratch_package(&app, "cloud", &declaration("json<CloudRecordWrite[]>"));
+    let source = "use flush, Done from \"@scratch/cloud\"\ncomponent App\n  mutation done as shape Done\n  action go\n    send done = flush()\n  view\n    text \"x\"\n";
+    std::fs::write(app.0.join("app.contract"), source).unwrap();
+    let (plan, _) = contract::compile_path_for_rust(&app.0.join("app.contract"))
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    let rust = contract::module_rust(&plan).unwrap();
+    for expected in [
+        "pub records: ::exact_data::modules::serde_json::Value,",
+        "pub extra: ::core::option::Option<::std::vec::Vec<::exact_data::modules::serde_json::Value>>,",
+        // The body carries the value as `put` encodes it: a JSON null as null
+        // (exact-data's `a_json_null_is_sent_and_an_absent_option_is_omitted`).
+        "::exact_data::modules::put(&mut o, \"records\", &self.records)?;",
+    ] {
+        assert!(rust.contains(expected), "{expected}\n---\n{rust}");
+    }
+    // What JSON cannot carry is refused, naming what `json<T>` holds.
+    for refused in ["json<bytes>", "json<handle<file>>", "json<json<Done>>"] {
+        scratch_package(&app, "cloud", &declaration(refused));
+        let errors = contract::compile_path_for_rust(&app.0.join("app.contract")).unwrap_err();
+        let text = format!("{errors:?}");
+        assert!(
+            text.contains(&format!("`{refused}` is not a JSON value's type"))
+                && text.contains("`option<T>` or `T[]` of one"),
+            "{refused}: {text}"
+        );
     }
 }

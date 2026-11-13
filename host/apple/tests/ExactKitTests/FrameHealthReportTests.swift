@@ -4,6 +4,8 @@ import XCTest
 import CExact
 #if os(macOS)
 import AppKit
+#else
+import UIKit
 #endif
 @testable import ExactCore
 @testable import ExactKit
@@ -172,6 +174,54 @@ final class FrameHealthReportTests: XCTestCase {
         XCTAssertGreaterThan(event.work.finished_us, event.work.target_us)
     }
 
+    func testAnExpiredLeaseDoesNotReachAFramesOwnerWork() throws {
+        let session = ExactApp.shared.makeSession(label: "expired-frame-capture")
+        defer { session.destroy() }
+        session.clock = nil
+        XCTAssertNil(session.boot(size: CGSize(width: 390, height: 844)).error)
+        let health = session.frameHealth
+        _ = health.setAgentCapture("start")
+        health.agentCaptureUntil = CACurrentMediaTime() - 1
+        var captures: [UInt64] = []
+        session.onApplyForTests = { _ in captures.append(health.captureID) }
+        session.onLandForTests = { _, batch in
+            if let timing = batch.frameWorkTiming { captures.append(timing.capture) }
+        }
+        #if os(macOS)
+        let link = session.presenter.viewport.displayLink(target: session.frames, selector: #selector(Frames.tick(_:)))
+        #else
+        let link = CADisplayLink(target: session.frames, selector: #selector(Frames.tick(_:)))
+        #endif
+        defer { link.invalidate() }
+        session.frames.motion = true
+        session.frames.tick(link)
+        session.drainFill()
+        session.frames.motion = false
+        session.frames.run(false)
+        XCTAssertFalse(captures.isEmpty, "the frame did owner work")
+        XCTAssertTrue(captures.allSatisfy { $0 == 0 }, "the lease expires before the frame sends or applies owner work: \(captures)")
+        XCTAssertEqual(health.captureID, 0)
+        XCTAssertEqual(health.agentCaptureUntil, 0)
+    }
+
+    func testAnApplyAfterTheLeaseDeadlineAddsNoCaptureEvidence() throws {
+        let session = ExactApp.shared.makeSession(label: "expired-apply-capture")
+        defer { session.destroy() }
+        session.clock = nil
+        XCTAssertNil(session.boot(size: CGSize(width: 390, height: 844)).error)
+        let health = session.frameHealth
+        _ = health.setAgentCapture("start")
+        let now = CACurrentMediaTime()
+        health.agentCaptureUntil = now - 1
+        var batch = wireBatch([])
+        batch.frameWorkTiming = FrameWorkTiming(capture: health.captureID, frame: (now - 0.01 - ExactEnv.t0) * 1000,
+            queued: now - 0.02, began: now - 0.019, finished: now - 0.018, landed: now - 0.001)
+        session.apply(batch)
+        XCTAssertEqual(health.historyStatus().apply_deadlines, 0, "an expired capture retains no post-deadline apply")
+        XCTAssertEqual(health.historyStatus().retained, 0)
+        XCTAssertEqual(health.captureID, 0)
+    }
+
     func testFrameCaptureAgentRequestDoesNotEnableTheLegacySampler() throws {
         let session = ExactApp.shared.makeSession(label: "frame-health-agent")
         defer { session.destroy() }
@@ -186,5 +236,44 @@ final class FrameHealthReportTests: XCTestCase {
         XCTAssertEqual(reply["capture"] as? Bool, true)
         XCTAssertNil(session.sampler)
         XCTAssertNotNil(session.frameHealth.setAgentCapture("start", duration: .nan)["error"])
+    }
+
+    /// Measuring the screen, the card's Share gives Exact's frames as a report of their own beside the screen's, and each
+    /// gives the median, p99 and maximum of every frame's timing since the reset: an app drawn by GPU surfaces has its
+    /// frame times only on Exact's clock (LLP 1079.000 §7.4)
+    func testShareGivesExactsFramesBesideTheScreensWithEveryFramesTiming() throws {
+        let screen = FrameHealth(policy: .always, source: FrameHealth.screenSource), exact = FrameHealth(enabled: true)
+        defer { screen.destroy(); exact.destroy() }
+        screen.setHUDVisible(true)
+        exact.setHUDVisible(true)
+        let now = CACurrentMediaTime()
+        // Sixty frames a refresh apart at 60 Hz, each with 4.2 ms of work, the last 20.2 ms
+        for n in 0..<60 {
+            let at = now - 1.2 + Double(n) / 60
+            exact.record(arrival: at, target: at + 1 / 60.0, period: 1 / 60.0, finished: at + (n == 59 ? 0.0202 : 0.0042))
+        }
+        screen.record(arrival: now - 0.0205, target: now - 0.012, period: 0, finished: now - 0.0102)
+        let clock = FrameHealthReport.snapshot(health: exact, session: nil, now: now, beside: screen)
+        XCTAssertEqual(clock["source"] as? String, exact.source)
+        XCTAssertEqual(clock["selection"] as? String, "one-source; the card's Share gives ui-update as a report of its own")
+        XCTAssertEqual((clock["otherSources"] as? [[String: Any]])?.compactMap { $0["source"] as? String }, ["ui-update"])
+        let core = try XCTUnwrap(clock["coreSinceReload"] as? [String: Any])
+        XCTAssertEqual(core["frameIntervals"] as? String, "59")
+        let frameTime = try XCTUnwrap(core["frameTimeBoundsNs"] as? [String: Any])
+        XCTAssertEqual(frameTime["median"] as? [UInt64], [16_500_000, 17_000_000], "16.7 ms, in its half-millisecond bin")
+        XCTAssertEqual(frameTime["maximum"] as? [UInt64], [16_500_000, 17_000_000])
+        let work = try XCTUnwrap(core["workBoundsNs"] as? [String: Any])
+        XCTAssertEqual(work["median"] as? [UInt64], [4_000_000, 4_500_000])
+        XCTAssertEqual(work["p99"] as? [UInt64], [20_000_000, 20_500_000])
+        XCTAssertEqual(work["maximum"] as? [UInt64], [20_000_000, 20_500_000])
+        XCTAssertLessThanOrEqual(FrameHealthReport.encode(clock).count + 1, 4000)
+        // The screen's report names Exact's frames as the other, and has work but no frame times
+        let shown = FrameHealthReport.snapshot(health: screen, session: nil, now: now, beside: exact)
+        XCTAssertEqual(shown["selection"] as? String, "one-source; the card's Share gives \(exact.source) as a report of its own")
+        let screenCore = try XCTUnwrap(shown["coreSinceReload"] as? [String: Any])
+        XCTAssertTrue(screenCore["frameTimeBoundsNs"] is NSNull)
+        XCTAssertEqual((screenCore["workBoundsNs"] as? [String: Any])?["maximum"] as? [UInt64], [10_000_000, 10_500_000])
+        // An agent's report names no Share
+        XCTAssertNil(FrameHealthReport.snapshot(health: exact, session: nil, now: now)["selection"])
     }
 }

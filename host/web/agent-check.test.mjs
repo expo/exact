@@ -2,16 +2,17 @@
 // host/web-js/check.js's observations and a capture's pixels): one fixture view per finding class, found on the page in
 // each scheme and absent from a page that has none; and a screenshot shows a transition where it ends, unless filmed.
 import { test, expect } from 'bun:test';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { open } from '../../scripts/agent.mjs';
 import { checkOp, judge, ratio } from '../../scripts/agent-check.mjs';
-import { decodePng } from '../../scripts/png.mjs';
+import { decodePng, encodePng } from '../../scripts/png.mjs';
 import { serveBuildTree } from './serve.mjs';
 import { fileURLToPath } from 'node:url';
+import { webCompiler } from '../web-js/module.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 const compiler = resolve(process.env.CARGO_TARGET_DIR ?? resolve(ROOT, 'target'), 'debug', process.platform === 'win32' ? 'contract.exe' : 'contract');
@@ -81,6 +82,8 @@ const CLEAN = `component CleanFixture
         text testId="detail" color="-exact-secondary-label" "Secondary detail"
       button testId="go" press=bump buttonStyle="bordered-prominent"
         text "Go"
+      button testId="start" press=bump buttonStyle="tinted" accent-color="-exact-system-green"
+        text "Start"
       row gap=8
         button testId="one" press=bump
           text "One"
@@ -216,6 +219,48 @@ const BUBBLES = `component BubbleFixture
           text "Two"
 `;
 
+// A reading screen (#392): verses as runs of one paragraph, each a number and its words with a `press`, narrow enough
+// that runs wrap and share lines; `nudged` is drawn back over the run before it, and `alone` is the only run of its
+// paragraph, so in no sentence.
+const VERSES = `component VerseFixture
+  state n = 0
+  action tap(v: number)
+    n = v
+  view
+    column testId="root" padding=16 width=240
+      text testId="chapter"
+        text "1 " press=tap(1) testId="number-1" font-weight=700
+        text "In the beginning God created the heaven and the earth. " press=tap(1) testId="verse-1"
+        text "2 " press=tap(2) testId="number-2" font-weight=700
+        text "And the earth was without form, and void; and darkness was upon the face of the deep. " press=tap(2) testId="verse-2"
+        text "3 " press=tap(3) testId="number-3" font-weight=700
+        text "And God said, Let there be light. " press=tap(3) testId="verse-3"
+      text margin-top=24
+        text "Light " press=tap(4) testId="before"
+        text "dark" press=tap(5) testId="nudged" position="relative" left=-30
+      text margin-top=24
+        text "4" press=tap(6) testId="alone"
+`;
+
+// A toast (#394): an announcement laid over the page while it shows. `toast` lets taps through and lies over the row
+// beneath by design; `stuck` takes them, so it covers the button under it and overlaps its label. `low` lets taps
+// through and runs past the screen's bottom, which cuts it all the same.
+const TOAST = `component ToastFixture
+  state n = 0
+  action bump
+    n = n + 1
+  view
+    column testId="root" height="100%" position="relative"
+      text testId="under" padding=16 "A sentence the toast lies over while it shows"
+      button testId="beneath" press=bump margin-top=40
+        text "Beneath the stuck one"
+      text "Saved" position="absolute" top=16 left=16 right=16 padding=12 border-radius=12 background-color="-exact-secondary-background"
+        pointer-events="none" aria-live="polite" testId="toast"
+      text "Stuck" position="absolute" top=72 left=16 right=16 padding=12 border-radius=12 background-color="-exact-secondary-background"
+        aria-live="polite" testId="stuck"
+      text "Past the screen's bottom" position="absolute" left=16 bottom=-24 height=48 pointer-events="none" testId="low"
+`;
+
 const built = (() => {
   const ready = new Map();
   return (name, source) => {
@@ -349,6 +394,10 @@ test('judging: WCAG ratios, the floors, a clamp asked for, a reachable cover, th
   const paleAccent = judge(obs([{ ...white, bg: [104, 165, 254], on: 'own', onAccentFill: true }]), null);
   expect(paleAccent.map((f) => [f.kind, f.detail.need])).toEqual([['contrast', 3]]);
   expect(paleAccent[0].hint).toContain('leave the accent unsaid');
+  // White on a fill in a system hue is the platform's pair, as that hue on white is: iOS's badge, the dark scheme's label
+  // on its red (3.4:1), is held to 3:1. The same white on a red of the author's own stays 4.5:1.
+  expect(found([{ ...white, bg: [255, 66, 69], on: 'own' }], { scheme: 'dark' })).toEqual([]);
+  expect(found([{ ...white, bg: [240, 60, 60], on: 'own' }], { scheme: 'dark' })).toEqual(['contrast:1']);
   // Overlap is judged on what is presented of each box: a row its scroller cuts at y = 10 overlaps nothing below.
   const row = { id: 6, x: 0, y: 0, w: 40, h: 20, control: 'press', sized: 'platform' }, tab = { id: 7, x: 0, y: 10, w: 40, h: 20, control: 'press', sized: 'platform' };
   expect(found([row, tab])).toEqual(['overlap:6']);
@@ -416,6 +465,39 @@ test('a padded percentage width past its parent is an overflow that names its ca
   expect(judge({ viewport: { w: 40, h: 20 }, scheme: 'light', target: 24, items: [{ ...padded, outX: 14 }] }, png)).toHaveLength(1);
 });
 
+test('a graphic past the viewport needs fitting or clipping, including one hidden from accessibility', async () => {
+  const nodes = new Map([
+    [1, { id: 1, type: 'Svg', props: { testId: 'chart' } }],
+    [2, { id: 2, type: 'Svg', props: { testId: 'decoration', accessibilityElementsHidden: true } }],
+    [3, { id: 3, type: 'Image', props: { testId: 'photo' } }],
+    [4, { id: 4, type: 'Control', props: { testId: 'button' } }],
+    [5, { id: 5, type: 'Text', props: { testId: 'caption' } }],
+  ]);
+  const obs = { viewport: { w: 402, h: 874 }, scheme: 'light', target: 44, items: [...nodes.keys()].map((id) => ({
+    id, x: 0, y: (id - 1) * 100, w: 420, h: 80, outX: 18, ...(id === 4 ? { control: 'button', sized: 'author' } : id === 5 ? { text: 'Caption' } : {}),
+  })) };
+  const graphic = 'fit the graphic (`width="100%"`), or clip it in its containing box (`overflow="hidden"`)';
+  const layout = 'let it wrap (`flex-wrap: wrap` with a `flex-basis` in rem, `min-width: 0`, `max-width: 100%`), or scroll it inside its own box';
+  for (const host of ['web', 'ios']) {
+    const found = judge(obs, null, { host, nodes });
+    expect(found.map((f) => [f.kind, f.id, f.box, f.detail])).toEqual([...nodes.keys()].map((id) => [
+      'overflow', id, [0, (id - 1) * 100, 420, 80], { past: 18, width: 402, unit: host === 'web' ? 'px' : 'pt' },
+    ]));
+    expect(found.map((f) => f.hint)).toEqual([graphic, graphic, graphic, layout, layout]);
+  }
+  const png = encodePng({ width: 402, height: 874, data: new Uint8Array(402 * 874 * 4).fill(255) });
+  const session = {
+    host: 'ios',
+    op: async ({ op }) => op === 'check' ? obs : { nodes: [...nodes.values()] },
+    carrier: { screenshot: async (path) => writeFileSync(path, png) },
+    tagged: (result) => result,
+  };
+  const run = (await checkOp(session)).check[0];
+  expect(run.findings.map((f) => [f.node, f.hint])).toEqual([
+    ['chart', graphic], ['decoration', graphic], ['photo', graphic], ['button', layout], ['caption', layout],
+  ]);
+});
+
 test('two texts drawn over each other run together, unless one stands on the opaque fill of the view laid over the other', () => {
   const vp = { viewport: { w: 200, h: 100 }, scheme: 'light', target: 24 };
   const row = { id: 3, text: 'Row 5', x: 0, y: 40, w: 60, h: 20 }, tab = { id: 7, text: 'Tab', x: 10, y: 45, w: 30, h: 20, on: 6 };
@@ -430,6 +512,21 @@ test('two texts drawn over each other run together, unless one stands on the opa
   // A list's section header pinned over its rows as they pass under it (contacts at the largest text size, bake-off r28).
   expect(kindsOf([row, { ...tab, pinned: true }])).toEqual([]);
   expect(judge({ ...vp, items: [{ ...row, control: 'press' }, { ...tab, pinned: true }] }, null)).toEqual([]);
+});
+
+test('a run of a paragraph that wraps is judged by its lines, and one drawn over its neighbour still overlaps it', () => {
+  const vp = { viewport: { w: 300, h: 200 }, scheme: 'light', target: 24 };
+  // "1 In the beginning … earth." ends mid-line; the next run starts there: their boxes meet, their lines do not.
+  const one = { id: 1, control: 'press', inline: true, x: 16, y: 16, w: 268, h: 36, lines: [{ x: 30, y: 16, w: 254, h: 18 }, { x: 16, y: 34, w: 120, h: 18 }] };
+  const two = { id: 2, control: 'press', inline: true, x: 16, y: 34, w: 268, h: 36, lines: [{ x: 136, y: 34, w: 148, h: 18 }, { x: 16, y: 52, w: 200, h: 18 }] };
+  const kindsOf = (items) => judge({ ...vp, items }, null).map((f) => `${f.id} ${f.kind}`);
+  expect(kindsOf([one, two])).toEqual([]);
+  expect(kindsOf([one, { ...two, lines: [{ x: 120, y: 34, w: 164, h: 18 }, two.lines[1]] }])).toEqual(['1 overlap']); // drawn back over it
+  const box = ({ lines, ...it }) => it;
+  expect(kindsOf([box(one), box(two)])).toEqual(['1 overlap']); // judged by its box, as before
+  // A block control beside it meets only its lines.
+  const button = { id: 3, control: 'button', sized: 'author', x: 230, y: 52, w: 60, h: 30 };
+  expect(kindsOf([button, two])).toEqual([]);
 });
 
 test('a page with every finding class has each found, by testId, in the scheme it shows in; a clean page has none', async () => {
@@ -554,6 +651,44 @@ test('a text is judged on the fill under it in each scheme, and a row its scroll
   } finally { await session.close(); }
 }, 900000);
 
+test('pressable runs of a paragraph are targets in a sentence, judged by their lines', async () => {
+  const session = await open({ host: 'web', url: await built('verses', VERSES), size: [390, 844] });
+  try {
+    const obs = await session.op({ op: 'check' }), ids = new Map(((await session.op({ op: 'tree' })).nodes ?? []).map((n) => [n.props?.testId, n.id]));
+    const item = (testId) => obs.items.find((it) => it.id === ids.get(testId));
+    expect(item('verse-2').lines?.length).toBeGreaterThan(1); // it wraps
+    expect(['number-1', 'verse-1', 'verse-2', 'nudged'].map((t) => item(t).inline)).toEqual([true, true, true, true]);
+    expect(item('alone').inline).toBeUndefined(); // the only words of its paragraph: no sentence to be in
+    const found = judge(obs, null).map((f) => `${[...ids].find(([, id]) => id === f.id)?.[0]} ${f.kind}`);
+    // The verses wrap into each other's lines and are drawn once: nothing. The nudged run is drawn over "Light ".
+    expect(found.sort()).toEqual(['before covered', 'before overlap']);
+    // Judged by their boxes, the runs that share a line overlapped, and a finger at a wrapped run's box's middle met the next.
+    const boxes = judge({ ...obs, items: obs.items.map(({ lines, ...it }) => it) }, null).filter((f) => f.kind === 'overlap').map((f) => f.id);
+    expect(boxes).toContain(ids.get('verse-1'));
+    expect(item('verse-1').cover).toBeUndefined();
+  } finally { await session.close(); }
+}, 900000);
+
+test('a toast that lets taps through lies over the page by design; one that takes them covers what is under it', async () => {
+  const session = await open({ host: 'web', url: await built('toast', TOAST), size: [390, 844] });
+  try {
+    // Contract has no `fixed`; the page pins `low` to the viewport, where nothing scrolls to what runs past its bottom.
+    await session.carrier.evaluate(`[...document.querySelectorAll('#exact-root [data-exact-text]')].find((e) => e.textContent.startsWith('Past the screen')).style.position = 'fixed'`);
+    const obs = await session.op({ op: 'check' }), ids = new Map(((await session.op({ op: 'tree' })).nodes ?? []).map((n) => [n.props?.testId, n.id]));
+    const item = (testId) => obs.items.find((it) => it.id === ids.get(testId));
+    expect([item('toast').overlay, item('stuck').overlay]).toEqual([true, undefined]);
+    expect(item('toast').cover).toBeUndefined(); // a hit test passes through it, so cannot say what lies over it
+    expect(item('low').cut).toMatchObject({ edge: 'bottom' }); // what lets taps through is still cut by the screen's edge
+    const name = (id) => [...ids].find(([, n]) => n === id)?.[0];
+    const found = judge(obs, null).map((f) => `${name(f.id) ?? name(f.of)} ${f.kind}${f.detail?.with != null ? ` ${name(f.detail.with)}` : ''}`);
+    expect(found.filter((f) => /toast/.test(f))).toEqual([]);
+    expect(found).toContain('beneath covered');
+    // Without the mark, the toast and the sentence it lies over run together.
+    const unmarked = judge({ ...obs, items: obs.items.map(({ overlay, ...it }) => it) }, null).map((f) => `${name(f.id)} ${f.kind} ${name(f.detail?.with)}`);
+    expect(unmarked.some((f) => /overlap/.test(f) && /toast/.test(f) && /under/.test(f)), unmarked.join('\n')).toBe(true);
+  } finally { await session.close(); }
+}, 900000);
+
 test('a screenshot shows a transition where it ends, the clock unmoved; a film\'s frames are the clock\'s', async () => {
   const session = await open({ host: 'web', url: await built('broken', BROKEN) });
   try {
@@ -580,3 +715,105 @@ test('a screenshot shows a transition where it ends, the clock unmoved; a film\'
     expect([small.w, small.h, png.width, png.height]).toEqual([390, 844, 390, 844]);
   } finally { await session.close(); }
 }, 900000);
+
+test('folded captions over pictures use captured pixels unless their own fill covers the picture', async () => {
+  const source = `component Captions
+  view
+    column background-color="black" color="white" padding=16 gap=16
+      column position="relative" height=48
+        image "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='400' height='48'%3E%3Cpath fill='%2300ff00' d='M0 0h400v48H0z'/%3E%3C/svg%3E" position="absolute" inset=0 width="100%" height="100%"
+        column position="relative" testId="caption"
+          text "Caption on a picture"
+      column position="relative" height=48
+        image "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='400' height='48'%3E%3Cpath fill='%2300ff00' d='M0 0h400v48H0z'/%3E%3C/svg%3E" position="absolute" inset=0 width="100%" height="100%"
+        column position="relative" background-color="black" testId="opaque-caption"
+          text "Caption on its own fill"
+`;
+  const session = await open({ host: 'web', url: await built('folded-captions', source) });
+  try {
+    const display = await session.carrier.evaluate(`getComputedStyle(document.querySelector('[data-testid="caption"] [data-exact-text]')).display`);
+    expect(display).toBe('contents');
+    const ids = new Map((await session.op({ op: 'tree' })).nodes.map(n => [n.props.testId, n.id]));
+    const obs = await session.op({ op: 'check' });
+    expect(obs.items.find(it => it.text === 'Caption on a picture').bg).toBeUndefined();
+    expect(obs.items.find(it => it.text === 'Caption on its own fill')).toMatchObject({ bg: [0, 0, 0], on: ids.get('opaque-caption') });
+    const runs = (await checkOp(session, ['both'])).check;
+    expect(runs.map(run => run.findings.map(f => [f.text, f.kind]))).toEqual([
+      [['Caption on a picture', 'contrast']], [['Caption on a picture', 'contrast']],
+    ]);
+    for (const run of runs) expect(run.findings[0].detail.bg).toBe('#00ff00');
+  } finally { await session.close(); }
+}, 120_000);
+
+test('Shared Elements keeps Zoom Close painted, observed and usable after repeated flights in both schemes', async () => {
+  if (webCompiler().cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
+  const root = resolve(import.meta.dir, '../..'), dir = mkdtempSync(resolve(root, 'target/shared-elements-agent-'));
+  let browser, server;
+  try {
+    const build = Bun.spawn([process.execPath, 'host/web-js/build.mjs', 'shared-elements', '--out', dir, '--render', 'none'], {
+      cwd: root, stdout: 'pipe', stderr: 'pipe',
+    });
+    const [status, stdout, stderr] = await Promise.all([build.exited, new Response(build.stdout).text(), new Response(build.stderr).text()]);
+    expect({ status, error: status ? stdout + stderr : '' }).toEqual({ status: 0, error: '' });
+    server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(req) {
+      const path = new URL(req.url).pathname, file = Bun.file(resolve(dir, path === '/' ? 'index.html' : path.slice(1)));
+      return await file.exists() ? new Response(file) : new Response('not found', { status: 404 });
+    } });
+    browser = await open({ host: 'web', app: 'shared-elements', url: server.url.href, size: [420, 780] });
+    const settle = async () => expect((await browser.clock('settle')).settled).toBe(true);
+    const tap = async id => { await browser.tap(id); await settle(); };
+    const scheme = async value => { await browser.prefer({ 'prefers-color-scheme': value }); await settle(); };
+    await settle();
+    for (const appearance of ['light', 'dark', 'light', 'dark']) {
+      await scheme(appearance);
+      await tap('tab-grid'); await tap('open-p1'); await tap('close');
+      await scheme(appearance === 'light' ? 'dark' : 'light');
+      await tap('tab-cards'); await tap('card-c1'); await tap('close-card');
+      await scheme(appearance);
+      await tap('tab-tasks'); await tap('task-t1');
+      await tap('tab-zoom'); await tap('zoom-open-p1');
+      const button = (await browser.op({ op: 'tree' })).nodes.find(n => n.props.testId === 'zoom-close');
+      const bounds = await browser.carrier.evaluate(`(() => {
+        const label = document.querySelector('[data-testid="zoom-close"] [data-exact-text]');
+        const range = document.createRange(); range.selectNodeContents(label);
+        return range.getBoundingClientRect().toJSON();
+      })()`);
+      const shot = resolve(dir, 'zoom.png');
+      await browser.screenshot(shot);
+      const png = decodePng(readFileSync(shot));
+      let ink = 0;
+      for (let y = Math.ceil(bounds.top); y < Math.floor(bounds.bottom); y++) {
+        for (let x = Math.ceil(bounds.left); x < Math.floor(bounds.right); x++) {
+          const i = (y * png.width + x) * 4;
+          if (Math.min(png.data[i], png.data[i + 1], png.data[i + 2]) > 200) ink++;
+        }
+      }
+      expect(ink).toBeGreaterThan(10);
+      const checked = await browser.op({ op: 'check' });
+      expect(checked.items.some(item => item.text === 'Close' && item.of === button.id)).toBe(true);
+      await tap('zoom-close');
+      expect((await browser.op({ op: 'tree' })).nodes.some(n => n.props.testId === 'zoom-close')).toBe(false);
+    }
+    await tap('zoom-open-p1');
+    for (const [style, visible] of [
+      ['label.style.visibility = "hidden"', false],
+      ['button.style.visibility = "hidden"; label.style.visibility = "visible"', true],
+      ['button.style.opacity = "0"', false],
+      ['button.style.display = "none"', false],
+      ['button.style.contentVisibility = "hidden"', false],
+      ['button.inert = true', false],
+      ['label.style.opacity = "0"', true],
+    ]) {
+      await browser.carrier.evaluate(`(() => {
+        const button = document.querySelector('[data-testid="zoom-close"]'), label = button.querySelector('[data-exact-text]');
+        button.style.cssText = ''; button.inert = false; label.style.cssText = '';
+        ${style};
+      })()`);
+      const label = (await browser.op({ op: 'check' })).items.find(item => item.text === 'Close');
+      expect(!!label).toBe(visible);
+      if (label) expect(label.fg[3]).toBe(1);
+    }
+  } finally {
+    await browser?.close(); server?.stop(true); rmSync(dir, { recursive: true, force: true });
+  }
+}, 120_000);

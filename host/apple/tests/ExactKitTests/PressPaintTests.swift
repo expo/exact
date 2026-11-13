@@ -612,7 +612,10 @@ final class PressPaintTests: XCTestCase {
         XCTAssertTrue(own.showsOwnTextColor, "its own press's colour is its own")
         XCTAssertEqual(rgba(own.fieldInk.cgColor), green)
     }
-    func testAPresslessLinkTracksActivationWithoutShowingActivePaintOrPlatformFeedback() throws {
+    /// A link with no `press` is pressed as CSS's `:active` holds on it
+    /// (LLP 1121 D8): the platform's press where it declares none, its own
+    /// active paint where it does.
+    func testAPresslessLinkShowsItsPressAsALinksActiveDoes() throws {
         let (p, _) = try fixture([:])
         p.apply(wireBatch([
             ["op": "create", "id": 4, "kind": "button", "props": ["href": "/destination"]],
@@ -620,27 +623,25 @@ final class PressPaintTests: XCTestCase {
             ["op": "roots", "ids": [1, 4]]
         ]))
         let link = try XCTUnwrap(p.views[4])
-        for authored in [false, true] {
-            link.applyStyle(authored ? ["press_scale": .number(0.9), "press_background_color": ink(navy)] : [:])
-            link.pressed = true
-            XCTAssertEqual(link.defaultLink, "/destination")
-            XCTAssertEqual(link.press.to, 1)
-            XCTAssertFalse(link.pressPaint.down)
-            #if os(iOS)
-            XCTAssertFalse(link.platformPressDims)
-            XCTAssertNil(link.press.dimmedAt)
-            #else
-            XCTAssertFalse(link.pressTinted)
-            #endif
-            link.pressFollows(inside: true)
-            XCTAssertEqual(link.press.to, 1)
-            XCTAssertFalse(link.pressPaint.down)
-            link.pressed = false
-        }
-        link.handlers = ["press"]
+        XCTAssertEqual(link.defaultLink, "/destination")
         link.pressed = true
-        XCTAssertEqual(link.press.to, 0.9, "a declared handler gets its active feedback")
-        XCTAssertTrue(link.pressPaint.down)
+        XCTAssertFalse(link.pressPaint.down)
+        #if os(iOS)
+        XCTAssertTrue(link.platformPressDims)
+        XCTAssertNotNil(link.press.dimmedAt, "the platform's dim, as a pressable with none of its own")
+        #else
+        XCTAssertTrue(link.pressTinted, "the platform's pressed look")
+        #endif
+        link.pressed = false
+        link.applyStyle(["press_scale": .number(0.9), "press_background_color": ink(navy)])
+        link.pressed = true
+        XCTAssertEqual(link.press.to, 0.9, "its `:active` scale")
+        XCTAssertTrue(link.pressPaint.down, "its `:active` paint")
+        link.pressFollows(inside: false)
+        XCTAssertEqual(link.press.to, 1, "let go while the pointer is outside, as any press")
+        link.pressFollows(inside: true)
+        XCTAssertEqual(link.press.to, 0.9, "and pressed again back inside")
+        link.pressed = false
     }
 
 }

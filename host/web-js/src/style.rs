@@ -315,6 +315,14 @@ pub fn project(
         let child_may_fold = matches!(tree[i].as_slice(), [c] if may_fold[*c as usize]);
         let mut parts = template::parts_with(&kernel, plan, view(i), may_fold[i], child_may_fold)
             .ok_or("a view the kernel lost")?;
+        if kernel
+            .node(view(i))
+            .is_some_and(|n| n.style.rare.animation_trigger == exact_kernel::AnimationTrigger::None)
+        {
+            parts
+                .props
+                .insert("data-exact-animation-trigger".into(), "none".into());
+        }
         if let Some(writes) = exact_runner::press_writes_router(plan, exact_plan::NodesId(i as u32))
         {
             parts
@@ -384,139 +392,7 @@ pub fn project(
             crate::sized::own_css(&node, canvas[i], reads_alt, &mut parts.css);
         }
     }
-    symbol_marks(plan, &kernel, &parents, &mut out);
     Ok(out)
-}
-
-/// Whether image `i` draws a symbol in its author's `color` (LLP 1121 stage
-/// 9 B; `NodeRef::symbol_color_said`), as far as the static tree says:
-/// `None` where it can't be a symbol (a literal source that is none) or is
-/// a native button's face; else the nodes between it and the nearest node
-/// whose static rows decide that decide at run time ([`Ink`]: a bound
-/// `color`, a mode boundary's implied row), and that decision. A bound source may be a symbol whatever
-/// its code names (a state's or a data's role), and the sheet asks for a
-/// symbol's path, so a photo's mark draws nothing. A bound `color` decides
-/// while it has a value: written as its binding is, a CSS-wide clear
-/// included; `none` takes it away, as the runner clears the written bit,
-/// and the next node up decides (symbols.js `inked`). A colour only a state
-/// look sets (`:hover`) does not count. `modes`: whether the plan has modes
-/// ([`crate::modes::active`]).
-fn symbol_color(
-    plan: &Plan,
-    kernel: &Kernel,
-    parents: &[Option<usize>],
-    i: usize,
-    modes: bool,
-) -> Option<(Vec<(usize, Ink)>, bool)> {
-    let view = |i: usize| -> ViewId { i as u32 + 1 };
-    let rows = |i: usize| {
-        plan.nodes
-            .get(i)
-            .unwrap()
-            .bindings
-            .iter()
-            .map(|b| plan.binding(b))
-    };
-    let bound = |i: usize, kind: BindingKind, id: u16| {
-        rows(i).find(|b| b.kind == kind && b.id == id && literal(plan, plan.code(b.expr)).is_none())
-    };
-    let node = kernel.node(view(i)).expect("template node");
-    let symbol = node
-        .props
-        .str(PropId::ImageSource)
-        .is_some_and(|s| s.starts_with("symbol:"))
-        || bound(i, BindingKind::Prop, PropId::ImageSource as u16).is_some();
-    let face = parents[i].is_some_and(|p| {
-        kernel
-            .node(view(p))
-            .is_some_and(|p| p.node_type == NodeType::Control)
-    });
-    if !symbol || face {
-        return None;
-    }
-    // A mode boundary (a pin or a scheme, LLP 1121 D7) writes again a row
-    // it does not set when the one around read a token: an implied row, no
-    // author's, which `says` stops at (modes.js `apply`, `$xs`).
-    let mut writers = Vec::new();
-    let mut at = Some(i);
-    while let Some(j) = at {
-        let node = kernel.node(view(j)).expect("template node");
-        let boundary = modes
-            && !node.style.mask.has(StyleId::TextColor)
-            && [StyleId::Mode, StyleId::ColorScheme]
-                .iter()
-                .any(|id| rows(j).any(|b| b.kind == BindingKind::Style && b.id == *id as u16));
-        let row = bound(j, BindingKind::Style, StyleId::TextColor as u16);
-        match (row, boundary) {
-            (Some(row), _) => writers.push((j, Ink::Bound(row.written, boundary))),
-            (None, true) => writers.push((j, Ink::Boundary)),
-            (None, false) => {}
-        }
-        if node.style.written.has(StyleId::TextColor) {
-            return Some((writers, true));
-        }
-        if node.style.mask.has(StyleId::TextColor) || node.starts(StyleId::TextColor) {
-            return Some((writers, false));
-        }
-        at = parents[j];
-    }
-    Some((writers, false))
-}
-
-/// A node between a symbol and what decides its ink statically, which
-/// decides it at run time.
-#[derive(Clone, Copy)]
-enum Ink {
-    /// A bound `color` (its author wrote it, and whether the node is also a
-    /// mode boundary, whose implied row stands when the binding has none).
-    Bound(bool, bool),
-    /// A mode boundary that sets no `color` of its own.
-    Boundary,
-}
-
-/// The marks of [`symbol_color`]: `data-symbol-color` on an image the
-/// static tree decides; else `data-symbol-ink` (how many bound colours up,
-/// then the decision past them, `1` or `0`) for symbols.js to decide after
-/// each commit, and `data-exact-ink` (written, `1` or `0`) on each node a
-/// bound `color` makes one of those.
-fn symbol_marks(
-    plan: &Plan,
-    kernel: &Kernel,
-    parents: &[Option<usize>],
-    out: &mut [Option<Parts>],
-) {
-    let mut writers = Vec::new();
-    let modes = crate::modes::active(plan);
-    for (i, parts) in out.iter_mut().enumerate() {
-        let Some(parts) = parts.as_mut().filter(|p| p.tag == "img") else {
-            continue;
-        };
-        parts.props.remove("data-symbol-color");
-        match symbol_color(plan, kernel, parents, i, modes) {
-            Some((up, true)) if up.is_empty() => {
-                parts
-                    .props
-                    .insert("data-symbol-color".into(), String::new());
-            }
-            Some((up, said)) if !up.is_empty() => {
-                let ink = format!("{}{}", up.len(), u8::from(said));
-                parts.props.insert("data-symbol-ink".into(), ink);
-                writers.extend(up);
-            }
-            _ => {}
-        }
-    }
-    for (j, ink) in writers {
-        if let Some(parts) = out[j].as_mut() {
-            let ink = match ink {
-                Ink::Bound(written, boundary) => {
-                    format!("{}{}", u8::from(written), if boundary { "b" } else { "" })
-                }
-                Ink::Boundary => "b".into(),
-            };
-            parts.props.insert("data-exact-ink".into(), ink);
-        }
-    }
 }
 
 /// Every `for` row's roots, through any region at its top.
@@ -801,10 +677,12 @@ fn ramp_rem(text: &str) -> Option<String> {
 
 /// A computed `transition`'s entries as an author's (LLP 1081 D5), shared by
 /// the ordinary and the pressed mappers: comments go (CSS removes them, so a
-/// check must too); springs on non-physics properties become `linear()`;
-/// an entry naming the host's `--exact-*` or an old spelling is dropped,
-/// as the native parser refuses it. `-exact-tint-color` becomes the property
-/// the browser animates, `--exact-tint`. `p` is the list of kept entries.
+/// check must too); each entry is folded to ASCII lower case, as the native
+/// parser reads its words in any case (motion/src/word.rs); springs on
+/// non-physics properties become `linear()`; an entry naming the host's
+/// `--exact-*` or an old spelling is dropped, as the native parser refuses it.
+/// `-exact-tint-color` becomes the property the browser animates,
+/// `--exact-tint`. `p` is the list of kept entries.
 pub static TRANSITION_ENTRIES: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
     use exact_motion::Property;
     let mut properties: std::collections::BTreeMap<_, Vec<&str>> = Property::ALL
@@ -840,7 +718,7 @@ pub static TRANSITION_ENTRIES: std::sync::LazyLock<String> = std::sync::LazyLock
     let spring = include_str!("../transition-spring.js")
         .replace("ALL_PROPERTIES", &serde_json::to_string(&all).unwrap())
         .replace("PROPERTIES", &serde_json::to_string(&properties).unwrap());
-    format!("const spring={spring};const p=v.replace(/\\/\\*[\\s\\S]*?\\*\\//g,\" \").split(/,(?![^(]*\\))/).map(t=>t.trim()).filter(t=>t&&!/(^|\\s)(--exact-\\S*|tint-color|exit-animation|layout-transition|press-scale|drag-timeline|symbol-rendering|symbol-palette|symbol-value|symbol-effect|press-haptic|content-transition|scroll-edge-effect|hover-effect|smart-invert|animation-trigger)(?=\\s|$)/i.test(t)).flatMap(t=>/spring\\(/i.test(t)?spring(t):[t]).map(t=>t.replace(/(^|\\s)-exact-tint-color(?=\\s|$)/i,\"$1--exact-tint\"));")
+    format!("const spring={spring};const p=v.replace(/\\/\\*[\\s\\S]*?\\*\\//g,\" \").split(/,(?![^(]*\\))/).map(t=>t.trim().replace(/[A-Z]+/g,c=>c.toLowerCase())).filter(t=>t&&!/(^|\\s)(--exact-\\S*|tint-color|exit-animation|layout-transition|press-scale|drag-timeline|symbol-rendering|symbol-palette|symbol-value|symbol-effect|press-haptic|content-transition|scroll-edge-effect|hover-effect|smart-invert|animation-trigger)(?=\\s|$)/i.test(t)).flatMap(t=>/spring\\(/i.test(t)?spring(t):[t]).map(t=>t.replace(/(^|\\s)-exact-tint-color(?=\\s|$)/i,\"$1--exact-tint\"));")
 });
 
 /// A computed `transition`, as the browser takes it: [`TRANSITION_ENTRIES`].
@@ -943,8 +821,17 @@ pub fn style_fallback(name: &str) -> String {
 /// css.rs writes no declaration for the row's empty value.
 const NONE: &str = "v=>v==null||/^\\s*none\\s*$/i.test(v)?null:v";
 
+/// `animation-timeline` as CSS's own row where a name may be a drag's: only
+/// `scroll()` and `view()` (css.rs).
+pub(super) const ANONYMOUS_TIMELINE: &str = "v=>v!=null&&/^\\s*(scroll|view)\\(/i.test(v)?v:null";
+
+/// `animation-range` as CSS's own row.
+pub(super) const ANIMATION_RANGE: &str = "v=>v==null||/^\\s*normal\\s*$/i.test(v)?null:v";
+
+/// A name's consumer is paused for the drag code; `scroll()` or `view()`
+/// only where the browser has no `animation-timeline` (css.rs, index.html).
 pub(super) const TIMELINE_PLAY_STATE: &str =
-    "v=>v==null||/^\\s*(unset|auto|(-exact-)?clock\\(.*\\))?\\s*$/i.test(v)?null:\"paused\"";
+    "v=>v==null||/^\\s*(unset|auto|(-exact-)?clock\\(.*\\))?\\s*$/i.test(v)?null:/^\\s*(scroll|view)\\(/i.test(v)?\"var(--exact-timeline-play,paused)\":\"paused\"";
 
 /// A bound corner's map: a list (white space outside parentheses, or a
 /// `/`) is the elliptical radius no row holds, refused whole with the
@@ -1137,9 +1024,11 @@ pub fn style_writes(id: u16, timeline: bool, written: bool) -> Result<Vec<Write>
         | StyleId::ScrollEdgeEffect
         | StyleId::HoverEffect
         | StyleId::SmartInvert => vec![],
-        // @ref LLP 1055 D13 — the browser starts an animation at insertion;
-        // this target does not hold one for its row (a declared deviation).
-        StyleId::AnimationTrigger => vec![],
+        // @ref LLP 1055 D13 — tree.js `css` gives the list's hold rule this value as an attribute.
+        StyleId::AnimationTrigger => vec![with(
+            "--exact-animation-trigger",
+            "v=>v===\"none\"?\"none\":\"view\"",
+        )],
         StyleId::Animation => vec![with("animation", NONE)],
         // @ref LLP 1069.011 D8 — and the custom property a native button reads.
         // The accent role must inherit, never write a self-reference.
@@ -1154,10 +1043,17 @@ pub fn style_writes(id: u16, timeline: bool, written: bool) -> Result<Vec<Write>
         StyleId::DragTimeline => vec![with("--exact-drag-timeline", NONE)],
         // @ref LLP 1055.002 — `-exact-clock(Name)` is css.rs's clock property and
         // leaves the play state alone; a drag timeline pauses.
+        // @ref LLP 1057.003 D5 — `scroll()` and `view()` as CSS's own row
+        // too, which the browser runs; a name the glue resolves (css.rs).
         StyleId::AnimationTimeline => vec![
             with(
                 "--exact-animation-timeline",
                 "v=>v==null||/^\\s*(unset|auto|(-exact-)?clock\\(.*\\))\\s*$/i.test(v)?null:v",
+            ),
+            with("animation-timeline", ANONYMOUS_TIMELINE),
+            with(
+                "--exact-css-timeline",
+                "v=>v!=null&&/^\\s*(scroll|view)\\(/i.test(v)?\"1\":null",
             ),
             with(
                 "--exact-animation-clock",
@@ -1168,10 +1064,21 @@ pub fn style_writes(id: u16, timeline: bool, written: bool) -> Result<Vec<Write>
                 TIMELINE_PLAY_STATE,
             ),
         ],
-        StyleId::AnimationRange => vec![with(
-            "--exact-animation-range",
-            "v=>v==null||/^\\s*normal\\s*$/i.test(v)?null:v",
-        )],
+        StyleId::AnimationRange => vec![
+            with(
+                "--exact-animation-range",
+                "v=>v==null||/^\\s*normal\\s*$/i.test(v)?null:v",
+            ),
+            with("animation-range", ANIMATION_RANGE),
+        ],
+        StyleId::ScrollTimelineName => vec![
+            with("scroll-timeline-name", NONE),
+            with("--exact-scroll-timeline", NONE),
+        ],
+        StyleId::ViewTimelineName => vec![
+            with("view-timeline-name", NONE),
+            with("--exact-view-timeline", NONE),
+        ],
         StyleId::TimelineScope => vec![
             with("timeline-scope", NONE),
             with("--exact-timeline-scope", NONE),
@@ -1264,6 +1171,9 @@ pub fn style_writes(id: u16, timeline: bool, written: bool) -> Result<Vec<Write>
 /// css.rs names it, its logical side.
 pub fn style_row(id: u16, written: bool) -> Result<(String, String), String> {
     let row = StyleId::from_bit(id as u32).ok_or("unknown style row")?;
+    if row == StyleId::TranslateVelocity {
+        return Ok(("--exact-translate-velocity".into(), String::new()));
+    }
     // `translate` is one declaration of the author's two lengths (css.rs
     // `lowered`): written as the author wrote them.
     if row == StyleId::Translate {

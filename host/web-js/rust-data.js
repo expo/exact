@@ -1,13 +1,14 @@
 import { admitsSecret, createRequestExecutor, fetchHostAsset, sameGrantDeclaration, setAppGrantSet } from './admission.js';
 import { rustGrantSet, tsGrantSet } from './admission-data.js';
 import { boundedHttpBody, longPollRefusal, streamed } from './http-body.js';
-// A Rust data module on the JS runtime (LLP 1029.000's seam, ABI 7,
+import { rt } from './rt-link.js'; // (rt.js's own, as a lazy chunk takes them)
+// A Rust data module on the JS runtime (LLP 1029.000's seam, ABI 8,
 // `logic/abi/src/lib.rs`): the app's importless module wasm and its plan's
 // declarations (`app.bind.plan`, the plan without the bake's answers),
 // fetched after first pixel; once bound and activated, every answer is a
 // synchronous call, as the runner's `DataSource::answer` is. Until then the
 // runtime keeps each resource's compiled value and asks again at `ready`.
-const ABI = 7, utf8 = new TextEncoder(), text = new TextDecoder();
+const ABI = 8, utf8 = new TextEncoder(), text = new TextDecoder();
 
 function writer() {
   let buf = new Uint8Array(256), at = 0;
@@ -47,6 +48,7 @@ function reader(b) {
   const d = new DataView(b.buffer, b.byteOffset, b.byteLength); let at = 0;
   const r = {
     u8: () => b[at++],
+    u16: () => { const v = d.getUint16(at, true); at += 2; return v; },
     u32: () => { const v = d.getUint32(at, true); at += 4; return v; },
     f64: () => { const v = d.getFloat64(at, true); at += 8; return v; },
     u64: () => { const v = Number(d.getBigUint64(at, true)); at += 8; return v; },
@@ -67,7 +69,10 @@ function reader(b) {
   return r;
 }
 
-export async function install(data, sources, load = p => fetchHostAsset(p).then(r => r.arrayBuffer())) {
+export async function install(data, sources, load = p => fetchHostAsset(p).then(r => {
+  if (!r.ok) throw new Error(`${p.slice(2)} answered HTTP ${r.status}`);
+  return r.arrayBuffer();
+}, e => { throw new Error(`${p.slice(2)} could not be fetched: ${e?.message ?? e}`); })) {
   const [wasm, plan] = await Promise.all([load('./rust/wasm/app.module.wasm'), load('./app.bind.plan')]);
   // Bytes, or a module a renderer compiled once for every render.
   const made = await WebAssembly.instantiate(wasm, {}), instance = made.instance ?? made;
@@ -97,20 +102,21 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
     // A call the seam could not carry (`call` above) is the resource's
     // failure instead (LLP 1071 §7).
     if (tag >= 2 && tag <= 4) throw Object.assign(new Error(r.str()), { unknown: tag === 2, refuse: true });
-    // A two-way socket (tag 11, LLP 1016.003): the web carries no Rust socket yet.
-    if (tag === 11) throw new Error("a Rust source's two-way socket is not carried on the web yet");
-    if (tag === 1 || tag === 6 || tag === 9 || tag === 10) {
+    // A stream (9), a long poll (10, LLP 1016.000 D8), a two-way socket (11, LLP 1016.003).
+    if (tag === 1 || tag === 6 || (tag >= 9 && tag <= 11)) {
       const http = tag === 1 ? 'ordered' : `independent:${r.u32()}`;
       const scoped = r.u8() === 1, scope = r.str();
       const method = r.str(), url = r.str(), headers = [];
       for (let n = r.u32(); n--;) headers.push([r.str(), r.str()]);
       const n = r.u32(), body = r.bytes(n);
+      const protocols = [];
+      if (tag >= 9) for (let n = r.u32(); n--;) protocols.push(r.str());
       // A long poll (tag 10, LLP 1016.000 D8): its terms after the body, checked as the stream opens (http-body.js).
       const longPoll = tag === 10 ? { cursor: r.str(), from: r.str(), sameCursorEvent: [false, true][r.u8()] ?? (() => { throw new Error('invalid long poll terms'); })() } : undefined;
       // (refused as the native seam refuses it: before the turn's writes apply)
       const pollRefusal = longPoll && longPollRefusal({ url, longPoll, stream: true }, method, n ? 'x' : '');
       if (pollRefusal) throw new Error(pollRefusal);
-      return { req: { method, url, headers, cache, body: text.decode(body), raw: body, http, maxResponseBytes: http === 'ordered' ? undefined : Number(http.split(':')[1]), scope: scoped ? scope : null, stream: tag >= 9, longPoll } };
+      return { req: { method, url, headers, cache, body: text.decode(body), raw: body, http, maxResponseBytes: http === 'ordered' ? undefined : Number(http.split(':')[1]), scope: scoped ? scope : null, stream: tag >= 9, socket: tag === 11, protocols, longPoll } };
     }
     // Storage work (LLP 1027.001 D2): a portable request the host runs
     // through the web host's own `storage-request.js`, under its scope.
@@ -122,11 +128,67 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
   if (!sameGrantDeclaration(rustGrantSet, meta[1])) throw new Error('Rust module grants differ from the admitted build');
   r = op(1, w => w.bytes(new Uint8Array(plan))); r.u8(); result(r);
   r = op(2); r.u8(); result(r);
+  // A Rust source's two-way sockets (LLP 1016.003), each open one's transport under a number for the resource that
+  // owns it and its stream's ticket, which the module's handles keep: a handle from an earlier ticket is stale.
+  const sockets = new Set(), ids = new WeakMap();
+  let nextId = 0;
+  const idOf = owner => { if (!ids.has(owner)) ids.set(owner, nextId++); return ids.get(owner); };
+  const live = s => sockets.has(s) && s.transport.readyState === 1 && !s.controller.signal.aborted && s.controller.active?.() !== false;
+  // What a call staged (`turn`: a mutation's, or `own` socket's mapper), each operation addressed to its socket now,
+  // refused whole if one is not open, as natively. The batch goes once the commit stands, checked whole again, as
+  // TypeScript's (ts-stream.js `publish`); a refused commit sends none of it, and the journal says so either way.
+  const said = (turn, why) => rt.journal.push(`t=${rt.clock.now} ${turn.verb} ${turn.name} failed: ${why}; socket frames were refused`);
+  const sending = (ops, turn) => {
+    const batch = ops.map(o => {
+      const s = [...sockets].find(s => s.id === o.id && live(s));
+      if (!s) throw new Error('InvalidStateError: the socket is not open');
+      return { ...o, s };
+    });
+    let held = true;
+    for (const o of batch) o.s.unsent += o.size;
+    const release = () => { if (held) for (const o of batch) o.s.unsent -= o.size; held = false; };
+    return Object.assign(() => {
+      release();
+      try {
+        const totals = new Map();
+        for (const o of batch) {
+          if (!live(o.s)) throw new DOMException('the socket is not open', 'InvalidStateError');
+          totals.set(o.s, (totals.get(o.s) ?? 0) + o.size);
+        }
+        for (const [s, n] of totals) s.transport.check(n);
+        for (const o of batch) {
+          if (o.op === 'close') o.s.transport.close(o.code, o.reason); else o.s.transport.send(o.data);
+          rt.journal.push(`t=${rt.clock.now} socket ${o.op}: ${o.size} bytes (${o.s.name})`);
+        }
+      } catch (e) { said(turn, e?.message ?? e); }
+    }, { refused: why => { release(); said(turn, why); } });
+  };
+  // The call's socket turn (`encode_socket_turn`): who may send, and each open socket with its buffered bytes,
+  // the transport's and what earlier calls of this commit staged on it.
+  const socketTurn = (w, turn) => {
+    if (turn?.own) { w.u8(2); w.u32(turn.own.id); w.u64(turn.own.ticket); } else w.u8(turn?.mutation ? 1 : 0);
+    const open = [...sockets].filter(live);
+    w.u32(open.length);
+    for (const s of open) { w.u32(s.id); w.u64(s.ticket); w.u64(s.transport.bufferedAmount + s.unsent); }
+  };
+  // What the call staged (`encode_socket_ops`), and a mapper's overload.
+  const socketOps = r => {
+    const ops = [];
+    for (let n = r.u32(); n--;) {
+      const id = r.u32(), tag = r.u8();
+      if (tag === 0) { const data = r.str(); ops.push({ id, op: 'send', data, size: utf8.encode(data).length }); }
+      else if (tag === 1) { const data = r.bytes(r.u32()); ops.push({ id, op: 'send', data, size: data.length }); }
+      else if (tag === 2) ops.push({ id, op: 'close', code: r.u16(), reason: r.str(), size: 0 });
+      else throw new Error('invalid socket operation');
+    }
+    const over = r.u8(), why = r.str();
+    return { ops, overload: over === 1 ? why : null };
+  };
   // One call (`call_request`): source, arguments by type, admitted secret names, the store's
-  // snapshot; its reply (`call_reply`): a store read, writes, the result.
+  // snapshot, its socket turn; its reply (`call_reply`): a store read, writes, socket operations, the result.
   // Whether the module's last call read the store before it failed: its resource is a store reader (LLP 1146 §2.3).
   let threwRead = false;
-  const callWith = (code, source, args, store, outcome) => {
+  const callWith = (code, source, args, store, outcome, turn) => {
     threwRead = false;
     const r = op(code, w => {
       w.str(source); w.u8(6); w.u32(args.length);
@@ -137,31 +199,62 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
       w.u32(pairs.length); for (const [k, v] of pairs) { w.str(k); w.str(v); }
       if (outcome) {
         if (outcome.storage) { w.u8(5); w.bytes(outcome.storage); }
-        // One message of a stream (LLP 1016.000), the ABI's tag 8.
-        else if (outcome.streamed) { const m = outcome.streamed; w.u8(8); w.str(m.event); w.str(m.id); w.str(m.data); w.u32(m.coalesced); }
+        // One message of a stream (LLP 1016.000), the ABI's tag 8, or 12 for a socket's binary frame; 11 a socket's close.
+        else if (outcome.streamed) {
+          const m = outcome.streamed, binary = typeof m.data !== 'string';
+          w.u8(binary ? 12 : 8); w.str(m.event); w.str(m.id);
+          if (binary) w.bytes(new Uint8Array(m.data)); else w.str(m.data);
+          w.u32(m.coalesced); w.str(m.protocol ?? '');
+        }
+        else if (outcome.closed) { const c = outcome.closed; w.u8(11); w.u16(c.code); w.str(c.reason); w.u8(c.wasClean ? 1 : 0); }
         else if (outcome.failed) { w.u8(outcome.failed); w.str(outcome.message); }
         else { w.u8(0); w.u16(outcome.status); w.u32(outcome.headers.length); for (const [k, v] of outcome.headers) { w.str(k); w.str(v); } w.bytes(outcome.body); }
       }
-      // The socket turn (LLP 1016.003 D5): none, and no open socket.
-      w.u8(0); w.u32(0);
+      socketTurn(w, turn);
     });
     if (r.u8() !== 2) throw new Error('expected a call reply');
     const observed = r.u8() === 1;
     const writes = [];
     for (let n = r.u32(); n--;) { const k = r.str(); const v = r.u8() ? r.str() : null; if (!admitsSecret(rustGrantSet, k)) throw new Error(`secret ${k} is not granted`); writes.push([k, v]); }
-    // No socket operation, in a turn that may send on none.
-    if (r.u32() !== 0) throw new Error('a Rust module staged socket frames on the web');
-    r.u8(); r.str();
+    const { ops, overload } = socketOps(r);
     let out;
-    try { out = result(r); } catch (error) { threwRead = observed; if (error.refuse && !globalThis.__exactRender) for (const [k, v] of writes) store.set(k, v); throw error; }
+    try { out = result(r); } catch (error) {
+      threwRead = observed; if (error.refuse && !globalThis.__exactRender) for (const [k, v] of writes) store.set(k, v);
+      if (ops.length) said(turn, error.message);
+      throw error;
+    }
     if (!globalThis.__exactRender) for (const [k, v] of writes) store.set(k, v);
     if (observed) out.store = true;
+    // A mapper's call past D7's bounds fails its frame, whatever it answered (LLP 1016.003 D4).
+    if (overload) { if (ops.length) said(turn, overload); throw new Error(overload); }
+    if (!ops.length) return out;
+    // A mutation that sends answers now (D4); a mapper's answer that asks again reopens the stream, and sends none.
+    if (out.req && turn.mutation) throw new Error('a socket mutation must answer synchronously');
+    if (out.req) said(turn, 'its answer reopened the stream');
+    else out.effects = [sending(ops, turn)];
     return out;
   };
-  const rust = (source, args, store) => callWith(3, source, args, store), ts = data.ts, tsThrewRead = data.threwRead;
+  const rust = (source, args, store, target, mutation) => callWith(3, source, args, store, null, mutation ? { mutation, verb: 'send', name: target } : null);
+  const ts = data.ts, tsThrewRead = data.threwRead;
   data.threwRead = () => { const read = [threwRead, !!tsThrewRead?.()]; threwRead = false; return read[0] || read[1]; };
-  data.answer = ts ? (source, args, store, target, mutation, forced) => { try { return rust(source, args, store); } catch (e) { if (e.unknown) return ts(source, args, store, target, mutation, forced); throw e; } } : rust;
-  data.parse = (source, args, outcome, store) => callWith(4, source, args, store, outcome);
+  data.answer = ts ? (source, args, store, target, mutation, forced) => { try { return rust(source, args, store, target, mutation); } catch (e) { if (e.unknown) return ts(source, args, store, target, mutation, forced); throw e; } } : rust;
+  // A stream's messages that arrived together (request-send.js): each parsed in order (LLP 1016.000 D4), the last
+  // one's answer theirs; one that answers with a request (the stream asked again) ends them there.
+  // A two-way socket's `open` or frame is its own mapper's turn (LLP 1016.003 D4): it may send on that socket.
+  data.parse = (source, args, outcome, store) => {
+    if (!outcome.streamed) return callWith(4, source, args, store, outcome);
+    let out, read = false;
+    const effects = [];
+    for (const m of outcome.streamed) {
+      out = callWith(4, source, args, store, { streamed: m }, m.socket && { own: m.socket, verb: 'mapper', name: m.socket.name });
+      read ||= !!out.store;
+      effects.push(...(out.effects ?? []));
+      if (out.req) break;
+    }
+    if (read) out.store = true;
+    if (effects.length) out.effects = effects;
+    return out;
+  };
   // An overlay (`overlay_request`): what a resource shows while writes affect it; none from the Rust module asks
   // the TypeScript one's, beside it.
   const types = s => (sources[s] ?? '|').split('|'), tsOverlay = data.overlay;
@@ -189,11 +282,24 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
   // The host runs the request under this child's own authority. An absent
   // request scope is therefore the Rust child set, not the mixed-app union.
   // A stream (`Answer::stream`, LLP 1016.000) is the web host's own reader, under the same authority;
-  // its end is the outcome a single request's would be.
+  // its end is the outcome a single request's would be. A resource's two-way socket (`Request::socket`) takes the
+  // reader's D7 path, as a TypeScript one's (ts-stream.js): `open`, every frame, binary too, and its close; each of
+  // its messages names its socket for `parse`. A mutation's socket has no mapper to send, and only listens.
   const run = createRequestExecutor(data.appId ?? meta[0], rustGrantSet, boundedHttpBody);
-  data.fetch = (req, message, controller) => !req.stream ? run(req) : streamed(req, rustGrantSet, message, controller).then(o => o.kind
-    ? { failed: o.kind, message: text.decode(o.body) }
-    : { status: o.status, headers: o.headers ? o.headers.split('\n').map(l => [l.slice(0, l.indexOf(': ')), l.slice(l.indexOf(': ') + 2)]) : [], body: o.body });
+  data.fetch = (req, message, controller) => {
+    if (!req.stream) return run(req);
+    let socket = null;
+    const protocol = req.socket && controller.resource ? { socket: transport => {
+      socket = { transport, controller, id: idOf(controller.owner), ticket: controller.ticket, name: controller.streamName, unsent: 0 };
+      sockets.add(socket); controller.socket = transport;
+    } } : undefined;
+    return streamed(req, rustGrantSet, m => message(socket ? { ...m, socket } : m), controller, undefined, protocol).then(o => {
+      sockets.delete(socket);
+      if (o.close) rt.journal.push(`t=${rt.clock.now} socket close: ${o.close.code} ${o.close.reason} (${controller.streamName})`);
+      return o.close ? { closed: o.close } : o.kind ? { failed: o.kind, message: text.decode(o.body) }
+        : { status: o.status, headers: o.headers ? o.headers.split('\n').map(l => [l.slice(0, l.indexOf(': ')), l.slice(l.indexOf(': ') + 2)]) : [], body: o.body };
+    });
+  };
   // What a loaded capability needs of the module (canvas2d.js's draws).
   data.logic = { exports: e, session, writer, reader, encode, ABI };
   data.appId ??= meta[0];

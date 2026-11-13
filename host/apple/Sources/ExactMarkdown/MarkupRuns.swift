@@ -45,7 +45,7 @@ enum MarkupRuns {
     /// padding is zero), so a line breaks around it and never inside its
     /// ends; its label is isolated in the direction its face pins, else in
     /// the lines' (`atoms.rtl`, D4). Its kind's own paint draws (colours,
-    /// radius, underline); a border, a ring, a state's paint and an icon do
+    /// radius, underline); a border, a ring and a state's paint do
     /// not, in a reader.
     static func expand(_ source: String, base: Run, color: [Double]?, boldText: Bool = false, atoms: MarkdownAtoms = MarkdownAtoms()) -> [Run] {
         var out: [Run] = []
@@ -91,6 +91,12 @@ enum MarkupRuns {
                     // face pins, else in its line's (D4).
                     let pinned = ["ltr": "\u{2066}", "rtl": "\u{2067}"][detail["direction"] as? String ?? ""]
                     let pad = metrics[kind]?.padding == 0 ? "" : "\u{202F}"
+                    if let icon = detail["icon"] as? String, !icon.isEmpty {
+                        let m = metrics[kind]
+                        run.atomIcon = AtomIconRun(source: icon, size: m?.icon, sizeEm: m?.iconEm ?? false,
+                                                   gap: m?.gap, gapEm: m?.gapEm ?? false,
+                                                   rtl: pinned.map { $0 == "\u{2067}" } ?? atoms.rtl)
+                    }
                     run.text = pad + (pinned ?? (atoms.rtl ? "\u{2067}" : "\u{2066}")) + unbroken + "\u{2069}" + pad
                     // Its press is the atom's, not a link's: never underlined as one, but as its kind says.
                     let rows = paint[kind]

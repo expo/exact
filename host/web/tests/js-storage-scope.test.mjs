@@ -16,7 +16,7 @@ import { standIns } from './stand-ins.mjs';
 import { fileURLToPath } from 'node:url';
 
 const webJs = fileURLToPath(new URL('../../web-js/', import.meta.url)), web = fileURLToPath(new URL('../', import.meta.url));
-const REAL = ['rt.js', 'held.js', 'font-family.js', 'observers.js', 'grid.js', 'overlay.js', 'roster.js', 'router.js', 'route-pattern.js', 'schedule.js', 'budget.js', 'persist.js'];
+const REAL = ['rt.js', 'clock.js', 'resources.js', 'tree.js', 'events.js', 'pieces.js', 'mount.js', 'strings.js', 'held.js', 'font-family.js', 'observers.js', 'grid.js', 'overlay.js', 'roster.js', 'router.js', 'route-pattern.js', 'schedule.js', 'budget.js', 'shape.js', 'persist.js'];
 const root = mkdtempSync(resolve(tmpdir(), 'exact-js-storage-'));
 /** The runtime as a build lays it out for the app at `appDir`, or as written (a release) when it is null. */
 function runtime(name, appDir) {
@@ -80,46 +80,62 @@ test('persisted state and the durable store are the app\'s own on a shared origi
   expect(release.persist.stored('goal', 2000, 'n')).toBe(1500);
 });
 
+// A write that failed after reading the value it replaces retries under the secret's lease
+// (storage-environment.js `retrySecretWrite`), and only while that value is still there; one that could not read it is
+// said and dropped, since a retry could overwrite another realm's later write.
 test('committed store writes retry without new writes, coalesce by name, and exclude rollback', async () => {
   const rt = await import(resolve(runtime('retry', null), 'rt.js'));
-  const storage = globalThis.localStorage, document = globalThis.document;
+  const storage = globalThis.localStorage, document = globalThis.document, navigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
   globalThis.document = { querySelector: () => null, getElementById: () => ({}) };
+  Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { locks: { request: async (_name, work) => work() } } });
   kept.clear();
-  let blocked = true;
-  Object.defineProperty(globalThis, 'localStorage', { configurable: true, get() {
-    if (blocked) throw new Error('disabled storage');
-    return storage;
-  } });
+  let blocked = true, unreadable = false;
+  const refuse = () => { if (blocked) throw new Error('quota exceeded'); };
+  globalThis.localStorage = {
+    get length() { return storage.length; }, key: i => storage.key(i),
+    getItem: k => { if (unreadable) throw new Error('disabled storage'); return storage.getItem(k); },
+    setItem: (k, v) => { refuse(); storage.setItem(k, v); }, removeItem: k => { refuse(); storage.removeItem(k); },
+  };
   const warnings = () => rt.journal.filter(l => l.includes('store token failed:'));
-  const commit = f => expect(rt.commit(f ?? (() => {}))).toBe(true);
+  // A commit persists; a retry it starts lands later, which awaiting `persist` again waits for.
+  const commit = async f => { expect(rt.commit(f ?? (() => {}))).toBe(true); await rt.Store.persist(); };
   try {
-    commit(() => rt.Store.set('token', 'first')); commit(); commit();
+    await commit(() => rt.Store.set('token', 'first')); await commit(); await commit();
     const firstWarnings = warnings();
-    blocked = false; commit();
+    blocked = false; await commit();
     expect(kept.get('exact.secret.token')).toBe('first');
     expect(firstWarnings).toHaveLength(1);
-    blocked = true; commit(() => rt.Store.set('token', 'second')); commit();
+    blocked = true; await commit(() => rt.Store.set('token', 'second')); await commit();
     expect(warnings()).toHaveLength(2);
     expect(rt.commit(() => { rt.Store.set('token', 'rollback'); rt.Store.set('uncommitted', 'never'); throw new rt.Refusal('test'); })).toBe(false);
-    blocked = false; commit();
+    blocked = false; await commit();
     expect(kept.get('exact.secret.token')).toBe('second');
     expect(kept.has('exact.secret.uncommitted')).toBe(false);
-    blocked = true; commit(() => rt.Store.set('token', 'obsolete'));
-    commit(() => rt.Store.set('token', 'latest')); commit();
+    blocked = true; await commit(() => rt.Store.set('token', 'obsolete'));
+    await commit(() => rt.Store.set('token', 'latest')); await commit();
     expect(warnings()).toHaveLength(4);
-    blocked = false; commit();
+    blocked = false; await commit();
     expect(kept.get('exact.secret.token')).toBe('latest');
-    blocked = true; commit(() => rt.Store.set('token', 'obsolete'));
-    commit(() => rt.Store.set('token', null)); commit();
+    blocked = true; await commit(() => rt.Store.set('token', 'obsolete'));
+    await commit(() => rt.Store.set('token', null)); await commit();
     expect(warnings()).toHaveLength(6);
-    blocked = false; commit();
+    blocked = false; await commit();
     expect(kept.has('exact.secret.token')).toBe(false);
-    blocked = true; commit(() => rt.Store.set('token', null));
-    commit(() => rt.Store.set('token', 'latest'));
-    blocked = false; commit();
+    blocked = true; await commit(() => rt.Store.set('token', null));
+    await commit(() => rt.Store.set('token', 'latest'));
+    blocked = false; await commit();
     expect(kept.get('exact.secret.token')).toBe('latest');
+    // Another realm's write while this one's retry waits keeps that realm's value.
+    blocked = true; await commit(() => rt.Store.set('token', 'stale'));
+    kept.set('exact.secret.token', 'another realm');
+    blocked = false; await commit();
+    expect(kept.get('exact.secret.token')).toBe('another realm');
+    unreadable = true; await commit(() => rt.Store.set('token', 'unread'));
+    unreadable = false; await commit();
+    expect([kept.get('exact.secret.token'), warnings().length]).toEqual(['another realm', 10]);
   } finally {
-    Object.defineProperty(globalThis, 'localStorage', { configurable: true, writable: true, value: storage });
+    globalThis.localStorage = storage;
+    if (navigator) Object.defineProperty(globalThis, 'navigator', navigator); else delete globalThis.navigator;
     if (document === undefined) delete globalThis.document; else globalThis.document = document;
   }
 });

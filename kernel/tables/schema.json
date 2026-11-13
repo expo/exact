@@ -472,7 +472,8 @@
     {
       "id": 54,
       "name": "backgroundMaterial",
-      "kind": "str"
+      "kind": "str",
+      "styleable": true
     },
     {
       "id": 55,
@@ -1326,6 +1327,7 @@
       "id": 216,
       "name": "glassGroup",
       "kind": "float",
+      "styleable": true,
       "_comment": "@ref LLP 1053.000.000 D1: the element's subtree is one Liquid Glass group whose glass begins to merge this many points apart (UIGlassContainerEffect, NSGlassEffectContainerView). Layout-neutral; drawn only on Apple 26+."
     },
     {
@@ -1421,7 +1423,7 @@
       "snapshot": "admit",
       "watch": "admit",
       "kind": "str",
-      "_comment": "HTML's global `title` attribute on any element but `head` (whose `title` is `headTitle`): advisory text, the platform's tooltip (studio diary R24). The browser's own on the web, `NSView.toolTip` on macOS; touch hosts show none."
+      "_comment": "HTML's global `title` attribute on any element but `head` (whose `title` is `headTitle`): advisory text, the platform's tooltip (studio diary R24). The browser's own on the web, `NSView.toolTip` on macOS, the tooltip control on Windows (`host/windows/src/tooltip.rs`); touch hosts show none. The painted hosts' accessibility reads it as the description, or the name where nothing else names the node."
     },
     {
       "id": 238,
@@ -1798,7 +1800,7 @@
       "id": 300,
       "name": "systemBarsHidden",
       "kind": "bool",
-      "_comment": "@ref LLP 1105 D1: `system-bars-hidden`, bound to state: the system's bars give way to this node's screen. iOS hides the status bar and auto-hides the home indicator, resolving the declaration that wins as for `statusBarStyle` (D2, D3; `false` is a declaration too); `statusBarAnimation` on the winning node fades the status bar's hiding and showing. Other hosts ignore it."
+      "_comment": "@ref LLP 1105 D1: `system-bars-hidden`, bound to state: the system's bars give way to this node's screen. iOS hides the status bar and auto-hides the home indicator, and Android hides the status and navigation bars (a swipe from the edge shows them for a moment), resolving the declaration that wins as for `statusBarStyle` (D2, D3, D7; `false` is a declaration too); on iOS `statusBarAnimation` on the winning node fades the status bar's hiding and showing. Other hosts ignore it."
     },
     {
       "id": 301,
@@ -1817,9 +1819,39 @@
       "name": "glassInteractive",
       "kind": "bool",
       "_comment": "On a box with `backgroundMaterial` glass or glass-clear: whether its glass reacts to a touch (`UIGlassEffect.isInteractive`). Unset, it does when the box has a `press` and is not disabled. Only iOS and tvOS 26 have interactive glass; other hosts ignore it."
+    },
+    {
+      "id": 304,
+      "name": "rel",
+      "kind": "str",
+      "_comment": "@ref LLP 1141.002 D1: HTML's rel, a set of space-separated tokens read ASCII case-insensitively. On a `link` or `form`, HTML's meaning, written into the web DOM. On a root tab, the token `search` names the app's search tab (`Kernel::root_tabs`), which iOS 18 and later show as a `UISearchTab`; the web's tab button carries no rel."
+    },
+    {
+      "id": 305,
+      "name": "tip",
+      "kind": "str",
+      "_comment": "@ref LLP 1035.006.000 D1: a tip's title, which teaches what the element does; empty, no tip. The element's `id` names the tip, so the platform remembers it across launches. iOS, iPadOS and macOS show it as TipKit's popover over the element, or over the bar or toolbar item that stands for it, when TipKit says it may; the person can close it. Other hosts show nothing (D4). Using it links the `tips` capability."
+    },
+    {
+      "id": 306,
+      "name": "tipMessage",
+      "kind": "str",
+      "_comment": "@ref LLP 1035.006.000 D1: the line under a tip's title (TipKit's `message`)."
+    },
+    {
+      "id": 307,
+      "name": "tipImage",
+      "kind": "str",
+      "_comment": "@ref LLP 1035.006.000 D1: the symbol beside a tip's title (TipKit's `image`), written as an `image`'s symbol source: `symbol:<role>` or `symbol:sf/<name>`."
+    },
+    {
+      "id": 308,
+      "name": "tipDone",
+      "kind": "bool",
+      "_comment": "@ref LLP 1035.006.000 D2: the person has done what the tip teaches. The platform retires the tip for good (TipKit's `invalidate(reason: .actionPerformed)`); it stays retired when this is false again or the app relaunches."
     }
   ],
-  "_enums": "Wire discriminant is the 0-based index. An unknown discriminant is a typed decode rejection, never a fallback.",
+  "_enums": "Wire discriminant is the 0-based index. An unknown discriminant is a typed decode rejection, never a fallback. refused: keywords the wire carries and the compiler refuses an author, because no presenter builds them (LLP 1043.000 §3 D1); `contract vocab` lists the others. No wire reads it, so it is outside the digest.",
   "enums": {
     "Resize": {
       "values": [
@@ -1867,7 +1899,8 @@
         "all",
         "contain"
       ],
-      "default": "auto"
+      "default": "auto",
+      "refused": ["contain"]
     },
     "ControlSize": {
       "values": [
@@ -2136,6 +2169,15 @@
       ],
       "default": "monochrome"
     },
+    "TimelineAxis": {
+      "values": [
+        "block",
+        "inline",
+        "x",
+        "y"
+      ],
+      "default": "block"
+    },
     "TintAdjustment": {
       "values": [
         "auto",
@@ -2272,6 +2314,18 @@
       ],
       "default": "normal"
     },
+    "SafeArea": {
+      "_comment": "@ref LLP 1123 D4: `-exact-safe-area`, the keywords of the safe_area row, not a wire enum. auto is 0 (every edge cleared); each edge is one bit in this order (top bit 0, left bit 3); none is every edge.",
+      "values": [
+        "auto",
+        "none",
+        "top",
+        "right",
+        "bottom",
+        "left"
+      ],
+      "default": "auto"
+    },
     "FontVariantLigatures": {
       "_comment": "CSS Fonts 4 `font-variant-ligatures`, the keywords of the font_variant_ligatures row, not a wire enum. normal is 0; each later value is one bit in this order (common-ligatures is bit 0, no-contextual bit 7), and none, which has no bit of its own, is every no- value (CSS: all four kinds disabled). A value and its no- form are refused together, as CSS takes one of each pair. Each kind is OpenType features of the chosen face: common liga and clig, discretionary dlig, historical hlig, contextual calt.",
       "values": [
@@ -2352,17 +2406,44 @@
     "ScrollSnapType": {
       "values": [
         "none",
-        "x mandatory"
+        "x mandatory",
+        "y mandatory",
+        "both mandatory",
+        "x",
+        "y",
+        "both"
       ],
-      "default": "none"
+      "default": "none",
+      "_comment": "CSS Scroll Snap 1 §5.1 `scroll-snap-type` as CSSOM serializes it: an axis, then `mandatory`, or the axis alone for `proximity` (the strictness CSS assumes when none is said). `block` and `inline` are not admitted (y and x here). Appended values keep earlier discriminants."
     },
     "ScrollSnapAlign": {
       "values": [
         "none",
         "start",
-        "end"
+        "end",
+        "center",
+        "none start",
+        "none end",
+        "none center",
+        "start none",
+        "start end",
+        "start center",
+        "end none",
+        "end start",
+        "end center",
+        "center none",
+        "center start",
+        "center end"
       ],
-      "default": "none"
+      "default": "none",
+      "_comment": "CSS Scroll Snap 1 §6.1 `scroll-snap-align`, `[none | start | end | center]{1,2}` as CSSOM serializes it: one value for both axes, or the block axis's (y) then the inline axis's (x)."
+    },
+    "ScrollSnapStop": {
+      "values": [
+        "normal",
+        "always"
+      ],
+      "default": "normal"
     },
     "ScrollbarWidth": {
       "values": [
@@ -2444,7 +2525,8 @@
         "maximum",
         "clear"
       ],
-      "default": "auto"
+      "default": "auto",
+      "refused": ["start", "end", "minimum", "maximum", "clear"]
     },
     "InterpolateSize": {
       "values": [
@@ -2686,7 +2768,7 @@
       "default": "none"
     }
   },
-  "_styles": "Each row is one mask bit. codec: dimension (u8 kind + f32; kind 0 auto, 1 points, 2 percent as authored 0-100 points, 3-6 an env(safe-area-inset-top/right/bottom/left) length with the f32 the points added, 7 calc(<percent> ± <px>) with a second f32 the points, 8-13 an env(viewport-segment-width/height/top/left/bottom/right x y) length with the f32 the points added and then two u8 indices x then y — LLP 1078 D3; 14-23 viewport vw/vh/vmin/vmax/svw/svh/lvw/lvh/dvw/dvh with f32 the percentage; 24 a calculation after a zero f32 (style/calc/wire.rs, LLP 1116 D5): a tree node by node, each a u8 tag (0 a value, 1 env(), 2 a sum, 3 a product, 4 a negation, 5 an inversion, 6 min, 7 max, 8 clamp), then a value’s f64 and u8 unit (0 a number, 1 a percentage, 2 px, 3-12 a viewport unit, 128 rem); an env()’s u8 (0-3 a safe-area-inset edge, 8-13 a viewport-segment variable followed by its two u8 indices, 16-35 a layout region's inset, 16 + region × 4 + edge, 36-39 an env(titlebar-area-x/y/width/height), which only a tree holds); a list’s u8 count and its children; clamp’s three presence bytes, each before its argument; or, for a value whose env() has a fallback, tag 9 and the text as written as a string (u32 length, UTF-8), which the row reads once substituted (CSS Environment Variables 1 §3). A tree is admitted only when it is within CSS Values 4 §10.8’s limits, its own §10.13 text parses back to it and no other kind holds it; a text only when the row reads it as one. Kind 25 is an env(-exact-<region>-inset-<edge>) layout region's inset, the f32 the points added, then a u8 region (0 safe-area-corners, 1 layout-margins, 2 layout-margins-corners, 3 readable-content, 4 readable-content-corners) and a u8 edge (0 top, 1 right, 2 bottom, 3 left), LLP 1123 D10) | line-height (u8: 0 normal, 1 number followed by f32, 2 length followed by f32) | f32 | u8 (keyword bits; keywords names the enum) | u16 | u32 | i32 | color (tagged ColorValue, src/wire/codec.rs) | vec2 (f32 f32) | auto-color (u8: 0 auto, 1 followed by color) | current-color (u8: 0 currentcolor, 1 followed by color) | tracks (CSS grid-template grammar Taffy can lay out: none, named lines, px, %, fr, auto, min/max-content, calc()/min()/max()/clamp() over px and %, fit-content(px or %), minmax(), and fixed/auto-fill/auto-fit repeat(); canonical CSS text on the wire) | placement (CSS grid placement: auto, nonzero numeric or named lines and positive numeric or named spans; canonical CSS text on the wire) | aspect-ratio (CSS text: auto, a ratio, or both) | background-image (CSS text: none or gradient layers, LLP 1066) | paint (CSS text: none, currentcolor, or a colour) | dasharray (CSS text: none or a list of numbers) | transform (CSS text: a transform list) | paint-order (CSS text: normal, or fill/stroke/markers) | marker (CSS text: none or url(#id)) | transform-origin (CSS text: one to three lengths, percentages or keywords) | transitions (`_transitions`) | animations (`_animations`) | drag-timeline, animation-timeline, animation-range, timeline-scope (CSS text: the four timeline rows, LLP 1057.003) | box-shadow, text-shadow, filter, backdrop-filter, clip-path, shape-outside, corner-shape, mask-image, rotate-axis, symbol-palette, font-variations, font-features, position-try-fallbacks (CSS text, parsed by the types named in build/codec.rs) | enum:<Name> (u8). admitsAuto applies to dimension rows only; Auto on a non-admitting row is a typed decode rejection. refusesPercent marks a dimension row CSS gives no percentage (column-width): a percentage there, alone or inside a calculation, is refused when set and a typed decode rejection. Every length row (each dimension, line-height, font-size, letter-spacing, the gaps, border widths and radii, shape-margin) also takes CSS `rem` and `em` through `set_dynamic`; the row holds the pixels the kernel resolves at the end of each commit against the host's root font size (LLP 1069.000 D3), so every reader and the wire see pixels. Every length row also takes CSS `ch` and `lh` at a fixed 8×16 px cell (LLP 1101 D3). terminal: how a terminal entry admits the row (LLP 1101 §4) — cell (lengths only in `ch`/`lh`, a percentage, `auto` or 0), admit, or quantize (the host approximates it); a row without one is refused in a terminal entry. layout: a change re-runs layout. text: a change invalidates text measurement. inherited: the row follows CSS inheritance — a node without its own row takes the nearest logical ancestor's computed value, else the initial value (LLP 1035.000 D1); the kernel marks the descendants an inherited change reaches. Defaults are the storage defaults AND the semantic defaults — this table is the one default authority, and the defaults are CSS's: a bare node is a block, content-box, flex-direction row, flex-shrink 1 (rules/RULES.md: the web is the standard). A colour row's default may name a role from `colors` (`\"CanvasText\"`), as CSS's initial `color` is a system colour; a host with the platform's colour shows that, never a snapshot (LLP 1095 stage 2). hosts (LLP 1159.000 D2): what a native host does with the row other than draw it as written, a list of { host: ios | macos | linux | windows | android, or painted for every host that draws with exact-linux's paint walk (linux, windows, android); on: box (an element outside an svg) or svg (one inside), where the entry is limited to one; fidelity: none (the node draws as if the row were unset) or best-effort (it differs as why says); why }. A host with no entry has no known gap, which is not a measurement. The compiler's style-undrawn lint, `contract vocab` and scripts/svgparity.mjs read it; no wire does, so it is outside the digest.",
+  "_styles": "Each row is one mask bit. codec: dimension (u8 kind + f32; kind 0 auto, 1 points, 2 percent as authored 0-100 points, 3-6 an env(safe-area-inset-top/right/bottom/left) length with the f32 the points added, 7 calc(<percent> ± <px>) with a second f32 the points, 8-13 an env(viewport-segment-width/height/top/left/bottom/right x y) length with the f32 the points added and then two u8 indices x then y — LLP 1078 D3; 14-23 viewport vw/vh/vmin/vmax/svw/svh/lvw/lvh/dvw/dvh with f32 the percentage; 24 a calculation after a zero f32 (style/calc/wire.rs, LLP 1116 D5): a tree node by node, each a u8 tag (0 a value, 1 env(), 2 a sum, 3 a product, 4 a negation, 5 an inversion, 6 min, 7 max, 8 clamp), then a value’s f64 and u8 unit (0 a number, 1 a percentage, 2 px, 3-12 a viewport unit, 128 rem); an env()’s u8 (0-3 a safe-area-inset edge, 4-7 a var(--exact-safe-area-inset-top/right/bottom/left), its content owner's local inset, which only a tree holds — LLP 1123 D5, D9; 8-13 a viewport-segment variable followed by its two u8 indices, 16-35 a layout region's inset, 16 + region × 4 + edge, 36-39 an env(titlebar-area-x/y/width/height), which only a tree holds); a list’s u8 count and its children; clamp’s three presence bytes, each before its argument; or, for a value whose env() has a fallback, tag 9 and the text as written as a string (u32 length, UTF-8), which the row reads once substituted (CSS Environment Variables 1 §3). A tree is admitted only when it is within CSS Values 4 §10.8’s limits, its own §10.13 text parses back to it and no other kind holds it; a text only when the row reads it as one. Kind 25 is an env(-exact-<region>-inset-<edge>) layout region's inset, the f32 the points added, then a u8 region (0 safe-area-corners, 1 layout-margins, 2 layout-margins-corners, 3 readable-content, 4 readable-content-corners) and a u8 edge (0 top, 1 right, 2 bottom, 3 left), LLP 1123 D10) | line-height (u8: 0 normal, 1 number followed by f32, 2 length followed by f32) | f32 | u8 (keyword bits; keywords names the enum) | u16 | u32 | i32 | color (tagged ColorValue, src/wire/codec.rs) | vec2 (f32 f32) | auto-color (u8: 0 auto, 1 followed by color) | current-color (u8: 0 currentcolor, 1 followed by color) | tracks (CSS grid-template grammar Taffy can lay out: none, named lines, px, %, fr, auto, min/max-content, calc()/min()/max()/clamp() over px and %, fit-content(px or %), minmax(), and fixed/auto-fill/auto-fit repeat(); canonical CSS text on the wire) | placement (CSS grid placement: auto, nonzero numeric or named lines and positive numeric or named spans; canonical CSS text on the wire) | aspect-ratio (CSS text: auto, a ratio, or both) | background-image (CSS text: none or gradient layers, LLP 1066) | paint (CSS text: none, currentcolor, or a colour) | dasharray (CSS text: none or a list of numbers) | transform (CSS text: a transform list) | paint-order (CSS text: normal, or fill/stroke/markers) | marker (CSS text: none or url(#id)) | transform-origin (CSS text: one to three lengths, percentages or keywords) | transitions (`_transitions`) | animations (`_animations`) | drag-timeline, animation-timeline, animation-range, timeline-scope, timeline-name, view-timeline-inset (CSS text: the timeline rows, LLP 1057.003) | box-shadow, text-shadow, filter, backdrop-filter, clip-path, shape-outside, corner-shape, mask-image, rotate-axis, symbol-palette, font-variations, font-features, position-try-fallbacks (CSS text, parsed by the types named in build/codec.rs) | enum:<Name> (u8). admitsAuto applies to dimension rows only; Auto on a non-admitting row is a typed decode rejection. refusesPercent marks a dimension row CSS gives no percentage (column-width): a percentage there, alone or inside a calculation, is refused when set and a typed decode rejection. Every length row (each dimension, line-height, font-size, letter-spacing, the gaps, border widths and radii, shape-margin, border-spacing) also takes CSS `rem` and `em` through `set_dynamic`; the row holds the pixels the kernel resolves at the end of each commit against the host's root font size (LLP 1069.000 D3), so every reader and the wire see pixels. Every length row also takes CSS `ch` and `lh` at a fixed 8×16 px cell (LLP 1101 D3). terminal: how a terminal entry admits the row (LLP 1101 §4) — cell (lengths only in `ch`/`lh`, a percentage, `auto` or 0), admit, or quantize (the host approximates it); a row without one is refused in a terminal entry. layout: a change re-runs layout. text: a change invalidates text measurement. inherited: the row follows CSS inheritance — a node without its own row takes the nearest logical ancestor's computed value, else the initial value (LLP 1035.000 D1); the kernel marks the descendants an inherited change reaches. Defaults are the storage defaults AND the semantic defaults — this table is the one default authority, and the defaults are CSS's: a bare node is a block, content-box, flex-direction row, flex-shrink 1 (rules/RULES.md: the web is the standard). A colour row's default may name a role from `colors` (`\"CanvasText\"`), as CSS's initial `color` is a system colour; a host with the platform's colour shows that, never a snapshot (LLP 1095 stage 2). hosts (LLP 1159.000 D2): what a native host does with the row other than draw it as written, a list of { host: ios | macos | linux | windows | android, or painted for every host that draws with exact-painted's paint walk (linux, windows, android); on: box (an element outside an svg) or svg (one inside), where the entry is limited to one; fidelity: none (the node draws as if the row were unset) or best-effort (it differs as why says); why }. A host with no entry has no known gap, which is not a measurement. The compiler's style-undrawn lint, `contract vocab` and scripts/svgparity.mjs read it; no wire does, so it is outside the digest.",
   "styles": [
     {
       "bit": 0,
@@ -3481,7 +3563,8 @@
       "bit": 81,
       "field": "scroll_snap_type",
       "codec": "enum:ScrollSnapType",
-      "cold": true
+      "cold": true,
+      "_comment": "LLP 1008 §9: the web executes CSS; UIKit, AppKit, Android and a Linux or Windows wheel rest where the shared rule picks (`ScrollSnap.swift`, `host/painted/src/presenter/snap.rs`)."
     },
     {
       "bit": 82,
@@ -3980,13 +4063,13 @@
       "field": "animation_timeline",
       "rare": true,
       "codec": "animation-timeline",
-      "_comment": "@ref LLP 1057.003 D1: CSS `animation-timeline`, `auto | <dashed-ident>`: the node's animations are held at the named drag timeline's progress, never played on the clock. @ref LLP 1055.002 D2: a third value, `-exact-clock(<ident>)`, keeps them on the clock from a start every animation on that clock timeline shares, a deviation LLP 1001 declares."
+      "_comment": "@ref LLP 1057.003 D1, D5: CSS `animation-timeline`, `auto | <dashed-ident> | scroll([nearest | root | self] || <axis>) | view(<axis> || <inset>{1,2})` (one value for all the node's animations; a list is refused): the node's animations are held at the named or anonymous timeline's progress (a scroll, view or drag timeline), never played on the clock. @ref LLP 1055.002 D2: a fifth value, `-exact-clock(<ident>)`, keeps them on the clock from a start every animation on that clock timeline shares, a deviation LLP 1001 declares."
     },
     {
       "bit": 149,
       "field": "animation_range",
       "codec": "animation-range",
-      "_comment": "@ref LLP 1057.003 D1: CSS `animation-range`, `normal | <length> <length>`: where on the timeline the animations run 0% to 100%.",
+      "_comment": "@ref LLP 1057.003 D1, D5: CSS `animation-range`, each end `normal | <length-percentage> | <timeline-range-name> <length-percentage>?` (one pair; a list is refused): where on the timeline the animations run 0% to 100%. A drag timeline's consumer takes two lengths, or stays on the clock.",
       "cold": true
     },
     {
@@ -4683,6 +4766,106 @@
       "codec": "color",
       "default": 0,
       "_comment": "Not CSS: `-exact-glass-tint`, the colour that tints the glass of a box whose `backgroundMaterial` is glass or glass-clear, resolved in the box's colour scheme: `UIGlassEffect.tintColor` on iOS and tvOS 26, `NSGlassEffectView.tintColor` on macOS 26, and on the web and Linux the material's background colour in place of the table's tint. An unset mask (the default, 0, is never read) is untinted glass. Not inherited."
+    },
+    {
+      "bit": 235,
+      "field": "translate_velocity",
+      "codec": "vec2",
+      "default": [0, 0],
+      "cold": true,
+      "_comment": "Not CSS: -exact-translate-velocity supplies the x/y initial velocity in CSS pixels per second when a translate target changes under a spring or a spring is enabled after dragging without a transition. Omitted, the engine preserves the running spring's velocity. An explicit zero pair stops inherited velocity. Changing this row alone never restarts a transition; while set, it applies to each subsequent translate target change or newly enabled spring."
+    },
+    {
+      "bit": 236,
+      "field": "scroll_timeline_name",
+      "rare": true,
+      "codec": "timeline-name",
+      "_comment": "@ref LLP 1057.003 D5: CSS `scroll-timeline-name`, `none | <dashed-ident>` (one name; a list is refused): a scroll progress timeline whose position is this node's scroll offset on its `scroll-timeline-axis`, 0% at the start of its scroll range and 100% at its end. On a node that is no scroll container, or has no scrollable overflow on the axis, the timeline is inactive. Not inherited."
+    },
+    {
+      "bit": 237,
+      "field": "scroll_timeline_axis",
+      "rare": true,
+      "codec": "enum:TimelineAxis",
+      "_comment": "@ref LLP 1057.003 D5: CSS `scroll-timeline-axis`: the axis `scroll-timeline-name`'s timeline reads. Not inherited."
+    },
+    {
+      "bit": 238,
+      "field": "view_timeline_name",
+      "rare": true,
+      "codec": "timeline-name",
+      "_comment": "@ref LLP 1057.003 D5: CSS `view-timeline-name`, `none | <dashed-ident>` (one name; a list is refused): a view progress timeline, this node's border box crossing the scrollport of its nearest ancestor scroll container (the page's when none) on its `view-timeline-axis`: 0% where its start edge meets the scrollport's end edge, 100% where its end edge leaves the scrollport's start edge (the `cover` range). Not inherited."
+    },
+    {
+      "bit": 239,
+      "field": "view_timeline_axis",
+      "rare": true,
+      "codec": "enum:TimelineAxis",
+      "_comment": "@ref LLP 1057.003 D5: CSS `view-timeline-axis`: the axis `view-timeline-name`'s timeline reads. Not inherited."
+    },
+    {
+      "bit": 240,
+      "field": "view_timeline_inset",
+      "rare": true,
+      "codec": "view-timeline-inset",
+      "_comment": "@ref LLP 1057.003 D5: CSS `view-timeline-inset`, `[auto | <length-percentage>]{1,2}` (one pair; a list is refused): how far the view timeline's scrollport edges move in, start then end (one value is both). `auto` is the scroller's `scroll-padding` on that side; a percentage is of the scrollport's size on the axis. Not inherited."
+    },
+    {
+      "bit": 241,
+      "field": "scroll_snap_stop",
+      "codec": "enum:ScrollSnapStop",
+      "cold": true,
+      "_comment": "CSS Scroll Snap 1 §6.2 `scroll-snap-stop` on a snap area: `always` keeps a snap from passing over the area's snap position, so one fling moves one card or one page."
+    },
+    {
+      "bit": 242,
+      "field": "safe_area",
+      "codec": "u8",
+      "keywords": "SafeArea",
+      "rare": true,
+      "layout": true,
+      "default": 0,
+      "_comment": "@ref LLP 1123 D4: `-exact-safe-area`, on a content owner's authored root (a route, a tab panel): the edges whose automatic clearance of the owner's chrome is off, as SwiftUI's `ignoresSafeArea(.container, edges:)`, as SafeArea's bits. `auto` (0) clears every edge, `none` none. Authored padding and the owner's allocation are unchanged; `var(--exact-safe-area-inset-*)` still reads the inset. Not inherited."
+    },
+    {
+      "bit": 243,
+      "field": "local_inset_top",
+      "refusesPercent": true,
+      "codec": "dimension",
+      "inherited": true,
+      "layout": true,
+      "default": 0,
+      "_comment": "@ref LLP 1123 D9: an author's `--exact-safe-area-inset-top`, a length with no percentage, which this node's subtree reads through `var(--exact-safe-area-inset-top)` in place of the content owner's local inset. Inherited as its computed length (an `em` resolved where it is declared); one invalid at computed-value time (a `var()` cycle) is unset. The host's own value stands on each owner's root, below any authored one."
+    },
+    {
+      "bit": 244,
+      "field": "local_inset_right",
+      "refusesPercent": true,
+      "codec": "dimension",
+      "inherited": true,
+      "layout": true,
+      "default": 0,
+      "_comment": "The right side of `local_inset_top`'s override."
+    },
+    {
+      "bit": 245,
+      "field": "local_inset_bottom",
+      "refusesPercent": true,
+      "codec": "dimension",
+      "inherited": true,
+      "layout": true,
+      "default": 0,
+      "_comment": "The bottom side of `local_inset_top`'s override."
+    },
+    {
+      "bit": 246,
+      "field": "local_inset_left",
+      "refusesPercent": true,
+      "codec": "dimension",
+      "inherited": true,
+      "layout": true,
+      "default": 0,
+      "_comment": "The left side of `local_inset_top`'s override."
     }
   ],
   "_transitions": "The `transition` row is CSS `transition` (LLP 1002): count u8 (≤8), then per declaration property u8 (0 all, then 1 + `Property`: 1 translate, 2 scale, 3 rotate, 4 opacity, 5 height, 6 stroke-dashoffset, 7 r, 8 color, 9 background-color, 10 fill, 11 stroke, 12 cx, 13 cy, 14 x, 15 y, 16 rx, 17 ry, 18 border-top-color, 19 border-right-color, 20 border-bottom-color, 21 border-left-color, 22 -exact-tint-color, 23 box-shadow — LLP 1062; 24, box-shadow's colour alone, is refused; 25 font-weight, 26 font-stretch, 27 font-variation-settings — LLP 1019 §13 D10; 28 is CSS's `border-color` shorthand; 29 is a path's `d`, LLP 1055.000 D15), duration f32 s, delay f32 s, easing u8 (0 linear, 1 ease, 2 ease-in, 3 ease-out, 4 ease-in-out, 5 cubic-bezier + 4×f32, 6 steps + u16 count + u8 position, 7 spring + f32 stiffness/damping/mass, 8 linear() + u8 count + count×(f32 input, f32 output)). Its Rust type lives in exact-motion; the kernel owns the bytes.",
@@ -4725,7 +4908,7 @@
     {
       "id": 9,
       "name": "SetLooks",
-      "_comment": "@ref LLP 1121 D8 (stage 8 B): a node's `:hover` and `:focus-visible` looks, resolved by the producer as a static row is: payload a u8 count (at most 2), then per look its state (1 :hover, 2 :focus-visible; ascending, each once; 0, once `:active`, is retired: `:active` lowers to the press paint) and a style patch of the look rows only (background-color, color, a side's border colour, opacity, box-shadow), set or cleared. A look's color reaches the subtree as the node's own does; the web and Apple show it, and Linux's looks paint the box alone. Replaces the node's looks whole; a count of 0 clears them. A host composes them over the base on its own tracking, under the press paint."
+      "_comment": "@ref LLP 1121 D8 (stage 8 B): a node's `:hover` and `:focus-visible` looks, resolved by the producer as a static row is: payload a u8 count (at most 2), then per look its state (1 :hover, 2 :focus-visible; ascending, each once; 0, once `:active`, is retired: `:active` lowers to the press paint) and a style patch of the look rows only (background-color, color, a side's border colour, opacity, box-shadow, scale), set or cleared. A look's color reaches the subtree as the node's own does; the web and Apple show it, and Linux's looks paint the box alone. A look's scale stands in for the node's and moves on the node's own transition for scale. Replaces the node's looks whole; a count of 0 clears them. A host composes them over the base on its own tracking, under the press paint."
     }
   ],
   "symbols": [
@@ -5188,6 +5371,36 @@
       "translate",
       "character.bubble",
       "m5 8 6 6m-7 0 6-6 2-3M2 5h12M7 2h1m14 20-5-10-5 10m2-4h6"
+    ],
+    [
+      "bag",
+      "bag",
+      "M5 8h14v12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V8ZM9 8V6.5a3 3 0 0 1 6 0V8"
+    ],
+    [
+      "bag-fill",
+      "bag.fill",
+      "M4 8h16v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8ZM8 8V6.5a4 4 0 0 1 8 0V8h-2V6.5a2 2 0 0 0-4 0V8Z"
+    ],
+    [
+      "phone",
+      "phone",
+      "M5 4h3.5l1.5 4-2 1.5a11 11 0 0 0 6.5 6.5l1.5-2 4 1.5V19a1 1 0 0 1-1 1A16 16 0 0 1 4 5a1 1 0 0 1 1-1Z"
+    ],
+    [
+      "smartphone",
+      "iphone",
+      "M8 2h8a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2ZM10.5 5h3"
+    ],
+    [
+      "article",
+      "doc.plaintext",
+      "M6 3h12a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1ZM8.5 8h7M8.5 12h7M8.5 16h4"
+    ],
+    [
+      "radio",
+      "radio",
+      "M4 9h16a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1ZM6 9l12-5M10.5 14.5a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0ZM14 13h4M14 16h4"
     ]
   ],
   "symbolAliases": [
@@ -5434,6 +5647,30 @@
     [
       "smiley",
       "emoji"
+    ],
+    [
+      "shopping-bag",
+      "bag"
+    ],
+    [
+      "local-mall",
+      "bag"
+    ],
+    [
+      "call",
+      "phone"
+    ],
+    [
+      "local-phone",
+      "phone"
+    ],
+    [
+      "phone-iphone",
+      "smartphone"
+    ],
+    [
+      "phone-android",
+      "smartphone"
     ]
   ],
   "symbolGlyphs": [
@@ -6334,7 +6571,7 @@
   ],
   "_lengthRamps": "@ref LLP 1137: the length ramps, written `-exact-<name>` on any length row but a font's size and line height, as a named length is. Each is a length at every `textStyleBodies` body size, read at the root font size as a text style's size is (UIKit's Dynamic Type): `accessory-checkmark-width` and `-height` are the checkmark accessory of UIKit's list cell, measured on the iOS 27 simulator at each content size category (`~/audits/exact2-no-tells-2026-10-11/grouped-symbol-probe/ramp.txt`; the 13 body, which iOS has no category for, is the 14's scaled), which grows with the text to AX2, steps back at AX3 and grows again. The `list-symbol-` ramps are a list cell's leading symbol, measured the same way on iOS 27.0 under the system's text size (`UIListContentView`'s layout guides and the drawn symbol, a `star` and a `gear`; a window's trait override lays the cell out otherwise): through the standard sizes `-width` and `-height` scale the sheet's 24 by 20 slot as UIKit's drawn symbol grows and `-inset` is where the text starts (UIKit's `textLayoutGuide`); at the accessibility sizes they are UIKit's image box (`imageLayoutGuide`, which steps back at AX3 as the checkmark does) and the text's first line, 16 past it. `-pull` and `-gap` keep the symbol at the cell's 16-point margin and the text at that inset. UIKit wraps the text's later lines back under the symbol to the margin, which a slot beside the text does not. `accessibility-stack-gap` is 8 through the largest standard size and wider than any line at the accessibility sizes (from the 28 body, AX1): as the gap between items of a wrapping row, it stacks them there, as UIKit's value cell and a hand-built cell's stack of labels turn vertical (`prefersSideBySideTextAndSecondaryText` off).",
   "lengthRamps": [["accessory-checkmark-width", [14.55, 15.67, 17.33, 18.33, 19, 21.67, 24, 26.33, 31.33, 37.33, 36, 42.33, 48]], ["accessory-checkmark-height", [13.62, 14.67, 15.67, 16.67, 17.33, 19.67, 21.33, 24, 28.67, 34.33, 32.67, 38.67, 43.33]], ["accessibility-stack-gap", [8, 8, 8, 8, 8, 8, 8, 8, 2000, 2000, 2000, 2000, 2000]], ["list-symbol-width", [18.83, 20.28, 21.63, 22.64, 24.0, 27.38, 30.08, 32.11, 36.33, 41.67, 41.0, 47.67, 54.33]], ["list-symbol-height", [15.29, 16.47, 17.64, 18.82, 20.0, 22.35, 24.41, 26.76, 33.33, 38.67, 47.67, 56.0, 63.0]], ["list-symbol-lead", [35.67, 36.67, 37.67, 39, 40, 42.33, 44.33, 47.67, 52.33, 57.67, 57, 63.67, 70.33]], ["list-symbol-gap", [8.84, 8.39, 8.04, 8.36, 8.0, 6.95, 6.25, 7.56, 8.0, 8.0, 8.0, 8.0, 8.0]]],
-  "_metrics": "@ref LLP 1115.002 D6, D8.4; LLP 1115.000 D17: the looks Exact draws itself, as data. Each row: a name, its kind, then its value in each column: iOS, the Mac, the web's first look (LLP 1116 D1) and the neutral look (LLP 1115.000 D4 part B). A row of three cells (a name, a kind, a value) is the neutral look's own and has no value in the other columns. A seventh cell is Android's Material look's (LLP 1115.001.001 D2.4): Compose Material 3's value at the pinned version, which `host/android/reference/rows.json` traces to its symbol and `tokens.mjs` checks against the pinned source; a row without one reads the web's first look's there. The `field-` and `state-` rows at the end are the Material look's own. A process reads one column (`style::metrics::column`): its platform's where an Apple host said it (`set_column`); the neutral look's where the process shows that look's colours (`style::roles::set_column`, the one switch for the look's colours and its metrics), which the web does and a host that paints its own controls with no platform toolkit under it, the Linux desktop and Windows (D17); Android's Material look's where Android's reader says it; else the web's first look. The kinds say what reads a row. `style`: the CSS value of the style row it is written on: a number of px (or a row's bare number: a weight, a flex factor), a keyword (`auto`, `right`, `mini`, `flex-start`), a percentage, a text style or a colour role by its own name, a `light-dark()` pair, or `unset` for no row at all in that column. `style length` (LLP 1121 stage 11 B, theme2's unit flag): a `style` row written on a length property (a gap, an inset, a corner, a width or height, a padding, a margin, an offset), whose number is px; the build holds the marker to the row's name both ways, and a base scale cell may name only such a row or a `length` one. A sheet the compiler writes names it as `-exact-<name>` and holds no number of its own; an author never writes one (lowering refuses the name, and the runner refuses it on a row its author wrote). The kernel reads the name as its value in the process's column when the row is set, so every reader and the wire see the value; the web's JS target, which keeps no kernel, reads a bound name in its build's column when it compiles (`host/web-js/src/style.rs`, `metric_map`). `length`: px as a number, or text in `em` (of the control's font size) or `rem` (of the root's). `number`: a ratio, a weight or an opacity. Code reads these two (`style::metrics::length`, `number`, by the row's place in `generated::metric`): the kernel's size for a control no host measured (`ControlKind::default_size`), and the Linux painter's shapes (`host/linux/src/paint/look.rs`). `unset` in any kind is no value in that column. A state is a row of its own, named for it: `-coarse` on a touch device (the web's `any-pointer: coarse`: any coarse input, normally a touch screen), `-hover`, `-pressed`. The `grouped-` rows are the grouped list's (`list appearance=\"auto\"`, `contract/lower/src/grouped.rs`): iOS's and the web's first look's are the sheet's values as they were (UIKit's measured list, LLP 1084 §2; the three surfaces still its literal pairs), the Mac's are SwiftUI's grouped `Form` measured on macOS 27.0.1 (LLP 1115.002 §1 and stage 4's as-built; `~/audits/exact2-no-tells-2026-10-11/mac-structure/` and `mac-grouped/`; a section is at most 744 wide there: the form's 704 and the card's 20 either side; a row is `border-box` with its insets as padding, LLP 1084 D7, so its minimum heights count its padding: the Mac's 36-point row is 36 here, and `grouped-button-` rows keep a destructive row the Mac's content-box push button), and the neutral look's are the first look's on the neutral grounds with a surface's corners. `popover-radius` is the corner of the default surface a host that paints a popover draws under one whose author wrote none (the `defaultSurface` prop): iOS's is UIKit's popover, Liquid Glass (`backgroundMaterial`'s `glass`) with 30-point continuous corners, measured against a presented `UIPopoverPresentationController` on the iOS 27 simulator (the edge profile of a `UIGlassEffect` view matched it best at 30 of 16 to 40); `popover-shadow-y`, `-blur` (CSS's blur radius) and `-alpha` (black's) are the faint shadow UIKit's popover casts beyond its glass's own, fitted the same way below and above it on a white page, in the light appearance only (over a red page UIKit's dark popover casts none); the web's first look holds iOS's values as every row does, and the web, the Mac and the neutral look draw their own (the UA's style, the system popover). The rows after them are the neutral look's metrics, which the web's sheet (`host/web/neutral.css`, and the shell's where the look keeps it) writes as CSS and `host/web/tests/neutral-look.test.mjs` holds to this table: a control is `control-height` tall with `control-radius` corners and a `control-line` edge; a surface that floats or groups has `surface-radius` corners; a mark (a checkbox, a radio, a switch's and a range's height) is `mark-size`; elevation is flat, `raised-` or `modal-`. Four of them have a value in every column, because the kernel sizes a control by them in every look: `mark-size`, `switch-width`, `switch-height` and `range-height` are Chrome's bare controls outside the neutral look (the switch WebKit's box), what an Apple host shows before it reports its own and Android's reader paints.",
+  "_metrics": "@ref LLP 1115.002 D6, D8.4; LLP 1115.000 D17: the looks Exact draws itself, as data. Each row: a name, its kind, then its value in each column: iOS, the Mac, the web's first look (LLP 1116 D1) and the neutral look (LLP 1115.000 D4 part B). A row of three cells (a name, a kind, a value) is the neutral look's own and has no value in the other columns. A seventh cell is Android's Material look's (LLP 1115.001.001 D2.4): Compose Material 3's value at the pinned version, which `host/android/reference/rows.json` traces to its symbol and `tokens.mjs` checks against the pinned source; a row without one reads the web's first look's there. The `field-` and `state-` rows at the end are the Material look's own. A process reads one column (`style::metrics::column`): its platform's where an Apple host said it (`set_column`); the neutral look's where the process shows that look's colours (`style::roles::set_column`, the one switch for the look's colours and its metrics), which the web does and a host that paints its own controls with no platform toolkit under it, the Linux desktop and Windows (D17); Android's Material look's where Android's reader says it; else the web's first look. The kinds say what reads a row. `style`: the CSS value of the style row it is written on: a number of px (or a row's bare number: a weight, a flex factor), a keyword (`auto`, `right`, `mini`, `flex-start`), a percentage, a text style or a colour role by its own name, a `light-dark()` pair, or `unset` for no row at all in that column. `style length` (LLP 1121 stage 11 B, theme2's unit flag): a `style` row written on a length property (a gap, an inset, a corner, a width or height, a padding, a margin, an offset), whose number is px; the build holds the marker to the row's name both ways, and a base scale cell may name only such a row or a `length` one. A sheet the compiler writes names it as `-exact-<name>` and holds no number of its own; an author never writes one (lowering refuses the name, and the runner refuses it on a row its author wrote). The kernel reads the name as its value in the process's column when the row is set, so every reader and the wire see the value; the web's JS target, which keeps no kernel, reads a bound name in its build's column when it compiles (`host/web-js/src/style.rs`, `metric_map`). `length`: px as a number, or text in `em` (of the control's font size) or `rem` (of the root's). `number`: a ratio, a weight or an opacity. Code reads these two (`style::metrics::length`, `number`, by the row's place in `generated::metric`): the kernel's size for a control no host measured (`ControlKind::default_size`), and the Linux painter's shapes (`host/painted/src/paint/look.rs`). `unset` in any kind is no value in that column. A state is a row of its own, named for it: `-coarse` on a touch device (the web's `any-pointer: coarse`: any coarse input, normally a touch screen), `-hover`, `-pressed`. The `grouped-` rows are the grouped list's (`list appearance=\"auto\"`, `contract/lower/src/grouped.rs`): iOS's and the web's first look's are the sheet's values as they were (UIKit's measured list, LLP 1084 §2; the three surfaces still its literal pairs), the Mac's are SwiftUI's grouped `Form` measured on macOS 27.0.1 (LLP 1115.002 §1 and stage 4's as-built; `~/audits/exact2-no-tells-2026-10-11/mac-structure/` and `mac-grouped/`; a section is at most 744 wide there: the form's 704 and the card's 20 either side; a row is `border-box` with its insets as padding, LLP 1084 D7, so its minimum heights count its padding: the Mac's 36-point row is 36 here, and `grouped-button-` rows keep a destructive row the Mac's content-box push button), and the neutral look's are the first look's on the neutral grounds with a surface's corners. `popover-radius` is the corner of the default surface a host that paints a popover draws under one whose author wrote none (the `defaultSurface` prop): iOS's is UIKit's popover, Liquid Glass (`backgroundMaterial`'s `glass`) with 30-point continuous corners, measured against a presented `UIPopoverPresentationController` on the iOS 27 simulator (the edge profile of a `UIGlassEffect` view matched it best at 30 of 16 to 40); `popover-shadow-y`, `-blur` (CSS's blur radius) and `-alpha` (black's) are the faint shadow UIKit's popover casts beyond its glass's own, fitted the same way below and above it on a white page, in the light appearance only (over a red page UIKit's dark popover casts none); the web's first look holds iOS's values as every row does, and the web, the Mac and the neutral look draw their own (the UA's style, the system popover). The rows after them are the neutral look's metrics, which the web's sheet (`host/web/neutral.css`, and the shell's where the look keeps it) writes as CSS and `host/web/tests/neutral-look.test.mjs` holds to this table: a control is `control-height` tall with `control-radius` corners and a `control-line` edge; a surface that floats or groups has `surface-radius` corners; a mark (a checkbox, a radio, a switch's and a range's height) is `mark-size`; elevation is flat, `raised-` or `modal-`. Four of them have a value in every column, because the kernel sizes a control by them in every look: `mark-size`, `switch-width`, `switch-height` and `range-height` are Chrome's bare controls outside the neutral look (the switch WebKit's box), what an Apple host shows before it reports its own and Android's reader paints.",
   "metrics": [
     ["heading-title-weight", "style", "unset", "unset", 700, 700, "unset"],
     ["heading-small-title-weight", "style", "unset", "unset", 600, 600, "unset"],
@@ -6484,6 +6721,9 @@
     ["tabbar-font", "length", "0.75rem"],
     ["tabbar-symbol", "length", "1.375rem"],
     ["tabbar-gap", "length", 2],
+    ["tabbar-badge-height", "length", "1.125rem"],
+    ["tabbar-badge-padding", "length", "0.3125rem"],
+    ["tabbar-badge-font", "length", "0.8125rem"],
     ["sidebar-row-height", "length", "2.25rem"],
     ["sidebar-symbol", "length", "1.125em"],
     ["sidebar-gap", "length", 10],
@@ -6514,6 +6754,7 @@
     ["sheet-height", "length", "45rem"],
     ["sheet-margin", "length", 64],
     ["sheet-top", "length", 12],
+    ["sheet-compact-height", "length", 480],
     ["sheet-padding", "length", 24],
     ["sheet-gap", "length", 12],
     ["sheet-action-gap", "length", 8],

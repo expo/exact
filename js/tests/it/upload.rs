@@ -217,7 +217,7 @@ fn a_refused_stream_option_is_marked_at_bake_and_plain_in_an_answer() {
     // placeholder; the source's own TypeError fails the bake as before.
     let deferred = bake.query("work", &super::storage::args("stream-option-uncaught", ""));
     assert!(
-        matches!(&deferred, Err(exact_runner::DataError::DeferredAtBake(m)) if m.contains("a stream has no timeout")),
+        matches!(&deferred, Err(exact_runner::DataError::DeferredAtBake { message: m, warning: true }) if m.contains("a stream has no timeout")),
         "{deferred:?}"
     );
     let fatal = bake.query("work", &super::storage::args("own-uncaught", ""));

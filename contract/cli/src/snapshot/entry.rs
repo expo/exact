@@ -1,8 +1,8 @@
 //! Compile an entry's reachable component tree with typed, replaceable data. No request, timer or handler enters this plan.
 
-use super::{check, referenced_styles, refusal, visit_nodes};
+use super::{check, referenced_styles, refusal};
 use crate::{
-    manifest::{Activity, WatchEntry, Widget, WATCH_KIND},
+    manifest::{Activity, Configuration, WatchEntry, Widget, WATCH_KIND},
     CompileError, Manifest,
 };
 use contract_syntax::{Attr, Binding, Expr, File, Node, Span, TypeExpr};
@@ -40,6 +40,7 @@ pub(super) struct RenderEntry<'a> {
     pub(super) preview: &'a Value,
     pub(super) families: &'a [String],
     pub(super) refresh: Option<&'a str>,
+    pub(super) configuration: Option<&'a Configuration>,
 }
 
 /// Compile every entry without changing or compiling the running app's plan.
@@ -132,7 +133,7 @@ pub fn write_entries(entries: &BTreeMap<String, Entry>, out: &Path) -> Result<()
             .values()
             .filter_map(|e| match &e.declaration {
                 Declaration::Widget(w) => Some(
-                    serde_json::json!({"kind":w.kind, "families":w.families, "watchFamilies":w.watch_families, "requiresSecrets":w.requires_secrets, "preview":w.preview}),
+                    serde_json::json!({"kind":w.kind, "families":w.families, "watchFamilies":w.watch_families, "requiresSecrets":w.requires_secrets, "preview":w.preview, "configuration":w.configuration.as_ref().map(Configuration::json)}),
                 ),
                 Declaration::Activity(_) | Declaration::Watch(_) => None,
             })
@@ -170,9 +171,11 @@ fn viewport_shape(shape: &TypeExpr, file: &File, at: Span) -> Result<(), Vec<Com
     };
     for field in &declared.fields {
         let expected = match field.name.as_str() {
-            "width" | "height" | "horizontalViewportSegments" | "verticalViewportSegments" => {
-                "number"
-            }
+            "width"
+            | "height"
+            | "horizontalViewportSegments"
+            | "verticalViewportSegments"
+            | "keyboardHeight" => "number",
             "prefersReducedMotion" | "prefersReducedTransparency" | "accessibilityTextSize" => {
                 "bool"
             }
@@ -189,6 +192,127 @@ fn viewport_shape(shape: &TypeExpr, file: &File, at: Span) -> Result<(), Vec<Com
             return Err(fail(format!("`{}`: `{name}.{}` is `{expected}` in the viewport fact; declare it `{}: {expected}`", super::VIEWPORT_SLOT, field.name, field.name)));
         }
     }
+    Ok(())
+}
+
+/// A component that injects `snapshot_configuration` reads the widget's
+/// configuration: the wrapper holds it in a slot of that name, initially each
+/// parameter's default, which the host replaces with the person's choices. The
+/// inject and the manifest's `configuration` come together, and the shape has
+/// one field per parameter, a `string` or an enum of exactly its values.
+fn configuration(
+    file: &File,
+    widget: &RenderEntry<'_>,
+    wrapper: &mut contract_syntax::Component,
+) -> Result<(), Vec<CompileError>> {
+    let slot = super::CONFIGURATION_SLOT;
+    let fail = |m: String, at: Span| vec![refusal("snapshot-configuration", m, at)];
+    let mut injected: Option<(TypeExpr, Span)> = None;
+    for c in &file.components {
+        for inject in c.injects.iter().filter(|p| p.name == slot) {
+            let Some(ty) = &inject.ty else {
+                return Err(fail(format!("`{slot}` needs its shape: `inject` with `{slot}: <shape>`, one field per configuration parameter"), inject.span));
+            };
+            match &injected {
+                Some((first, _)) if !same_type(first, ty) => {
+                    return Err(fail(format!("`{slot}` is declared with another shape in `{}`; every component reads the configuration through one shape", c.name), inject.span));
+                }
+                Some(_) => {}
+                None => injected = Some((ty.clone(), inject.span)),
+            }
+        }
+    }
+    let ((ty, at), configuration) = match (injected, widget.configuration) {
+        (None, None) => return Ok(()),
+        (Some((_, at)), None) => {
+            return Err(fail(
+                if widget.refresh.is_some() {
+                    format!("entry {}: `{slot}` reads a configuration the widget does not declare; add `configuration` to its app.json entry or remove the inject", widget.kind)
+                } else {
+                    format!("entry {}: a Live Activity has no configuration; remove the `{slot}` inject", widget.kind)
+                },
+                at,
+            ))
+        }
+        (None, Some(_)) => {
+            return Err(fail(format!("entry {}: its `configuration` is read by no component; inject `{slot}: <shape>` in `{}` (or one it uses) or remove the configuration", widget.kind, widget.component), Span::default()))
+        }
+        (Some(found), Some(configuration)) => (found, configuration),
+    };
+    let parameters = configuration.parameters.as_slice();
+    let names = |parameters: &[crate::Parameter]| {
+        parameters
+            .iter()
+            .map(|p| format!("`{}`", p.name))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let shape = match &ty {
+        TypeExpr::Named(name, _) => file.shapes.iter().find(|s| &s.name == name),
+        _ => None,
+    };
+    let Some(declared) = shape else {
+        return Err(fail(
+            format!(
+                "`{slot}` takes a shape declared with one field per configuration parameter: {}",
+                names(parameters)
+            ),
+            at,
+        ));
+    };
+    let name = &declared.name;
+    if declared.fields.len() != parameters.len() {
+        return Err(fail(
+            format!(
+                "`{slot}`: `{name}` must have exactly the configuration's parameters as fields: {}",
+                names(parameters)
+            ),
+            at,
+        ));
+    }
+    let mut args = Vec::new();
+    for parameter in parameters {
+        let Some(field) = declared.fields.iter().find(|f| f.name == parameter.name) else {
+            return Err(fail(format!("`{slot}`: `{name}` has no field `{}`; its fields must be the configuration's parameters: {}", parameter.name, names(parameters)), at));
+        };
+        let fits = match &field.ty {
+            TypeExpr::Named(n, _) => n == "string",
+            TypeExpr::Enum(values, _) => {
+                values.len() == parameter.values.len()
+                    && parameter.values.iter().all(|(v, _)| values.contains(v))
+            }
+            _ => false,
+        };
+        if !fits {
+            let values = parameter
+                .values
+                .iter()
+                .map(|(v, _)| format!("\"{v}\""))
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(fail(format!("`{slot}`: declare `{name}.{}` as `string` or `enum<{values}>`, the parameter's values", parameter.name), at));
+        }
+        args.push(Expr::NamedArg(
+            parameter.name.clone(),
+            Box::new(Expr::Str(parameter.default.clone(), at)),
+            at,
+        ));
+    }
+    // The shape's field order, which the record constructor follows.
+    args.sort_by_key(|arg| match arg {
+        Expr::NamedArg(field, _, _) => declared.fields.iter().position(|f| &f.name == field),
+        _ => None,
+    });
+    wrapper.states.push(Binding {
+        name: slot.into(),
+        expr: Expr::Call(name.clone(), args, at),
+        span: at,
+    });
+    wrapper.provides.push(Binding {
+        name: slot.into(),
+        expr: Expr::Ident(slot.into(), at),
+        span: at,
+    });
     Ok(())
 }
 
@@ -219,6 +343,7 @@ fn compile_widget(
             preview: &widget.preview,
             families: &admission_families,
             refresh: Some(&widget.refresh),
+            configuration: widget.configuration.as_ref(),
         },
         app,
     )
@@ -280,7 +405,7 @@ pub(super) fn compile_file(
         let before = reached.len();
         for c in &file.components {
             if reached.contains(&c.name) {
-                visit_nodes(&c.view, &mut |n| {
+                Node::walk(&c.view).for_each(|n| {
                     if let Node::Use { name, .. } = n {
                         reached.insert(name.clone());
                     }
@@ -359,7 +484,7 @@ pub(super) fn compile_file(
         }
     };
     for c in &file.components {
-        visit_nodes(&c.view, &mut |n| {
+        Node::walk(&c.view).for_each(|n| {
             if let Node::Element { attrs, .. } = n {
                 font_attrs(attrs);
             }
@@ -435,6 +560,7 @@ pub(super) fn compile_file(
             placeholder: None,
             each: None,
             transient: false,
+            keep: false,
             gate: None,
             span: at,
         });
@@ -444,6 +570,7 @@ pub(super) fn compile_file(
             span: at,
         });
     }
+    configuration(&file, widget, &mut wrapper)?;
     file.components.insert(0, wrapper);
     super::paragraphs::check(&file, widget.families)?;
     let strings = match app {
@@ -459,6 +586,47 @@ pub(super) fn compile_file(
         .expect("props slot")
         .ty;
     let mut plan = plan;
+    if let Some(configuration) = widget.configuration {
+        // LLP 1126: the boot slot keeps the fixed vocabulary even when the inject
+        // reads strings. Its first enum member is the current fallback for a saved choice.
+        let slot = plan
+            .slots
+            .iter()
+            .position(|s| plan.str(s.name) == super::CONFIGURATION_SLOT)
+            .unwrap();
+        let fields = plan
+            .type_(plan.slots[slot].ty)
+            .fields
+            .iter()
+            .map(|id| plan.str(plan.field(id).name).to_owned())
+            .collect::<Vec<_>>();
+        let mut builder = exact_plan::builder::PlanBuilder::from_plan(plan);
+        let fields = fields
+            .iter()
+            .map(|name| {
+                let parameter = configuration
+                    .parameters
+                    .iter()
+                    .find(|p| &p.name == name)
+                    .unwrap();
+                let mut values = vec![parameter.default.clone()];
+                values.extend(
+                    parameter
+                        .values
+                        .iter()
+                        .map(|(v, _)| v)
+                        .filter(|v| *v != &parameter.default)
+                        .cloned(),
+                );
+                (name.as_str(), builder.string_enum(&values))
+            })
+            .collect::<Vec<_>>();
+        let ty = builder.record("SnapshotConfiguration", &fields);
+        plan = builder
+            .finish()
+            .map_err(|e| vec![fail(format!("invalid configuration: {e:?}"))])?;
+        plan.slots[slot].ty = ty;
+    }
     if let Some(refresh) = widget.refresh {
         let mut builder = exact_plan::builder::PlanBuilder::from_plan(plan);
         let number = builder.primitive(exact_plan::TypeKind::Number);

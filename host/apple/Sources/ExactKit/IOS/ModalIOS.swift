@@ -59,13 +59,7 @@ private final class ModalController: UIViewController, UIGestureRecognizerDelega
         cornerRadius = radius
         grabberValue = grabber
         let content = { [weak self] () -> CGFloat? in
-            guard let route = self?.route else { return nil }
-            // A scroller's extent counts its padding, and a container's
-            // bottom cover (the sheet's safe area, which UIKit adds below the
-            // detent) is padding; a route that does not scroll sends its
-            // children's extent, which leaves it out (LLP 1075.003 §9.11).
-            guard route.scroll != nil, case .edges(let e)? = self?.host?.presenter.navigation.covers[route.id] else { return route.content.height }
-            return route.content.height - e.bottom
+            self?.route?.fitContentHeight
         }
         let configure = {
             // Authored points and `fit-content` exclude the bottom safe

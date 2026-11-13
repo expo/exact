@@ -44,8 +44,6 @@
         "@exact/quick-actions": "workspace:*",
         "@exact/reading": "workspace:*",
         "@exact/recording": "workspace:*",
-        "@exact/scale-fixture-cards": "workspace:*",
-        "@exact/scale-fixture-notes": "workspace:*",
         "@exact/search-index": "workspace:*",
         "@exact/sign-in": "workspace:*",
         "@exact/speech-recognition": "workspace:*",
@@ -277,14 +275,6 @@
         "@exact/media-capture",
       ],
     },
-    "packages/scale-fixture-cards": {
-      "name": "@exact/scale-fixture-cards",
-      "version": "0.1.0",
-    },
-    "packages/scale-fixture-notes": {
-      "name": "@exact/scale-fixture-notes",
-      "version": "0.1.0",
-    },
     "packages/search-index": {
       "name": "@exact/search-index",
       "version": "1.0.0",
@@ -430,10 +420,6 @@
     "@exact/reading": ["@exact/reading@workspace:packages/reading"],
 
     "@exact/recording": ["@exact/recording@workspace:packages/recording"],
-
-    "@exact/scale-fixture-cards": ["@exact/scale-fixture-cards@workspace:packages/scale-fixture-cards"],
-
-    "@exact/scale-fixture-notes": ["@exact/scale-fixture-notes@workspace:packages/scale-fixture-notes"],
 
     "@exact/search-index": ["@exact/search-index@workspace:packages/search-index"],
 

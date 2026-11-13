@@ -188,6 +188,59 @@ final class AgentScrollRangeIOSTests: XCTestCase {
         XCTAssertNotNil(page["ry"], "\(page)")
     }
 
+    /// While a scroll runs, `layout` reports a scroller's offset where UIKit draws it, its presentation layer's, and
+    /// the boxes inside it there too, as `getBoundingClientRect` would; the model offset it is headed for is the
+    /// scroller's `target`, in `nodes` and in `layout <target>`'s scroll chain alike (LLP 1012, ruled 2026-11-12).
+    func testARunningScrollReportsWhereItShowsAndWhereItIsHeaded() throws {
+        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
+            throw missing("scene", "a node's explanation is the runner's, of a page booted in a scene's window")
+        }
+        let session = ExactApp.shared.makeSession(label: "agent-scroll-running")
+        self.session = session
+        let view = ExactView(session: session), host = UIViewController()
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        host.view.addSubview(view)
+        self.window = window
+        XCTAssertNil(session.boot(plan: try fixturePlan("PAGE_EDGES"), size: window.bounds.size).error)
+        view.frame = host.view.bounds
+        view.layoutIfNeeded()
+        let named = { (testId: String) in session.presenter.views.values.first { $0.props["testId"] == testId } }
+        until("the page is laid out") { named("list")?.scroll != nil }
+        let list = try XCTUnwrap(named("list")), top = try XCTUnwrap(named("list-top")), sv = try XCTUnwrap(list.scroll)
+        let agent = Agent(session: session)
+        let rest = try node(agent.layout(), Int(top.id))["y"] as? Double ?? .nan
+        let inset = Double(list.scrollTopInset(sv)), from = Double(sv.contentOffset.y)
+        XCTAssertNil(try node(agent.layout(), Int(list.id))["target"], "at rest the two agree")
+        // An animated offset: the model is at its end at once, and the layer shows the way there
+        let start = sv.bounds
+        sv.contentOffset.y = CGFloat(from) + 300
+        let motion = CABasicAnimation(keyPath: "bounds")
+        motion.fromValue = NSValue(cgRect: start)
+        motion.toValue = NSValue(cgRect: sv.bounds)
+        motion.duration = 3
+        sv.layer.add(motion, forKey: "agent-test-scroll")
+        until("a frame shows it moving") { (sv.layer.presentation()?.bounds.minY).map { $0 > CGFloat(from) + 1 && $0 < CGFloat(from) + 200 } ?? false }
+        let scroller = try node(agent.layout(), Int(list.id)), row = try node(agent.layout(), Int(top.id))
+        let sy = try XCTUnwrap(scroller["sy"] as? Double, "\(scroller)")
+        XCTAssertGreaterThan(sy, from + inset, "it has left its start: \(scroller)")
+        XCTAssertLessThan(sy, from + inset + 290, "and shows short of its end: \(scroller)")
+        XCTAssertEqual((scroller["target"] as? [String: Any])?["sy"] as? Double, from + inset + 300, "headed for its end: \(scroller)")
+        XCTAssertEqual(try XCTUnwrap(row["y"] as? Double), rest - (sy - from - inset), accuracy: 15, "the row where it shows: \(row) \(scroller)")
+        let explained = try XCTUnwrap(agent.layout(["id": Int(top.id)])["node"] as? [String: Any])
+        let entry = try XCTUnwrap((explained["scroll"] as? [[String: Any]])?.first { $0["id"] as? Int == Int(list.id) }, "\(explained)")
+        XCTAssertEqual((entry["target"] as? [String: Any])?["sy"] as? Double, from + inset + 300, "\(entry)")
+        XCTAssertLessThan(try XCTUnwrap(entry["sy"] as? Double), from + inset + 290, "\(entry)")
+        let box = try XCTUnwrap((explained["space"] as? [String: Any])?["viewport"] as? [String: Any], "\(explained)")
+        XCTAssertGreaterThan(try XCTUnwrap(box["y"] as? Double), rest - 290, "its box where it shows: \(box)")
+        sv.layer.removeAllAnimations()
+        until("a frame shows it landed") { sv.layer.presentation()?.bounds == sv.bounds }
+        let landed = try node(agent.layout(), Int(list.id))
+        XCTAssertNil(landed["target"], "\(landed)")
+        XCTAssertEqual(landed["sy"] as? Double, from + inset + 300, "\(landed)")
+    }
+
     /// A scroller whose native scroll view stands in for it (a grouped list's collection view) reports that view's
     /// range, not its own box's.
     func testANativeScrollViewsRangeIsTheNodes() throws {

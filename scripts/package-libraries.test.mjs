@@ -1,7 +1,7 @@
 // LLP 1154 D3, D6 and LLP 1133.001 D9: a package's prebuilt library is fetched by its hash before a build, refused
 // by name when the bytes have another, and taken from the cache when they are there; what the cache lays out for the
 // link is checked on every build. A Linux target's library is the shared object itself, made here as a minimal ELF
-// file, so these cases need no toolchain; the xcframework cases need a Mac's `ditto` and `plutil`.
+// file, so these cases need no toolchain. Cases that compile a real macOS dylib still need a Mac.
 import { afterAll, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -9,6 +9,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, sym
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { zipSync } from 'fflate';
 import { fetchLibrary, libraryFor, prepareLibrary, sharedObjectName } from './package-libraries.mjs';
 
 const scratch = mkdtempSync(join(tmpdir(), 'exact-package-libraries-'));
@@ -46,6 +47,37 @@ function fixture(name, packages) {
 const library = (name, bytes) => { const at = join(scratch, `${name}-libvault.so`); writeFileSync(at, bytes); return pathToFileURL(at).href; };
 const declares = (url, bytes, link = 'vault', target = TARGET) => ({ vault: { native: { link, library: { [target]: { url, sha256: sha256(bytes) } } } } });
 const refusal = (run) => { try { run(); return null; } catch (e) { return e.message; } };
+
+test('an iOS xcframework is selected and laid out on every build host, retaining its install name', () => {
+  const target = 'aarch64-apple-ios-sim', install = '@rpath/vault.framework/vault';
+  const name = Buffer.from(install + '\0'), size = (24 + name.length + 7) & ~7;
+  const binary = Buffer.alloc(32 + size);
+  binary.writeUInt32LE(0xfeedfacf, 0); binary.writeUInt32LE(0x0100000c, 4); binary.writeUInt32LE(6, 12);
+  binary.writeUInt32LE(1, 16); binary.writeUInt32LE(size, 20);
+  binary.writeUInt32LE(0xd, 32); binary.writeUInt32LE(size, 36); binary.writeUInt32LE(24, 40); name.copy(binary, 56);
+  const root = 'vault.xcframework', slice = `${root}/ios-arm64-simulator/vault.framework`;
+  const info = Buffer.from(JSON.stringify({ AvailableLibraries: [{ LibraryIdentifier: 'ios-arm64-simulator', LibraryPath: 'vault.framework', SupportedPlatform: 'ios', SupportedPlatformVariant: 'simulator', SupportedArchitectures: ['arm64'] }] }));
+  const zipped = (label, file = binary, extra = {}) => {
+    const bytes = zipSync({ [`${root}/Info.plist`]: info, [`${slice}/vault`]: file, ...extra });
+    const path = join(scratch, `${label}.xcframework.zip`); writeFileSync(path, bytes);
+    return fixture(label, declares(pathToFileURL(path).href, bytes, 'vault', target));
+  };
+  const cache = join(scratch, 'cache-portable-ios');
+  const app = zipped('portable-ios');
+  const library = prepareLibrary(app, target, { cache, ...quiet });
+  expect(library.kind).toBe('apple');
+  expect(readFileSync(join(library.placed, 'vault'))).toEqual(binary);
+  expect(readFileSync(join(library.view, 'libvault.dylib'))).toEqual(binary);
+  const wrong = Buffer.from(binary); wrong.write('bad', 56);
+  expect(refusal(() => prepareLibrary(zipped('wrong-ios-name', wrong), target, { cache, ...quiet }))).toContain('framework\'s install name is bad');
+  const fat = Buffer.alloc(48);
+  fat.writeUInt32BE(0xcafebabe, 0); fat.writeUInt32BE(2, 4);
+  fat.writeUInt32BE(48, 16); fat.writeUInt32BE(binary.length, 20);
+  fat.writeUInt32BE(48 + binary.length, 36); fat.writeUInt32BE(wrong.length, 40);
+  expect(refusal(() => prepareLibrary(zipped('wrong-ios-second-slice', Buffer.concat([fat, binary, wrong])), target, { cache, ...quiet }))).toContain(`${install}, bad`);
+  const escape = zipped('portable-ios-link-escape', binary, { [`${slice}/outside`]: [Buffer.from('../../../../outside'), { os: 3, attrs: (0o120777 << 16) >>> 0 }] });
+  expect(refusal(() => prepareLibrary(escape, target, { cache, ...quiet }))).toContain('holds a link that leaves it');
+});
 
 test('a library is fetched from a file: URL by its hash, laid out for the link, and taken from the cache after', () => {
   const bytes = elf('libvault.so'), cache = join(scratch, 'cache-fetch');

@@ -44,10 +44,11 @@ final class PackagePictures: @unchecked Sendable {
         return !hostSchemes.contains(String(scheme))
     }
 
-    /// The runner's admission of `source` when a view loads it, main thread:
-    /// nil to load it (admitted, or no package's scheme), else why not.
-    func admit(_ source: String, session: ExactSession) -> String? {
-        guard Self.mayServe(source), let answer = session.runtime.picture(source) else { return nil }
+    /// The runner's admission of `source`, main thread: nil to load it
+    /// (admitted, or no package's scheme), else why not. A retry checks
+    /// without counting a new view/source admission.
+    func admit(_ source: String, session: ExactSession, count: Bool = true) -> String? {
+        guard Self.mayServe(source), let answer = session.runtime.picture(source, count: count) else { return nil }
         guard let name = answer["extension"] as? String else {
             return answer["message"] as? String ?? answer["error"] as? String ?? "refused"
         }

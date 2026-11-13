@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { MalformedOperation } from './agent-keys.mjs';
 
-const source = readFileSync(new URL('./agent.mjs', import.meta.url), 'utf8');
+const source = readFileSync(new URL('./agent-session.mjs', import.meta.url), 'utf8');
 const start = source.indexOf("    async clock(spec = 'settle'"), end = source.indexOf('\n    /** The window', start);
 
 /** The method on a web host at clock 1000, its wall clock moving 100 ms a look; `at(ms)` runs as the wall passes ms. */

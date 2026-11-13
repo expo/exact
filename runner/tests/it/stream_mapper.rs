@@ -164,3 +164,75 @@ fn a_rejected_first_mapper_ends_pending_without_a_value() {
     assert_eq!(r.outstanding().failed, ["feed"]);
     assert!(r.failed_resources()[0].1.contains("the mapper rejected"));
 }
+
+fn batch(r: &mut Runner<Source>, ticket: u64, data: &[&str]) {
+    let batch = data.iter().map(|d| Message {
+        data: (*d).into(),
+        ..Message::default()
+    });
+    r.fulfill(ticket, Outcome::Messages(batch.collect()))
+        .unwrap();
+}
+
+/// LLP 1016.000 D4: every message reaches the mapper in arrival order, and
+/// what waited together commits once, as the last one's value.
+#[test]
+fn messages_that_waited_together_each_reach_the_mapper_and_commit_once() {
+    let (mut r, ticket) = boot();
+    batch(&mut r, ticket, &["a", "a b", "a b c"]);
+    shown(&r, "live", 3, false);
+    assert_eq!(r.streams()[0].2.messages, 3);
+    let commits = |r: &Runner<Source>| {
+        (r.journal())
+            .filter(|l| l.contains(&format!(" fulfil {ticket} (")))
+            .count()
+    };
+    assert_eq!(commits(&r), 1);
+    assert!(r.journal().any(|l| l.contains("[3 messages, 9 bytes]")));
+
+    // A message whose mapper yields holds the rest behind its turn, in order.
+    batch(&mut r, ticket, &["x", "yield", "c d e f"]);
+    shown(&r, "live", 3, false);
+    turn(&mut r, "b b");
+    shown(&r, "live", 2, false);
+    turn(&mut r, "");
+    shown(&r, "live", 4, false);
+    assert!(r.take_requests().is_empty() && r.is_open_stream(ticket));
+
+    // One the mapper refuses ends the stream; the batch commits nothing.
+    batch(&mut r, ticket, &["p", "reject", "q"]);
+    shown(&r, "live", 4, false);
+    assert!(!r.holds(ticket));
+    assert!(r.failed_resources()[0].1.contains("the mapper rejected"));
+}
+
+/// D4's bound behind a mapper's turns counts messages, a batch each of its
+/// own, whether a later batch waits or a batch's tail does.
+#[test]
+fn messages_behind_a_turn_are_bounded_by_count_however_they_arrived() {
+    let empty = |n: usize| vec![""; n];
+    // Later batches: two of 2048 fit beside the turn, one more does not.
+    let (mut r, ticket) = boot();
+    batch(&mut r, ticket, &["a", "yield"]);
+    batch(&mut r, ticket, &empty(2048));
+    batch(&mut r, ticket, &empty(2048));
+    assert!(r.holds(ticket));
+    batch(&mut r, ticket, &["b"]);
+    assert!(!r.holds(ticket));
+    assert!(
+        r.failed_resources()[0].1.contains(
+            "fell behind: 4096 messages (0 bytes) waited for its turns, and 1 more arrived"
+        ),
+        "{:?}",
+        r.failed_resources()
+    );
+    // A batch's own tail past the bound.
+    let (mut r, ticket) = boot();
+    let mut tail = vec!["yield"];
+    tail.extend(empty(4097));
+    batch(&mut r, ticket, &tail);
+    assert!(!r.holds(ticket));
+    assert!(r.failed_resources()[0]
+        .1
+        .contains("fell behind: 0 messages (0 bytes) waited for its turns, and 4097 more arrived"));
+}

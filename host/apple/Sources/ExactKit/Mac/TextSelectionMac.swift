@@ -54,6 +54,16 @@ package final class TextSelection {
         }
     }
 
+    /// A view renewed for another list item (LLP 1078, RenewMac.swift): its
+    /// paragraphs are that item's. A selection in a list is the items' and
+    /// is placed again (`structureChanged`); one held by the view itself
+    /// ends with its item, as it would with the view.
+    func renewed(_ node: NodeView) {
+        positions.removeValue(forKey: node.id)
+        guard list == nil, anchor === node || focus === node else { return }
+        anchor = nil; focus = nil
+    }
+
     init(_ presenter: Presenter) {
         self.presenter = presenter
         focusObservers = PageFacts.observe { [weak self] in self?.focusChanged() }
@@ -1008,7 +1018,7 @@ package final class TextSelection {
                 var line = rebuilt[offset]
                 let range = NSRange(location: ranges[offset].location, length: ranges[offset].length)
                 let fragment = paragraph.fragments.isEmpty ? nil : paragraph.fragments[index]
-                let width = fragment.map { Double($0.available) } ?? Double(box.width)
+                let width = fragment.map { Double($0.available) } ?? Double(box.width - paragraph.insets.at(range.location).width)
                 let flowClamped = fragment.map { $0.end < (paragraph.shape?.preparedFlow().utf8Count ?? source.string.utf8.count) && paint.lineClamp > 0 } ?? false
                 if index == paragraph.lines.count - 1, paragraph.clampedRange != nil || flowClamped {
                     line = TextEngine.clampedLine(source, range: range, width: width) ?? line

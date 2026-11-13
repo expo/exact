@@ -1,6 +1,142 @@
 use super::{sources, Scratch};
 
 #[test]
+#[cfg(unix)]
+fn source_capture_skips_module_xcframeworks_with_versioned_slices() {
+    let app = Scratch::new(&std::env::temp_dir()).unwrap();
+    std::fs::write(app.0.join("app.ts"), "export const grants = '';\n").unwrap();
+    let before = sources(&app.0).unwrap();
+    for modules in [
+        "modules/apple",
+        "ios/modules",
+        "macos/modules",
+        "tvos/modules",
+    ] {
+        let framework = app
+            .0
+            .join(modules)
+            .join("Vendor.xcframework/macos-arm64/Vendor.framework");
+        let version = framework.join("Versions/A");
+        std::fs::create_dir_all(version.join("Resources")).unwrap();
+        std::fs::write(version.join("Vendor"), b"binary").unwrap();
+        std::fs::write(version.join("Resources/config.json"), b"{}").unwrap();
+        std::os::unix::fs::symlink("A", framework.join("Versions/Current")).unwrap();
+        for name in ["Vendor", "Resources"] {
+            std::os::unix::fs::symlink(format!("Versions/Current/{name}"), framework.join(name))
+                .unwrap();
+        }
+    }
+    assert_eq!(sources(&app.0).unwrap(), before);
+    // Skipping binary bundles must not admit source links beside them.
+    std::os::unix::fs::symlink("../../app.ts", app.0.join("modules/apple/helper.ts")).unwrap();
+    assert!(sources(&app.0).unwrap_err().contains("source links"));
+}
+
+#[test]
+fn one_shot_reports_a_missing_peer_as_a_type_check_refusal() {
+    let app = Scratch::new(&std::env::temp_dir()).unwrap();
+    let stage = Scratch::new(&app.0).unwrap();
+    let package = app.0.join("consumer");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::create_dir_all(app.0.join("node_modules")).unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&package, app.0.join("node_modules/consumer")).unwrap();
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_dir(&package, app.0.join("node_modules/consumer")).unwrap();
+    std::fs::write(package.join("package.json"), r#"{"name":"consumer","version":"1.0.0","types":"index.d.ts","peerDependencies":{"missing-peer":"^1.0.0"}}"#).unwrap();
+    std::fs::write(
+        package.join("index.d.ts"),
+        "export type Value = import('missing-peer').Value;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        stage.0.join("__exact_paths.json"),
+        serde_json::json!({"app":app.0,"mounts":[]}).to_string(),
+    )
+    .unwrap();
+    std::fs::write(stage.0.join("app.ts"), "import type { Value } from 'consumer'; export const appId = 'test.exact.peer'; export const grants = '';\n").unwrap();
+    std::fs::write(stage.0.join("__exact_entry.ts"), "export * from './app';\n").unwrap();
+    let error = super::compile_once(&stage.0, &super::Tools::default()).unwrap_err();
+    assert_eq!(error, "the TypeScript does not compile (tsc):\nconsumer@1.0.0 requires peer missing-peer@^1.0.0, which is not installed in the app; install a compatible version");
+}
+
+#[test]
+fn source_capture_names_a_file_above_the_per_file_limit() {
+    let app = Scratch::new(&std::env::temp_dir()).unwrap();
+    let path = app.0.join("oversized.json");
+    let limit = 16 << 20;
+    let file = std::fs::File::create(&path).unwrap();
+    file.set_len(limit).unwrap();
+    assert_eq!(
+        sources(&app.0).unwrap()[std::path::Path::new("oversized.json")].len(),
+        limit as usize
+    );
+    file.set_len(limit + 1).unwrap();
+    let error = sources(&app.0).unwrap_err();
+    assert!(error.contains(&path.display().to_string()), "{error}");
+    assert!(error.contains("16777217 bytes"), "{error}");
+    assert!(error.contains("16 MiB per-file limit"), "{error}");
+}
+
+#[test]
+fn source_capture_names_the_file_crossing_the_total_limit() {
+    let app = Scratch::new(&std::env::temp_dir()).unwrap();
+    for index in 0..4 {
+        std::fs::File::create(app.0.join(format!("{index}.json")))
+            .unwrap()
+            .set_len(16 << 20)
+            .unwrap();
+    }
+    assert_eq!(
+        sources(&app.0)
+            .unwrap()
+            .values()
+            .map(Vec::len)
+            .sum::<usize>(),
+        64 << 20
+    );
+    std::fs::write(app.0.join("extra.json"), b"x").unwrap();
+    let error = sources(&app.0).unwrap_err();
+    // Directory enumeration may reach the extra byte before any of the large files.
+    assert!(
+        (0..4)
+            .map(|i| (format!("{i}.json"), 16 << 20))
+            .chain([("extra.json".into(), 1)])
+            .any(|(name, bytes)| error
+                .contains(&format!("{} ({bytes} bytes)", app.0.join(name).display()))),
+        "{error}"
+    );
+    assert!(error.contains("67108865 bytes"), "{error}");
+    assert!(error.contains("64 MiB limit"), "{error}");
+}
+
+#[test]
+fn source_capture_names_the_physical_file_in_an_oversized_mount() {
+    let parent = Scratch::new(&std::env::temp_dir()).unwrap();
+    let app = parent.0.join("app");
+    let shared = parent.0.join("shared");
+    std::fs::create_dir(&app).unwrap();
+    std::fs::create_dir(&shared).unwrap();
+    std::fs::write(
+        app.join("app.json"),
+        r#"{"typescript":{"sources":{"core":"../shared"}}}"#,
+    )
+    .unwrap();
+    let path = shared.join("large.ts");
+    std::fs::File::create(&path)
+        .unwrap()
+        .set_len((16 << 20) + 1)
+        .unwrap();
+    let error = sources(&app).unwrap_err();
+    assert!(
+        error.contains(&path.canonicalize().unwrap().display().to_string()),
+        "{error}"
+    );
+    assert!(error.contains("16777217 bytes"), "{error}");
+    assert!(error.contains("16 MiB per-file limit"), "{error}");
+}
+
+#[test]
 fn mixed_bake_reads_rust_identity_and_own_grants_without_executing_it() {
     use contract::DataSource;
     struct Rust;
@@ -29,6 +165,95 @@ fn mixed_bake_reads_rust_identity_and_own_grants_without_executing_it() {
         Some("fs.read app:/data/rust")
     );
     assert!(super::mixed_grants(&serde_json::json!({"appId":"wrong"}), Some(&Rust)).is_err());
+}
+
+#[test]
+fn mixed_provider_types_follow_the_composer_and_survive_development_bakes() {
+    use super::{bake_in, BakeMode, Composer, Producer, Seed, Tools};
+    use exact_runner::{DataError, DataSource, Value};
+
+    if !exact_js::ENGINE_LINKED {
+        return;
+    }
+    struct Rust;
+    impl DataSource for Rust {
+        fn app_id(&self) -> &str {
+            "test.mixed"
+        }
+        fn query(&mut self, _: &str, _: &[Value]) -> Result<Value, DataError> {
+            Ok(Value::str("Rust"))
+        }
+    }
+    let app = Scratch::new(&std::env::temp_dir()).unwrap();
+    let stage = Scratch::new(&std::env::temp_dir()).unwrap();
+    std::fs::write(
+        app.0.join("app.contract"),
+        "component App\n  resource javascript = javascript() as shape string\n  resource rust = rust() as shape string\n  mutation written as shape string\n  action write\n    send written = rustWrite()\n  view\n    column\n      text javascript\n      text rust\n",
+    )
+    .unwrap();
+    let source = "import type { TypeScriptSources, TypeScriptAnswer } from './app.contract.d.ts';\nexport const appId = 'test.mixed';\nexport const grants = '';\nconst sources: TypeScriptSources = { javascript: () => 'TypeScript' };\nexport const answer: TypeScriptAnswer = (source, args, store, storage, native) => sources[source](args, store, storage, native);\n";
+    std::fs::write(app.0.join("app.ts"), source).unwrap();
+    let composer = || Composer {
+        rust_sources: vec!["rust".into(), "rustWrite".into()],
+        compose: Box::new(|module| {
+            Box::new(
+                exact_data::Mixed::new(module, Rust, &["javascript"], &["rust", "rustWrite"])
+                    .unwrap(),
+            )
+        }),
+    };
+    let tools = Tools::default();
+    let baked = bake_in(
+        &app.0,
+        &tools,
+        &stage.0,
+        &mut Default::default(),
+        BakeMode::Production,
+        Some(composer()),
+        None,
+    )
+    .unwrap();
+    let output = app.0.join("dist");
+    baked.write_new(&output).unwrap();
+    let mut seed = Seed::read(
+        Some(&output.join("app.plan")),
+        Some(&output.join("app.module.json")),
+    )
+    .unwrap()
+    .unwrap();
+    let mut producer = Producer::new(tools).unwrap();
+    for _ in 0..2 {
+        let development = producer.bake(&app.0, Some(&seed)).unwrap();
+        assert_eq!(development.declarations, baked.declarations);
+        assert_eq!(
+            std::fs::read_to_string(app.0.join("app.contract.d.ts")).unwrap(),
+            baked.declarations
+        );
+        let receipt: serde_json::Value = serde_json::from_str(&development.receipt).unwrap();
+        assert_eq!(
+            receipt["rustSources"],
+            serde_json::json!(["rust", "rustWrite"])
+        );
+        seed = Seed::new(&development.plan, &["rust".into(), "rustWrite".into()]).unwrap();
+    }
+    std::fs::write(
+        app.0.join("app.ts"),
+        source.replace("{ javascript: () => 'TypeScript' }", "{}"),
+    )
+    .unwrap();
+    let error = producer.bake(&app.0, Some(&seed)).err().unwrap();
+    assert!(
+        error.contains("javascript") && error.contains("TS2741"),
+        "{error}"
+    );
+
+    std::fs::write(app.0.join("app.ts"), source).unwrap();
+    let changed = Seed::new(&baked.plan, &["rust".into()]).unwrap();
+    let error = producer.bake(&app.0, Some(&changed)).err().unwrap();
+    assert!(
+        error.contains("rustWrite") && error.contains("TS2741"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -418,7 +643,8 @@ fn a_linked_bake_gives_the_archive_what_rust_compiles() {
 #[test]
 fn a_linked_module_leaves_its_bytecode_to_the_link() {
     let meta = serde_json::json!({"appId": "a", "grants": "", "module": {"sha256": "beef"}});
-    let linked = super::module_constants(&meta, false, "ios", true, None).unwrap();
+    let linked =
+        super::module_constants(&meta, false, "ios", true, None, &serde_json::Value::Null).unwrap();
     assert!(
         !linked.contains("beef") && !linked.contains("app.hbc"),
         "{linked}"
@@ -427,7 +653,9 @@ fn a_linked_module_leaves_its_bytecode_to_the_link() {
         linked.contains("::exact_apple::baked::bytecode()"),
         "{linked}"
     );
-    let embedded = super::module_constants(&meta, false, "ios", false, None).unwrap();
+    let embedded =
+        super::module_constants(&meta, false, "ios", false, None, &serde_json::Value::Null)
+            .unwrap();
     assert!(
         embedded.contains("REVISION: &str = \"beef\"") && embedded.contains("/app.hbc"),
         "{embedded}"
@@ -496,14 +724,30 @@ fn a_package_declaring_native_writes_the_factory_and_a_second_refuses() {
     // The link reads the rest of `native` from the same declaration.
     assert!(slot.native["library"].is_object(), "{:?}", slot.native);
     let meta = serde_json::json!({"appId": "a", "grants": "", "module": {"sha256": "beef"}});
-    let linux = super::module_constants(&meta, false, "linux", false, Some(&slot)).unwrap();
+    let linux = super::module_constants(
+        &meta,
+        false,
+        "linux",
+        false,
+        Some(&slot),
+        &serde_json::Value::Null,
+    )
+    .unwrap();
     assert!(
         linux.contains(&format!("#[path = {:?}]\n", root.display().to_string()))
             && linux.contains("mod exact_native_shim;")
-            && linux.contains("pub fn exact_native(_grants: &str) -> Box<dyn exact_js::NativeModule> {\n    Box::new(exact_native_shim::Vault::new(APP))\n}"),
+            && linux.contains("pub fn exact_native(_grants: &str) -> Box<dyn exact_js::NativeModule> {\n    Box::new(exact_native_shim::Vault::new(&APP))\n}"),
         "{linux}"
     );
-    let web = super::module_constants(&meta, false, "web", false, Some(&slot)).unwrap();
+    let web = super::module_constants(
+        &meta,
+        false,
+        "web",
+        false,
+        Some(&slot),
+        &serde_json::Value::Null,
+    )
+    .unwrap();
     assert!(!web.contains("exact_native"), "{web}");
 
     package(

@@ -371,6 +371,14 @@ fn offer(a: AxisOffer) -> f32 {
     }
 }
 
+pub(crate) fn c_hyphens(hyphens: exact_kernel::Hyphens) -> u8 {
+    match hyphens {
+        exact_kernel::Hyphens::Manual => 0,
+        exact_kernel::Hyphens::None => 1,
+        exact_kernel::Hyphens::Auto => 2,
+    }
+}
+
 pub(crate) fn c_run(text: &str, style: exact_kernel::TextStyle, inline: Option<InlineBox>) -> CRun {
     let b = inline.unwrap_or(InlineBox {
         width: 0.0,
@@ -541,11 +549,7 @@ impl CallbackMeasurer {
             exclusion_count: shapes.flat.len(),
             markup: u8::from(request.paragraph.markup == exact_kernel::Markup::Markdown),
             text_indent: request.paragraph.text_indent,
-            hyphens: match request.paragraph.hyphens {
-                exact_kernel::Hyphens::Manual => 0,
-                exact_kernel::Hyphens::None => 1,
-                exact_kernel::Hyphens::Auto => 2,
-            },
+            hyphens: c_hyphens(request.paragraph.hyphens),
             lang: self.language.as_ptr(),
             lang_len: self.language.len(),
             text_box_trim: request.paragraph.text_box_trim as u8,

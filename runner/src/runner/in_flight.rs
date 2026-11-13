@@ -179,6 +179,17 @@ impl<D: DataSource> Runner<D> {
                 .any(|p| p.waited() && !self.held_for_agent(p) && !self.data_timer_held(p.ticket))
     }
 
+    /// Whether one-shot work is armed (LLP 1101.003 D2): an `after` timer
+    /// not yet fired (a spent one is set to infinity), a mutation's `then`,
+    /// or a queued mutation's next send. A repeating timer is not: an
+    /// `every` spinner never ends, so it cannot hold a run open.
+    pub fn one_shot_armed(&self) -> bool {
+        (self.timers.iter().zip(&self.plan.timers))
+            .any(|(t, row)| row.once && t.next_ms.is_finite())
+            || self.then_due.iter().any(|due| due.is_finite())
+            || self.queues.next_due.iter().any(|due| due.is_finite())
+    }
+
     /// Replies landed for held requests, by target, whatever they said (LLP
     /// 1016.000 D9): what `clock held` waits on to rise. A request let go
     /// (superseded, forgotten) never counts: its late reply is dropped.

@@ -701,3 +701,32 @@ fn a_pin_that_changes_while_moving_keeps_the_reports_limit() {
     // A new pin still retires every row that left the window.
     assert!(now.iter().all(|&i| i >= 105), "{now:?}");
 }
+
+#[test]
+fn a_view_offset_crosses_the_wire_and_rejects_invalid_geometry() {
+    let h = Harness::new(100, false, false);
+    let feedback = h.feedback(1000.0);
+    let fill = CollectionFill {
+        animating: true,
+        view_offset: Some(100.0),
+        ..Default::default()
+    };
+    let bytes = feedback.encode_with(fill).unwrap();
+    assert_eq!(
+        CollectionFeedback::decode_with_fill(&bytes).unwrap(),
+        (feedback.clone(), fill)
+    );
+    for offset in [f64::NAN, f64::INFINITY, f64::MAX] {
+        assert!(feedback
+            .encode_with(CollectionFill {
+                view_offset: Some(offset),
+                ..fill
+            })
+            .is_err());
+        let mut invalid = bytes.clone();
+        let at = invalid.len() - 8;
+        invalid[at..].copy_from_slice(&offset.to_le_bytes());
+        assert!(CollectionFeedback::decode_with_fill(&invalid).is_err());
+    }
+    assert!(CollectionFeedback::decode_with_fill(&bytes[..bytes.len() - 1]).is_err());
+}

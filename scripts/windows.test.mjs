@@ -135,8 +135,8 @@ test('ordinary Windows host manifests admit only the empty host settings object'
 });
 
 test('storage error numbers retain platform meaning and require an exact typed suffix', () => {
-  const source=readFileSync(new URL('../js/src/prelude.js',import.meta.url),'utf8');
-  const mapping=source.slice(source.indexOf('  var windowsStorage ='),source.indexOf('  function storageError('));
+  const source=readFileSync(new URL('../js/src/storage.js',import.meta.url),'utf8');
+  const mapping=source.slice(source.indexOf('    var windowsStorage ='),source.indexOf('    function storageError('));
   const make=marker=>{
     const global={__exact_windows_storage:marker};
     const code=new Function('global',`${mapping}\nreturn storageCode;`)(global);

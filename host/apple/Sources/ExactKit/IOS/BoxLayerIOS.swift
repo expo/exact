@@ -65,7 +65,7 @@ final class NodeLayer: CALayer {
     }
     private var passingWrites = false
     /// `body`'s writes to the layer's opacity as passing ones, put back by
-    /// the time it returns (a capture's or a filter's raise to 1): none asks
+    /// the time it returns (a filter's raise to 1): none asks
     /// its canvas to list its children again, as an author's change does
     /// (`transparencyChanged`), which would capture again, and again.
     func passing(_ body: () -> Void) {

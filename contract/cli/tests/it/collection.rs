@@ -118,7 +118,7 @@ fn invalid_opt_in_shape_and_layout_are_rejected_with_stable_ids() {
         (
             "list virtualized=true estimated-item-height=yes height=200",
             ROW,
-            "lower-list-height",
+            "lower-attr-type",
         ),
         (
             "list virtualized=true item-height=400 height=200",

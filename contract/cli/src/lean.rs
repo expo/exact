@@ -29,8 +29,9 @@ pub fn lean_path(path: &Path, name: &str) -> Result<String, CompileError> {
     lean_file(path, name, true)
 }
 
-/// [`lean`] of the expansion the plan compiler makes, its uses' arguments
-/// not ascribed (`difftest expansion` compares it with the Lean expander).
+/// The component expansion before row-delete lowering, with its uses'
+/// arguments not ascribed (`difftest expansion` compares it with the Lean
+/// expander).
 pub fn lean_plain(src: &str, name: &str) -> Result<String, CompileError> {
     lean_source(src, name, false)
 }
@@ -113,6 +114,8 @@ fn emit_file(
             out: String::new(),
             checked: &checked,
             root: checked.expanded.root.clone(),
+            format_used: Default::default(),
+            records: Default::default(),
         };
         e.program(name)?;
         Ok(e.out)
@@ -126,11 +129,14 @@ fn emit_file(
 pub fn emit_checked(checked: &Checked, name: &str) -> Result<String, CompileError> {
     // The same expansion, every prop's and inject's argument ascribed its
     // declared type: the checker's judgment of each use rides along.
-    let (typed, _) = contract_syntax::expand_typed(checked.file);
+    let (mut typed, _) = contract_syntax::expand_typed(checked.file);
+    typed.root.view = contract_lower::expand_row_deletes(&typed.root.view, &checked.file.styles);
     let mut e = Emitter {
         out: String::new(),
         checked,
         root: typed.root,
+        format_used: Default::default(),
+        records: Default::default(),
     };
     e.program(name)?;
     Ok(e.out)
@@ -142,10 +148,17 @@ struct Emitter<'a> {
     /// The expanded root with its uses' arguments ascribed
     /// (`contract_syntax::expand_typed`).
     root: Component,
+    /// Whether a localized formatter's call read the format slot.
+    format_used: std::cell::Cell<bool>,
+    /// [`Emitter::format_records`], once asked.
+    records: std::cell::OnceCell<Option<Vec<(String, String)>>>,
 }
 
 /// The name of the resolved locale's slot, as the plan names it.
 const LOCALE: &str = "#locale";
+
+/// The name of the format locale's slot (LLP 1054.000.003 D6).
+const FORMAT: &str = "#format";
 
 fn refuse(message: impl Into<String>, span: Span) -> CompileError {
     CompileError {
@@ -286,6 +299,20 @@ impl Emitter<'_> {
         let _ = writeln!(o, "  router := {},", self.router());
         let _ = writeln!(o, "  strings := {},", self.strings_list());
         let _ = writeln!(o, "  locale := {},", self.locale());
+        // The format slot follows the locale slot, as the compiler makes it
+        // for a program that formats with a table's data.
+        if let Some(locale) = self
+            .format_used
+            .get()
+            .then(|| self.locale_state())
+            .flatten()
+        {
+            o = o.replacen(
+                &locale,
+                &format!("{locale},\n    {}", self.format_state()),
+                1,
+            );
+        }
         let _ = writeln!(o, "  sources := {}", self.sources_list(ct));
         o.push_str("}\n");
         let _ = writeln!(self.out, "def {name} : Contract.Program := {{");
@@ -302,6 +329,48 @@ impl Emitter<'_> {
             string(LOCALE),
             string(&st.base)
         ))
+    }
+
+    /// The format locale's slot, initialized to the base table's name, as
+    /// the runner leaves it until a host tells a place.
+    fn format_state(&self) -> String {
+        let base = self
+            .checked
+            .types
+            .shapes
+            .strings
+            .as_deref()
+            .map_or("", |st| &st.base);
+        format!(
+            "{{ name := {}, ty := .string, init := (.str {}), owner := .none, late := false }}",
+            string(FORMAT),
+            string(base)
+        )
+    }
+
+    /// Each table's format data, base first, when one formats otherwise
+    /// than `en-US` (`contract_lower::formats::records`).
+    fn format_records(&self) -> Option<&[(String, String)]> {
+        self.records
+            .get_or_init(|| {
+                let st = self.checked.types.shapes.strings.as_deref()?;
+                let others = st.tables.keys().filter(|l| **l != st.base);
+                let names: Vec<&str> = std::iter::once(&st.base)
+                    .chain(others)
+                    .map(String::as_str)
+                    .collect();
+                let records = contract_lower::formats::records(names.iter().copied())?;
+                Some(names.iter().map(|n| n.to_string()).zip(records).collect())
+            })
+            .as_deref()
+    }
+
+    /// `CProgram.format`: the format slot, when a formatter reads it.
+    fn format(&self) -> String {
+        match self.format_used.get() {
+            true => format!(".some {}", string(FORMAT)),
+            false => ".none".into(),
+        }
     }
 
     /// `Program.locale`: the resolved locale's slot, when there are tables.
@@ -327,10 +396,21 @@ impl Emitter<'_> {
                 base.into_iter()
                     .chain(others)
                     .map(|(locale, table)| {
-                        let texts: Vec<String> = table
+                        let mut texts: Vec<String> = table
                             .iter()
                             .map(|(k, t)| format!("({}, {})", string(k), string(t)))
                             .collect();
+                        // A table's format data, under the key no table has
+                        // (`Format.formatKey`), when a formatter reads it.
+                        if let Some(record) = self
+                            .format_used
+                            .get()
+                            .then(|| self.format_records())
+                            .flatten()
+                            .and_then(|r| r.iter().find(|(n, _)| n == locale))
+                        {
+                            texts.push(format!("(\"\\u001Eformat\", {})", string(&record.1)));
+                        }
                         format!("({}, [{}])", string(locale), texts.join(", "))
                     })
                     .collect()
@@ -558,6 +638,7 @@ impl Emitter<'_> {
                 TaskKind::Every => ".every",
                 TaskKind::After => ".after",
                 TaskKind::Frame => ".frame",
+                TaskKind::Change => ".change",
             };
             // A gated task's gate and key (LLP 1092 D12), as D9 lowers them.
             let mut gate = String::new();
@@ -718,22 +799,30 @@ impl Emitter<'_> {
                             exact_plan::StdlibDefault::Str(s) => format!("(.str {})", string(s)),
                         });
                     }
+                    // The format locale, last, as lowering passes it.
+                    if f.localized() {
+                        if self.format_records().is_some() {
+                            self.format_used.set(true);
+                            parts.push(format!("(.var {})", string(FORMAT)));
+                        } else {
+                            parts.push("(.str \"\")".into());
+                        }
+                    }
                 }
                 format!("(.call {} [{}])", string(name), parts.join(", "))
             }
             Expr::NamedArg(n, v, _) => format!("(.named {} {})", string(n), self.expr(v)?),
             Expr::Typed(e, t, _) => {
                 let resolved = self.checked.types.shapes.resolve(t).ok();
-                // A literal at its own type is the literal: the ascription
-                // changes nothing, and the compiler reads literals as
-                // literals (a template's text, an attribute's value).
+                // At its own Lean type a literal needs no ascription.
+                // Enums are strings in the semantics.
                 let literal = match **e {
-                    Expr::Number(..) => Some(Ty::Number),
-                    Expr::Str(..) => Some(Ty::String),
-                    Expr::Bool(..) => Some(Ty::Bool),
-                    _ => None,
+                    Expr::Number(..) => resolved == Some(Ty::Number),
+                    Expr::Str(..) => resolved.as_ref().is_some_and(Ty::is_string),
+                    Expr::Bool(..) => resolved == Some(Ty::Bool),
+                    _ => false,
                 };
-                if literal.is_some() && literal == resolved {
+                if literal {
                     return self.expr(e);
                 }
                 let t = resolved.map_or_else(|| ".unknown".to_string(), |t| ty(&t));

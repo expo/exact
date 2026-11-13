@@ -94,7 +94,9 @@ function diffs(root, c) {
 }
 
 /** Up to `limit` commits that touched the design's files, newest first,
- * after skipping `skip`; `more` when there are older ones. */
+ * after skipping `skip`; `more` when there are older ones. The walk takes
+ * first parents only, as `commitOf` compares with the first parent: a
+ * merged branch's edits are the merge's, listed once. */
 export function designLog(appDir, designFile, { limit = 20, skip = 0, contracts = [] } = {}) {
   const repo = repository(appDir);
   if (!repo) return { error: { message: 'the app is in no git repository' } };
@@ -102,7 +104,7 @@ export function designLog(appDir, designFile, { limit = 20, skip = 0, contracts 
   const specs = pathspecs(root, dir, designFile, contracts);
   let shas;
   try {
-    shas = git(root, ['log', '--no-show-signature', '--format=%H', `--max-count=${limit + 1}`, `--skip=${skip}`, '--', ...specs]).toString().split('\n').filter(Boolean);
+    shas = git(root, ['log', '--first-parent', '--no-show-signature', '--format=%H', `--max-count=${limit + 1}`, `--skip=${skip}`, '--', ...specs]).toString().split('\n').filter(Boolean);
   } catch (e) {
     // A repository with no commit yet has no history.
     if (/does not have any commits|bad default revision/.test(e.message)) return { ok: { commits: [], more: false } };

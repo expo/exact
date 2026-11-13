@@ -45,6 +45,11 @@ pub(super) struct Churn {
 }
 
 impl<D: DataSource> Runner<D> {
+    /// Invalid options deferred until launch, once per resource and explanation.
+    pub fn bake_warnings(&self) -> &[String] {
+        &self.bake_warnings
+    }
+
     pub(super) fn check_send_arguments(&self, m: usize, args: &[Value]) -> Result<(), RunnerError> {
         check_arguments(self.plan.str(self.plan.mutations[m].name), args)
     }
@@ -99,12 +104,26 @@ impl<D: DataSource> Runner<D> {
                 .map(Answer::Now)
                 .map_err(|error| RunnerError::Data { resource, error });
         }
-        if source == crate::surface_record::SOURCE {
+        if matches!(
+            source.as_str(),
+            crate::surface_record::SOURCE | crate::canvas_performance::SOURCE
+        ) {
             let answer = self.links.surface_answer.ok_or_else(|| RunnerError::Data {
                 resource: resource.clone(),
                 error: DataError::Unavailable("this host links no surfaces".into()),
             })?;
-            return answer(&self.plan, &self.surface_records, i)
+            let records = if source == crate::canvas_performance::SOURCE {
+                crate::canvas_performance::validate(&self.plan, self.resource_row(i).ty).map_err(
+                    |error| RunnerError::Data {
+                        resource: resource.clone(),
+                        error: DataError::Unavailable(error),
+                    },
+                )?;
+                &self.canvas_performance
+            } else {
+                &self.surface_records
+            };
+            return answer(&self.plan, records, i)
                 .map(Answer::Now)
                 .map_err(|error| RunnerError::Data { resource, error });
         }
@@ -112,6 +131,14 @@ impl<D: DataSource> Runner<D> {
         // (LLP 1133.002 D13).
         if self.plan.module_named(&source).is_some() {
             return self.module_answer(i, &source, args);
+        }
+        // A source declared in Contract is the runner's to ask (LLP 1162.001).
+        if self.plan.fetch_named(&source).is_some() {
+            self.log(lines::query(&resource, &source));
+            self.count_ask(i);
+            return self
+                .fetch_answer(&source, args)
+                .map_err(|error| RunnerError::Data { resource, error });
         }
         // @ref LLP 1038 D5 / §8 — distinguish asked sources from compiled boot values.
         self.log(lines::query(&resource, &source));
@@ -290,9 +317,37 @@ mod tests {
             Some(crate::failure::FailureCode::Storage)
         );
         assert!(!failed.resources[0].pending);
-        for pending in [Some(DataError::DeferredAtBake("at bake".into())), None] {
-            assert!(boot(pending).unwrap().resources[0].pending);
+        for pending in [
+            Some(DataError::DeferredAtBake {
+                message: "at bake".into(),
+                warning: false,
+            }),
+            None,
+        ] {
+            let deferred = boot(pending).unwrap();
+            assert!(deferred.resources[0].pending);
+            assert!(deferred.bake_warnings().is_empty());
         }
+        let why = "exactTimeout: a stream has no timeout";
+        let mut warned = boot(Some(DataError::DeferredAtBake {
+            message: why.into(),
+            warning: true,
+        }))
+        .unwrap();
+        for _ in 0..2 {
+            warned.refresh_next.push(0);
+            warned.settle(false).unwrap();
+        }
+        assert_eq!(warned.bake_warnings().len(), 1);
+        assert!(warned.bake_warnings()[0].contains("resource `r`"));
+        assert!(warned.bake_warnings()[0].contains(why));
+        warned.data.0 = Some(DataError::DeferredAtBake {
+            message: "exactIdleTimeout must be an integer".into(),
+            warning: true,
+        });
+        warned.refresh_next.push(0);
+        warned.settle(false).unwrap();
+        assert_eq!(warned.bake_warnings().len(), 2);
         let mut overrun = boot(Some(DataError::Overrun("over budget".into()))).unwrap();
         assert!(overrun.resources[0].pending && overrun.failed_resources().is_empty());
         let t0 = overrun.now_ms();
@@ -325,7 +380,10 @@ mod tests {
         }
         let deferred = boot_on(
             plan(true),
-            Some(DataError::DeferredAtBake("at bake".into())),
+            Some(DataError::DeferredAtBake {
+                message: "at bake".into(),
+                warning: false,
+            }),
         )
         .err();
         assert!(

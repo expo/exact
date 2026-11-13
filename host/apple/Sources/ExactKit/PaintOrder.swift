@@ -147,8 +147,16 @@ extension NodeView {
         #if os(macOS)
         let place = { (child: PaintView) in position(child.siblingPaintRank)! }
         #else
+        // A navigation root's children beside the routes go above the native container, whose box is the page's
+        // where the routes' are not (`NavigationHost.clearBesideRoutes`): those at or below its rank into the step
+        // above it, in their own ranks' order, so their `z-index` still orders them among themselves
+        let plane = position(1)
+        let lowest = plane == nil ? nil : children.lazy.compactMap { ($0 as? NodeView)?.clearsNavigation == true ? position($0.siblingPaintRank) : nil }.min()
         let place = { (child: PaintView) -> CGFloat in
             let own = position(child.siblingPaintRank)!
+            if let node = child as? NodeView, node.clearsNavigation, let plane, let lowest, own <= plane {
+                return plane + 0.0001 + 0.0008 * (plane > lowest ? (own - lowest) / (plane - lowest) : 1)
+            }
             guard let over = (child as? NodeView)?.bandOver, let under = position(over) else { return own }
             return max(own, under + 0.0005)
         }

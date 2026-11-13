@@ -20,20 +20,26 @@
 
 use crate::arena::NodeArena;
 use crate::generated::{Direction, NodeType, PropId, StyleId, VerticalAlign};
-use crate::style::Dimension;
+use crate::style::{cells, Dimension};
 use taffy::prelude::{auto, length, zero, Rect};
 
 /// HTML's UA `border-spacing: 2px`: between neighbouring cells, and between
 /// the outer cells and the table's padding edge (CSS 2.1 §17.6.1).
 pub(crate) const SPACING: f32 = 2.0;
 
-/// A table's `border-spacing`: its own, else the UA sheet's.
-pub(crate) fn spacing(style: &crate::StyleProps) -> f32 {
-    if style.mask.has(StyleId::BorderSpacing) {
+/// A table's `border-spacing`, its own else the UA sheet's, across and
+/// down: under a terminal's space rule, whole columns and rows
+/// ([`cells::gap`]), as every other gap is.
+pub(crate) fn spacing(style: &crate::StyleProps, env: &crate::Env) -> (f32, f32) {
+    let px = if style.mask.has(StyleId::BorderSpacing) {
         style.rare.border_spacing.max(0.0)
     } else {
         SPACING
-    }
+    };
+    (
+        cells::gap(env, px, cells::COLUMN),
+        cells::gap(env, px, cells::ROW),
+    )
 }
 
 /// HTML's UA padding of a `th` and a `td`, on each side where none is said.
@@ -147,7 +153,7 @@ pub(crate) fn apply(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
     let Some(table) = table else {
         return;
     };
-    let env = arena.env();
+    let env = &*arena.env_of(slot);
     match part {
         Part::Table => {
             s.display = taffy::style::Display::Grid;
@@ -158,16 +164,20 @@ pub(crate) fn apply(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
             if !style.mask.has(StyleId::BoxSizing) {
                 s.box_sizing = taffy::style::BoxSizing::BorderBox;
             }
-            let spacing = spacing(style);
+            // Under a terminal's space rule each in whole cells on its
+            // axis, as `StyleProps::lower` takes every padding and gap.
+            let (across, down) = spacing(style, env);
+            let padding =
+                |side: &Dimension, cell, added| side.spaced(env, cell).floor_lp(env, added);
             s.padding = Rect {
-                left: style.padding_left.floor_lp(env, spacing),
-                right: style.padding_right.floor_lp(env, spacing),
-                top: style.padding_top.floor_lp(env, spacing),
-                bottom: style.padding_bottom.floor_lp(env, spacing),
+                left: padding(&style.padding_left, cells::COLUMN, across),
+                right: padding(&style.padding_right, cells::COLUMN, across),
+                top: padding(&style.padding_top, cells::ROW, down),
+                bottom: padding(&style.padding_bottom, cells::ROW, down),
             };
             s.gap = taffy::geometry::Size {
-                width: length(spacing),
-                height: length(spacing),
+                width: length(across),
+                height: length(down),
             };
             // A height is the table's least: its rows grow to fill it, and
             // content taller than it makes it taller (CSS 2.2 §17.5.3).
@@ -186,8 +196,11 @@ pub(crate) fn apply(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
             // another box, has no padding of its own.
             let t = arena.style(table);
             let padded = lays_out(arena, table);
-            let spacing = spacing(t);
-            let inset = |d: Dimension| match d.resolve(env) {
+            // The table's lengths in the table's environment, the caption's
+            // margins in its own (LLP 1123 D9)
+            let table_env = &*arena.env_of(table);
+            let (spacing, _) = spacing(t, table_env);
+            let inset = |d: Dimension| match d.spaced(table_env, cells::COLUMN).resolve(table_env) {
                 Dimension::Points(v) if padded => v.max(0.0) + spacing,
                 _ => spacing,
             };
@@ -247,14 +260,14 @@ pub(crate) fn apply(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
         }
         Part::Cell => {
             s.margin = zero();
-            for (id, side) in [
-                (StyleId::PaddingLeft, &mut s.padding.left),
-                (StyleId::PaddingRight, &mut s.padding.right),
-                (StyleId::PaddingTop, &mut s.padding.top),
-                (StyleId::PaddingBottom, &mut s.padding.bottom),
+            for (id, side, cell) in [
+                (StyleId::PaddingLeft, &mut s.padding.left, cells::COLUMN),
+                (StyleId::PaddingRight, &mut s.padding.right, cells::COLUMN),
+                (StyleId::PaddingTop, &mut s.padding.top, cells::ROW),
+                (StyleId::PaddingBottom, &mut s.padding.bottom, cells::ROW),
             ] {
                 if !style.mask.has(id) {
-                    *side = length(CELL_PADDING);
+                    *side = length(cells::gap(env, CELL_PADDING, cell));
                 }
             }
             least(style, env, s);

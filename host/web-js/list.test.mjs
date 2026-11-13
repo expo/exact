@@ -6,7 +6,9 @@ import { need } from '../../scripts/coverage.mjs';
 
 const { unavailable } = chromium();
 const test = need('chrome', unavailable, { test: bunTest });
-let server, suite, cdp, evaluate, call;
+let server, cdp, evaluate, call;
+// Register the shared browser's shutdown hook before beforeAll runs.
+const suite = unavailable ? null : await cdpBrowser({ args: [DESKTOP_INPUT] });
 beforeAll(async () => {
   if (unavailable) return;
   server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch(req) {
@@ -18,7 +20,6 @@ beforeAll(async () => {
       headers: { 'content-type': path.endsWith('.js') ? 'text/javascript' : 'text/html' },
     });
   }});
-  suite = await cdpBrowser({ args: [DESKTOP_INPUT] });
   ({ cdp } = suite);
   const { sessionId } = await suite.page();
   call = (method, params) => cdp.send(method, params, sessionId);
@@ -33,6 +34,32 @@ beforeAll(async () => {
 afterAll(async () => {
   await suite?.close();
   server?.stop(true);
+}, 60_000);
+
+test('adopted prefetched rows hold from their live mount, preserving insertion-triggered plays', async () => {
+  const result = await evaluate(`(async () => {
+    const style = document.head.appendChild(document.createElement('style'));
+    style.textContent = '@keyframes adopted-draw {from {opacity:0.2} to {opacity:1}}';
+    const port = document.createElement('div');
+    port.style.cssText = 'width:200px;height:40px;overflow:auto';
+    document.getElementById('exact-root').append(port);
+    const rows = Array.from({length:8}, (_, i) => i);
+    port.innerHTML = rows.map(i => '<div role="listitem" data-listitemkey="n:'+i+'"><div style="height:20px;animation:adopted-draw 60s linear both"'+(i===4?' data-exact-animation-trigger="none"':'')+'></div></div>').join('');
+    const original = [...port.children].map(w => w.firstElementChild);
+    original.forEach(el => { el.getAnimations()[0].currentTime = 500; });
+    const own = rt.scope(() => rt.adoptRow(port, () => list.vl(port, () => rows, i => i(), (wrapper, item) => {
+      rt.h(wrapper, 'div', 0, item() === 4 ? {'data-exact-animation-trigger':'none'} : {}, 0);
+    }, {est:20, pw:[200], ph:[40], animations:true})));
+    const mounted = [0,3,4].map(i => ({same:port.$list.mounted.find(m => m.key === 'n:'+i)?.wrapper.firstElementChild === original[i],
+      time:original[i].getAnimations()[0].currentTime, state:original[i].getAnimations()[0].playState}));
+    rt.settled(); await exact.lists.pending(); await exact.lists.settle();
+    const held = original[3].getAnimations()[0].currentTime;
+    rt.end(own); port.remove(); style.remove(); rt.settled();
+    return {mounted, held};
+  })()`);
+  expect(result).toEqual({mounted:[
+    {same:true,time:0,state:'paused'}, {same:true,time:0,state:'paused'}, {same:true,time:500,state:'running'},
+  ],held:0});
 }, 60_000);
 
 test('paging keeps unchanged keyed row measurements and defers new overscan', async () => {
@@ -653,6 +680,42 @@ test('reach-margin moves reachend earlier or later; the default is one port', as
     return lists.map(l => l.at);
   })()`);
   expect(result).toEqual([5768, 5128, 5128, 6080]);
+}, 60_000);
+
+test('replacement lists fire both edges at their reach-margin thresholds', async () => {
+  const result = await evaluate(`(async () => {
+    const results = [];
+    for (const reach of [undefined, '0px', '300%', '0PX 960px', undefined]) {
+      const el = document.createElement('div');
+      el.id = 'feed'; el.style.cssText = 'height:320px;width:400px;overflow:auto';
+      document.getElementById('exact-root').append(el);
+      const starts = [], ends = [];
+      const own = rt.scope(() => list.vl(el, () => Array.from({length:200}, (_, i) => i), i => i(), (w, i) => {
+        const row = document.createElement('div'); row.textContent = String(i()); row.style.height = '32px'; w.append(row);
+      }, {est:32, pw:[], ph:[320], start: () => { starts.push(el.scrollTop); }, end: () => { ends.push(el.scrollTop); }, reach}));
+      // Only the first mount is also published when the controller loads.
+      rt.settled(); await exact.lists.pending(); await exact.lists.settle();
+      const scroll = async top => {
+        await new Promise(resolve => { el.addEventListener('scroll', resolve, {once:true}); el.scrollTop = top; });
+        await exact.lists.settle();
+      };
+      // Each boundary only touches an edge row; the next pixel overlaps it.
+      for (const top of [1000, 5088, 5089, 5728, 5729, 6048, 6049, 6080]) await scroll(top);
+      for (const top of [1000, 992, 991, 352, 351, 32, 31, 0]) await scroll(top);
+      await scroll(6080);
+      results.push({starts, ends});
+      rt.end(own); el.remove(); rt.settled();
+      if (exact.lists.internals.Lists.size) throw Error('a retired list is still registered');
+    }
+    return results;
+  })()`);
+  expect(result).toEqual([
+    {starts:[0, 351], ends:[5729, 6080]},
+    {starts:[0, 31], ends:[6049, 6080]},
+    {starts:[0, 991], ends:[5089, 6080]},
+    {starts:[0, 31], ends:[5089, 6080]},
+    {starts:[0, 351], ends:[5729, 6080]},
+  ]);
 }, 60_000);
 
 // @ref LLP 1027.004 D3 — the edge band leads a fling as the window does (reach.rs `Margin::band`). The
@@ -1303,4 +1366,118 @@ test('a jump that meets a touch fling waits for it and lands at the end', async 
   expect(result.landing).toBeGreaterThan(1);
   expect({receding: result.receding, gaps: result.gaps}).toEqual({receding: true, gaps: result.gaps});
   expect(result.pulled).toEqual([]);
+}, 60_000);
+
+test('a row list lays its gap out between the cards and reads a new gap and estimate', async () => {
+  const result = await evaluate(`(async () => {
+    const strip = document.createElement('div');
+    strip.style.cssText = 'display:flex;height:120px;width:320px;overflow-x:scroll;overflow-y:hidden;column-gap:14px';
+    document.getElementById('exact-root').append(strip);
+    const width = rt.sig(100), gap = rt.sig(14);
+    const own = rt.scope(() => list.vl(strip, rt.sig(Array.from({length:1000}, (_, j) => j)), j => j(), (cw, j) => {
+      const card = document.createElement('div'); card.style.cssText = 'height:100px;flex:none'; cw.append(card);
+      rt.S(card, 'width', 'px', () => width());
+    }, {x: true, est: () => width(), gap: () => gap(), pw: [320], ph: [120]}));
+    rt.settled();
+    await exact.lists.pending(); await exact.lists.settle();
+    const c = strip.$list;
+    // Where each mounted card lays out, against where the index starts it.
+    const laid = () => c.mounted.map(m => {
+      const x = m.wrapper.getBoundingClientRect().left - strip.getBoundingClientRect().left + strip.scrollLeft;
+      return [Math.round(x), c.index.prefix(m.position)];
+    });
+    const out = { first: laid(), total: c.index.total, sizes: c.snapshot().rows.map(r => r.size) };
+    rt.commit(() => { rt.W(gap, 4); strip.style.columnGap = '4px'; }); rt.settled();
+    await exact.lists.settle();
+    out.regapped = laid(); out.regappedTotal = c.index.total;
+    rt.commit(() => rt.W(width, 150)); rt.settled();
+    await exact.lists.pending(); await exact.lists.settle();
+    out.wider = laid(); out.widerTotal = c.index.total;
+    rt.end(own); strip.remove(); rt.settled();
+    return out;
+  })()`);
+  expect(result.first.length).toBeGreaterThan(2);
+  for (const [x, start] of [...result.first, ...result.regapped, ...result.wider]) expect(x).toBe(start);
+  expect(result.first.map(([x]) => x)).toEqual(result.first.map((_, i) => i * 114));
+  expect(result.sizes.every(s => s === 100)).toBe(true);
+  expect(result.total).toBe(1000 * 114 - 14);
+  expect(result.regappedTotal).toBe(1000 * 104 - 4);
+  expect(result.widerTotal).toBe(1000 * 154 - 4);
+}, 60_000);
+
+test('a card that is not displayed has no gap around it, as in a flex row', async () => {
+  const result = await evaluate(`(async () => {
+    const strip = document.createElement('div');
+    strip.style.cssText = 'display:flex;height:120px;width:320px;overflow-x:scroll;overflow-y:hidden;column-gap:14px';
+    document.getElementById('exact-root').append(strip);
+    const hide = rt.sig(false), gap = rt.sig(14);
+    const own = rt.scope(() => list.vl(strip, rt.sig(Array.from({length:1000}, (_, j) => j)), j => j(), (cw, j) => {
+      const card = document.createElement('div'); card.style.cssText = 'width:100px;height:100px;flex:none'; cw.append(card);
+      rt.S(card, 'display', '', () => hide() && j() % 3 === 1 ? 'none' : 'block');
+    }, {x: true, est: 100, gap: () => gap(), pw: [320], ph: [120], inputs: () => [hide()]}));
+    rt.settled();
+    await exact.lists.pending(); await exact.lists.settle();
+    const c = strip.$list;
+    // Each shown card's left in the strip, and where a flex row of the shown cards alone puts it.
+    const laid = () => c.mounted.filter(m => getComputedStyle(m.wrapper.firstElementChild).display !== 'none').map(m => {
+      const x = m.wrapper.getBoundingClientRect().left - strip.getBoundingClientRect().left + strip.scrollLeft;
+      const shown = Array.from({length: m.position}, (_, i) => i).filter(i => !(hide() && i % 3 === 1)).length;
+      return [Math.round(x), shown * (100 + gap()), Math.round(c.index.prefix(m.position))];
+    });
+    rt.commit(() => rt.W(hide, true)); rt.settled();
+    await exact.lists.pending(); await exact.lists.settle(); await exact.lists.settle();
+    const hidden = laid(), wrappers = c.mounted.filter(m => m.position % 3 === 1).map(m => m.wrapper.style.display);
+    // A new gap moves the shown cards; a hidden one, of no extent, takes none.
+    rt.commit(() => { rt.W(gap, 4); strip.style.columnGap = '4px'; }); rt.settled();
+    const moved = laid().map(([, css, start]) => [start, css]);
+    await exact.lists.settle(); await exact.lists.settle();
+    const regapped = laid();
+    rt.commit(() => { rt.W(gap, 14); strip.style.columnGap = '14px'; }); rt.settled();
+    await exact.lists.settle(); await exact.lists.settle();
+    rt.commit(() => rt.W(hide, false)); rt.settled();
+    await exact.lists.pending(); await exact.lists.settle(); await exact.lists.settle();
+    const shown = laid();
+    rt.end(own); strip.remove(); rt.settled();
+    return { hidden, wrappers, moved, regapped, shown };
+  })()`);
+  expect(result.hidden.length).toBeGreaterThan(2);
+  expect(result.regapped.length).toBeGreaterThan(2);
+  for (const [start, css] of result.moved) expect(start).toBe(css);
+  for (const [x, css, start] of [...result.hidden, ...result.regapped, ...result.shown]) expect([x, start]).toEqual([css, css]);
+  expect(result.wrappers.every(d => d === 'none')).toBe(true);
+}, 60_000);
+
+test('a list scrolled while a hidden card is mounted fills its window', async () => {
+  const result = await evaluate(`(async () => {
+    const strip = document.createElement('div');
+    strip.style.cssText = 'display:flex;height:120px;width:320px;overflow-x:scroll;overflow-y:hidden;column-gap:14px';
+    document.getElementById('exact-root').append(strip);
+    const hide = rt.sig(false);
+    const own = rt.scope(() => list.vl(strip, rt.sig(Array.from({length:1000}, (_, j) => j)), j => j(), (cw, j) => {
+      const card = document.createElement('div'); card.style.cssText = 'width:100px;height:100px;flex:none'; cw.append(card);
+      rt.S(card, 'display', '', () => hide() && j() % 3 === 1 ? 'none' : 'block');
+    }, {x: true, est: 100, gap: 14, pw: [320], ph: [120], inputs: () => [hide()]}));
+    rt.settled();
+    await exact.lists.pending(); await exact.lists.settle();
+    rt.commit(() => rt.W(hide, true)); rt.settled();
+    const c = strip.$list, out = [];
+    c.syncUndisplayed();
+    const hiddenMounted = c.mounted.some(m => m.undisplayed);
+    for (const left of [2000, 5000]) {
+      await new Promise(resolve => { strip.addEventListener('scroll', resolve, {once:true}); strip.scrollLeft = left; });
+      await exact.lists.settle(); await exact.lists.settle();
+      // The shown cards the port sees, by where they lay out.
+      const port = strip.getBoundingClientRect();
+      const seen = c.mounted.filter(m => getComputedStyle(m.wrapper.firstElementChild).display !== 'none')
+        .map(m => m.wrapper.getBoundingClientRect()).filter(r => r.right > port.left && r.left < port.right);
+      out.push({ seen: seen.length, covered: Math.round(Math.max(...seen.map(r => r.right)) - port.left) });
+    }
+    rt.end(own); strip.remove(); rt.settled();
+    return { hiddenMounted, out };
+  })()`);
+  expect(result.hiddenMounted).toBe(true);
+  for (const r of result.out) {
+    expect(r.seen).toBeGreaterThan(1);
+    expect(r.covered).toBeGreaterThanOrEqual(320 - 14);
+  }
 }, 60_000);

@@ -5,7 +5,7 @@ use accesskit::{
 };
 use accesskit_winit::{Adapter, WindowEvent as AccessEvent};
 use exact_kernel::PropId;
-use exact_linux::{
+use exact_painted::{
     presenter::access::{act, flag, role, Node as Source},
     Presenter,
 };
@@ -20,6 +20,11 @@ use winit::{
 
 pub(super) enum Event {
     Wake,
+    Close,
+    /// The app's bare `focus()`.
+    Focus,
+    /// The app's `hideWindow()`.
+    Hide,
     ModalWake,
     Timer(std::sync::Arc<crate::timers::Fired>),
     Access(accesskit_winit::Event),

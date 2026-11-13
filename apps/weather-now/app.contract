@@ -1,0 +1,81 @@
+// Weather Now: the weather where a place is, from Open-Meteo, with no data
+// module. Both reads are sources declared here (LLP 1162.001): the runner
+// makes each request and reads its JSON into the shape, so the app has no
+// `app.ts` and its native build links no JavaScript engine.
+
+shape Current
+  temperature_2m: number
+  apparent_temperature: number
+  relative_humidity_2m: number
+  wind_speed_10m: number
+
+shape Place
+  id: number
+  name: string
+  country: option<string>
+  admin1: option<string>
+  latitude: number
+  longitude: number
+
+shape Found
+  results: option<Place[]>
+
+source current(latitude: number, longitude: number) as shape Current
+  url "https://api.open-meteo.com/v1/forecast?latitude={latitude}&longitude={longitude}&current=temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m"
+  pointer "/current"
+
+source places(name: string) as shape Found
+  url "https://geocoding-api.open-meteo.com/v1/search?name={name}&count=6&language=en&format=json"
+
+fn region(p: Place): string = match p.admin1 {
+  case some(a) => match p.country { case some(c) => `${a}, ${c}`, case none => a },
+  case none => match p.country { case some(c) => c, case none => "" }
+}
+
+component WeatherNow
+  state query = ""
+  state city = "Berlin"
+  state latitude = 52.52
+  state longitude = 13.41
+  resource now = current(latitude, longitude) as shape Current
+  resource found = places(query.trim()) when query.trim().length >= 2 as shape Found else empty()
+  derive hits = match found.results { case some(r) => r, case none => [] }
+  action edit(v: string)
+    query = v
+  action choose(name: string, lat: number, lon: number)
+    city = name
+    latitude = lat
+    longitude = lon
+    query = ""
+  action again
+    refresh now
+
+  view
+    column padding=20 gap=12
+      input type="search" value=query input=edit placeholder="Find a city" aria-label="Find a city"
+        testId="query"
+      if query.trim().length >= 2
+        list id="places" testId="places"
+          for p in hits key=p.id
+            button press=choose(p.name, p.latitude, p.longitude) testId=`place-${p.id}`
+              text-align="start" display="flex"
+              column flex=1 min-width=0 gap=2 padding="8px 0"
+                text p.name
+                text region(p) font="-exact-footnote" color="-exact-secondary-label"
+          if current(found) and hits.length == 0
+            text "No places found." testId="none"
+      else
+        column gap=8
+          text city role="heading" aria-level=1 testId="city"
+          if failed(now)
+            text "The weather couldn't be reached." testId="error"
+            button press=again testId="retry"
+              text "Try Again"
+          else if not current(now)
+            progress aria-label="Loading" testId="loading"
+          else
+            text `${round(now.temperature_2m)}°` font="-exact-large-title" font-variant-numeric="tabular-nums"
+              testId="temp"
+            text `Feels like ${round(now.apparent_temperature)}°` testId="feels"
+            text `Wind ${round(now.wind_speed_10m)} km/h · Humidity ${round(now.relative_humidity_2m)}%`
+              font-variant-numeric="tabular-nums" testId="wind"

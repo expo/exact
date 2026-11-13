@@ -77,6 +77,10 @@ impl exact_runner::DataSourceWrapper for Composed {
     fn app_id(&self) -> &str {
         self.0.app_id()
     }
+    fn preloads(&self) -> &[exact_runner::request::Preload] {
+        self.0.preloads()
+    }
+
     fn grants(&self) -> &str {
         self.0.grants()
     }

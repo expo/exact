@@ -83,6 +83,9 @@ shape Follow
   username: string
   following: bool
 
+theme
+  accentInk="light-dark(#ffffff, #000000)"
+
 style Container
   width="100%" max-width=1140 margin-left="auto" margin-right="auto" padding-left=15 padding-right=15 box-sizing="border-box"
 style NavLink
@@ -92,7 +95,7 @@ style Btn
 style BtnSm
   padding-top=4 padding-bottom=4 padding-left=8 padding-right=8 border-radius=6 border-style="solid" border-width=1 font-size=14 line-height=1.25
 style BtnLg
-  padding-top=12 padding-bottom=12 padding-left=24 padding-right=24 border-radius=10 border-style="solid" border-width=1 font-size=20 line-height=1.25 background-color="AccentColor" border-color="AccentColor" color="AccentColorText" align-self="flex-end"
+  padding-top=12 padding-bottom=12 padding-left=24 padding-right=24 border-radius=10 border-style="solid" border-width=1 font-size=20 line-height=1.25 background-color="AccentColor" border-color="AccentColor" color="accentInk" align-self="flex-end"
 style Field
   width="100%" box-sizing="border-box" padding-top=8 padding-bottom=8 padding-left=12 padding-right=12 font-size=16 line-height=1.25 color="FieldText" background-color="Field" border-style="solid" border-width=1 border-color="-exact-separator" border-radius=8 margin-bottom=16
 style FieldLg
@@ -210,29 +213,36 @@ component RealWorld
         if c.ok and c.kind == "delete"
           nav = open(nav, "/")
       case none
-  // Your Feed is the signed-in reader's; a signed-out visit goes to sign in,
-  // in place of its entry, as React's <Navigate to="/login" replace />. A
-  // tab's first entry can only be its root, so a first visit's entry gives
-  // up its query, and /login follows on the next tick: Back is the global
-  // feed, never Your Feed again. A tick looks, since `me` answering runs
-  // nothing.
-  action settle
-    let nextNav = loginNext and current.name == "home" and not me.signedIn ? push(nav, "/login") : nav
-    if loginNext
-      loginNext = false
-      if current.name == "home" and not me.signedIn
-        nav = nextNav
-    if following and not pending(me) and not me.signedIn
-      if depth(nextNav) > 1
-        nav = replace(nextNav, "/login")
+  // A signed-out reader on a route that needs a reader goes to sign in, in
+  // place of that route's entry, as React's <Navigate to="/login" replace />.
+  // The router has no guards: an action checks and applies `replace` (LLP
+  // 1038 §7), from a task the session arms, since `me` answering runs nothing.
+  // Every route not named in `publicRoute` needs a reader, so one added later does
+  // too. Signed out is known only once `me` has answered.
+  derive publicRoute = (current.name == "home" and not following) or current.name == "tag" or current.name == "login" or current.name == "register" or current.name == "article" or current.name == "profile" or current.name == "favorites" or current.name == "notfound"
+  derive signedOut = not pending(me) and not me.signedIn
+  task leave when signedOut and not publicRoute key=current.id
+    after(1, toSignIn)
+  task signInNext when loginNext
+    after(1, pushSignIn)
+  action toSignIn
+    // A push already due lands on whatever home entry is on top.
+    if signedOut and not publicRoute and not loginNext
+      if depth(nav) > 1
+        nav = replace(nav, "/login")
       else
+        // A tab's first entry can only be its root, so a first visit gives up
+        // its query, and /login follows (`signInNext`): Back is the global
+        // feed, never Your Feed again.
         loginNext = true
-        nav = replace(nextNav, "/")
-  task settling mount
-    every(100, settle)
+        nav = replace(nav, "/")
+  action pushSignIn
+    loginNext = false
+    if current.name == "home" and not me.signedIn
+      nav = push(nav, "/login")
 
   view
-    main navigationKey=`${current.id}`
+    main navigationKey=`${current.id}` testId="app"
       navigationBack="back"
       navigate=followLink
       width="100%"
@@ -436,7 +446,7 @@ component Heart
       class=BtnSm
       margin-left="auto"
       border-color="AccentColor"
-      color=(on ? "AccentColorText": "AccentColor")
+      color=(on ? "accentInk": "AccentColor")
       background-color=(on ? "AccentColor": "-exact-background")
       testId=`favorite-${slug}`
       text `♥ ${n}`
@@ -927,7 +937,7 @@ component ArticleActions
           button press=favorite(post.slug, not post.favorited, post.favoritesCount)
             class=BtnSm
             border-color="AccentColor"
-            color=(post.favorited ? "AccentColorText": "AccentColor")
+            color=(post.favorited ? "accentInk": "AccentColor")
             background-color=(post.favorited ? "AccentColor": "-exact-background")
             testId="favorite"
             text `♥ ${post.favorited ? "Unfavorite" : "Favorite"} Article (${post.favoritesCount})`
@@ -1054,7 +1064,7 @@ component ArticlePage
                       class=BtnSm
                       border-color="AccentColor"
                       background-color="AccentColor"
-                      color="AccentColorText"
+                      color="accentInk"
                       font-weight=700
                       testId="post-comment"
                       text "Post Comment"

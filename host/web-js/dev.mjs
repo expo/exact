@@ -34,7 +34,9 @@ import { INSPECT_EVENTS } from './inspect-dev.js';
 import { galleryLoop } from './dev-gallery.mjs';
 import { inlineWhy as inlineWhyOf } from './dev-inline.mjs';
 import { DEV_STATUS_TYPE, FAILED, PHASE, gist } from '../web/dev-phase.mjs';
+import { startupBuilds, stopBuildTree } from '../web/dev-startup.mjs';
 import { fileURLToPath } from 'node:url';
+import { installedFileDependencies } from '../../scripts/file-dependencies.mjs';
 
 const CHECKPOINT_BYTES = 16 * 1024 * 1024, CHECKPOINTS = 8;
 
@@ -106,12 +108,16 @@ function mapDesignSource(app, dir) {
  * when it says so as the build ends (an input moved since it began, or it
  * was stopped for one), or a source it read moved since, leaves `dist` as
  * it was and resolves `{superseded}`: what it read is older than the files.
- * With none, it is published whatever moved. */
-function build(app, dist, keep = () => false, compiler = null, superseded = null) {
+ * With none, it is published whatever moved. `cancelled()` still sets it
+ * aside during shutdown, including the final startup attempt. */
+function build(app, dist, keep = () => false, compiler = null, superseded = null, cancelled = () => false) {
   // One stage per dist: two loops on one target/ (two apps outside a workspace, or one CARGO_TARGET_DIR) never
   // build into each other's.
   const stage = resolve(app.target, 'web-js-dev-stage', createHash('sha256').update(resolve(dist)).digest('hex').slice(0, 16));
   rmSync(stage, { recursive: true, force: true });
+  // The app's `file:` packages as their directories hold them, before the build begins: installed during it, they
+  // would be sources moved since it began, and it would be set aside (#115).
+  try { installedFileDependencies(app.dir); } catch (error) { return Promise.resolve({ packages: devPackages(stage), error: error.message }); }
   const began = Date.now();
   // The app's own inputs beside its Contract sources, and which were there.
   const own = [designPath(app.dir) ?? resolve(app.dir, 'app.tamber'), resolve(app.dir, 'app.ts'), resolve(app.dir, 'app.json'), resolve(app.dir, '.exact/backend-origin'), resolve(app.dir, '.env.local'), resolve(app.dir, '.env')];
@@ -148,7 +154,7 @@ function build(app, dist, keep = () => false, compiler = null, superseded = null
       const newer = () => packages.sources.some((path) => { try { return since(path); } catch { return known.has(path); } })
         || own.some((path) => { try { lstatSync(path); } catch { return there.has(path); } return !there.has(path) || since(path); });
       const setAside = () => { rmSync(stage, { recursive: true, force: true }); done({ superseded: true, packages }); };
-      const moved = () => superseded && (superseded() || newer());
+      const moved = () => cancelled() || (superseded && (superseded() || newer()));
       // A failed one too: its errors may be of files since edited.
       if (moved()) return setAside();
       // The one line a build says when it rewrote the types app.ts imports, built or not (LLP 1116.001 D4.5).
@@ -197,6 +203,26 @@ function copyCompiler(path, copy, built) {
 
 /** Build `app` on the JS target and serve it with reload, until the process ends. */
 export async function devJs({ app, dist, port, host, origins, gate, lan, allowHosts = [], remoteAsked = { remote: null, tunnel: null, plugin: false, hosts: [] }, residentPort = 0, pairTtlMs }) {
+  let stopping = false, shutdown = null;
+  // A design (`exact-web-js design`), read from the compiler with no build:
+  // a value-only edit's and a scrub's. Optimised (host-dev), built as the
+  // loop starts and again after any edit that is not a design's, so it is
+  // the compiler the builds use; until it is, the debug compiler answers.
+  const tool = { path: resolve(process.env.CARGO_TARGET_DIR ? resolve(process.env.CARGO_TARGET_DIR) : resolve(root, 'target'), 'host-dev/exact-web-js'), ready: false, built: null, child: null, reading: null, cleaner: null };
+  const patcher = { child: null, built: null, asks: new Map(), n: 0 };
+  const toolExits = new Set(), inspections = new Set();
+  const stopGroup = child => {
+    const exit = stopBuildTree(child);
+    toolExits.add(exit);
+    void exit.finally(() => toolExits.delete(exit));
+    return exit;
+  };
+  const stopCompilers = () => {
+    for (const child of [building, tool.child, tool.reading, tool.cleaner, patcher.child, ...inspections]) stopGroup(child);
+    return Promise.all(toolExits);
+  };
+  const startup = startupBuilds();
+  startup.handoff(() => shutdown ??= (async () => { stopping = true; await stopCompilers(); process.exit(0); })());
   const budget = /\|\s*Dev restart[^|]*\|\s*([^|\n]+)/.exec(readFileSync(resolve(root, 'rules/RULES.md'), 'utf8'))?.[1].trim() ?? '?';
   const t0 = Date.now();
   // A first build that fails (a refusal or a compile error) serves its
@@ -211,7 +237,8 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
     const input = (name) => name && ((!skipped.test(String(name)) && String(name) !== 'app.contract.d.ts') || /^\.exact(?:[\\/]backend-origin)?$/.test(String(name)) || settingsFile(name));
     const begun = Date.now();
     const early = [watch(app.dir, { recursive: true }, (_, name) => { if (!moved && input(name) && movedSince(resolve(app.dir, String(name)), begun)) moved = true; }), watch(resolve(root, 'host/web-js'), { recursive: true }, (_, name) => { if (!moved && name && !skipped.test(String(name)) && movedSince(resolve(root, 'host/web-js', String(name)), begun)) moved = true; })];
-    try { built = await build(app, dist, () => false, null, tries < 3 ? () => moved : null); } finally { for (const w of early) w.close(); }
+    try { built = await build(app, dist, () => false, null, tries < 3 ? () => moved : null, () => stopping); } finally { for (const w of early) w.close(); }
+    if (stopping) await shutdown;
     startMoved = moved;
     if (!built.superseded) break;
     console.log('a source moved while the first build ran: building again');
@@ -280,13 +307,6 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
   // frames, *1.11*), so a late fetch of one of them never shows over it; the
   // scrub ends with it.
   const releasedMark = () => { const mark = released?.id ? released : undefined; scrubbed = null; aside = null; released = false; return mark; };
-  // A design (`exact-web-js design`), read from the compiler with no build:
-  // a value-only edit's and a scrub's. Optimised (host-dev), built as the
-  // loop starts and again after any edit that is not a design's, so it is
-  // the compiler the builds use; until it is, the debug compiler answers.
-  const tool = { path: resolve(process.env.CARGO_TARGET_DIR ? resolve(process.env.CARGO_TARGET_DIR) : resolve(root, 'target'), 'host-dev/exact-web-js'), ready: false, built: null, child: null, reading: null, cleaner: null };
-  // Cargo and the compilers it runs, as a group (stopped together).
-  const stopGroup = (child) => { if (!child) return; try { process.kill(-child.pid, 'SIGTERM'); } catch { child.kill(); } };
   // What a failed build said: each error with the lines that explain it (a
   // linker's `ld:` and `Undefined symbols` lines, its notes, the command line
   // cut short), then its last lines.
@@ -337,6 +357,7 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
   };
   let cleaned = false, readerHolds = 0;
   const buildTool = () => {
+    if (stopping) return;
     tool.ready = false;
     stopGroup(tool.child);
     const started = new Date();
@@ -348,7 +369,7 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
     // (only the first: one built again because a cold build left its inputs newer is not held twice).
     const hold = readerHolds++ === 0 ? Number(process.env.EXACT_DEV_READER_HOLD_MS) || 0 : 0;
     child.on('exit', (code, signal) => setTimeout(() => {
-      if (tool.child !== child) return;
+      if (stopping || tool.child !== child) return;
       tool.child = null;
       tool.ready = code === 0 && existsSync(tool.path);
       // Dated to the build's start, as Cargo dates its fingerprints: a
@@ -395,12 +416,15 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
   // and one made while dist moved on is not served.
   const tables = new Map();
   const inspectTable = (digest, plan = resolve(dist, 'app.plan')) => {
+    if (stopping) return Promise.resolve(null);
     if (!tables.has(digest)) {
       tables.set(digest, new Promise((done) => {
         // (this loop's own: another loop on one target/ may make the same plan's table, and removes its own)
         const out = resolve(app.target, `inspect-${digest}-${process.pid}.json`);
         const compiler = toolFresh() ? { cmd: tool.path, pre: [], done() {} } : webCompiler();
-        const child = spawn(compiler.cmd, [...compiler.pre, 'inspect-table', plan, out], { cwd: root, stdio: ['ignore', 'ignore', 'pipe'] });
+        const child = spawn(compiler.cmd, [...compiler.pre, 'inspect-table', plan, out], { cwd: root, stdio: ['ignore', 'ignore', 'pipe'], detached: true });
+        inspections.add(child);
+        child.once('close', () => inspections.delete(child));
         let err = '';
         child.stderr.on('data', (d) => { err += d; });
         child.on('exit', (code) => {
@@ -444,7 +468,7 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
   // A fast batch is checked by the full build after it (its verifying build): the
   // design's module inputs and its compile; a value-only edit during that
   // build is sent at once and checked after it.
-  let designing = false, stopping = false;
+  let designing = false;
   // Input changes seen, counted: a build that began before the last one
   // read older files, and is set aside (`superseded`), never published.
   // An edit stops the build in flight, once in a burst and only while it
@@ -483,7 +507,7 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
     client: (n) => client(n, null, { base: '/__dev/gallery', stream: '/__dev/gallery/stream', page: 'gallery' }) });
   const rebuild = async () => {
     // A burst a build already took (its timer still armed) is no edit.
-    if (!edited.size) return;
+    if (stopping || !edited.size) return;
     const at = saved, t = Date.now();
     // A path that existed during the save and is gone by now (an editor's
     // or sed's temporary file) edited nothing; one already gone when its
@@ -582,7 +606,8 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
       && next.tokens.every((t, i) => t.name === design.tokens[i].name && String(t.accent) === String(design.tokens[i].accent) && (!t.inline || same(t, design.tokens[i])));
     buildBegan = Date.now();
     console.log(`edit → building${checking ? ' (checking the batch)' : ''}`);
-    built = await build(app, dist, keep, compiler, () => inputs !== began);
+    built = await build(app, dist, keep, compiler, () => inputs !== began, () => stopping);
+    if (stopping) return;
     if (built.superseded && ++asideRun === 3) console.log('edit → three builds in a row set aside: an input moves during every build (does one write its own input?)');
     if (!built.superseded) { stopped = false; lastBuildMs = Date.now() - buildBegan; asideRun = 0; }
     // An input moved while it built (a value-only edit's batch included):
@@ -671,6 +696,7 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
   // A build reading a tree (the assets it copies) is reported too on macOS:
   // a path not modified since the last build started is no edit.
   const changed = (base, skip = skipped, fresh = true) => (_, name) => {
+    if (stopping) return;
     // A Contract source the compile read is an input even where the app's
     // watcher skips (a dot directory).
     if (name && skip.test(String(name)) && !contractInput(resolve(base, String(name)))
@@ -790,8 +816,8 @@ es.onmessage=e=>{const m=JSON.parse(e.data);if(m.kind==='tamber-batch'||m.kind==
   // committed design, each frame's folded rows set on that plan, compiling
   // nothing. Started at a scrub's first frame, again after the reader
   // builds again; a frame it cannot patch is compiled whole instead.
-  const patcher = { child: null, built: null, asks: new Map(), n: 0 };
   const patcherAsk = (request) => new Promise((done) => {
+    if (stopping) return done({ fallback: true });
     if (!toolFresh()) return done({ fallback: true });
     if (!patcher.child || patcher.built !== tool.built) {
       stopGroup(patcher.child);
@@ -1149,19 +1175,19 @@ es.onmessage=e=>{const m=JSON.parse(e.data);if(m.kind==='tamber-batch'||m.kind==
       req.pipe(out);
     }, () => { starting.waiting.delete(fail); if (!gone) failedNow(res); });
   };
-  const stop = async () => {
+  const stop = () => shutdown ??= (async () => {
     stopping = true;
-    for (const w of watchers) w.close(); stopBuild('SIGKILL'); stopGroup(tool.child); stopGroup(tool.reading); stopGroup(tool.cleaner); stopGroup(patcher.child); residentChild?.kill('SIGTERM'); server.close(); server.closeAllConnections?.();
+    clearTimeout(timer); timer = null;
+    const buildExit = stopCompilers();
+    for (const w of watchers) w.close(); residentChild?.kill('SIGTERM'); server.close(); server.closeAllConnections?.();
     // The design server lets go of its lock before this exits.
-    await Promise.all([tamber?.close(), doors?.close(), gallery.stop()]);
+    await Promise.all([buildExit, tamber?.close(), doors?.close(), gallery.stop()]);
     // A local iOS build in flight is stopped and waited for, as the resident loop does.
     const install = installer.child;
     if (install && install.exitCode === null && install.signalCode === null) { const exit = new Promise((ok) => install.once('exit', ok)); install.kill('SIGTERM'); await exit; }
     process.exit(process.exitCode ?? 0);
-  };
-  process.on('SIGINT', stop);
-  process.on('SIGTERM', stop);
-  process.on('SIGHUP', stop);
+  })();
+  startup.handoff(stop);
   watchLauncher(stop);
   await listenDelay();
   // (and on [::1], for a localhost URL: the design tool's canvas)

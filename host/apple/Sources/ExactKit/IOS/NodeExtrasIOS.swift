@@ -51,6 +51,7 @@ final class NodeAside {
     var scale: CGFloat = 1
     var rotate: CGFloat = 0
     var content = CGSize.zero
+    var fitContentHeight: CGFloat?
     var image: UIImage?
     var raster: NativeRasterLease?
     var imageLayer: CALayer?
@@ -163,6 +164,9 @@ final class NodeExtras {
     var followedScroll: (top: CGFloat, end: Bool, start: Bool)?
     var followsEndAfterInteraction = false
     var followingEndAnimated = false
+    /// Until when a `scrollTop` write UIKit animates (`scroll-behavior: smooth`) counts as running: UIKit does not always
+    /// report the end of an animation another write stops, so, as a reveal, for `ElementScrolls.revealBound` at most.
+    var authoredScrollUntil: CFTimeInterval = 0
     var anchoredScrollTop: CGFloat?
     var retainedScrollTop: CGFloat?
     var materialKind: String?
@@ -198,6 +202,9 @@ final class NodeExtras {
     /// A control bar over a scroller's content (LLP 1131 D3, D4): the scroller's paint rank, which it is placed
     /// above, and UIKit's edge effect.
     var bandOver: Int64?
+    /// A child of the navigation root that no route's box meets: it paints
+    /// over the native container (`NavigationHost.clearBesideRoutes`).
+    var clearsNavigation = false
     var edgeInteraction: AnyObject?
     var scrollWritten: String?
     /// A hatched node whose hatch undoes its own additions: its row may be
@@ -244,6 +251,7 @@ extension NodeView {
     /// A scroll container's content extent (the `content` op), before the
     /// axes that do not scroll are held to the box.
     var content: CGSize { get { aside?.content ?? .zero } set { if newValue != .zero || aside != nil { asideMade.content = newValue } } }
+    var fitContentHeight: CGFloat? { get { aside?.fitContentHeight } set { if newValue != nil || aside != nil { asideMade.fitContentHeight = newValue } } }
     /// An image node's picture, once loaded (decoded off the main thread),
     /// the source it came from, and which load is current: a completion
     /// from an older load, or for a view that was destroyed, is dropped.
@@ -373,9 +381,7 @@ extension NodeView {
         canvas.needsCapture = true
         canvases?.scheduleCapture()
     }
-    /// Its filter published new pixels, at once or when its chain landed: the
-    /// canvas it is drawn through captures it again, as that picture
-    /// (`filterPicture`).
+    /// Its filter's pixels or layer effect changed: its canvas captures again.
     func filterPublished() {
         guard let canvas = canvasAbove else { return }
         canvas.needsCapture = true
@@ -423,6 +429,11 @@ extension NodeView {
     var followedScroll: (top: CGFloat, end: Bool, start: Bool)? { get { extras?.followedScroll } set { if newValue != nil || extras != nil { more.followedScroll = newValue } } }
     var followingEndAnimated: Bool { get { extras?.followingEndAnimated ?? false } set { if newValue || extras != nil { more.followingEndAnimated = newValue } } }
     var followsEndAfterInteraction: Bool { get { extras?.followsEndAfterInteraction ?? false } set { if newValue || extras != nil { more.followsEndAfterInteraction = newValue } } }
+    /// A smooth `scrollTop` write is running: the app's scroll, which the end-follow leaves alone (LLP 1070.000 §15).
+    var authoredScrollAnimating: Bool {
+        get { (extras?.authoredScrollUntil ?? 0) > CACurrentMediaTime() }
+        set { if newValue || extras != nil { more.authoredScrollUntil = newValue ? CACurrentMediaTime() + ElementScrolls.revealBound : 0 } }
+    }
     var anchoredScrollTop: CGFloat? { get { extras?.anchoredScrollTop } set { if newValue != nil || extras != nil { more.anchoredScrollTop = newValue } } }
     var retainedScrollTop: CGFloat? { get { extras?.retainedScrollTop } set { if newValue != nil || extras != nil { more.retainedScrollTop = newValue } } }
     var materialKind: String? { get { extras?.materialKind } set { if newValue != nil || extras != nil { more.materialKind = newValue } } }
@@ -452,6 +463,7 @@ extension NodeView {
     var scrollCollapsed: CGFloat { get { extras?.scrollCollapsed ?? 0 } set { if newValue != 0 || extras != nil { more.scrollCollapsed = newValue } } }
     var scrollWritten: String? { get { extras?.scrollWritten } set { if newValue != nil || extras != nil { more.scrollWritten = newValue } } }
     var hatchReusable: Bool { get { extras?.hatchReusable ?? false } set { if newValue || extras != nil { more.hatchReusable = newValue } } }
+    var clearsNavigation: Bool { get { extras?.clearsNavigation ?? false } set { if newValue || extras != nil { more.clearsNavigation = newValue } } }
     /// Where CSS's `scrollTop` 0 is in UIKit's offsets: past the scroller's
     /// top inset when UIKit insets it — a collapsing title's bar, or the bar
     /// over a route's bottom-edge scroller (`reachBottom`), which stays
@@ -467,6 +479,20 @@ extension NodeView {
     var bandInset: UIEdgeInsets { extras?.bandInset ?? .zero }
     var bandOver: Int64? { get { extras?.bandOver } set { if newValue != nil || extras != nil { more.bandOver = newValue } } }
     var edgeInteraction: AnyObject? { get { extras?.edgeInteraction } set { if newValue != nil || extras != nil { more.edgeInteraction = newValue } } }
+    /// Whether a touch at `point` can reach this box's children. Overflow
+    /// that is not visible clips them at the padding edge (CSS Overflow 3
+    /// §3), so a touch on the border is the box's own, as a browser hit-tests
+    /// it. A scroller's border is its scroll view's, which takes the touch
+    /// for its pan.
+    func reachesChildren(at point: CGPoint) -> Bool {
+        let x = (style["overflow_x"]?.string ?? "visible") != "visible", y = (style["overflow_y"]?.string ?? "visible") != "visible"
+        guard x || y, scrollView == nil else { return true }
+        let uniform = number("border_width")
+        let widths = ["top", "right", "bottom", "left"].map { number("border_width_" + $0, uniform) }
+        if x && y { return innerOutline(widths, in: bounds).contains(point) }
+        return x ? point.x >= bounds.minX + widths[3] && point.x <= bounds.maxX - widths[1]
+            : point.y >= bounds.minY + widths[0] && point.y <= bounds.maxY - widths[2]
+    }
     /// Its scroll view's frame: its bounds, and the band past them.
     package var scrollFrame: CGRect { bounds.inset(by: UIEdgeInsets(top: -pageBand.top, left: 0, bottom: -pageBand.bottom, right: 0)) }
     /// Native padding and footer space are content, unlike a bar or keyboard.

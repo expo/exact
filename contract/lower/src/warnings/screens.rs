@@ -21,7 +21,7 @@
 
 use super::{computed, has, literal};
 use crate::LowerError;
-use contract_syntax::{BinOp, Component, Expr, Node, Stmt, TemplatePart, UnOp};
+use contract_syntax::{BinOp, Component, Expr, Node, Stmt, UnOp};
 use contract_types::Checked;
 use std::collections::BTreeSet;
 
@@ -74,7 +74,7 @@ impl<'a> App<'a> {
                     }
                 }
             }
-            stack.extend(lists(node).into_iter().flatten());
+            stack.extend(node.children());
         }
         app.picked = picked;
         app
@@ -142,7 +142,7 @@ impl<'a> App<'a> {
                         || literal(attrs, "display") == Some("none")
                         || computed(attrs, "role");
                     if !closed {
-                        lists(node)
+                        node.child_lists()
                             .into_iter()
                             .for_each(|l| self.walk(l, routed, out));
                     }
@@ -352,7 +352,7 @@ fn look(nodes: &[Node], seen: &mut Seen) {
                 seen.heading = true;
             }
         }
-        lists(node).into_iter().for_each(|l| look(l, seen));
+        node.child_lists().into_iter().for_each(|l| look(l, seen));
     }
 }
 
@@ -370,7 +370,7 @@ fn pressed<'n>(nodes: &'n [Node], out: &mut Vec<&'n Expr>) {
                     .map(|a| &a.value),
             );
         }
-        lists(node).into_iter().for_each(|l| pressed(l, out));
+        node.child_lists().into_iter().for_each(|l| pressed(l, out));
     }
 }
 
@@ -471,20 +471,6 @@ fn choice(node: &Node) -> Vec<(Option<&Expr>, &[Node])> {
     }
 }
 
-/// Every child list of a node: an element's children, a choice's arms, a
-/// row's body, a use's fill.
-fn lists(node: &Node) -> Vec<&[Node]> {
-    match node {
-        Node::Element { children, .. } | Node::Use { children, .. } => vec![children],
-        Node::When {
-            then, otherwise, ..
-        } => vec![then, otherwise],
-        Node::Match { some, none, .. } => vec![&some.1, none],
-        Node::Each { body, .. } => vec![body],
-        Node::Children { .. } => Vec::new(),
-    }
-}
-
 /// Every state a statement list assigns, through branches and calls.
 fn assigned(body: &[Stmt], out: &mut BTreeSet<String>) {
     for s in body {
@@ -511,43 +497,8 @@ fn assigned(body: &[Stmt], out: &mut BTreeSet<String>) {
 /// Every name an expression reads (a `fn`'s body reads only its
 /// parameters, so a call reads its arguments).
 pub(super) fn idents(e: &Expr, out: &mut Vec<String>) {
-    match e {
-        Expr::Ident(n, _) => out.push(n.clone()),
-        Expr::Call(_, args, _) | Expr::List(args, _) => args.iter().for_each(|a| idents(a, out)),
-        Expr::Member(x, _, _)
-        | Expr::NamedArg(_, x, _)
-        | Expr::Typed(x, _, _)
-        | Expr::Some(x, _)
-        | Expr::Unary(_, x, _)
-        | Expr::Arrow { body: x, .. } => idents(x, out),
-        Expr::Binary(_, a, b, _) => {
-            idents(a, out);
-            idents(b, out);
-        }
-        Expr::Ternary(a, b, c, _) => {
-            idents(a, out);
-            idents(b, out);
-            idents(c, out);
-        }
-        Expr::Match {
-            subject,
-            some,
-            none,
-            ..
-        } => {
-            idents(subject, out);
-            idents(some, out);
-            idents(none, out);
-        }
-        Expr::Let { value, body, .. } => {
-            idents(value, out);
-            idents(body, out);
-        }
-        Expr::Template(parts, _) => parts.iter().for_each(|p| {
-            if let TemplatePart::Expr(x) = p {
-                idents(x, out);
-            }
-        }),
-        Expr::Number(..) | Expr::Str(..) | Expr::Bool(..) | Expr::None(_) => {}
-    }
+    out.extend(e.walk().filter_map(|x| match x {
+        Expr::Ident(n, _) => Some(n.clone()),
+        _ => None,
+    }));
 }

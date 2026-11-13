@@ -1,38 +1,51 @@
 // The data seam's bytes, and the store's presence calls (below), for
-// prelude.js: base64 for what crosses the seam
+// prelude.js: native request bytes, base64 for what crosses the seam
 // as JSON, a string's UTF-8 length, a stream message's data, a long
 // poll's terms as the seam carries them (LLP 1016.000 D8), an upload's
-// option and events, a fetch's body and file
-// options, an image call's options and an answer's timers (here, beside the
-// prelude, under its line cap). Natively a
+// option and events, and a fetch's body and file options. Natively a
 // binary message (a byte stream's bytes, a socket's frame; LLP 1016.000)
 // names only its size, and the host fills an ArrayBuffer of it through the
 // bytes door (op 9, js/src/crypto.rs): base64 decoded byte by byte in the
-// interpreter cost 1.8 ms a 12 KB message. Evaluated just before prelude.js,
-// which takes `__exact_binary` and deletes it: natively, and on the web in
-// the module realm's iframe (module-glue.js) or its worker (module-worker.js).
+// interpreter cost 1.8 ms a 12 KB message. Evaluated just before the
+// prelude's scripts, whose prelude.js takes `__exact_binary` and deletes
+// it: natively, and on the web in the module realm's iframe
+// (module-glue.js) or its worker (module-worker.js).
 (function (global) {
   "use strict";
   var door = global.__exact_bytes; // natively; prelude.js takes it from the global
   var StreamBody = global.__exact_stream_body || global.Response;
   delete global.__exact_stream_body;
-  var streamLocked = global.ReadableStream && Object.getOwnPropertyDescriptor(global.ReadableStream.prototype, "locked").get;
-  function isReadableStream(value) { return value !== null && typeof value === "object" && streamLocked && holds(streamLocked, value); }
+  var streamLocked =
+    global.ReadableStream && Object.getOwnPropertyDescriptor(global.ReadableStream.prototype, "locked").get;
+  function isReadableStream(value) {
+    return value !== null && typeof value === "object" && streamLocked && holds(streamLocked, value);
+  }
   function fromBase64(text) {
-    return Uint8Array.from(global.atob(text), function (c) { return c.charCodeAt(0); });
+    return Uint8Array.from(global.atob(text), function (c) {
+      return c.charCodeAt(0);
+    });
   }
   var BASE64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
   function toBase64(bytes) {
-    var out = [], n = bytes.length, i = 0, v;
+    var out = [],
+      n = bytes.length,
+      i = 0,
+      v;
     for (; i + 2 < n; i += 3) {
-      v = bytes[i] << 16 | bytes[i + 1] << 8 | bytes[i + 2];
-      out.push(BASE64[v >> 18 & 63] + BASE64[v >> 12 & 63] + BASE64[v >> 6 & 63] + BASE64[v & 63]);
+      v = (bytes[i] << 16) | (bytes[i + 1] << 8) | bytes[i + 2];
+      out.push(BASE64[(v >> 18) & 63] + BASE64[(v >> 12) & 63] + BASE64[(v >> 6) & 63] + BASE64[v & 63]);
     }
     if (i < n) {
-      v = bytes[i] << 16 | (i + 1 < n ? bytes[i + 1] << 8 : 0);
-      out.push(BASE64[v >> 18 & 63] + BASE64[v >> 12 & 63] + (i + 1 < n ? BASE64[v >> 6 & 63] : "=") + "=");
+      v = (bytes[i] << 16) | (i + 1 < n ? bytes[i + 1] << 8 : 0);
+      out.push(BASE64[(v >> 18) & 63] + BASE64[(v >> 12) & 63] + (i + 1 < n ? BASE64[(v >> 6) & 63] : "=") + "=");
     }
     return out.join("");
+  }
+  // Native fetches copy the extracted body into the request while
+  // admitting its metadata. The web's string door carries base64.
+  function sendRequest(host, ticket, wire, bytes) {
+    if (door && bytes) door(11, ticket + " " + wire, slot(viewSlots[0], bytes));
+    else return host(1, String(ticket), wire);
   }
   // A string's UTF-8 bytes as TextEncoder makes them: a pair is 4, a lone
   // surrogate its replacement character's 3.
@@ -42,8 +55,10 @@
       var c = s.charCodeAt(i);
       if (c < 0x80) n += 1;
       else if (c < 0x800) n += 2;
-      else if (c >= 0xd800 && c < 0xdc00 && i + 1 < s.length && (s.charCodeAt(i + 1) & 0xfc00) === 0xdc00) { n += 4; i++; }
-      else n += 3;
+      else if (c >= 0xd800 && c < 0xdc00 && i + 1 < s.length && (s.charCodeAt(i + 1) & 0xfc00) === 0xdc00) {
+        n += 4;
+        i++;
+      } else n += 3;
     }
     return n;
   }
@@ -63,10 +78,15 @@
   function gateDecode(track, type, timestamp, data) {
     door(8, data.byteOffset + " " + data.byteLength, data.buffer);
   }
-  // `exactLongPoll` (LLP 1016.000 D8), checked as the web's ts-stream.js checks it (names in code points, `from` a member
-  // or two joined by one `.`): the op's `long_poll`, nothing when there is none, or why it is refused.
+  // `exactLongPoll` (LLP 1016.000 D8), checked as the web's ts-stream.js checks it (names in code points, `from` a
+  // member or two joined by one `.`): the op's `long_poll`, nothing when there is none, or why it is refused.
   function longPollOf(init, stream, method, url) {
-    var poll = init ? init.exactLongPoll : undefined, name = function (k) { var v = poll[k], n = typeof v === "string" ? Array.from(v).length : 0; return n > 0 && n <= 256 ? v : null; };
+    var poll = init ? init.exactLongPoll : undefined,
+      name = function (k) {
+        var v = poll[k],
+          n = typeof v === "string" ? Array.from(v).length : 0;
+        return n > 0 && n <= 256 ? v : null;
+      };
     if (poll === undefined) return undefined;
     if (!stream) return "exactLongPoll asks again for an answer that keeps coming: give exactStream too";
     if (/^wss?:/i.test(String(url))) return "exactLongPoll: a long poll is HTTP, not a WebSocket";
@@ -74,8 +94,16 @@
     if (poll === null || typeof poll !== "object") return "exactLongPoll is { cursor, from }";
     if (!name("cursor")) return "exactLongPoll.cursor is the query parameter the cursor goes in, a name";
     var parts = name("from") ? poll.from.split(".") : [];
-    if (!parts.length || parts.length > 2 || parts.some(function (p) { return !p; })) return "exactLongPoll.from is the reply's field the cursor comes from, a name, or two joined by one `.`";
-    if (poll.sameCursor !== undefined && poll.sameCursor !== "heartbeat" && poll.sameCursor !== "event") return "exactLongPoll.sameCursor is \"heartbeat\" (the default) or \"event\"";
+    if (
+      !parts.length ||
+      parts.length > 2 ||
+      parts.some(function (p) {
+        return !p;
+      })
+    )
+      return "exactLongPoll.from is the reply's field the cursor comes from, a name, or two joined by one `.`";
+    if (poll.sameCursor !== undefined && poll.sameCursor !== "heartbeat" && poll.sameCursor !== "event")
+      return 'exactLongPoll.sameCursor is "heartbeat" (the default) or "event"';
     return { cursor: poll.cursor, from: poll.from, same_cursor_event: poll.sameCursor === "event" ? true : undefined };
   }
   // `exactUploadProgress` (LLP 1016.000 D10), checked as the runner and the web's
@@ -86,24 +114,50 @@
     if (upload !== true) return "exactUploadProgress is true or false";
     if (!stream) return "exactUploadProgress reports an upload's progress to its stream: give exactStream too";
     if (/^wss?:/i.test(String(url))) return "exactUploadProgress: a WebSocket sends no body";
-    if (/^[a-z][a-z0-9+.-]*:/i.test(String(url)) && !/^https?:/i.test(String(url))) return "exactUploadProgress: an upload is an http: or https: request";
+    if (/^[a-z][a-z0-9+.-]*:/i.test(String(url)) && !/^https?:/i.test(String(url)))
+      return "exactUploadProgress: an upload is an http: or https: request";
     if (init.exactLongPoll !== undefined) return "exactUploadProgress: a long poll sends no body";
     if (method === "GET" || method === "HEAD") return "exactUploadProgress: a GET or HEAD request sends no body";
     return true;
   }
   // `exactIdleTimeout` (LLP 1016.000 D11): why it is refused, if it is. `socket`: a WebSocket stream that is no
   // listener, child, upload or long poll.
+  // Protocol names, never credentials (LLP 1016.000; RFC 7230 token).
+  function socketProtocols(value, socket) {
+    if (value === undefined) return [];
+    if (!socket) throw new TypeError("exactProtocols: only a WebSocket stream takes protocols");
+    if (!Array.isArray(value)) throw new TypeError("exactProtocols must be an array of protocol names");
+    var names = [];
+    for (var name of value) {
+      if (typeof name !== "string" || !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name))
+        throw new TypeError(`invalid WebSocket protocol ${JSON.stringify(name)}: expected a non-empty RFC 7230 token`);
+      if (names.includes(name)) throw new TypeError(`duplicate WebSocket protocol ${JSON.stringify(name)}`);
+      names.push(name);
+    }
+    return names;
+  }
+
   function idleRefusal(idle, socket) {
     if (idle === undefined) return undefined;
-    if (!Number.isInteger(idle) || idle < 1 || idle > 3600000) return "exactIdleTimeout must be an integer number of milliseconds from 1 to 3600000";
+    if (!Number.isInteger(idle) || idle < 1 || idle > 3600000)
+      return "exactIdleTimeout must be an integer number of milliseconds from 1 to 3600000";
     return socket ? undefined : "exactIdleTimeout: only a WebSocket stream takes an idle timeout";
   }
   // An upload's event for its mapper, as XMLHttpRequest names them: `progress` for the host's count of the body's
   // bytes sent, and `load` for the reply, whatever its status, which ends the stream.
   function uploadEvent(o) {
-    if (o.response) return { type: "load", status: o.response.status, data: o.response.body, lastEventId: "", coalesced: 0 };
+    if (o.response)
+      return { type: "load", status: o.response.status, data: o.response.body, lastEventId: "", coalesced: 0 };
     var sent = JSON.parse(o.message.data);
-    return { type: "progress", loaded: sent.loaded, total: sent.total, lengthComputable: true, data: "", lastEventId: "", coalesced: o.message.coalesced };
+    return {
+      type: "progress",
+      loaded: sent.loaded,
+      total: sent.total,
+      lengthComputable: true,
+      data: "",
+      lastEventId: "",
+      coalesced: o.message.coalesced,
+    };
   }
   // The store's presence calls (LLP 1133.010 D5), for prelude.js's `store`,
   // over its host door: a name's occupancy (op 18 kept, 19 locked or
@@ -127,15 +181,22 @@
         refuse("store." + op + "()");
         var locked = host(19, name, "") === "1";
         if (op === "unlock" && !locked) return Promise.resolve(get(name));
-        if (op === "unprotect" && !locked || op === "protect" && locked) return Promise.resolve();
-        if (op === "protect" && host(20, "", "") !== "1") throw new Error("NotSupportedError: " + name + " cannot be locked: this device keeps no locked secret now");
+        if ((op === "unprotect" && !locked) || (op === "protect" && locked)) return Promise.resolve();
+        if (op === "protect" && host(20, "", "") !== "1")
+          throw new Error("NotSupportedError: " + name + " cannot be locked: this device keeps no locked secret now");
       } catch (e) {
         // The lock is read first: a refusal for want of a store names the operation called
-        if (e && /^store\.locked: no store here/.test(e.message)) e.message = e.message.replace("store.locked", "store." + op);
+        if (e && /^store\.locked: no store here/.test(e.message))
+          e.message = e.message.replace("store.locked", "store." + op);
         return Promise.reject(named(e));
       }
-      var body = JSON.stringify({ presence: op, name: name, reason: options && options.reason != null ? String(options.reason) : "" });
-      return global.fetch("exact-native:", { method: "POST", body: body, exactIndependentHttp: { maxResponseBytes: 1048576 } })
+      var body = JSON.stringify({
+        presence: op,
+        name: name,
+        reason: options && options.reason != null ? String(options.reason) : "",
+      });
+      return global
+        .fetch("exact-native:", { method: "POST", body: body, exactIndependentHttp: { maxResponseBytes: 1048576 } })
         .then(function (r) {
           return r.text().then(function (t) {
             var v = r.status === 200 ? JSON.parse(t) : { error: "UnknownError", message: t };
@@ -145,55 +206,31 @@
         });
     }
     return Object.freeze({
-      door: function (op, a, b) { try { return host(op, a, b); } catch (e) { throw named(e); } },
-      has: function (name) { refuse("store.has()"); return host(18, String(name), "") === "1"; },
-      locked: function (name) { refuse("store.locked()"); return host(19, String(name), "") === "1"; },
-      unlock: function (name, options) { return call("unlock", name, options); },
-      protect: function (name) { return call("protect", name); },
-      unprotect: function (name, options) { return call("unprotect", name, options); },
+      door: function (op, a, b) {
+        try {
+          return host(op, a, b);
+        } catch (e) {
+          throw named(e);
+        }
+      },
+      has: function (name) {
+        refuse("store.has()");
+        return host(18, String(name), "") === "1";
+      },
+      locked: function (name) {
+        refuse("store.locked()");
+        return host(19, String(name), "") === "1";
+      },
+      unlock: function (name, options) {
+        return call("unlock", name, options);
+      },
+      protect: function (name) {
+        return call("protect", name);
+      },
+      unprotect: function (name, options) {
+        return call("unprotect", name, options);
+      },
     });
-  }
-  // The image calls' options (prelude.js `imageCall`), checked before
-  // anything is queued, as the host's arguments after `from` and `to`:
-  // `compressImage`'s two numbers and type (LLP 1069.002 A1, A1.11), then its
-  // edit, and `transformImage`'s all, each as the one JSON value the codec
-  // reads (LLP 1133.019 D17).
-  var IMAGE_WORDS = { flip: ["horizontal", "vertical"], resizeQuality: ["pixelated", "low", "medium", "high"], metadata: ["keep", "no-location", "none"] };
-  function imageOptions(api, options, transform) {
-    var out = {}, crop;
-    function fail(says) { throw new TypeError(api + ": " + says); }
-    function take(name, ok, says) {
-      var value = options[name];
-      if (value === undefined) return;
-      if (!ok(value)) fail(name + " must be " + says);
-      out[name] = value;
-    }
-    function word(name) { take(name, function (w) { return IMAGE_WORDS[name].indexOf(w) >= 0; }, IMAGE_WORDS[name].map(function (w) { return JSON.stringify(w); }).join(" or ")); }
-    function finite(n) { return typeof n === "number" && isFinite(n); }
-    function side(n) { return Number.isInteger(n) && n >= 1 && n <= 16384; }
-    if (transform ? options !== undefined && (!options || typeof options !== "object") : !options || typeof options !== "object") fail(transform ? "options must be an object" : "options must be {maxDimension, maxBytes}");
-    options = options || {};
-    crop = options.crop;
-    take("rotate", finite, "a finite number of degrees");
-    word("flip");
-    if (crop !== undefined) {
-      if (!crop || typeof crop !== "object" || ![crop.x, crop.y, crop.width, crop.height].every(finite) || !(crop.width > 0 && crop.height > 0)) fail("crop must be {x, y, width, height}, finite, with a positive width and height");
-      out.crop = { x: crop.x, y: crop.y, width: crop.width, height: crop.height };
-    }
-    if (!transform) {
-      var dimension = options.maxDimension, bytes = options.maxBytes, type = options.type === undefined ? "image/jpeg" : options.type;
-      if (!Number.isInteger(dimension) || dimension < 1 || dimension > 8192) fail("maxDimension must be an integer from 1 to 8192");
-      if (!Number.isInteger(bytes) || bytes < 1 || bytes > 67108864) fail("maxBytes must be an integer from 1 to 67108864");
-      if (type !== "image/jpeg" && type !== "image/png") fail("type must be \"image/jpeg\" or \"image/png\"");
-      return [dimension, bytes, type].concat(Object.keys(out).length ? [JSON.stringify(out)] : []);
-    }
-    take("resizeWidth", side, "an integer from 1 to 16384");
-    take("resizeHeight", side, "an integer from 1 to 16384");
-    word("resizeQuality");
-    take("type", function (t) { return typeof t === "string" && /^image\/[a-z0-9.+-]+$/.test(t); }, "a media type such as \"image/jpeg\"");
-    take("quality", function (q) { return typeof q === "number" && q >= 0 && q <= 1; }, "a number from 0 to 1");
-    word("metadata");
-    return [JSON.stringify(out)];
   }
   // `exactBodyFrom` and `exactBodyTo` (LLP 1108 D6 R2), checked as the web's
   // ts-body-from.js checks them: a refusal's words, or undefined.
@@ -203,12 +240,15 @@
     if (/(^|\/)\.\.?(\/|$)|\0/.test(path.slice(5))) return name + ": an app:/ path has no . or .. segment";
   }
   function fileRefusal(init, method, url, raw) {
-    var from = init ? init.exactBodyFrom : undefined, to = init ? init.exactBodyTo : undefined, why;
+    var from = init ? init.exactBodyFrom : undefined,
+      to = init ? init.exactBodyTo : undefined,
+      why;
     if (from !== undefined) {
       if ((why = filePath("exactBodyFrom", from))) return why;
       if (method === "GET" || method === "HEAD") return "fetch: a " + method + " request cannot have a body";
       if (raw != null) return "fetch: a request has one body: body or exactBodyFrom";
-      if (init.exactStream !== undefined && /^wss?:/i.test(String(url))) return "exactBodyFrom: a WebSocket sends no body";
+      if (init.exactStream !== undefined && /^wss?:/i.test(String(url)))
+        return "exactBodyFrom: a WebSocket sends no body";
     }
     if (to !== undefined) {
       if ((why = filePath("exactBodyTo", to))) return why;
@@ -236,29 +276,74 @@
   // connection a target of its own: its mapper sends only on the connection
   // whose `connection` or `message` event it answers. `env` is the prelude's
   // door and turn: the answer running, the mapper call, and any mapper call.
-  var SOCKET_OPS = 256, SOCKET_BYTES = 1048576;
+  var SOCKET_OPS = 256,
+    SOCKET_BYTES = 1048576;
   function sockets(env) {
     var host = env.host;
-    var closed = function (what) { return new DOMException("the " + (what || "socket") + " is not open", "InvalidStateError"); }, quota = function (what) { return new DOMException(what, "QuotaExceededError"); };
+    var closed = function (what) {
+        return new DOMException("the " + (what || "socket") + " is not open", "InvalidStateError");
+      },
+      quota = function (what) {
+        return new DOMException(what, "QuotaExceededError");
+      };
     // The transport's bytes as this turn began, earlier turns' unsent ones and
     // an answer's this turn (door op 15; none on wasm, whose handle never
     // opens), as WHATWG's `bufferedAmount` counts them at a task's start. A
     // listener's connections are bounded by the host (D3).
-    function buffered(owner) { if (owner.listen) return 0; try { return Number(host(15, String(owner.ticket), "")) || 0; } catch (e) { return 0; } }
-    function turn(owner) { var m = env.mapping(); return m && m.owner === owner ? m : env.current(); } // its own mapper's call, else the turn's
+    function buffered(owner) {
+      if (owner.listen) return 0;
+      try {
+        return Number(host(15, String(owner.ticket), "")) || 0;
+      } catch (e) {
+        return 0;
+      }
+    }
+    function turn(owner) {
+      var m = env.mapping();
+      return m && m.owner === owner ? m : env.current();
+    } // its own mapper's call, else the turn's
     // Stage `op` on `target` (the socket, or one connection of a listener),
     // whose `state` 1 is open; `byMutation`: its stream is a mutation's.
     function stage(owner, target, op, byMutation) {
-      var call = turn(owner), mapping = env.mapping(), mapper = !!mapping && call === mapping, what = owner.listen ? "connection" : "socket";
-      // A turn of an answer the runner still holds, in no mapper call: a resource's, or a mutation's after a source that answered with a promise.
-      var answer = !mapper && !env.inMapper() && !!call && !call.replied && !call.letGo && (call.answer || call.mutation && !call.sync && call.status === "pending");
-      if (!call || !mapper && !answer && (!call.mutation || !call.sync)) throw new Error(what + "." + op.op.replace("text", "send").replace("binary", "send").replace("line", "send") + " is only available in a mutation's synchronous source, its " + (owner.listen ? "listener" : "socket") + "'s own mapper or an answer in flight");
-      if (owner.state !== 1 || target.state !== 1 || answer && byMutation) throw closed(what);
+      var call = turn(owner),
+        mapping = env.mapping(),
+        mapper = !!mapping && call === mapping,
+        what = owner.listen ? "connection" : "socket";
+      // A turn of an answer the runner still holds, in no mapper call: a resource's, or a mutation's after a source
+      // that answered with a promise.
+      var answer =
+        !mapper &&
+        !env.inMapper() &&
+        !!call &&
+        !call.replied &&
+        !call.letGo &&
+        (call.answer || (call.mutation && !call.sync && call.status === "pending"));
+      if (!call || (!mapper && !answer && (!call.mutation || !call.sync)))
+        throw new Error(
+          what +
+            "." +
+            op.op.replace("text", "send").replace("binary", "send").replace("line", "send") +
+            " is only available in a mutation's synchronous source, its " +
+            (owner.listen ? "listener" : "socket") +
+            "'s own mapper or an answer in flight"
+        );
+      if (owner.state !== 1 || target.state !== 1 || (answer && byMutation)) throw closed(what);
       if (mapper && owner.listen && mapping.connection !== target) throw closed(what);
       if (answer) return sendNow(owner, target, call, op);
-      if (!mapper && call.tickets.length) { call.socketConflict = true; throw new Error(env.conflict); }
-      var over = function (what) { var e = quota(what); if (mapper) call.overload = e; return e; }; // fails a mapper's snapshot, caught or not
-      var ops = call.socketOps || (call.socketOps = []), bytes = op.size, mine = op.size, kind = mapper ? "mapper call" : "mutation";
+      if (!mapper && call.tickets.length) {
+        call.socketConflict = true;
+        throw new Error(env.conflict);
+      }
+      // Fails a mapper's snapshot, caught or not.
+      var over = function (what) {
+        var e = quota(what);
+        if (mapper) call.overload = e;
+        return e;
+      };
+      var ops = call.socketOps || (call.socketOps = []),
+        bytes = op.size,
+        mine = op.size,
+        kind = mapper ? "mapper call" : "mutation";
       if (ops.length >= SOCKET_OPS) throw over("socket " + kind + " exceeds 256 operations");
       for (var i = 0; i < ops.length; i++) {
         if (ops[i].target === target && ops[i].ends) throw closed(what);
@@ -268,7 +353,8 @@
       // The turn's payload as a whole; this socket's buffer with what it stages on it.
       if (bytes > SOCKET_BYTES) throw over("socket " + kind + " exceeds 1 MiB");
       if (buffered(owner) + mine > SOCKET_BYTES) throw over("socket buffer exceeds 1 MiB");
-      op.owner = owner; op.target = target;
+      op.owner = owner;
+      op.target = target;
       ops.push(op);
     }
     // An answer's operation goes to the host now; D7's bounds count over all its turns.
@@ -278,35 +364,53 @@
       if (sent.ops >= SOCKET_OPS) throw quota("socket answer exceeds 256 operations");
       if (sent.bytes + op.size > SOCKET_BYTES) throw quota("socket answer exceeds 1 MiB");
       if (buffered(owner) + op.size > SOCKET_BYTES) throw quota("socket buffer exceeds 1 MiB");
-      sent.ops++; sent.bytes += op.size;
+      sent.ops++;
+      sent.bytes += op.size;
       if (op.ends) sent.closed.push(target);
       host(17, String(owner.ticket), wire(op));
     }
     // `op.wire`: a child's operation as js/src/process.js spells it.
-    function wire(op) { return JSON.stringify(op.wire || { op: op.op, data: op.data, code: op.code, reason: op.reason, connection: op.connection }); }
+    function wire(op) {
+      return JSON.stringify(
+        op.wire || { op: op.op, data: op.data, code: op.code, reason: op.reason, connection: op.connection }
+      );
+    }
     function socketOwner(ticket, byMutation) {
       var owner = { ticket: ticket, state: 0 };
       function amount() {
-        var n = buffered(owner), call = turn(owner), ops = call && call.socketOps;
+        var n = buffered(owner),
+          call = turn(owner),
+          ops = call && call.socketOps;
         for (var i = 0; ops && i < ops.length; i++) if (ops[i].owner === owner) n += ops[i].size;
         return n;
       }
       // A child's handle stages through them (js/src/process.js).
-      owner.stage = function (op) { return stage(owner, owner, op, byMutation); };
+      owner.stage = function (op) {
+        return stage(owner, owner, op, byMutation);
+      };
       owner.amount = amount;
       owner.handle = Object.freeze({
-        get readyState() { return owner.state; },
-        get bufferedAmount() { return amount(); },
+        get readyState() {
+          return owner.state;
+        },
+        get bufferedAmount() {
+          return amount();
+        },
         send: function (data) {
-          if (typeof data === "string") return stage(owner, owner, { op: "text", data: data, size: utf8Length(data) }, byMutation);
-          if (!(data instanceof ArrayBuffer) && !ArrayBuffer.isView(data)) throw new TypeError("socket.send expects a string, ArrayBuffer or ArrayBufferView");
+          if (typeof data === "string")
+            return stage(owner, owner, { op: "text", data: data, size: utf8Length(data) }, byMutation);
+          if (!(data instanceof ArrayBuffer) && !ArrayBuffer.isView(data))
+            throw new TypeError("socket.send expects a string, ArrayBuffer or ArrayBufferView");
           var bytes = new Uint8Array(copyBytes(data, "socket.send"));
           stage(owner, owner, { op: "binary", data: toBase64(bytes), size: bytes.length }, byMutation);
         },
         close: function (code, reason) {
-          if (code === undefined) code = 1000; if (reason === undefined) reason = "";
-          if (code !== 1000 && (!Number.isInteger(code) || code < 3000 || code > 4999)) throw new DOMException("invalid socket close code", "InvalidAccessError");
-          if (typeof reason !== "string" || utf8Length(reason) > 123) throw new SyntaxError("socket close reason exceeds 123 UTF-8 bytes");
+          if (code === undefined) code = 1000;
+          if (reason === undefined) reason = "";
+          if (code !== 1000 && (!Number.isInteger(code) || code < 3000 || code > 4999))
+            throw new DOMException("invalid socket close code", "InvalidAccessError");
+          if (typeof reason !== "string" || utf8Length(reason) > 123)
+            throw new SyntaxError("socket close reason exceeds 123 UTF-8 bytes");
           stage(owner, owner, { op: "close", code: code, reason: reason, size: 0, ends: true }, byMutation);
         },
       });
@@ -323,170 +427,116 @@
         if (c) return c;
         c = { id: id, state: 1 };
         c.handle = Object.freeze({
-          get readyState() { return c.state; },
+          get readyState() {
+            return c.state;
+          },
           send: function (text) {
             if (typeof text !== "string") throw new TypeError("ListenConnection.send expects a string");
             // The peer would read a line with a newline as two.
             if (text.indexOf("\n") >= 0) throw new SyntaxError("ListenConnection.send: a line has no \\n");
             stage(owner, c, { op: "line", connection: id, data: text, size: utf8Length(text) + 1 }, false);
           },
-          end: function () { stage(owner, c, { op: "end", connection: id, size: 0, ends: true }, false); },
+          end: function () {
+            stage(owner, c, { op: "end", connection: id, size: 0, ends: true }, false);
+          },
         });
         owner.connections.set(id, c);
         return c;
       };
       // The stream's end, or its answer let go: every handle is closed.
-      owner.close = function () { owner.state = 3; owner.connections.forEach(function (c) { c.state = 3; }); owner.connections.clear(); };
+      owner.close = function () {
+        owner.state = 3;
+        owner.connections.forEach(function (c) {
+          c.state = 3;
+        });
+        owner.connections.clear();
+      };
       return owner;
     }
     // One message for a listener's mapper: the event and the connection
     // handle beside it (none for `listening`). `end` closes that handle.
     function listenEvent(owner, message) {
-      var type = message.event, id = Number(message.id), c = type === "listening" ? null : owner.connection(id);
-      if (type === "listening") { owner.state = 1; return { event: { type: type, address: message.data, port: id || 0 } }; }
-      if (type === "end") { c.state = 3; owner.connections.delete(id); return { event: { type: type, id: id, reason: message.data }, connection: c }; }
+      var type = message.event,
+        id = Number(message.id),
+        c = type === "listening" ? null : owner.connection(id);
+      if (type === "listening") {
+        owner.state = 1;
+        return { event: { type: type, address: message.data, port: id || 0 } };
+      }
+      if (type === "end") {
+        c.state = 3;
+        owner.connections.delete(id);
+        return { event: { type: type, id: id, reason: message.data }, connection: c };
+      }
       if (type === "connection") return { event: { type: type, id: id }, connection: c };
       return { event: { type: "message", id: id, data: message.data }, connection: c };
     }
     // A turn's staged operations to the host, with its answer.
-    function hand(call, door) { // door 17: a promise-answering mutation's first answer turn, counted toward its bounds
-      var ops = call.socketOps || [], sent = door === 17 && (call.socketSent = { ops: ops.length, bytes: 0, closed: [] }); call.socketOps = null;
-      ops.forEach(function (op) { if (sent) { sent.bytes += op.size; if (op.ends) sent.closed.push(op.target); } host(door || 14, String(op.owner.ticket), wire(op)); });
+    function hand(call, door) {
+      // door 17: a promise-answering mutation's first answer turn, counted toward its bounds
+      var ops = call.socketOps || [],
+        sent = door === 17 && (call.socketSent = { ops: ops.length, bytes: 0, closed: [] });
+      call.socketOps = null;
+      ops.forEach(function (op) {
+        if (sent) {
+          sent.bytes += op.size;
+          if (op.ends) sent.closed.push(op.target);
+        }
+        host(door || 14, String(op.owner.ticket), wire(op));
+      });
     }
     return { socketOwner: socketOwner, listenOwner: listenOwner, listenEvent: listenEvent, hand: hand };
   }
-  // An answer's own timers (LLP 1027.000 D1 as amended 2026-10-28), for
-  // prelude.js, here under its line cap. `setTimeout` arms one due on the
-  // runner's clock as the call began (`clock`, host door op 21), owned by the
-  // answer running (`owner`, which refuses one outside an answer). An answer
-  // that awaits only its timers parks on the earliest (`wait`), and the
-  // runner asks it again once its clock is there (`fire`): one callback a
-  // turn, so the microtasks each queues run before the next, as a browser
-  // runs them between tasks. An answer that gives its value or is let go
-  // clears the rest (`drop`): their callbacks never run. `setInterval`, the
-  // frame callbacks and the clock reads stay refused. Hermes's rejection
-  // tracker schedules its report with `setTimeout` too: that one runs alone,
-  // at the prelude's next `checkpoint`, which is when a browser fires
-  // `unhandledrejection`.
-  function timers(owner, clock, journal, report, sources) {
-    var armed = new Map(), reports = [], signals = new WeakMap(), next = 1, now = 0;
-    function fixed(name, value) { Object.defineProperty(global, name, { value: value, writable: false, configurable: false }); }
-    // The runner's clock as the call began; where none is (at bake), the last time a timer ran at. Not kept
-    // monotonic: a runner that restarts at zero beside this realm (a dev reload) is the clock from then on.
-    function time() { var c = clock(), t = Number(c); if (c !== undefined && c !== "" && t === t) now = t; return now; }
-    function arm(api, run, ms, args) {
-      var call = owner(api), id = next++;
-      armed.set(id, { call: call, due: Math.ceil(time() + ms), run: run, args: args });
-      return id;
-    }
-    fixed("setTimeout", function setTimeout(callback, delay) {
-      if (typeof callback === "function" && report(callback)) { reports.push({ id: next, run: callback }); return next++; }
-      if (typeof callback !== "function") throw new TypeError("setTimeout(): the callback must be a function; a string of code is never run");
-      return arm("setTimeout()", callback, Math.max(Number(delay) | 0, 0), Array.prototype.slice.call(arguments, 2)); // `long`, as WebIDL converts it
-    });
-    fixed("clearTimeout", function clearTimeout(id) {
-      var timer = armed.get(id);
-      if (timer) timer.call.ran = true; // Its parked deadline must be read again (LLP 1162 D3).
-      armed.delete(id);
-      reports = reports.filter(function (r) { return r.id !== id; });
-    });
-    ["setInterval", "requestAnimationFrame", "requestIdleCallback"].forEach(function (name) {
-      fixed(name, function () { throw new Error(name + "() is unavailable in data sources: an answer waits with setTimeout; pass time as an argument"); });
-    });
-    ["clearInterval", "cancelAnimationFrame", "cancelIdleCallback"].forEach(function (name) { fixed(name, function () {}); });
-    if (global.AbortSignal) global.AbortSignal.timeout = function timeout(ms) {
-      var n = Number(ms);
-      if (!(n >= 0 && n <= 9007199254740991)) throw new TypeError("AbortSignal.timeout(): the delay is a number of milliseconds from 0");
-      var controller = new global.AbortController();
-      var abort = function () { controller.abort(new global.DOMException("signal timed out", "TimeoutError")); };
-      var id = arm("AbortSignal.timeout()", abort, Math.floor(n), []);
-      // Its deadline outlives the timer, which its answer's end drops: a request carrying it still has it.
-      signals.set(controller.signal, { id: id, due: armed.get(id).due, abort: abort });
-      return controller.signal;
-    };
-    // A timeout signal's deadline, or the earliest among the signals one was composed of (`sources`).
-    function deadline(signal) {
-      var s = signal && signals.get(signal), composed = !s && signal && sources(signal);
-      if (composed) composed.forEach(function (input) { var t = signals.get(input); if (t && (!s || t.due < s.due)) s = t; });
-      return s;
-    }
-    function first(call, by) {
-      var found;
-      armed.forEach(function (t, id) { if (t.call === call && t.due <= by && (!found || t.due < found[1].due)) found = [id, t]; });
-      return found;
-    }
-    return {
-      // The earliest of `call`'s timers: when it is due, or undefined.
-      wait: function (call) { var t = first(call, Infinity); return t ? (call.timerDue = t[1].due) : undefined; },
-      armed: function (call) { return first(call, Infinity) !== undefined; },
-      // When `call`'s earliest timer comes due before the fetch carrying
-      // `signal` ends on its own deadline (`left`, which the host keeps): its
-      // time, or undefined. The runner resumes the answer then if no reply came.
-      race: function (call, signal) {
-        var t = first(call, Infinity), s = deadline(signal);
-        return t && !(s && !signal.aborted && s.due <= t[1].due) ? (call.timerDue = t[1].due) : undefined;
-      },
-      now: time,
-      // `call`'s earliest timer due by the clock `at` runs: the runner's, or,
-      // where none is (at bake), the last time a timer ran at. `due`: the
-      // runner says the timer it waited for is due, so that one runs.
-      fire: function (call, at, due) {
-        var t = Number(at);
-        if (at !== "" && t === t) now = t;
-        if (due) now = Math.max(now, call.timerDue || 0);
-        t = first(call, now);
-        if (!t) return;
-        armed.delete(t[0]);
-        try { t[1].run.apply(undefined, t[1].args); }
-        catch (e) { journal("data: a timer's callback threw: " + (e && e.message !== undefined ? e.message : String(e))); }
-      },
-      drop: function (call) { armed.forEach(function (t, id) { if (t.call === call) armed.delete(id); }); },
-      // An `AbortSignal.timeout` still to fire, or one composed of it: the ms
-      // left, the deadline a fetch carrying it gives the host; `expire` aborts
-      // it when that passes, its timer dropped or not, as a browser's fires:
-      // a fetch its answer let go runs to its end (LLP 1146 D2), and another
-      // answer may carry the same signal.
-      left: function (signal) { var s = deadline(signal); return s && !signal.aborted ? Math.max(1, s.due - time()) : undefined; },
-      expire: function (signal) { var s = deadline(signal); if (s && !signal.aborted) { armed.delete(s.id); s.abort(); } },
-      checkpoint: function () {
-        var ran = reports.length > 0;
-        while (reports.length) {
-          var report = reports.shift();
-          try { report.run(); } catch (e) { /* the tracker's own; nothing to tell */ }
-        }
-        return ran;
-      },
-    };
-  }
-  // An answer's reply as JSON (prelude.js `ok`), where a list element that is plain data frozen to its leaves
+  // An answer's reply as JSON (reply.js `ok`), where a list element that is plain data frozen to its leaves
   // keeps its JSON by identity and is spliced back, never walked again: a transcript's window holds its last
   // page's rows (rt1's crossing plan). Frozen plain data, no Proxy in it, can't change once its prototypes
   // are frozen, which hardening does natively; only the native runtime (its byte door) keeps anything, since
   // the web's module realm is unhardened.
   // `step(holder, key, item)` is the prelude's own replacer (its large-string capture), run as JSON would.
-  var isFrozen = Object.isFrozen, protoOf = Object.getPrototypeOf, names = Object.getOwnPropertyNames;
-  var symbols = Object.getOwnPropertySymbols, describe = Object.getOwnPropertyDescriptor;
+  var isFrozen = Object.isFrozen,
+    protoOf = Object.getPrototypeOf,
+    names = Object.getOwnPropertyNames;
+  var symbols = Object.getOwnPropertySymbols,
+    describe = Object.getOwnPropertyDescriptor;
   var unbox = Function.prototype.call.bind(String.prototype.valueOf);
-  var PLAIN = [Object.prototype, Array.prototype, null], keptJson = new WeakMap();
+  var PLAIN = [Object.prototype, Array.prototype, null],
+    keptJson = new WeakMap();
   // Every Proxy made from here on, natively (the prelude's, then the app's): a trap can answer a later read
   // differently from what the keep check saw, and no JS check tells a Proxy apart, so these are never kept.
   var proxies = new WeakSet();
-  if (door && typeof global.Proxy === "function") (function (Native) {
-    // Proxies over the engine's own, so construction, calls and properties are the engine's (a Proxy with
-    // no `new` throws; revocable can't be constructed), each result recorded. One difference no JS wrapper
-    // avoids: Hermes reads `prototype` from an explicit new target (`Reflect.construct(Proxy, args, C)`, a
-    // bound Proxy) before the trap runs, where the engine's Proxy reads nothing; a data property runs no code.
-    var construct = Reflect.construct, apply = Reflect.apply, revocable = Native.revocable;
-    var made = function (proxy) { proxies.add(proxy); return proxy; };
-    var described = Object.getOwnPropertyDescriptor(Native, "revocable");
-    described.value = new Native(revocable, { apply: function (fn, self, args) { var r = apply(fn, self, args); made(r.proxy); return r; } });
-    Object.defineProperty(Native, "revocable", described);
-    var tracked = new Native(Native, { construct: function (fn, args, target) { return made(construct(fn, args, target === tracked ? fn : target)); } });
-    Object.defineProperty(global, "Proxy", { value: tracked, writable: true, configurable: true });
-  })(global.Proxy);
+  if (door && typeof global.Proxy === "function")
+    (function (Native) {
+      // Proxies over the engine's own, so construction, calls and properties are the engine's (a Proxy with
+      // no `new` throws; revocable can't be constructed), each result recorded. One difference no JS wrapper
+      // avoids: Hermes reads `prototype` from an explicit new target (`Reflect.construct(Proxy, args, C)`, a
+      // bound Proxy) before the trap runs, where the engine's Proxy reads nothing; a data property runs no code.
+      var construct = Reflect.construct,
+        apply = Reflect.apply,
+        revocable = Native.revocable;
+      var made = function (proxy) {
+        proxies.add(proxy);
+        return proxy;
+      };
+      var described = Object.getOwnPropertyDescriptor(Native, "revocable");
+      described.value = new Native(revocable, {
+        apply: function (fn, self, args) {
+          var r = apply(fn, self, args);
+          made(r.proxy);
+          return r;
+        },
+      });
+      Object.defineProperty(Native, "revocable", described);
+      var tracked = new Native(Native, {
+        construct: function (fn, args, target) {
+          return made(construct(fn, args, target === tracked ? fn : target));
+        },
+      });
+      Object.defineProperty(global, "Proxy", { value: tracked, writable: true, configurable: true });
+    })(global.Proxy);
   // A token's JSON where a string begins (after a run of backslashes of even length: a quote inside a string
   // is escaped by an odd one), and a string or key that would read as one: U+0000 and digits, nothing else.
-  var TOKEN = /((?:^|[^\\])(?:\\\\)*)"\\u0000\d+"/g, SPELLED = /^\u0000\d+$/;
+  var TOKEN = /((?:^|[^\\])(?:\\\\)*)"\\u0000\d+"/g,
+    SPELLED = /^\u0000\d+$/;
   function frozenData(v, depth) {
     if (v === null) return true;
     if (typeof v === "string") return v.length < 65536; // a large string is captured
@@ -494,11 +544,13 @@
     // Own symbols: a wrapper's own Symbol.toPrimitive would be read (its prototype's are hardened intrinsics).
     // JSON reads an object's own names and its `toJSON`: an own one is a function (refused below), and its
     // prototypes, hardened intrinsics, have none; only a Proxy could answer differently later.
-    if (depth > 64 || proxies.has(v) || !isFrozen(v) || PLAIN.indexOf(protoOf(v)) < 0 || symbols(v).length) return false;
+    if (depth > 64 || proxies.has(v) || !isFrozen(v) || PLAIN.indexOf(protoOf(v)) < 0 || symbols(v).length)
+      return false;
     var own = names(v);
     for (var i = 0; i < own.length; i++) {
       var d = describe(v, own[i]);
-      if (!("value" in d) || !frozenData(d.value, depth + 1)) return false; // a getter can vary (and a toJSON is a function)
+      // a getter can vary (and a toJSON is a function)
+      if (!("value" in d) || !frozenData(d.value, depth + 1)) return false;
     }
     return true;
   }
@@ -506,12 +558,14 @@
     var keeps = !!door && isFrozen(Object.prototype) && isFrozen(Array.prototype);
     // Every token in the text, and every string or key spelled like one, in the order JSON writes them: a
     // kept text, or null where the text stays as written.
-    var texts = [], places = [];
+    var texts = [],
+      places = [];
     var text = JSON.stringify(reply, function (key, item) {
-      var out = item, kept;
+      var out = item,
+        kept;
       if (keeps && item !== null && typeof item === "object" && Array.isArray(this)) {
         kept = keptJson.get(item);
-        if (kept === undefined && frozenData(item, 0)) keptJson.set(item, kept = JSON.stringify(item));
+        if (kept === undefined && frozenData(item, 0)) keptJson.set(item, (kept = JSON.stringify(item)));
       }
       if (kept !== undefined) out = "\u0000" + texts.push(kept);
       else if (step) out = step.call(this, key, item);
@@ -519,11 +573,24 @@
       if (out !== null && typeof out === "object") {
         // A boxed string: converted here, once, as JSON would (its own toString honored), so its text is known.
         var boxed = false;
-        try { unbox(out); boxed = true; } catch (e) { /* not a String */ }
+        try {
+          unbox(out);
+          boxed = true;
+        } catch (e) {
+          /* not a String */
+        }
         if (boxed) out = String(out);
       }
       var type = typeof out;
-      if (out !== undefined && type !== "function" && type !== "symbol" && key !== "" && !Array.isArray(this) && SPELLED.test(key)) places.push(null);
+      if (
+        out !== undefined &&
+        type !== "function" &&
+        type !== "symbol" &&
+        key !== "" &&
+        !Array.isArray(this) &&
+        SPELLED.test(key)
+      )
+        places.push(null);
       if (kept !== undefined) places.push(kept);
       else if (type === "string" && SPELLED.test(out)) places.push(null);
       return out;
@@ -558,8 +625,10 @@
   // `value`'s buffer source (`bufferSource`), one on a SharedArrayBuffer or a resizable buffer refused
   function allowedSource(value, api) {
     var source = bufferSource(value);
-    if (source && sharedLength && holds(sharedLength, source.buffer)) throw new TypeError(api + ": data on a SharedArrayBuffer is not a BufferSource");
-    if (source && bufferResizable && slot(bufferResizable, source.buffer) === true) throw new TypeError(api + ": data on a resizable ArrayBuffer is not a BufferSource");
+    if (source && sharedLength && holds(sharedLength, source.buffer))
+      throw new TypeError(api + ": data on a SharedArrayBuffer is not a BufferSource");
+    if (source && bufferResizable && slot(bufferResizable, source.buffer) === true)
+      throw new TypeError(api + ": data on a resizable ArrayBuffer is not a BufferSource");
     return source;
   }
   // A BufferSource's buffer, offset and length, read through its internal slots as Web IDL reads them, never through
@@ -570,39 +639,74 @@
     // A primitive is none, found without a getter's throw (`fetch` asks this of every body)
     if (value === null || typeof value !== "object") return null;
     if (isView(value)) {
-      var slots = holds(viewSlots[0], value) ? viewSlots : dataViewSlots, buffer = slot(slots[0], value);
-      if (holds(bufferLength, buffer) && slot(bufferLength, buffer) === 0) return { buffer: buffer, offset: 0, length: 0 };
+      var slots = holds(viewSlots[0], value) ? viewSlots : dataViewSlots,
+        buffer = slot(slots[0], value);
+      if (holds(bufferLength, buffer) && slot(bufferLength, buffer) === 0)
+        return { buffer: buffer, offset: 0, length: 0 };
       return { buffer: buffer, offset: slot(slots[1], value), length: slot(slots[2], value) };
     }
     return holds(bufferLength, value) ? { buffer: value, offset: 0, length: slot(bufferLength, value) } : null;
   }
-  var reflectApply = Reflect.apply, isView = ArrayBuffer.isView, Bytes = Uint8Array;
-  function getterOf(proto, name) { var described = Object.getOwnPropertyDescriptor(proto, name); return described && described.get; }
-  var viewSlots = ["buffer", "byteOffset", "byteLength"].map(function (name) { return getterOf(Object.getPrototypeOf(Uint8Array.prototype), name); });
-  var dataViewSlots = ["buffer", "byteOffset", "byteLength"].map(function (name) { return getterOf(DataView.prototype, name); });
-  var bufferLength = getterOf(ArrayBuffer.prototype, "byteLength"), bufferResizable = getterOf(ArrayBuffer.prototype, "resizable");
-  var sharedLength = typeof SharedArrayBuffer === "function" ? getterOf(SharedArrayBuffer.prototype, "byteLength") : undefined;
-  function slot(getter, value) { return reflectApply(getter, value, []); }
+  var reflectApply = Reflect.apply,
+    isView = ArrayBuffer.isView,
+    Bytes = Uint8Array;
+  function getterOf(proto, name) {
+    var described = Object.getOwnPropertyDescriptor(proto, name);
+    return described && described.get;
+  }
+  var viewSlots = ["buffer", "byteOffset", "byteLength"].map(function (name) {
+    return getterOf(Object.getPrototypeOf(Uint8Array.prototype), name);
+  });
+  var dataViewSlots = ["buffer", "byteOffset", "byteLength"].map(function (name) {
+    return getterOf(DataView.prototype, name);
+  });
+  var bufferLength = getterOf(ArrayBuffer.prototype, "byteLength"),
+    bufferResizable = getterOf(ArrayBuffer.prototype, "resizable");
+  var sharedLength =
+    typeof SharedArrayBuffer === "function" ? getterOf(SharedArrayBuffer.prototype, "byteLength") : undefined;
+  function slot(getter, value) {
+    return reflectApply(getter, value, []);
+  }
   // Whether `value` has the internal slot `getter` reads
-  function holds(getter, value) { try { slot(getter, value); return true; } catch (e) { return false; } }
+  function holds(getter, value) {
+    try {
+      slot(getter, value);
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
 
   var formText = global.URLSearchParams && global.URLSearchParams.prototype.toString;
   // Whether `value` is a `URLSearchParams`, by the platform's own check
   function isForm(value) {
     if (!formText || value === null || typeof value !== "object") return false;
-    try { reflectApply(formText, value, []); return true; } catch (e) { return false; }
+    try {
+      reflectApply(formText, value, []);
+      return true;
+    } catch (e) {
+      return false;
+    }
   }
   // Fetch's BodyInit extraction gives strings and forms a type, bytes and streams none.
   function bodyType(body, form) {
-    return form ? "application/x-www-form-urlencoded;charset=UTF-8" : typeof body === "string" ? "text/plain;charset=UTF-8" : null;
+    return form
+      ? "application/x-www-form-urlencoded;charset=UTF-8"
+      : typeof body === "string"
+        ? "text/plain;charset=UTF-8"
+        : null;
   }
   function requestBody(raw, method, headers) {
-    if (isReadableStream(raw)) throw new TypeError("fetch: ReadableStream request bodies are unavailable; collect the bytes with new Response(body).arrayBuffer() first");
+    if (isReadableStream(raw))
+      throw new TypeError(
+        "fetch: ReadableStream request bodies are unavailable; collect the bytes with new Response(body).arrayBuffer() first"
+      );
     // Fetch's Request refuses a body on a GET or HEAD, an empty one too.
     if (raw != null && (method === "GET" || method === "HEAD"))
       throw new TypeError("fetch: a " + method + " request cannot have a body");
     // A BufferSource goes as bytes (LLP 1069.002 D4); forms use their internal list, never an app's toString.
-    var bytes = bufferSourceBytes(raw, "fetch"), form = !bytes && isForm(raw);
+    var bytes = bufferSourceBytes(raw, "fetch"),
+      form = !bytes && isForm(raw);
     var text = bytes || raw == null ? "" : form ? reflectApply(formText, raw, []) : String(raw);
     var type = bytes || raw == null ? null : bodyType(text, form);
     if (type && !headers.has("content-type")) headers.set("content-type", type);
@@ -627,18 +731,32 @@
     // code, so there they go unguarded
     var headersHooks = global.__exact_ibex2_headers_hooks;
     delete global.__exact_ibex2_headers_hooks;
-    var guard = headersHooks ? headersHooks.guard : function (headers) { return headers; };
-    var ownKeys = Reflect.ownKeys, ownDescriptor = Reflect.getOwnPropertyDescriptor;
+    var guard = headersHooks
+      ? headersHooks.guard
+      : function (headers) {
+          return headers;
+        };
+    var ownKeys = Reflect.ownKeys,
+      ownDescriptor = Reflect.getOwnPropertyDescriptor;
     // The platform's own operations, taken before any app code runs, for what an app's object could answer itself; a
     // realm may lack either class
-    var Headers = global.Headers, eachHeader = Headers && Headers.prototype.forEach, appendHeader = Headers && Headers.prototype.append;
+    var Headers = global.Headers,
+      eachHeader = Headers && Headers.prototype.forEach,
+      appendHeader = Headers && Headers.prototype.append;
     var states = new WeakMap();
-    var streamRead = StreamBody && StreamBody.prototype.arrayBuffer, streamClone = StreamBody && StreamBody.prototype.clone;
+    var streamRead = StreamBody && StreamBody.prototype.arrayBuffer,
+      streamClone = StreamBody && StreamBody.prototype.clone;
     var streamUsed = StreamBody && Object.getOwnPropertyDescriptor(StreamBody.prototype, "bodyUsed").get;
     var streamBody = StreamBody && Object.getOwnPropertyDescriptor(StreamBody.prototype, "body").get;
-    function isStreamBody(body) { return StreamBody && body instanceof StreamBody; }
-    function used(s) { return isStreamBody(s.body) ? slot(streamUsed, s.body) : s.used; }
-    function unusable(s) { return used(s) || isStreamBody(s.body) && slot(streamLocked, slot(streamBody, s.body)); }
+    function isStreamBody(body) {
+      return StreamBody && body instanceof StreamBody;
+    }
+    function used(s) {
+      return isStreamBody(s.body) ? slot(streamUsed, s.body) : s.used;
+    }
+    function unusable(s) {
+      return used(s) || (isStreamBody(s.body) && slot(streamLocked, slot(streamBody, s.body)));
+    }
     function state(response) {
       var s = states.get(response);
       if (!s) throw new TypeError("not a Response");
@@ -651,11 +769,19 @@
     // an iterator an app gives the headers
     function headersCopy(headers, kind) {
       var copy = new Headers();
-      reflectApply(eachHeader, headers, [function (value, name) { reflectApply(appendHeader, copy, [name, value]); }]);
+      reflectApply(eachHeader, headers, [
+        function (value, name) {
+          reflectApply(appendHeader, copy, [name, value]);
+        },
+      ]);
       return guard(copy, kind);
     }
-    // Web IDL's `unsigned short`: ToNumber (a BigInt or a symbol refused), truncated, modulo 2^16; NaN and the infinities 0
-    function unsignedShort(value) { var n = +value; return isFinite(n) ? ((Math.trunc(n) % 65536) + 65536) % 65536 : 0; }
+    // Web IDL's `unsigned short`: ToNumber (a BigInt or a symbol refused), truncated, modulo 2^16; NaN and the
+    // infinities 0
+    function unsignedShort(value) {
+      var n = +value;
+      return isFinite(n) ? ((Math.trunc(n) % 65536) + 65536) % 65536 : 0;
+    }
     // Web IDL's strings: ToString, a symbol refused
     function string(value, api) {
       if (typeof value === "symbol") throw new TypeError(api + ": a symbol is not a string");
@@ -676,11 +802,23 @@
       if (!isObject(value)) throw new TypeError(api + ": the headers are no sequence or record");
       var method = iteratorOf(value, api);
       if (method) {
-        return sequenceOf(value, method, function (pair) {
-          var parts = isObject(pair) ? iteratorOf(pair, api) : undefined;
-          if (!parts) throw new TypeError(api + ": a header is no sequence of a name and a value");
-          return sequenceOf(pair, parts, function (part) { return byteString(part, api); }, api);
-        }, api);
+        return sequenceOf(
+          value,
+          method,
+          function (pair) {
+            var parts = isObject(pair) ? iteratorOf(pair, api) : undefined;
+            if (!parts) throw new TypeError(api + ": a header is no sequence of a name and a value");
+            return sequenceOf(
+              pair,
+              parts,
+              function (part) {
+                return byteString(part, api);
+              },
+              api
+            );
+          },
+          api
+        );
       }
       var pairs = [];
       ownKeys(value).forEach(function (key) {
@@ -689,7 +827,9 @@
       });
       return pairs;
     }
-    function isObject(value) { return value !== null && (typeof value === "object" || typeof value === "function"); }
+    function isObject(value) {
+      return value !== null && (typeof value === "object" || typeof value === "function");
+    }
     // Web IDL's GetMethod for `Symbol.iterator`: the method, read once, or undefined for none
     function iteratorOf(value, api) {
       var method = value[Symbol.iterator];
@@ -701,7 +841,8 @@
     // `call` the app gives them, and each value converted as it is yielded
     // (https://webidl.spec.whatwg.org/#create-sequence-from-iterable)
     function sequenceOf(value, method, convert, api) {
-      var iterator = reflectApply(method, value, []), list = [];
+      var iterator = reflectApply(method, value, []),
+        list = [];
       if (!isObject(iterator)) throw new TypeError(api + ": an iterator is not an object");
       var next = iterator.next;
       for (;;) {
@@ -716,16 +857,26 @@
     function initOf(init, api) {
       if (init != null && !isObject(init)) throw new TypeError(api + ": the init is not a dictionary");
       var given = init == null ? {} : init;
-      var headers = headersInitOf(given.headers, api), asked = given.status;
-      var status = asked === undefined ? 200 : unsignedShort(asked), statusText = given.statusText;
-      return { headers: headers, status: status, statusText: statusText === undefined ? "" : byteString(statusText, api) };
+      var headers = headersInitOf(given.headers, api),
+        asked = given.status;
+      var status = asked === undefined ? 200 : unsignedShort(asked),
+        statusText = given.statusText;
+      return {
+        headers: headers,
+        status: status,
+        statusText: statusText === undefined ? "" : byteString(statusText, api),
+      };
     }
     // Fetch's "initialize a response": the extracted body and the type it brings
     function initialized(source, type, options, api) {
-      var status = options.status, statusText = options.statusText, headers = new Headers();
-      if (status < 200 || status > 599) throw new RangeError(api + ": the status must be from 200 to 599, not " + status);
+      var status = options.status,
+        statusText = options.statusText,
+        headers = new Headers();
+      if (status < 200 || status > 599)
+        throw new RangeError(api + ": the status must be from 200 to 599, not " + status);
       // A reason phrase: tabs, spaces, visible ASCII and bytes from 0x80 (RFC 9112 §4)
-      if (/[^\t\x20-\x7e\x80-\xff]/.test(statusText)) throw new TypeError(api + ": the statusText " + JSON.stringify(statusText) + " is not a reason phrase");
+      if (/[^\t\x20-\x7e\x80-\xff]/.test(statusText))
+        throw new TypeError(api + ": the statusText " + JSON.stringify(statusText) + " is not a reason phrase");
       options.headers.forEach(function (pair) {
         if (pair.length !== 2) throw new TypeError(api + ": a header is a name and a value");
         headers.append(pair[0], pair[1]);
@@ -733,9 +884,18 @@
       headers["delete"]("set-cookie");
       headers["delete"]("set-cookie2");
       guard(headers, "response");
-      if (source !== null && (status === 204 || status === 205 || status === 304)) throw new TypeError(api + ": a " + status + " has no body");
+      if (source !== null && (status === 204 || status === 205 || status === 304))
+        throw new TypeError(api + ": a " + status + " has no body");
       if (type && !headers.has("content-type")) headers.set("content-type", type);
-      return { status: status, statusText: statusText, headers: headers, guard: "response", body: source === null ? null : typeof source === "string" ? new TextEncoder().encode(source) : source, used: false, exactBodyTo: null };
+      return {
+        status: status,
+        statusText: statusText,
+        headers: headers,
+        guard: "response",
+        body: source === null ? null : typeof source === "string" ? new TextEncoder().encode(source) : source,
+        used: false,
+        exactBodyTo: null,
+      };
     }
     function made(fields) {
       var response = Object.create(Response.prototype);
@@ -746,21 +906,53 @@
     // string), then the init; Fetch extracts the body after both
     function Response(body, init) {
       if (!new.target) throw new TypeError("Response must be constructed with new");
-      var api = "new Response()", form = isForm(body), stream = isReadableStream(body);
-      var kept = body == null || form || stream || isBufferSource(body, api) ? body : string(body, api), options = initOf(init, api);
-      var source = kept == null ? null : stream ? new StreamBody(kept) : form ? reflectApply(formText, kept, []) : typeof kept === "string" ? kept : bufferSourceBytes(kept, api);
+      var api = "new Response()",
+        form = isForm(body),
+        stream = isReadableStream(body);
+      var kept = body == null || form || stream || isBufferSource(body, api) ? body : string(body, api),
+        options = initOf(init, api);
+      var source =
+        kept == null
+          ? null
+          : stream
+            ? new StreamBody(kept)
+            : form
+              ? reflectApply(formText, kept, [])
+              : typeof kept === "string"
+                ? kept
+                : bufferSourceBytes(kept, api);
       var type = bodyType(kept, form);
       states.set(this, initialized(source, type, options, api));
     }
     ["status", "statusText", "headers", "exactBodyTo"].forEach(function (name) {
-      Object.defineProperty(Response.prototype, name, { get: function () { return state(this)[name]; }, enumerable: true, configurable: true });
+      Object.defineProperty(Response.prototype, name, {
+        get: function () {
+          return state(this)[name];
+        },
+        enumerable: true,
+        configurable: true,
+      });
     });
-    Object.defineProperty(Response.prototype, "ok", { get: function () { var status = state(this).status; return status >= 200 && status < 300; }, enumerable: true, configurable: true });
-    Object.defineProperty(Response.prototype, "bodyUsed", { get: function () { var s = state(this); return s.body !== null && used(s); }, enumerable: true, configurable: true });
-    // Fetch's "consume body": a body is read once; none reads as empty, as often as asked. An app's body is bytes or a stream;
-    // a host reply's, its bytes in base64 and their UTF-8 text, as the host decoded it. `read` makes the reader's
-    // value from it, and the promise is resolved with that value alone: the body held stays out of reach. As Fetch
-    // consumes one, a body is marked read now and read in a later turn, and none is read now, so its promise is
+    Object.defineProperty(Response.prototype, "ok", {
+      get: function () {
+        var status = state(this).status;
+        return status >= 200 && status < 300;
+      },
+      enumerable: true,
+      configurable: true,
+    });
+    Object.defineProperty(Response.prototype, "bodyUsed", {
+      get: function () {
+        var s = state(this);
+        return s.body !== null && used(s);
+      },
+      enumerable: true,
+      configurable: true,
+    });
+    // Fetch's "consume body": a body is read once; none reads as empty, as often as asked. An app's body is bytes or a
+    // stream; a host reply's, its bytes in base64 and their UTF-8 text, as the host decoded it. `read` makes the
+    // reader's value from it, and the promise is resolved with that value alone: the body held stays out of reach. As
+    // Fetch consumes one, a body is marked read now and read in a later turn, and none is read now, so its promise is
     // settled already, rejected if `read` throws.
     var none = new Uint8Array(0);
     function consumed(response, read) {
@@ -769,50 +961,90 @@
         var s = state(response);
         if (s.body === null) return Promise.resolve(read(none));
         if (unusable(s)) throw new TypeError("the body is locked or was read already");
-        if (isStreamBody(s.body)) return reflectApply(streamRead, s.body, []).then(function (bytes) { return read(new Uint8Array(bytes)); });
+        if (isStreamBody(s.body))
+          return reflectApply(streamRead, s.body, []).then(function (bytes) {
+            return read(new Uint8Array(bytes));
+          });
         s.used = true;
         body = s.body;
       } catch (e) {
         return Promise.reject(e);
       }
-      return Promise.resolve().then(function () { return read(body); });
+      return Promise.resolve().then(function () {
+        return read(body);
+      });
     }
     Response.prototype.arrayBuffer = function () {
-      return consumed(this, function (body) { return body instanceof Uint8Array ? copyBytes(body, "Response.arrayBuffer()") : fromBase64(body.base64).buffer; });
+      return consumed(this, function (body) {
+        return body instanceof Uint8Array ? copyBytes(body, "Response.arrayBuffer()") : fromBase64(body.base64).buffer;
+      });
     };
     // A body UTF-8 decoded, a leading byte order mark dropped (Fetch's "UTF-8 decode")
     function decoded(body) {
       if (body instanceof Uint8Array) return new TextDecoder().decode(body);
       return body.text.charCodeAt(0) === 0xfeff ? body.text.slice(1) : body.text;
     }
-    Response.prototype.text = function () { return consumed(this, decoded); };
+    Response.prototype.text = function () {
+      return consumed(this, decoded);
+    };
     // Parsed as the body is read, as Fetch's "package data" does, not in a turn after
-    Response.prototype.json = function () { return consumed(this, function (body) { return JSON.parse(decoded(body)); }); };
+    Response.prototype.json = function () {
+      return consumed(this, function (body) {
+        return JSON.parse(decoded(body));
+      });
+    };
     Response.prototype.clone = function () {
       var s = state(this);
-      if (s.body !== null && unusable(s)) throw new TypeError("Response.clone(): the body is locked or was read already");
+      if (s.body !== null && unusable(s))
+        throw new TypeError("Response.clone(): the body is locked or was read already");
       var body = isStreamBody(s.body) ? reflectApply(streamClone, s.body, []) : s.body;
-      return made({ status: s.status, statusText: s.statusText, headers: headersCopy(s.headers, s.guard), guard: s.guard, body: body, used: false, exactBodyTo: s.exactBodyTo });
+      return made({
+        status: s.status,
+        statusText: s.statusText,
+        headers: headersCopy(s.headers, s.guard),
+        guard: s.guard,
+        body: body,
+        used: false,
+        exactBodyTo: s.exactBodyTo,
+      });
     };
     // The init converted before the data is serialized, as Web IDL converts the arguments first
     Response.json = function (data, init) {
-      var api = "Response.json()", options = initOf(init, api), text = JSON.stringify(data);
+      var api = "Response.json()",
+        options = initOf(init, api),
+        text = JSON.stringify(data);
       if (text === undefined) throw new TypeError(api + ": the data has no JSON");
       return made(initialized(text, "application/json", options, api));
     };
     // Both arguments converted, then the URL parsed, then the status checked. The URL is absolute: data code has no
     // document to resolve a relative one against.
     Response.redirect = function (url, status) {
-      var api = "Response.redirect()", given = string(url, api), code = status === undefined ? 302 : unsignedShort(status);
+      var api = "Response.redirect()",
+        given = string(url, api),
+        code = status === undefined ? 302 : unsignedShort(status);
       var location = new global.URL(given).href;
-      if ([301, 302, 303, 307, 308].indexOf(code) < 0) throw new RangeError(api + ": the status must be 301, 302, 303, 307 or 308, not " + code);
-      return made({ status: code, statusText: "", headers: headersOf([["location", location]], "immutable"), body: null, used: false, exactBodyTo: null, guard: "immutable" });
+      if ([301, 302, 303, 307, 308].indexOf(code) < 0)
+        throw new RangeError(api + ": the status must be 301, 302, 303, 307 or 308, not " + code);
+      return made({
+        status: code,
+        statusText: "",
+        headers: headersOf([["location", location]], "immutable"),
+        body: null,
+        used: false,
+        exactBodyTo: null,
+        guard: "immutable",
+      });
     };
     // A host reply. A HEAD's, and one whose status has no body, has none (Fetch, "HTTP-network fetch").
     function reply(r, to, head) {
-      var written = to === undefined ? undefined : bodyWritten(r), empty = head || r.status === 204 || r.status === 205 || r.status === 304;
+      var written = to === undefined ? undefined : bodyWritten(r),
+        empty = head || r.status === 204 || r.status === 205 || r.status === 304;
       return made({
-        status: r.status, statusText: "", headers: headersOf(r.headers, "immutable"), guard: "immutable", used: false,
+        status: r.status,
+        statusText: "",
+        headers: headersOf(r.headers, "immutable"),
+        guard: "immutable",
+        used: false,
         body: empty ? null : { base64: r.bodyBase64 || "", text: r.body || "" },
         exactBodyTo: written === undefined ? null : { path: to, bytes: written },
       });
@@ -828,21 +1060,21 @@
   }
   FetchError.prototype = Object.create(Error.prototype);
   function cacheMode(init) {
-    var raw = init ? init.cache : undefined, mode = raw === undefined ? "default" : String(raw);
+    var raw = init ? init.cache : undefined,
+      mode = raw === undefined ? "default" : String(raw);
     if (["default", "no-store", "reload", "no-cache", "force-cache", "only-if-cached"].indexOf(mode) < 0)
       throw new TypeError("cache must be default, no-store, reload, no-cache, force-cache or only-if-cached");
     return raw === undefined ? undefined : mode;
   }
   global.__exact_binary = Object.freeze({
     requestBody: requestBody,
+    sendRequest: sendRequest,
     keptReply: keptReply,
     responses: responses,
     copyBytes: copyBytes,
-    timers: timers,
     fileRefusal: fileRefusal,
     cacheMode: cacheMode,
     FetchError: FetchError,
-    imageOptions: imageOptions,
     toBase64: toBase64,
     utf8Length: utf8Length,
     messageData: messageData,
@@ -850,111 +1082,9 @@
     longPollOf: longPollOf,
     uploadOf: uploadOf,
     idleRefusal: idleRefusal,
+    socketProtocols: socketProtocols,
     uploadEvent: uploadEvent,
     presence: presence,
     sockets: sockets,
   });
-})(globalThis);
-
-// Work that outlives its answer (LLP 1146 D2): a fetch with effects whose
-// answer was let go is adopted, not rejected (`__exact_adopt`), and its reply
-// reaches the let-go answer's continuation in a module turn, which the
-// executor runs outside every answer and commit (js/src/module_work.rs), so
-// what that continuation writes to the store stands on its own. A live
-// answer's step that such a turn settles runs in that answer's own turn, so
-// its reads, writes and fetches are its own. prelude.js takes
-// `__exact_module_work` and deletes it; it is here, in binary.js, so that
-// every realm that evaluates the prelude has it.
-(function (global) {
-  "use strict";
-  // The prelude's hooks: `host` (the door) and `live(call)` (a call still answering).
-  global.__exact_module_work = function (hooks) {
-    var host = hooks.host;
-    // The turn running now, by its call's id: an answer's, MODULE's, or null
-    // (a let-go chain, a background delivery, module evaluation). An id, so
-    // that no ended call's value is kept alive by it.
-    var MODULE = Object.freeze({ id: -1 });
-    var turn = null;
-    var ready = new Map();           // live answer's call -> [steps for its own turn]
-    var discarded = [];              // steps of answers let go before their turn, run with no store
-    var tearingDown = false;
-    var adopted = 0;                 // adopted fetches in flight
-    function waiting() { var n = 0; ready.forEach(function (steps) { n += steps.length; }); return n; }
-    // What may still settle an answer waiting on module work, for the executor.
-    function note() { host(22, "state", JSON.stringify({ outstanding: adopted + waiting() })); }
-    function runDiscarded() {
-      turn = null;
-      for (var n = 0; discarded.length && n < 1024; n++) discarded.shift()();
-    }
-    return Object.freeze({
-      MODULE: MODULE,
-      // The turn now (the executor's `__exact_turn`): an answer's call, MODULE or null.
-      setTurn: function (t) {
-        turn = t ? t.id : null;
-        var steps = t && t !== MODULE ? ready.get(t) : null;
-        if (steps) { ready.delete(t); steps.forEach(function (s) { s(); }); note(); }
-      },
-      // Finish readied storage chains when no further answer turn can run
-      teardown: function () {
-        tearingDown = true;
-        ready.forEach(function (steps) { steps.forEach(function (s) { discarded.push(s); }); });
-        ready.clear();
-        runDiscarded();
-        note();
-      },
-      // The async helper asks before each step whether it runs here. In a
-      // module or background turn a live answer's step waits for its own turn;
-      // anything else runs where it is, the let-go answer's continuation
-      // included. `step(key, arg)` is the helper's next step, bound only when
-      // deferred: this runs before every step of every async function.
-      route: function (at, step, key, arg) {
-        if (tearingDown || !at || (turn !== null && turn !== MODULE.id) || !hooks.live(at)) return false;
-        if (!ready.has(at)) ready.set(at, []);
-        ready.get(at).push(function () { step(key, arg); });
-        note();
-        return true;
-      },
-      // After a module turn, with no store: what let-go answers had waiting.
-      runDiscarded: runDiscarded,
-      // An answer let go: its steps waiting for its turn move to the steps
-      // the let-go chain runs with no store, and stop counting as
-      // outstanding. How many moved.
-      forgot: function (call) {
-        var steps = ready.get(call);
-        if (!steps) return 0;
-        ready.delete(call);
-        steps.forEach(function (s) { discarded.push(s); });
-        note();
-        return steps.length;
-      },
-      inModuleTurn: function () { return turn === MODULE.id; },
-      readied: function (call) { return ready.has(call); },
-      adopted: function () { adopted++; note(); },
-      landed: function () { adopted--; note(); },
-      outstanding: function () { return adopted + waiting() > 0; },
-    });
-  };
-})(globalThis);
-
-// A parked answer needs a turn only when its chain or its next operation moved (LLP 1162 D3).
-(function (global) {
-  "use strict";
-  global.__exact_waiting_answers = function (calls, pending, work, headOwner) {
-    return function (ids) {
-      var own = new Set(), unclaimed = false, at = headOwner(), ready = [];
-      pending.forEach(function (p) {
-        if (p.claimed || p.stream || p.module) return;
-        if (p.call && p.call.status === "pending" && !p.call.letGo && calls.has(p.call.id)) own.add(p.call.id);
-        else unclaimed = true;
-      });
-      JSON.parse(ids).forEach(function (id) {
-        var c = calls.get(id);
-        if (!c) return;
-        var claims = unclaimed && c.status === "pending" && !c.storage;
-        if (claims) unclaimed = false;
-        if (c.ran || c.status !== "pending" || work.readied(c) || own.has(id) || c.storage && (!at || at === c) || claims) ready.push(id);
-      });
-      return JSON.stringify(ready);
-    };
-  };
 })(globalThis);

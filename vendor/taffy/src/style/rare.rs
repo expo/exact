@@ -31,7 +31,8 @@ pub struct RareStyle<S: CheapCloneStr = DefaultCheapStr> {
     /// Keeps the custom identifier type when grid layout is disabled.
     #[cfg_attr(feature = "serde", serde(skip))]
     pub dummy: core::marker::PhantomData<S>,
-    /// Owners of opaque calculation handles in this style, including its grid tracks.
+    /// EXACT PATCH 71: owners of opaque calculation handles in this style, including its
+    /// grid tracks.
     #[cfg(all(feature = "calc", any(feature = "alloc", feature = "std")))]
     #[cfg_attr(feature = "serde", serde(skip))]
     pub calc_owners: crate::sys::Vec<CalcOwner>,
@@ -79,7 +80,7 @@ pub struct RareStyle<S: CheapCloneStr = DefaultCheapStr> {
 }
 
 impl<S: CheapCloneStr> RareStyle<S> {
-    /// Keep an opaque calculation alive for this style and every clone of it.
+    /// EXACT PATCH 71: keep an opaque calculation alive for this style and every clone of it.
     #[cfg(all(feature = "calc", any(feature = "alloc", feature = "std")))]
     pub fn keep_calc<T: Send + Sync + 'static>(&mut self, owner: Arc<T>) {
         self.calc_owners.push(CalcOwner(owner));

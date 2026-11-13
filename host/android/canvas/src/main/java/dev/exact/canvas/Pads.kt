@@ -19,10 +19,10 @@ import android.view.MotionEvent
  * pads, `current` and the claims a module made through them (@exact/gamepad, [ExtensionPads]) where they were. The
  * activity that reads the host hands it every key and motion event first, whatever holds the focus. Only while a
  * canvas receives pad input are those events consumed; otherwise Android handles navigation. When that activity
- * goes to the background each pad keeps its slot and the canvas hears it all released, so a world's holds drop;
- * Android has no call that reads a pad's state, so a pad reports itself
- * again with its next event: a motion event carries every axis, and a button held through the background reads up
- * until it is pressed again, as a key does.
+ * loses window focus or goes to the background each pad keeps its slot and the canvas hears it all released, so a
+ * world's holds drop. Android has no call that reads a pad's state, so a pad reports itself again with its next
+ * event: a motion event carries every axis, and a button held while unfocused reads up until it is pressed again,
+ * as a key does.
  *
  * **A drive's pads.** Under the agent (`EXACT_AGENT`, as the host reads it), `EXACT_AGENT_PADS` (the drive's
  * `x_agent_pads` launch extra) is a JSON list of `{"index", "id", "vendor", "product", "pressed", "leaves"}`: those pads take their
@@ -71,19 +71,19 @@ object Pads : InputManager.InputDeviceListener {
             readings[slot] = r
             val pressed = pad.optJSONArray("pressed")
             for (j in 0 until (pressed?.length() ?: 0)) r.key(pressed!!.optInt(j), true)
-            send(slot, r)
+            send(slot, r, 0)
             if (pressed != null && pressed.length() > 0) current = slot
             if (pad.has("leaves")) Handler(Looper.getMainLooper()).postDelayed({ onInputDeviceRemoved(id) }, pad.optLong("leaves"))
         }
     }
 
-    /** The app went to the background (said by the activity that reads the host): each pad's canvas reading is
-     * all released, and the slot kept. */
+    /** The activity that reads the host lost window focus or stopped: release each pad's canvas reading and keep
+     * its slot. */
     fun background() {
         for (slot in 0 until MAX) if (slots[slot] != -1) {
             val device = InputDevice.getDevice(slots[slot])
             readings[slot] = PadReading.of { axis -> device?.getMotionRange(axis) != null }
-            send(slot, readings[slot])
+            send(slot, readings[slot], 0)
         }
     }
 
@@ -95,7 +95,7 @@ object Pads : InputManager.InputDeviceListener {
         if (!isPad(e.deviceId) || (e.action != KeyEvent.ACTION_DOWN && e.action != KeyEvent.ACTION_UP)) return false
         if (e.repeatCount > 0) return takesInput
         val (slot, r) = reading(e.deviceId) ?: return takesInput
-        if (r.key(button, e.action == KeyEvent.ACTION_DOWN)) send(slot, r)
+        if (r.key(button, e.action == KeyEvent.ACTION_DOWN)) send(slot, r, e.eventTime)
         if (e.action == KeyEvent.ACTION_DOWN && current != slot) { current = slot; tell() }
         return takesInput
     }
@@ -112,7 +112,7 @@ object Pads : InputManager.InputDeviceListener {
             maxOf(e.getAxisValue(MotionEvent.AXIS_RTRIGGER), e.getAxisValue(MotionEvent.AXIS_GAS)),
             e.getAxisValue(MotionEvent.AXIS_HAT_X), e.getAxisValue(MotionEvent.AXIS_HAT_Y),
         )
-        if (changed) send(slot, r)
+        if (changed) send(slot, r, e.eventTime)
         return takesInput
     }
 
@@ -122,7 +122,7 @@ object Pads : InputManager.InputDeviceListener {
         slots[slot] = -1; readings[slot] = null
         injected.remove(deviceId)
         if (current == slot) current = -1
-        send(slot, null)
+        send(slot, null, 0)
         tell()
     }
     override fun onInputDeviceAdded(deviceId: Int) { if (isPad(deviceId)) reading(deviceId) }
@@ -165,7 +165,8 @@ object Pads : InputManager.InputDeviceListener {
         return slot to readings[slot]!!
     }
 
-    private fun send(slot: Int, r: PadReading?) = Exact.pad(slot, r != null, r?.values?.copyOf() ?: FloatArray(21))
+    /** [at] is the event's `eventTime` (`SystemClock.uptimeMillis()`), 0 for a send no event caused. */
+    private fun send(slot: Int, r: PadReading?, at: Long) = Exact.pad(slot, r != null, r?.values?.copyOf() ?: FloatArray(21), at)
 
     private const val MAX = 16
     /** Android's gamepad keys by standard index, as Chromium's Android mapping reads them. */

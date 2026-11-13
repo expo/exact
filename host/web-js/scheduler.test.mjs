@@ -15,7 +15,7 @@ test('a yield without the browser scheduler resolves in a later task; postTask a
   expect(globalThis.scheduler).toBeUndefined();
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-scheduler-'));
   cpSync(resolve(ROOT, 'host/web-js/ts-fetch.js'), resolve(dir, 'ts-fetch.js'));
-  writeFileSync(resolve(dir, 'admission.js'), `export { ownWithout, redirectOf, signalDeadline } from ${JSON.stringify(pathToFileURL(resolve(ROOT, 'host/web-js/admission.js')).href)};
+  writeFileSync(resolve(dir, 'admission.js'), `export { ownWithout, redirectOf, signalDeadline, socketProtocols } from ${JSON.stringify(pathToFileURL(resolve(ROOT, 'host/web-js/admission.js')).href)};
 export class FetchError extends Error {} export const overlaying = { on: false }; export const inOverlay = what => new Error(what + ' in an overlay');
 export const fetchWith = () => Promise.reject(new Error('no fetch'));\n`);
   writeFileSync(resolve(dir, 'admission-data.js'), 'export const tsGrantSet = {};\n');
@@ -78,7 +78,7 @@ test('live tool deadlines refresh time and arm a wake without unrelated commits;
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-call-clock-')), old = globalThis.exact;
   cpSync(resolve(ROOT, 'host/web-js/calls.js'), resolve(dir, 'calls.js'));
   // Keep the production dispatcher: its callback result decides whether an advance continues.
-  const runtime = readFileSync(resolve(ROOT, 'host/web-js/rt.js'), 'utf8');
+  const runtime = readFileSync(resolve(ROOT, 'host/web-js/clock.js'), 'utf8');
   const advance = runtime.slice(runtime.indexOf('export function advance('), runtime.indexOf('let driving ='));
   expect(advance).toContain('function fire(');
   writeFileSync(resolve(dir, 'rt.js'), `export const clock={now:0,agent:false,timers:[]},wall={now:0},data={},After=[],Clocked=[],Mutations=[],Origin={now:()=>'app'},journal=[],say=x=>journal.push(x),order=()=>0,drive=()=>{};

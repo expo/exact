@@ -1,5 +1,5 @@
 //! Bind Windows' composition stream to the field that began it.
-use exact_linux::{presenter::ime::Target, Presenter};
+use exact_painted::{presenter::ime::Target, Presenter};
 use exact_runner::DataSource;
 use std::{cell::Cell, rc::Rc};
 use winit::{

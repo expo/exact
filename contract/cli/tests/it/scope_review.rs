@@ -234,19 +234,23 @@ fn a_binding_never_reaches_another_files_fn() {
 }
 
 #[test]
-fn a_computed_token_does_not_hide_the_literal_name_and_keywords_are_case_sensitive() {
+fn a_computed_token_does_not_hide_the_literal_name_and_keywords_match_in_any_case() {
+    // #49: a keyword in any case is the keyword, as `motion` reads it
+    // (CSS Values 4 §2.1); a name keeps its case.
     let dir = Dir::new("computed-token");
     dir.write(
         "ui.contract",
-        "keyframes pulse\n  to opacity=0\nkeyframes Linear\n  to opacity=0\ncomponent Card\n  props\n    ease: string\n  view\n    column\n      view animation=`1s ${ease} pulse`\n      view animation=\"Linear 1s\"\n",
+        "keyframes pulse\n  to opacity=0\nkeyframes Linear\n  to opacity=0\nkeyframes Spin\n  to opacity=0\ncomponent Card\n  props\n    ease: string\n  view\n    column\n      view animation=`1s ${ease} pulse`\n      view animation=\"Linear 1s\"\n      view animation=\"ease Linear 1s\"\n      view animation=\"Spin 1S EASE INFINITE\"\n",
     );
     let root = dir.write(
         "app.contract",
-        "use Card from \"./ui.contract\"\nkeyframes pulse\n  to opacity=1\nkeyframes Linear\n  to opacity=1\ncomponent App\n  view\n    Card(ease=\"linear\")\n",
+        "use Card from \"./ui.contract\"\nkeyframes pulse\n  to opacity=1\nkeyframes Linear\n  to opacity=1\nkeyframes Spin\n  to opacity=1\ncomponent App\n  view\n    Card(ease=\"linear\")\n",
     );
     let text = plan(&root);
     assert!(text.contains("pulse__ui"), "{text}");
-    assert!(text.contains("\"Linear__ui 1s\""), "{text}");
+    assert!(text.contains("\"Linear 1s\""), "{text}");
+    assert!(text.contains("\"ease Linear__ui 1s\""), "{text}");
+    assert!(text.contains("\"Spin__ui 1S EASE INFINITE\""), "{text}");
     assert!(!text.contains(" pulse\""), "{text}");
 }
 
@@ -409,7 +413,7 @@ fn computed_easings_times_tabs_and_infinities_are_read_as_motion_reads_them() {
     let dir = Dir::new("round4-shorthand");
     dir.write(
         "ui.contract",
-        "keyframes linear\n  to opacity=0\nkeyframes pulse\n  to opacity=0\nkeyframes slide\n  to opacity=0\ncomponent Card\n  props\n    n: number\n  view\n    column\n      view animation=`steps(${n}, jump-end) linear 1s`\n      view animation=\"\tpulse 1s\"\n      view animation=\"inf slide\"\n",
+        "keyframes linear\n  to opacity=0\nkeyframes pulse\n  to opacity=0\nkeyframes slide\n  to opacity=0\ncomponent Card\n  props\n    n: number\n  view\n    column\n      view animation=`steps(${n}, jump-end) linear 1s`\n      view animation=\"\tpulse 1s\"\n      view animation=\"INFINITE slide\"\n",
     );
     let root = dir.write(
         "app.contract",
@@ -419,7 +423,9 @@ fn computed_easings_times_tabs_and_infinities_are_read_as_motion_reads_them() {
     assert!(text.contains("jump-end) linear__ui 1s"), "{text}");
     assert!(text.contains("pulse__ui 1s"), "{text}");
     assert!(!text.contains("pulse__uie"), "{text}");
-    assert!(text.contains("\"inf slide__ui\""), "{text}");
+    // A count in any case; `inf`, which Rust reads as a number and CSS does
+    // not, is no count, and `motion` refuses `inf slide` as two names.
+    assert!(text.contains("\"INFINITE slide__ui\""), "{text}");
 }
 
 #[test]
@@ -504,7 +510,7 @@ fn a_shorthand_motion_refuses_is_not_rewritten_into_one_it_plays() {
     // is checked where it lands; here the rewrite itself is what is tested.
     let root = dir.write(
         "app.contract",
-        "use Card from \"./ui.contract\"\nkeyframes infs\n  to opacity=1\ncomponent App\n  view\n    column\n      Card(a=\"x\")\n      view animation=\"1s 1s infs\"\n",
+        "use Card from \"./ui.contract\"\nkeyframes infs\n  to opacity=1\ncomponent App\n  view\n    column\n      Card(a=\"x\")\n      view animation=\"1s 1s 2s infs\"\n",
     );
     let e = contract::compile_path(&root).err();
     assert!(

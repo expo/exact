@@ -1,0 +1,50 @@
+routes nav
+  home "/"
+  detail "/detail"
+  collection "/collection"
+
+component App
+  state count = 0
+  state inside = false
+  state markerCount = 0
+  state markerInside = false
+  state first = "unseen"
+  state sixth = "unseen"
+  action rowSeen(i: number, e: IntersectionObserverEntry)
+    if i == 1
+      first = `${e.isIntersecting}`
+    if i == 6
+      sixth = `${e.isIntersecting}`
+  action seen(e: IntersectionObserverEntry)
+    count = count + 1
+    inside = e.isIntersecting
+  action markerSeen(e: IntersectionObserverEntry)
+    markerCount = markerCount + 1
+    markerInside = e.isIntersecting
+  action open
+    nav = push(nav, "/detail")
+  action openList
+    nav = push(nav, "/collection")
+  view
+    main navigationKey=`${top(nav).id}` interactive-widget="resizes-visual" width="100%" height="100%"
+      for e in stack(nav) key=e.id
+        column navigationKey=`${e.id}` position="absolute" inset=0 display="block"
+          header
+            text "Intersection" role="heading" aria-level=2
+          if e.name == "home"
+            button press=open testId="open"
+              text "Open"
+          else if e.name == "detail"
+            button press=openList testId="open-list"
+              text "List"
+            text `${count}:${inside}` testId="route-facts"
+            text `${markerCount}:${markerInside}` testId="marker-facts"
+            box height=50 width=100 intersect=seen testId="route-target"
+            box height=1600
+            box height=50 width=100 intersect=markerSeen testId="paging-marker"
+            box height=600
+          else
+            text `${first}:${sixth}` testId="list-facts"
+            list virtualized=true appearance="none" width=200 height=400 testId="virtual-list"
+              for i in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20] key=i
+                box height=100 intersect=rowSeen(i) testId=`item-${i}`

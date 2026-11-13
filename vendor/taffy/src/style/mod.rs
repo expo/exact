@@ -110,8 +110,8 @@ pub trait CoreStyle {
     fn is_compressible_replaced(&self) -> bool {
         false
     }
-    /// Whether this node carries the table-item sizing marker. Exact also
-    /// uses it for HTML form-control shrink-to-fit sizing (patch 21).
+    /// EXACT PATCH 21: whether this node carries the table-item sizing marker,
+    /// which Exact also uses for HTML form-control shrink-to-fit sizing.
     #[inline(always)]
     fn is_table_item(&self) -> bool {
         false

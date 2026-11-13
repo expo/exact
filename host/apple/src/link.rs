@@ -96,6 +96,8 @@ impl Grammars {
 /// when the plan keeps answers or the app's grants name I/O.
 #[derive(Clone, Copy)]
 pub struct IoLinks {
+    /// The process-start work, independent of any session.
+    pub preloads: fn() -> Option<crate::launch_preloads::LaunchPreloads>,
     /// Bind the app's grants: [`crate::store::endowed`].
     pub endow: fn(&str, &str, bool) -> crate::store::Endowed,
     /// Read the stores only on an explicitly requested refresh.
@@ -118,6 +120,7 @@ pub type StartIo = fn(
 impl IoLinks {
     /// The platform's.
     pub const LINKED: IoLinks = IoLinks {
+        preloads: crate::launch_preloads::current,
         endow: crate::store::endowed,
         snapshot: crate::store::snapshot_for,
         start: crate::executor::start_io,

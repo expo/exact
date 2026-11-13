@@ -4,10 +4,10 @@ import { getFunctionName } from 'convex/server';
 import { convexToJson, jsonToConvex } from 'convex/values';
 import { api } from './convex/_generated/api';
 
-// The deployment, where `npx convex dev` runs one on this machine (and where the tests' server.ts listens).
-// A cloud deployment is named in both lines: 'https://<name>.convex.cloud' and 'net.websocket wss://<name>.convex.cloud'.
-const CONVEX = 'http://127.0.0.1:3210';
-export const grants = 'net.websocket ws://127.0.0.1:3210';
+// The deployment's socket origin, where `npx convex dev` runs one on this machine (and where the tests'
+// server.ts listens). A cloud deployment is 'wss://<name>.convex.cloud'.
+const CONVEX = 'ws://127.0.0.1:3210';
+export const grants = `net.websocket ${CONVEX}`;
 
 const cx = convex(CONVEX, { getFunctionName, convexToJson, jsonToConvex });
 // A refusal is a reply: Convex's own words when it refused the write, ours when it never went.

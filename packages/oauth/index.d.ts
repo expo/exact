@@ -20,13 +20,13 @@ export interface OAuthSession {
 /** What `signIn()` and `signOut()` answer; `OAuthResult` in Contract. */
 export interface OAuthResult {
   ok: boolean;
-  /** A stable code: "access_denied", "cancelled", "popup_blocked", "state_mismatch", "issuer_mismatch", "invalid_grant", "network", "server", "config", "invalid_response", or the provider's OAuth error code. */
+  /** A stable code: "access_denied", "cancelled", "popup_blocked", "state_mismatch", "issuer_mismatch", "invalid_grant", "auth_session", "network", "server", "config", "invalid_response", or the provider's OAuth error code. */
   code: string;
   /** A sentence for the person; "" when ok. */
   error: string;
   /** Trying again later may succeed. */
   retryable: boolean;
-  /** The HTTP status, 400 or over, of the reply that failed; 0 otherwise: no reply came, or the package refused a 2xx or 3xx it could not use. */
+  /** The HTTP status, 400 or over, of the reply that failed, or 502 for a failed system auth session; 0 otherwise: no reply came, or the package refused a 2xx or 3xx it could not use. */
   status: number;
 }
 
@@ -101,13 +101,15 @@ export interface OAuthAuthorization {
   url: string;
   /** The authorization endpoint. */
   endpoint: string;
-  /** `response_type`, `client_id`, `redirect_uri`, `scope`, `state`, the PKCE challenge, `nonce` with `openid`, and `authorizationParams`. */
+  /** `response_type`, `client_id`, `redirect_uri`, `scope`, `state`, the PKCE challenge, `nonce` with `openid`, and `authorizationParams` with the sign-in’s `params` overrides. */
   params: Record<string, string>;
   /** The package's transport (`OAuthConfig.fetch`, else `fetch`), to send it with. */
   fetch: (url: string, init: RequestInit) => Promise<Response>;
 }
 
 export interface OAuthSignIn {
+  /** Extra authorization parameters for this press, overriding authorizationParams. The package's own fields (response_type, client_id, redirect_uri, scope, state, code_challenge, code_challenge_method, nonce and max_age) are refused with TypeError. */
+  params?: Record<string, string>;
   /** For an app that signs the person in with its own screens (LLP 1146 D8): sends the authorization request as the provider documents, and answers the URL it redirected to. Throw an `OAuthError` to say why it could not. */
   authorize?: (request: OAuthAuthorization) => Promise<string>;
 }

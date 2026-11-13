@@ -106,19 +106,11 @@ fn walk(
                 }
                 walk(children, styles, seen, out);
             }
-            Node::When {
-                then, otherwise, ..
-            } => {
-                walk(then, styles, seen, out);
-                walk(otherwise, styles, seen, out);
+            node => {
+                for list in node.child_lists() {
+                    walk(list, styles, seen, out);
+                }
             }
-            Node::Each { body, .. } => walk(body, styles, seen, out),
-            Node::Match { some, none, .. } => {
-                walk(&some.1, styles, seen, out);
-                walk(none, styles, seen, out);
-            }
-            Node::Use { children, .. } => walk(children, styles, seen, out),
-            Node::Children { .. } => {}
         }
     }
 }

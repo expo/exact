@@ -113,7 +113,7 @@ fn a_header_is_a_bar_with_its_heading_its_buttons_and_its_search_field() {
         shape,
         HeaderShape {
             header: 11,
-            heading: 12,
+            heading: Some(12),
             level: 1,
             leading: vec![],
             trailing: vec![13],
@@ -152,8 +152,9 @@ fn the_back_control_is_the_platforms_own_back_on_a_pushed_route_and_an_item_else
 
 #[test]
 fn what_is_not_header_shaped_is_no_bar() {
-    // No header first; a header with no heading; one with two; a level with
-    // no heading role (LLP 1115.000 D12.5); a text in a button is no title.
+    // No header first; a header with no heading that holds a text; one with
+    // two; a level with no heading role (LLP 1115.000 D12.5); a text in a
+    // button is no title.
     let level: &[(PropId, &str)] = &[(PropId::AccessibilityHeadingLevel, "1")];
     for (name, route) in [
         (
@@ -167,10 +168,22 @@ fn what_is_not_header_shaped_is_no_bar() {
             ),
         ),
         (
-            "no heading",
+            "no heading, and a text the bar has no place for",
             view(
                 10,
-                vec![Node(11, NodeType::View, HEADER, vec![button(13, &[])])],
+                vec![Node(
+                    11,
+                    NodeType::View,
+                    HEADER,
+                    vec![button(13, &[]), view(17, vec![text(16, &[])])],
+                )],
+            ),
+        ),
+        (
+            "no heading and nothing to place",
+            view(
+                10,
+                vec![Node(11, NodeType::View, HEADER, vec![view(17, vec![])])],
             ),
         ),
         (
@@ -189,7 +202,12 @@ fn what_is_not_header_shaped_is_no_bar() {
             "a level alone",
             view(
                 10,
-                vec![Node(11, NodeType::View, HEADER, vec![text(12, level)])],
+                vec![Node(
+                    11,
+                    NodeType::View,
+                    HEADER,
+                    vec![text(12, level), button(13, &[])],
+                )],
             ),
         ),
         (
@@ -204,6 +222,117 @@ fn what_is_not_header_shaped_is_no_bar() {
             "{name}"
         );
     }
+}
+
+/// Issue #364: a header that holds only what the bar places (buttons, a
+/// readout, boxes around or between them) is the bar with no title, its
+/// items trailing as SwiftUI's automatic placement puts them, and the
+/// stack's Back control leading.
+#[test]
+fn a_header_of_buttons_alone_is_a_bar_with_no_title() {
+    let kernel = kernel(view(
+        10,
+        vec![
+            Node(
+                11,
+                NodeType::View,
+                HEADER,
+                vec![
+                    button(22, BACK),
+                    view(17, vec![]),
+                    view(
+                        18,
+                        vec![button(13, &[]), Node(70, NodeType::Text, STATUS, vec![])],
+                    ),
+                ],
+            ),
+            view(15, vec![]),
+        ],
+    ));
+    let presented = kernel
+        .header_shape(10, Some("back"), false, &pressed)
+        .unwrap();
+    assert_eq!(
+        presented,
+        HeaderShape {
+            header: 11,
+            heading: None,
+            level: 0,
+            leading: vec![22],
+            trailing: vec![13, 70],
+            items: vec![22, 13],
+            search: None,
+            segments: None,
+            tap: None,
+        }
+    );
+    let pushed = kernel
+        .header_shape(10, Some("back"), true, &pressed)
+        .unwrap();
+    assert_eq!((pushed.leading, pushed.trailing), (vec![], vec![13, 70]));
+    // A host's mirror: route > header > [button, box > [button]], the boxes
+    // said; no heading (0), level 0, two trailing items.
+    let words = [
+        0,
+        1,
+        fact::HEADER | fact::BOX,
+        2,
+        fact::PRESS,
+        0,
+        fact::BOX,
+        1,
+        fact::PRESS,
+        0,
+    ];
+    assert_eq!(
+        bars::header_shape_words(&words, 0),
+        Some(vec![1, 0, 0, 0, 0, 0, 0, 2, 2, 2, 4, 2, 4])
+    );
+    // A mirror that does not say a box is one: what it holds may show.
+    let unsaid = [
+        0,
+        1,
+        fact::HEADER | fact::BOX,
+        2,
+        fact::PRESS,
+        0,
+        0,
+        1,
+        fact::PRESS,
+        0,
+    ];
+    assert_eq!(bars::header_shape_words(&unsaid, 0), None);
+}
+
+/// The bar has one place for a search field and one for a tablist: a header
+/// with no heading and two of either keeps them in the page, as the compiler
+/// warns, rather than losing the second.
+#[test]
+fn a_header_with_no_heading_and_two_search_fields_or_tablists_is_no_bar() {
+    let one = |extra: Vec<Node>| {
+        let mut children = vec![
+            button(13, &[]),
+            Node(14, NodeType::TextInput, SEARCH, vec![]),
+        ];
+        children.extend(extra);
+        kernel(view(
+            10,
+            vec![Node(11, NodeType::View, HEADER, children), view(15, vec![])],
+        ))
+    };
+    assert!(
+        one(vec![])
+            .header_shape(10, None, false, &pressed)
+            .is_some(),
+        "one field: the bar holds it"
+    );
+    let two_fields = one(vec![Node(16, NodeType::TextInput, SEARCH, vec![])]);
+    assert_eq!(two_fields.header_shape(10, None, false, &pressed), None);
+    let two_tablists = one(vec![
+        Node(30, NodeType::View, TABLIST, vec![button(32, &[])]),
+        Node(31, NodeType::View, TABLIST, vec![button(33, &[])]),
+    ]);
+    assert_eq!(two_tablists.header_shape(10, None, false, &pressed), None);
 }
 
 #[test]
@@ -242,7 +371,7 @@ fn a_pressable_around_the_heading_is_the_title_and_a_tablist_its_segments() {
     ));
     let shape = kernel.header_shape(10, None, true, &pressed).unwrap();
     assert_eq!(shape.tap, Some(42));
-    assert_eq!(shape.heading, 12);
+    assert_eq!(shape.heading, Some(12));
     assert_eq!(shape.segments, Some(30));
     assert_eq!(shape.leading, vec![41]);
     assert_eq!(
@@ -296,7 +425,7 @@ fn a_readout_is_an_item_that_is_no_button() {
         )],
     ));
     let shape = around.header_shape(10, None, true, &pressed).unwrap();
-    assert_eq!(shape.heading, 12);
+    assert_eq!(shape.heading, Some(12));
     assert!(shape.trailing.is_empty() && shape.leading.is_empty());
     // A host's mirror: route > header > [heading, button, status > text].
     let words = [
@@ -316,7 +445,7 @@ fn a_readout_is_an_item_that_is_no_button() {
     // Two trailing items, the button and the readout; one button.
     assert_eq!(
         bars::header_shape_words(&words, 0),
-        Some(vec![1, 2, 2, 0, 0, 0, 0, 2, 1, 3, 4, 3])
+        Some(vec![1, 3, 2, 0, 0, 0, 0, 2, 1, 3, 4, 3])
     );
 }
 
@@ -456,7 +585,7 @@ fn a_header_button_wrapping_a_popover_with_a_heading_is_an_item_not_the_titles_t
         )],
     ));
     let shape = tree.header_shape(10, None, true, &pressed).unwrap();
-    assert_eq!(shape.heading, 12);
+    assert_eq!(shape.heading, Some(12));
     assert_eq!(shape.tap, None);
     assert_eq!(shape.items, vec![41]);
     assert_eq!(shape.trailing, vec![41]);
@@ -534,7 +663,10 @@ fn a_disabled_header_button_is_an_item_though_nothing_presses_it() {
         )],
     ));
     let shape = tree.header_shape(10, None, true, &pressed).unwrap();
-    assert_eq!((shape.heading, shape.tap, shape.items), (12, None, vec![]));
+    assert_eq!(
+        (shape.heading, shape.tap, shape.items),
+        (Some(12), None, vec![])
+    );
 }
 
 #[test]
@@ -637,16 +769,16 @@ fn a_hosts_own_mirror_of_the_tree_reads_the_same_rule() {
         fact::SEARCH,
         0,
     ];
-    // header 1, heading 3, level 1, no tap, search 6 (+1), no tablist;
+    // header 1, heading 3 (+1), level 1, no tap, search 6 (+1), no tablist;
     // one leading, one trailing, two items.
     assert_eq!(
         bars::header_shape_words(&words, 0),
-        Some(vec![1, 3, 1, 0, 7, 0, 1, 1, 2, 2, 4, 2, 4])
+        Some(vec![1, 4, 1, 0, 7, 0, 1, 1, 2, 2, 4, 2, 4])
     );
     // Pushed: the Back control is the platform's, in neither list.
     assert_eq!(
         bars::header_shape_words(&words, bars::BACK_IS_PLATFORMS),
-        Some(vec![1, 3, 1, 0, 7, 0, 0, 1, 2, 4, 2, 4])
+        Some(vec![1, 4, 1, 0, 7, 0, 0, 1, 2, 4, 2, 4])
     );
     // The projection: a hidden header, or a route that says no bar, has none,
     // and the shape alone is still read.
@@ -671,6 +803,83 @@ fn a_hosts_own_mirror_of_the_tree_reads_the_same_rule() {
         "two roots"
     );
     assert_eq!(bars::header_shape_words(&[0], 0), None);
+}
+
+/// A child the web does not show (`display: none`), or one inside a box
+/// that is, is no item and no heading: the bar is the header's without it.
+#[test]
+fn a_headers_hidden_children_are_left_out_of_the_rule() {
+    let h1 = fact::HEADING | 1 << fact::LEVEL;
+    // route > header > [back button, heading, hidden button]
+    let button = [
+        0,
+        1,
+        fact::HEADER,
+        3,
+        fact::PRESS | fact::BACK,
+        0,
+        h1,
+        0,
+        fact::PRESS | fact::HIDDEN,
+        0,
+    ];
+    // One leading item and one button: Back.
+    assert_eq!(
+        bars::header_shape_words(&button, 0),
+        Some(vec![1, 4, 1, 0, 0, 0, 1, 0, 1, 2, 2])
+    );
+    // route > header > [heading, hidden box > [button, heading]]
+    let boxed = [
+        0,
+        1,
+        fact::HEADER,
+        2,
+        h1,
+        0,
+        fact::HIDDEN,
+        2,
+        fact::PRESS,
+        0,
+        fact::HEADING,
+        0,
+    ];
+    assert_eq!(
+        bars::header_shape_words(&boxed, 0),
+        Some(vec![1, 3, 1, 0, 0, 0, 0, 0, 0])
+    );
+    // route > header > [heading, hidden heading]: one heading shown.
+    let headings = [
+        0,
+        1,
+        fact::HEADER,
+        2,
+        h1,
+        0,
+        fact::HEADING | fact::HIDDEN,
+        0,
+    ];
+    assert_eq!(
+        bars::header_shape_words(&headings, 0),
+        Some(vec![1, 3, 1, 0, 0, 0, 0, 0, 0])
+    );
+    // A pressable around a hidden heading is an item, not the title's tap.
+    // route > header > [heading, button > hidden heading]
+    let tap = [
+        0,
+        1,
+        fact::HEADER,
+        2,
+        h1,
+        0,
+        fact::PRESS,
+        1,
+        fact::HEADING | fact::HIDDEN,
+        0,
+    ];
+    assert_eq!(
+        bars::header_shape_words(&tap, 0),
+        Some(vec![1, 3, 1, 0, 0, 0, 0, 1, 1, 3, 3])
+    );
 }
 
 #[test]
@@ -753,4 +962,96 @@ fn a_roots_tabs_are_the_panels_its_own_tablist_names() {
     // A root with no tablist of its own is one stack.
     assert_eq!(kernel.root_tabs(5), None);
     assert_eq!(kernel.root_tabs(99), None);
+}
+
+/// LLP 1141.002 D1: the first root tab whose `rel` holds the token
+/// `search`, ASCII case-insensitively, is the app's search tab, known
+/// before its panel holds anything; a `rel` without the token is not.
+#[test]
+fn a_root_tab_with_rel_search_is_the_search_tab() {
+    let tab = |id: u32, props: &'static [(PropId, &'static str)]| {
+        Node(id, NodeType::Pressable, props, vec![])
+    };
+    const TABLIST: &[(PropId, &str)] = &[(PropId::AccessibilityRole, "tablist")];
+    const PLAIN: &[(PropId, &str)] = &[
+        (PropId::AccessibilityRole, "tab"),
+        (PropId::AccessibilityControls, "panel-a"),
+        (PropId::Rel, "nofollow"),
+    ];
+    const SEARCH: &[(PropId, &str)] = &[
+        (PropId::AccessibilityRole, "tab"),
+        (PropId::AccessibilityControls, "panel-b"),
+        (PropId::Rel, "help  SEARCH"),
+    ];
+    const SECOND: &[(PropId, &str)] = &[
+        (PropId::AccessibilityRole, "tab"),
+        (PropId::AccessibilityControls, "panel-c"),
+        (PropId::Rel, "search"),
+    ];
+    let panel =
+        |id: u32, name: &'static [(PropId, &'static str)]| Node(id, NodeType::View, name, vec![]);
+    const PANEL_A: &[(PropId, &str)] = &[
+        (PropId::AccessibilityRole, "tabpanel"),
+        (PropId::Id, "panel-a"),
+    ];
+    const PANEL_B: &[(PropId, &str)] = &[
+        (PropId::AccessibilityRole, "tabpanel"),
+        (PropId::Id, "panel-b"),
+    ];
+    const PANEL_C: &[(PropId, &str)] = &[
+        (PropId::AccessibilityRole, "tabpanel"),
+        (PropId::Id, "panel-c"),
+    ];
+    let kernel = kernel(view(
+        1,
+        vec![
+            panel(2, PANEL_A),
+            panel(3, PANEL_B),
+            panel(4, PANEL_C),
+            Node(
+                5,
+                NodeType::View,
+                TABLIST,
+                vec![tab(6, PLAIN), tab(7, SEARCH), tab(8, SECOND)],
+            ),
+        ],
+    ));
+    let tabs = kernel.root_tabs(1).unwrap();
+    assert_eq!(tabs.tabs, vec![6, 7, 8]);
+    assert_eq!(
+        tabs.search,
+        Some(1),
+        "the first tab whose rel holds `search`"
+    );
+    assert!(bars::rel_has("noopener Search", "search"));
+    assert!(!bars::rel_has("searching", "search"));
+}
+
+#[test]
+fn a_linked_panel_inside_the_tablist_belongs_to_the_root() {
+    const LIST: &[(PropId, &str)] = &[(PropId::AccessibilityRole, "tablist")];
+    const TAB: &[(PropId, &str)] = &[
+        (PropId::AccessibilityRole, "tab"),
+        (PropId::AccessibilityControls, "panel"),
+    ];
+    const PANEL: &[(PropId, &str)] = &[
+        (PropId::AccessibilityRole, "tabpanel"),
+        (PropId::Id, "panel"),
+    ];
+    let kernel = kernel(view(
+        1,
+        vec![Node(
+            2,
+            NodeType::View,
+            LIST,
+            vec![
+                Node(3, NodeType::Pressable, TAB, vec![]),
+                Node(4, NodeType::View, PANEL, vec![view(5, vec![])]),
+            ],
+        )],
+    ));
+    let tabs = kernel.root_tabs(1).unwrap();
+    assert_eq!(tabs.tablist, 2);
+    assert_eq!(tabs.tabs, [3]);
+    assert_eq!(tabs.panels, [4]);
 }

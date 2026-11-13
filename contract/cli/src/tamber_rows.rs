@@ -29,22 +29,11 @@ pub(crate) struct AtRow {
 /// `style`'s, a state part's row included.
 fn attr_at(file: &contract_syntax::File, line: u32, col: u32) -> Option<&Attr> {
     fn walk(nodes: &[Node], line: u32, col: u32) -> Option<&Attr> {
-        nodes.iter().find_map(|n| match n {
-            Node::Element {
-                attrs, children, ..
-            } => attrs
+        Node::walk(nodes).find_map(|n| match n {
+            Node::Element { attrs, .. } => attrs
                 .iter()
-                .find(|a| a.written && a.span.line == line && a.span.col == col)
-                .or_else(|| walk(children, line, col)),
-            Node::Use { children, .. } => walk(children, line, col),
-            Node::When {
-                then, otherwise, ..
-            } => walk(then, line, col).or_else(|| walk(otherwise, line, col)),
-            Node::Each { body, .. } => walk(body, line, col),
-            Node::Match { some, none, .. } => {
-                walk(&some.1, line, col).or_else(|| walk(none, line, col))
-            }
-            Node::Children { .. } => None,
+                .find(|a| a.written && a.span.line == line && a.span.col == col),
+            _ => None,
         })
     }
     let styled = file.styles.iter().flat_map(|s| &s.attrs);

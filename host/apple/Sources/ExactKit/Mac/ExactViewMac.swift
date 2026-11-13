@@ -10,8 +10,11 @@ import AppKit
 import AVFoundation
 
 extension ExactSession {
-    /// The page's canvas colour (the first root's background): what a
-    /// full-size-content window paints behind its titlebar.
+    /// The page's canvas colour as the view draws it: the first root's
+    /// background, or the window background when it has none. It is clear
+    /// when the root's background is translucent: the view then draws no
+    /// canvas, and the containing app's views show behind the page (LLP
+    /// 1031 D3). A full-size-content window paints it behind its titlebar.
     public var pageBackground: NSColor { presenter.pageBackground }
 }
 
@@ -295,6 +298,7 @@ public final class ExactView: NSView {
         super.viewDidChangeBackingProperties()
         session.controlTextChanged()
         fit()
+        session.presenter.svg.rescale(clock: session.clock)
     }
 
     /// The page zoom moved (ZoomMac.swift): the viewport is another size in
@@ -302,6 +306,7 @@ public final class ExactView: NSView {
     func zoomChanged() {
         fit()
         syncInsets()
+        session.presenter.svg.rescale(clock: session.clock)
     }
 
     public override func viewWillMove(toWindow newWindow: NSWindow?) {
@@ -415,6 +420,7 @@ public final class ExactView: NSView {
             session.presenter.insets = next
             session.insets(top: next.top, right: next.right, bottom: next.bottom, left: next.left)
         }
+        session.presenter.insetScrollersFromChrome()
         guard session.booted else { return }
         let regions = LayoutRegionsMac.insets(of: self).map(css)
         if !regionsTold || regions != session.presenter.regions {
@@ -459,9 +465,11 @@ public final class ExactView: NSView {
 }
 
 extension ExactView: NSMenuItemValidation {
-    /// Start Speaking with text selected, Stop Speaking while it speaks.
+    /// Start Speaking with text selected, Stop Speaking while it speaks,
+    /// Copy with text selected or a root that hears it (`RootEdits`).
     public func validateMenuItem(_ item: NSMenuItem) -> Bool {
         switch item.action {
+        case #selector(copy(_:)): rootEdits.hearer(#selector(NodeView.copy(_:))) != nil || !session.presenter.selection.selectedText().isEmpty
         case #selector(toggleFrameHealth(_:)): validateFrameHealthItem(item)
         case #selector(startSpeaking(_:)): !session.presenter.selection.selectedText().isEmpty
         case #selector(stopSpeaking(_:)): Self.speech.isSpeaking

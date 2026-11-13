@@ -12,6 +12,8 @@ mod ownership;
 mod position;
 #[path = "rekey_tests.rs"]
 mod rekey;
+#[path = "sizing_tests.rs"]
+mod sizing;
 #[path = "smooth_tests.rs"]
 mod smooth;
 #[path = "snap_tests.rs"]

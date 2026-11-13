@@ -21,7 +21,7 @@ fn plan() -> exact_plan::Plan {
     contract::snapshot::compile("shape Props\n  title: string\ncomponent Card\n  props\n    title: string\n  view\n    text title\n", &contract::Widget { requires_secrets: false,
         kind:"card".into(), title:None, description:None, families:vec!["systemSmall".into()], watch_families: vec![],
         component:"Card".into(), props:"Props".into(), refresh:"refresh".into(),
-        preview:serde_json::json!({"title":"preview"})
+        preview:serde_json::json!({"title":"preview"}), configuration: None
     }).unwrap()
 }
 /// The snapshot runner, its turns timed on the ticking clock when `turn`
@@ -297,6 +297,7 @@ fn apple_bridge_admits_the_plan_it_booted_with_borrowed_module_bytes() {
     bridge.boot_entry(
         plan.len(),
         4,
+        0,
         0,
         Module::new(Vec::new(), APP, GRANTS),
         Hooks::none(),

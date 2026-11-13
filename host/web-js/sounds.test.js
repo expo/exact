@@ -219,3 +219,24 @@ for (const command of [false, true]) test(`commands and expansion keep the group
     advance(start + 1000, false);
   }
 });
+
+test('setSounds moves a sounding voice and its end as the runner does (LLP 1096 D14)', () => {
+  const start = clock.now, voice = () => exact.sounds.state(true).voices.findLast(v => v.group === 'k');
+  commit(() => C('playSound', ['kick', start, 1, 'k']));
+  advance(start + 100, false);
+  commit(() => C('setSounds', ['k', null, 0.5, null, 0]));
+  expect(voice().ends).toBe(start + 400);
+  advance(start + 200, false);
+  // 150 ms of the 250 ms kick played, 100 left; the ramp to 2 over 100 ms would cover 125.
+  commit(() => C('setSounds', ['k', 1, 2, -0.5, 100]));
+  const v = voice();
+  expect(v.ends).toBeCloseTo(start + 200 + (-0.5 + Math.sqrt(3.25)) / 0.015, 9);
+  expect([v.gain, v.playbackRate, v.pan]).toEqual([1, 2, -0.5]);
+  commit(() => C('setSounds', ['k', 0 / 0, null, null, null]));
+  const lines = journal.slice(-20).map(l => l.replace(/^t=\S+ /, ''));
+  expect(lines).toContain('sounds set: 1 (group k) playbackRate 0.5 ramp 0');
+  expect(lines).toContain(`sound ${v.id} ends at ${start + 400} (end)`);
+  expect(lines).toContain('sounds set: 1 (group k) gain 1 playbackRate 2 pan -0.5 ramp 100');
+  expect(lines).toContain('sounds not set: gain is not a number');
+  advance(start + 1000, false);
+});

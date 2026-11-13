@@ -28,6 +28,53 @@ pub struct Widget {
     pub requires_secrets: bool,
     /// Placeholder props, checked against the shape at bake.
     pub preview: Value,
+    /// The person's choices in the Edit Widget sheet, when the entry has any.
+    pub configuration: Option<Configuration>,
+}
+
+/// A widget's configuration: WidgetKit's `AppIntentConfiguration`, whose
+/// intent has one parameter per row. A render reads the chosen values through
+/// the reserved `snapshot_configuration` inject.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Configuration {
+    /// The intent's title.
+    pub title: String,
+    /// The intent's description; the generated intent falls back to the title.
+    pub description: Option<String>,
+    /// In the sheet's order.
+    pub parameters: Vec<Parameter>,
+}
+
+impl Configuration {
+    /// The declaration as `app.json` writes it, every default filled in: what
+    /// the gallery's registry carries and what the binary's cohort hashes, the
+    /// intent being generated Swift.
+    pub fn json(&self) -> Value {
+        serde_json::json!({
+            "title": self.title,
+            "description": self.description,
+            "parameters": self.parameters.iter().map(|p| serde_json::json!({
+                "name": p.name,
+                "type": "enum",
+                "title": p.title,
+                "values": p.values.iter().map(|(value, title)| serde_json::json!({"value": value, "title": title})).collect::<Vec<_>>(),
+                "default": p.default,
+            })).collect::<Vec<_>>(),
+        })
+    }
+}
+
+/// One choice in the Edit Widget sheet: an enum of fixed values.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Parameter {
+    /// The field of the configuration shape that carries the chosen value.
+    pub name: String,
+    /// The row's label in the sheet.
+    pub title: String,
+    /// `(value, title)` pairs: the value the render reads and the label the sheet shows.
+    pub values: Vec<(String, String)>,
+    /// The value before the person chooses, and in the gallery's default preview.
+    pub default: String,
 }
 
 use exact_plan::entry_identifier;
@@ -59,6 +106,7 @@ impl Manifest {
                         "refresh",
                         "requiresSecrets",
                         "preview",
+                        "configuration",
                     ]
                     .contains(&key.as_str())
                     {
@@ -76,14 +124,7 @@ impl Manifest {
                 let label = |key: &str| -> Result<Option<String>, String> {
                     object
                         .get(key)
-                        .map(|value| {
-                            // The label is a Swift string literal in the generated widget bundle.
-                            value
-                                .as_str()
-                                .filter(|s| !s.trim().is_empty() && !s.chars().any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}')))
-                                .map(str::to_owned)
-                                .ok_or_else(|| format!("{at}.{key} must be a non-empty string without control characters"))
-                        })
+                        .map(|value| swift_label(value).ok_or_else(|| format!("{at}.{key} must be a non-empty string without control characters")))
                         .transpose()
                 };
                 let kind = name("kind")?;
@@ -146,6 +187,15 @@ impl Manifest {
                     .filter(|v| v.is_object())
                     .ok_or_else(|| format!("{at}.preview must be an object of props"))?
                     .clone();
+                let configuration = object
+                    .get("configuration")
+                    .map(|value| configuration(value, &format!("{at}.configuration")))
+                    .transpose()?;
+                if !watch_families.is_empty() && configuration.as_ref().is_some_and(|c| {
+                    c.parameters.iter().fold(1usize, |count, p| count.saturating_mul(p.values.len())) > 64
+                }) {
+                    return Err(format!("{at}.configuration allows at most 64 watch recommendations (the product of parameter value counts); reduce the values or parameters"));
+                }
                 Ok(Widget {
                     kind,
                     title: label("title")?,
@@ -160,8 +210,134 @@ impl Manifest {
                         Some(value) => value.as_bool().ok_or_else(|| format!("{at}.requiresSecrets must be a boolean"))?,
                     },
                     preview,
+                    configuration,
                 })
             })
             .collect()
     }
+}
+
+/// A label is a Swift string literal in the generated widget bundle.
+fn swift_label(value: &Value) -> Option<String> {
+    value
+        .as_str()
+        .filter(|s| {
+            !s.trim().is_empty()
+                && !s
+                    .chars()
+                    .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
+        })
+        .map(str::to_owned)
+}
+
+fn configuration(value: &Value, at: &str) -> Result<Configuration, String> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| format!("{at} must be an object with `title` and `parameters`"))?;
+    for key in object.keys() {
+        if !["title", "description", "parameters"].contains(&key.as_str()) {
+            return Err(format!("{at}.{key} is unknown; remove it"));
+        }
+    }
+    let label = |key: &str, object: &serde_json::Map<String, Value>, at: &str| {
+        object.get(key).map(|v| {
+            swift_label(v).ok_or_else(|| {
+                format!("{at}.{key} must be a non-empty string without control characters")
+            })
+        })
+    };
+    let title = label("title", object, at)
+        .ok_or_else(|| format!("{at}.title is required: the intent's title"))??;
+    let description = label("description", object, at).transpose()?;
+    let rows = object
+        .get("parameters")
+        .and_then(Value::as_array)
+        .filter(|a| !a.is_empty())
+        .ok_or_else(|| format!("{at}.parameters must be a nonempty array"))?;
+    let mut names = HashSet::new();
+    let parameters = rows
+        .iter()
+        .enumerate()
+        .map(|(i, row)| {
+            let at = format!("{at}.parameters[{i}]");
+            let row = row
+                .as_object()
+                .ok_or_else(|| format!("{at} must be an object"))?;
+            for key in row.keys() {
+                if !["name", "title", "type", "values", "default"].contains(&key.as_str()) {
+                    return Err(format!("{at}.{key} is unknown; remove it"));
+                }
+            }
+            if row.get("type").and_then(Value::as_str) != Some("enum") {
+                return Err(format!("{at}.type must be `enum`: a fixed list of values"));
+            }
+            let name = row
+                .get("name")
+                .and_then(Value::as_str)
+                .filter(|n| {
+                    let mut chars = n.chars();
+                    chars.next().is_some_and(|c| c.is_ascii_lowercase())
+                        && chars.all(|c| c.is_ascii_alphanumeric())
+                })
+                .ok_or_else(|| {
+                    format!("{at}.name must be a lowerCamelCase identifier, a field of the configuration shape")
+                })?
+                .to_owned();
+            if !names.insert(name.clone()) {
+                return Err(format!(
+                    "{at}.name repeats {name}; give each parameter a unique name"
+                ));
+            }
+            let title = label("title", row, &at)
+                .ok_or_else(|| format!("{at}.title is required: the row's label in the sheet"))??;
+            let values = row
+                .get("values")
+                .and_then(Value::as_array)
+                .filter(|a| !a.is_empty())
+                .ok_or_else(|| {
+                    format!("{at}.values must be a nonempty array of {{\"value\", \"title\"}}")
+                })?;
+            let mut seen = HashSet::new();
+            let values = values
+                .iter()
+                .enumerate()
+                .map(|(j, choice)| {
+                    let at = format!("{at}.values[{j}]");
+                    let choice = choice
+                        .as_object()
+                        .filter(|o| o.keys().all(|k| k == "value" || k == "title"))
+                        .ok_or_else(|| format!("{at} must be {{\"value\", \"title\"}}"))?;
+                    let value = choice
+                        .get("value")
+                        .and_then(swift_label)
+                        .ok_or_else(|| format!("{at}.value must be a non-empty string without control characters"))?;
+                    if !seen.insert(value.clone()) {
+                        return Err(format!("{at}.value repeats {value}; remove the duplicate"));
+                    }
+                    let title = label("title", choice, &at)
+                        .ok_or_else(|| format!("{at}.title is required: the choice's label in the sheet"))??;
+                    Ok((value, title))
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            let default = match row.get("default") {
+                None => values[0].0.clone(),
+                Some(v) => v
+                    .as_str()
+                    .filter(|d| values.iter().any(|(value, _)| value == d))
+                    .ok_or_else(|| format!("{at}.default must be one of its values"))?
+                    .to_owned(),
+            };
+            Ok(Parameter {
+                name,
+                title,
+                values,
+                default,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(Configuration {
+        title,
+        description,
+        parameters,
+    })
 }

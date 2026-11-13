@@ -8,11 +8,11 @@
 //! collection's capabilities name.
 //!
 //! WinRT's `HidDevice` needs a package capability the unpackaged host cannot declare (D14), so this is Win32's,
-//! declared here: the package names only `exact_linux` and `std`. Not built yet: the plug notifications
+//! declared here: the package names only `exact_painted` and `std`. Not built yet: the plug notifications
 //! (`CM_Register_Notification`); the lists are read again at each ask. `requestDevice` (the `DevicePicker`) fails
 //! `NotSupportedError`: the app lists `attachedDevices` itself.
 
-use exact_linux::package::{json, Context, Json, Notifier, Package, Reply};
+use exact_painted::package::{json, Context, Json, Notifier, Package, Reply};
 use std::collections::BTreeMap;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};

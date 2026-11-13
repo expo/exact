@@ -67,7 +67,7 @@ const SUBHEADLINE: &str = "-exact-subheadline";
 
 use crate::metrics::grouped as metric;
 use actions::{action_cell, disclosure};
-use lines::{stack_lines, stack_of_lines, subtitle};
+use lines::{stack_lines, stack_of_lines};
 use title::{title_button, title_face};
 
 /// The style a grouped list's attributes ask for: `None` for any other
@@ -162,72 +162,22 @@ fn attr(name: &str, value: Expr, span: Span) -> Attr {
 
 /// Remove the grouped-row sheet from a native button's face (LLP 1069.011 D5).
 pub(crate) fn unsheet(children: &[Node]) -> Option<Vec<Node>> {
-    fn strip(node: &Node) -> Node {
-        match node {
-            Node::Element {
-                tag,
-                positional,
-                attrs,
-                children,
-                span,
-                instance,
-            } => Node::Element {
-                tag: tag.clone(),
-                positional: positional.clone(),
-                attrs: attrs
-                    .iter()
-                    .filter(|a| !a.name.starts_with(MARK))
-                    .cloned()
-                    .collect(),
-                children: children.iter().map(strip).collect(),
-                span: *span,
-                instance: *instance,
-            },
-            Node::When {
-                tag,
-                cond,
-                then,
-                otherwise,
-                span,
-            } => Node::When {
-                tag: *tag,
-                cond: cond.clone(),
-                then: then.iter().map(strip).collect(),
-                otherwise: otherwise.iter().map(strip).collect(),
-                span: *span,
-            },
-            Node::Match {
-                tag,
-                subject,
-                some,
-                none,
-                span,
-            } => Node::Match {
-                tag: *tag,
-                subject: subject.clone(),
-                some: (some.0.clone(), some.1.iter().map(strip).collect()),
-                none: none.iter().map(strip).collect(),
-                span: *span,
-            },
-            other => other.clone(),
+    fn strip(node: &mut Node) {
+        if let Node::Element { attrs, .. } = node {
+            attrs.retain(|a| !a.name.starts_with(MARK));
+        }
+        for list in node.child_lists_mut() {
+            list.iter_mut().for_each(strip);
         }
     }
-    fn marked(node: &Node) -> bool {
-        match node {
-            Node::Element {
-                attrs, children, ..
-            } => attrs.iter().any(|a| a.name.starts_with(MARK)) || children.iter().any(marked),
-            Node::When {
-                then, otherwise, ..
-            } => then.iter().chain(otherwise).any(marked),
-            Node::Match { some, none, .. } => some.1.iter().chain(none).any(marked),
-            _ => false,
-        }
-    }
-    children
-        .iter()
-        .any(marked)
-        .then(|| children.iter().map(strip).collect())
+    let marked = Node::walk(children).any(|node| {
+        matches!(node, Node::Element { attrs, .. } if attrs.iter().any(|a| a.name.starts_with(MARK)))
+    });
+    marked.then(|| {
+        let mut children = children.to_vec();
+        children.iter_mut().for_each(strip);
+        children
+    })
 }
 
 /// An element's sheet rows, unmarked, and its other attributes when it has
@@ -687,7 +637,7 @@ fn section(
     group.push(s("overflow", "hidden", span));
     let mut styled = |n: &Node| {
         Ok(swipe_rows::grouped(n, &|n, swiped| {
-            row(n, !cardless, swiped)
+            row(n, !cardless, swiped, class)
         }))
     };
     let body = rows
@@ -869,14 +819,14 @@ fn s_val(value: &str, span: Span) -> Expr {
 /// carries as a custom row.
 /// A grouped list's row: the sheet's rows, without the look of an element
 /// that yields it to the row (`row_look`).
-fn row(node: &Node, separated: bool, swiped: bool) -> Node {
+pub(crate) fn row(node: &Node, separated: bool, swiped: bool, class: ClassRows<'_>) -> Node {
     match crate::row_look::yielded(node) {
-        Some(own) => styled(&own, separated, swiped),
-        None => styled(node, separated, swiped),
+        Some(own) => styled(&own, separated, swiped, class),
+        None => styled(node, separated, swiped, class),
     }
 }
 
-fn styled(node: &Node, separated: bool, swiped: bool) -> Node {
+fn styled(node: &Node, separated: bool, swiped: bool, class: ClassRows<'_>) -> Node {
     let Node::Element {
         tag,
         attrs,
@@ -1125,6 +1075,8 @@ fn styled(node: &Node, separated: bool, swiped: bool) -> Node {
             i,
             last,
             stack,
+            row_attrs: attrs,
+            class,
             lines,
             field,
             titled: titled == Some(k),
@@ -1168,6 +1120,8 @@ struct Place<'a> {
     last: usize,
     /// Whether a `column` here is the row's text stack (`text_stack`).
     stack: bool,
+    row_attrs: &'a [Attr],
+    class: ClassRows<'a>,
     /// Whether a stack of lines here takes the cell's margins (`stacks`).
     lines: bool,
     /// The field beside the row's label, if it is such a row.
@@ -1202,6 +1156,8 @@ fn part(child: &Node, at: Place<'_>, texts: &mut Count) -> Node {
         i,
         last,
         stack,
+        row_attrs,
+        class,
         lines,
         field,
         titled,
@@ -1417,7 +1373,7 @@ fn part(child: &Node, at: Place<'_>, texts: &mut Count) -> Node {
                 vec![n("min-width", 0.0, at)],
             )
         }
-        ("column", _) if stack => subtitle(child),
+        ("column", _) if stack => cell::column(child, row_attrs, class),
         // A column around the title's one text is the title, as a stack of
         // lines is: a text after it is the value at the far edge, not a
         // second title sharing the row's room (grocery-list's quantity

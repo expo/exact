@@ -223,7 +223,10 @@ extension NodeView {
         }
         var spec = TextStyle.spec(runs: runs, style: style, props: props, strut: strut,
                                   color: ink,
-                                  language: presenter?.documentLanguage ?? "", flow: !flowShapes.isEmpty)
+                                  language: presenter?.documentLanguage ?? "", flow: !flowShapes.isEmpty) { runs in
+            guard props["markup"] == "markdown", let text else { return runs }
+            return text.atomIcons(runs, node: self)
+        }
         // One shadow over the paragraph when its runs agree (LLP 1077 D3).
         spec.gatherShadows()
         cachedTextSpec = spec

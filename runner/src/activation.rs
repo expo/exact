@@ -44,14 +44,31 @@ pub fn wake(plan: &Plan) -> Option<Vec<Media>> {
 /// a virtualized list, whose rows past the first the runtime makes as the
 /// reader scrolls; a canvas, a native view or a web view, which the runtime
 /// draws; page code (`hatch`); an app's frame (`src`); an instant
-/// (`datetime`), shown in the reader's zone. Asked of the plan, not the
-/// page: a page sent as it is written decides before its document.
+/// (`datetime`), shown in the reader's zone; the language the reader chose
+/// (`setLocale`), which the page's store keeps and the render cannot read.
+/// Asked of the plan, not the page: a page sent as it is written decides
+/// before its document.
 pub fn runtime_kept(plan: &Plan) -> bool {
     let device = plan.resources.iter().any(|row| {
         let source = plan.str(row.source);
         source.starts_with("exact") && !WAITS.contains(&source)
     });
-    device || drawn(plan)
+    device || drawn(plan) || crate::uses::chooses_locale(plan)
+}
+
+/// Whether the plan offers a tool to a browser's agent: a faced tool whose
+/// face reaches the web door (LLP 1133.023 D8). Only the runtime registers
+/// it, so an undeclared route's page that would wait for the reader is
+/// made `idle` instead: the agent finds the tools once the page has loaded,
+/// not at the person's first act.
+pub fn offers_tools(plan: &Plan) -> bool {
+    plan.tools.iter().any(|t| {
+        let face: serde_json::Value = serde_json::from_str(plan.str(t.face)).unwrap_or_default();
+        face.is_object()
+            && face["doors"]
+                .as_array()
+                .is_none_or(|doors| doors.iter().any(|d| d == "web"))
+    })
 }
 
 fn drawn(plan: &Plan) -> bool {

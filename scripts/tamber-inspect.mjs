@@ -78,15 +78,6 @@ export const mapCard = (line) => {
   } catch { return null; }
 };
 
-/** The map `bytes` hold, when its digest is `digest`; else null. */
-export function mapFor(bytes, digest) {
-  if (!bytes || !digest) return null;
-  try {
-    const map = JSON.parse(Buffer.from(bytes).toString('utf8'));
-    return map?.digest === digest && Array.isArray(map.nodes) ? map : null;
-  } catch { return null; }
-}
-
 /** Why a file the map names has moved since it was compiled, or ''. */
 function moved(map, file, read, app = null) {
   // Named as an answer names a file (`tamber-paths.mjs`), never this machine's path.

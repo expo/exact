@@ -5,10 +5,11 @@
 // when the deploy script names it, and the app's release notes. Stamped into
 // the bundle's Info.plist, so it is baked into the binary, for a normal build
 // and an `--archive` alike. Every key is optional.
-import { spawnSync } from 'node:child_process';
+import { spawnSync } from './toolchain.mjs';
 import { closeSync, existsSync, openSync, readSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { resolve } from 'node:path';
+import { recordedSources } from './shader-libraries.mjs';
 
 const git = (dir, args) => {
   const r = spawnSync('git', ['-C', dir, ...args], { encoding: 'utf8' });
@@ -83,5 +84,8 @@ export function buildInfo(app, { root, archive = false, production = false, sdk 
     ...(env.EXACT_DISTRIBUTION_REVISION ? { ExactDistributionRevision: env.EXACT_DISTRIBUTION_REVISION } : {}),
     ...(notes ? { ExactReleaseNotes: notes } : {}),
     ...(env.EXACT_DEV_MENU != null ? { ExactDevMenu: env.EXACT_DEV_MENU !== '0' } : {}),
+    // Where a development run on this Mac or its simulator records the MSL its GPU
+    // module compiles, for the next build to compile ahead (shader-libraries.mjs).
+    ...(!production && !archive && app.dir && ['macosx', 'iphonesimulator', 'appletvsimulator'].includes(sdk) ? { ExactMetalSources: recordedSources(app) } : {}),
   };
 }

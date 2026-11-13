@@ -205,16 +205,14 @@ fn unknown_presentation_only_matters_where_a_heading_could_be() {
 }
 
 #[test]
-fn a_keyed_child_with_navigation_back_may_be_a_route() {
-    for back in ["", "back"] {
-        let route = screen(HEADER).replacen(
-            "column",
-            &format!("column navigationKey=\"home\" navigationBack=\"{back}\""),
-            1,
-        );
-        let root = screen(&route).replacen("column", "main navigationKey=\"home\"", 1);
-        let src = app(&root);
-        assert!(warnings(&src).is_empty(), "{src}");
+fn keyed_elements_outside_the_first_root_are_not_navigation_routes() {
+    let keys = "column navigationKey=\"root\"\n  column navigationKey=\"home\"";
+    for view in [
+        screen(&format!("{HEADER}\n{keys}")),
+        screen(&format!("{HEADER}\n{}", screen(keys))),
+    ] {
+        let src = app(&view);
+        assert_eq!(warnings(&src).len(), 1, "{src}");
     }
 }
 

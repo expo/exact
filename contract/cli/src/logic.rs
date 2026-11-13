@@ -12,8 +12,9 @@ pub fn rust_entry(
     let constructor = native_storage_constructor(constructor, inputs)?;
     let constructor = constructor.as_str();
     // The digest of the source this binary compiles `constructor`'s crate
-    // from (`scripts/app.mjs` `nativeSource`): a Rust update built from the
-    // same source then runs this native code, not the module.
+    // from (`scripts/rust.mjs` `nativeSource`): a Rust update built from the
+    // same source then runs this native code, not the module. Routing compares
+    // source digests, never the wasm module's (LLP 1030 D3a, amended 2026-11-12).
     println!("cargo:rerun-if-env-changed=EXACT_NATIVE_SOURCE");
     let native = match std::env::var("EXACT_NATIVE_SOURCE") {
         Ok(source) if !source.is_empty() => {
@@ -24,7 +25,13 @@ pub fn rust_entry(
         }
         _ => String::new(),
     };
-    let supplemental = if let Some(directory) = std::env::var_os("EXACT_RUST_BUNDLE") {
+    // A data source that names no app id takes the manifest's, so a native
+    // host gives it the app's storage roots (`Swappable::named`).
+    let named = inputs["app"]
+        .as_str()
+        .map(|app| format!(".named({app:?})"))
+        .unwrap_or_default();
+    let mut supplemental = if let Some(directory) = std::env::var_os("EXACT_RUST_BUNDLE") {
         let receipt: serde_json::Value = serde_json::from_slice(
             &std::fs::read(std::path::Path::new(&directory).join("app.module.json"))
                 .map_err(|e| e.to_string())?,
@@ -43,12 +50,21 @@ pub fn rust_entry(
         ) {
             return Err("invalid supplemental Rust module filename".into());
         }
-        format!("{{ use exact_logic::exact_runner::DataSource; exact_logic::Swappable::{mode}({constructor}){native}.replacement(include_bytes!(concat!(env!(\"OUT_DIR\"), \"/app.plan\")), include_str!(concat!(env!(\"OUT_DIR\"), \"/rust/app.module.json\")), include_bytes!(concat!(env!(\"OUT_DIR\"), \"/rust/{file}\")).to_vec()).expect(\"validated baked Rust pair\") }}")
+        format!("{{ use exact_logic::exact_runner::DataSource; exact_logic::Swappable::{mode}({constructor}){native}{named}.replacement(include_bytes!(concat!(env!(\"OUT_DIR\"), \"/app.plan\")), include_str!(concat!(env!(\"OUT_DIR\"), \"/rust/app.module.json\")), include_bytes!(concat!(env!(\"OUT_DIR\"), \"/rust/{file}\")).to_vec()).expect(\"validated baked Rust pair\") }}")
     } else {
-        format!("exact_logic::Swappable::{mode}({constructor}){native}")
+        format!("exact_logic::Swappable::{mode}({constructor}){native}{named}")
     };
+    let has_preloads = inputs["preload"]
+        .as_array()
+        .is_some_and(|entries| !entries.is_empty());
+    if has_preloads {
+        supplemental = format!(
+            "({supplemental}).with_preloads({})",
+            crate::preload_expression(&inputs["preload"])
+        );
+    }
     match mode {
-        "off" if inputs["platform"] == "web" => Ok(format!("type AppData = {data};\n#[allow(dead_code)]\nfn app_data() -> AppData {{ {constructor} }}\n")),
+        "off" if inputs["platform"] == "web" && !has_preloads => Ok(format!("type AppData = {data};\n#[allow(dead_code)]\nfn app_data() -> AppData {{ {constructor} }}\n")),
         "off" | "native" | "tiered" | "wasm" | "browser" => Ok(format!(
             "exact_logic::configured!(AppData, {data}, || {supplemental});\n#[allow(dead_code)]\nfn app_data() -> AppData {{ Default::default() }}\n"
         )),
@@ -150,14 +166,14 @@ fn launch_parts() -> Result<String, String> {
             file.canonicalize().map_err(|e| e.to_string())?
         ));
         calls.push_str(&format!(
-            "    {ident}::launch(exact_linux::journal::LaunchContext::new({name:?}, {config:?}, {app:?}, COMPAT));\n"
+            "    {ident}::launch(exact_painted::journal::LaunchContext::new({name:?}, {config:?}, {app:?}, COMPAT));\n"
         ));
     }
     if calls.is_empty() {
         return Ok("fn launch_parts() {}\n".into());
     }
     Ok(format!(
-        "{mods}fn launch_parts() {{\n    let started = std::time::Instant::now();\n{calls}    exact_linux::journal::launch_parts_ran(started.elapsed());\n}}\n"
+        "{mods}fn launch_parts() {{\n    let started = std::time::Instant::now();\n{calls}    exact_painted::journal::launch_parts_ran(started.elapsed());\n}}\n"
     ))
 }
 
@@ -258,8 +274,9 @@ pub fn web_linked(plan: &exact_plan::Plan, inputs: &serde_json::Value) -> String
     // A grouped list is its authored nodes on the web, and the browser does
     // its own I/O and plays CSS's transitions (LLP 1047.001 D2); its file
     // input is the media picker, `auth` below is the sign-in sheet, and its
-    // numerals roll in the runtime's text (LLP 1077 D15), and its date and
-    // time controls are the browser's own (LLP 1115.001.000 D2).
+    // numerals roll in the runtime's text (LLP 1077 D15), its date and
+    // time controls are the browser's own (LLP 1115.001.000 D2), and it
+    // shows no tips (LLP 1035.006.000 D4).
     let names: Vec<&str> = uses
         .iter()
         .filter(|c| {
@@ -273,6 +290,7 @@ pub fn web_linked(plan: &exact_plan::Plan, inputs: &serde_json::Value) -> String
                     | Capability::Numerals
                     | Capability::Dates
                     | Capability::Sqlite
+                    | Capability::Tips
             )
         })
         .map(|c| c.name())
@@ -324,7 +342,8 @@ pub fn web_linked(plan: &exact_plan::Plan, inputs: &serde_json::Value) -> String
             | Capability::AuthSession
             | Capability::Numerals
             | Capability::Dates
-            | Capability::Sqlite => {}
+            | Capability::Sqlite
+            | Capability::Tips => {}
         }
     }
     entry
@@ -383,6 +402,18 @@ mod tests {
         assert!(super::rust_entry("Data", "data()", "off", &inputs)
             .unwrap()
             .contains("ibex2_sqlite::link();"));
+    }
+
+    /// The entry gives a data source the manifest's app id, which a source
+    /// that names none takes (`Swappable::named`), in every native mode.
+    #[test]
+    fn an_entry_names_the_manifests_app() {
+        let inputs = serde_json::json!({"app": "com.example.notes", "linked": []});
+        for mode in ["off", "native", "tiered", "wasm"] {
+            let entry = super::rust_entry("Data", "data()", mode, &inputs).unwrap();
+            let named = format!("Swappable::{mode}(data()).named(\"com.example.notes\")");
+            assert!(entry.contains(&named), "{entry}");
+        }
     }
 
     /// LLP 1047.001 D3: the entry names its set and invokes the export

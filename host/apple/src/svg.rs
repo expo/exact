@@ -83,6 +83,8 @@ pub(crate) struct SvgState {
     pub(crate) scene_builds: usize,
     /// The last scene sent per `svg`, and its content box.
     sent: IdMap<ViewId, (String, Rect)>,
+    /// SVG roots whose cost-limit warning was logged during this node's lifetime.
+    over_warned: IdSet<ViewId>,
     /// Environment used by the cached scenes, including the window unit basis.
     environment: Option<exact_kernel::Env>,
     /// Boxes whose lowered animations may have changed, and their last spec.
@@ -205,6 +207,7 @@ impl SvgState {
         self.pressable.remove(&id);
         self.played.remove(&id);
         self.sent.remove(&id);
+        self.over_warned.remove(&id);
         self.box_sent.remove(&id);
         self.box_size.remove(&id);
         self.boxes.remove(&id);
@@ -214,6 +217,19 @@ impl SvgState {
                 true
             }
             None => false,
+        }
+    }
+
+    /// A view renewed for another list item (LLP 1078): the presenter drops
+    /// its scene and its box's animations, so an `svg`'s scene is owed whole
+    /// and a box's animations are sent as a new view's are.
+    pub(crate) fn renewed(&mut self, id: ViewId) {
+        self.played.remove(&id);
+        self.box_sent.remove(&id);
+        self.box_size.remove(&id);
+        if let Some((scene, _)) = self.sent.get_mut(&id) {
+            scene.clear();
+            self.dirty.insert(id);
         }
     }
 
@@ -236,14 +252,15 @@ impl SvgState {
         }
     }
 
-    /// The `svg` and `animations` ops this batch owes.
+    /// The `svg` and `animations` ops this batch owes, and new cost-limit warnings.
     pub(crate) fn emit(
         &mut self,
         kernel: &Kernel,
         engine: &Engine,
         appearance: &exact_kernel::motion::PaintMotion,
         batch: &mut Batch,
-    ) {
+    ) -> Vec<String> {
+        let mut notes = Vec::new();
         let environment = kernel.arena().env();
         if self.environment.as_ref() != Some(environment) {
             // A fixed content box can contain window-relative geometry, including
@@ -275,14 +292,20 @@ impl SvgState {
             {
                 self.scene_builds += 1;
             }
-            let scene = scene(
+            // Sampled motion contributes its value; lowered motion carries its spec.
+            let resolved = exact_kernel::svg::scene::resolve(
                 kernel,
-                engine,
-                &self.pressable,
                 &node,
                 bx,
+                &Sampled(engine),
                 appearance.dark(node.key),
             );
+            if let Some(limit) = resolved.over {
+                if self.over_warned.insert(root) {
+                    notes.push(format!("svg #{root}: {limit}; drawing nothing"));
+                }
+            }
+            let scene = serialize(&resolved, engine, &self.pressable, bx);
             if self.sent.get(&root).is_none_or(|(s, _)| *s != scene) {
                 batch.svg(root, &scene);
                 self.sent.insert(root, (scene, bx));
@@ -373,6 +396,7 @@ impl SvgState {
                 }
             }
         }
+        notes
     }
 }
 
@@ -394,23 +418,7 @@ pub(crate) fn image_scene(
 
 /// `{"box":[x,y,w,h],"t":[a,b,c,d,e,f]|null,"els":[…]}`: `t` null renders
 /// nothing (a view box with no area). The scene is the kernel's resolved
-/// one (LLP 1055.000 D1); this only serializes it with the lowered
-/// animations of each item.
-fn scene(
-    kernel: &Kernel,
-    engine: &Engine,
-    press: &IdSet<ViewId>,
-    node: &NodeRef<'_>,
-    bx: (f32, f32, f32, f32),
-    dark: bool,
-) -> String {
-    // A sampled animation's value now; a lowered one is Core Animation's,
-    // so the scene carries its underlying value and the spec.
-    let resolved = exact_kernel::svg::scene::resolve(kernel, node, bx, &Sampled(engine), dark);
-    serialize(&resolved, engine, press, bx)
-}
-
-/// A resolved scene as [`scene`] sends it.
+/// one (LLP 1055.000 D1), serialized with each item's lowered animations.
 fn serialize(
     resolved: &exact_kernel::svg::Scene,
     engine: &Engine,
@@ -897,6 +905,12 @@ fn shape_json(
             }
             None => paint_json(local(paint.as_ref()).as_ref(), s),
         }
+    }
+    // @ref LLP 1055.000 D17 — which paints take hits, as `pointer-events`
+    // reads them: a set fill that draws nothing (an empty gradient) still
+    // does, so the presenter cannot tell from the paints above.
+    if let Some((fill, stroke)) = shape.hit_paints() {
+        let _ = write!(s, ",\"hp\":[{},{}]", fill as u8, stroke as u8);
     }
     if shape.order != [0, 1, 2] {
         let _ = write!(

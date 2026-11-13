@@ -27,7 +27,7 @@
 use super::sends::{exclusive, facts, made_in, Frame, Guard};
 use super::{AnalyzeError, Related};
 use contract_syntax::inline::calls::shown;
-use contract_syntax::{BinOp, Component, Expr, Span, Stmt, TemplatePart};
+use contract_syntax::{BinOp, Component, Expr, Span, Stmt};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// An assignment on some path: its frame, where, under what guard, the
@@ -315,58 +315,15 @@ pub(super) fn slot_reads<'e>(
                 read.2 = Some(field);
             }
         }
-        Expr::Number(..) | Expr::Str(..) | Expr::Bool(..) | Expr::None(_) => {}
         // A settled value: the pending map changes after the body runs.
         Expr::Call(name, _, _) if name == "pending" => {}
-        Expr::Call(_, args, _) | Expr::List(args, _) => {
-            args.iter().for_each(|a| slot_reads(a, slots, bound, out))
-        }
-        Expr::Template(parts, _) => {
-            for p in parts {
-                if let TemplatePart::Expr(x) = p {
-                    slot_reads(x, slots, bound, out);
-                }
+        _ => {
+            for (x, binds) in e.scoped_operands() {
+                let depth = bound.len();
+                bound.extend(binds.iter());
+                slot_reads(x, slots, bound, out);
+                bound.truncate(depth);
             }
-        }
-        Expr::Some(x, _)
-        | Expr::Member(x, _, _)
-        | Expr::NamedArg(_, x, _)
-        | Expr::Typed(x, _, _)
-        | Expr::Unary(_, x, _) => slot_reads(x, slots, bound, out),
-        Expr::Binary(_, a, b, _) => {
-            slot_reads(a, slots, bound, out);
-            slot_reads(b, slots, bound, out);
-        }
-        Expr::Ternary(a, b, c, _) => {
-            slot_reads(a, slots, bound, out);
-            slot_reads(b, slots, bound, out);
-            slot_reads(c, slots, bound, out);
-        }
-        Expr::Match {
-            subject,
-            var,
-            some,
-            none,
-            ..
-        } => {
-            slot_reads(subject, slots, bound, out);
-            slot_reads(none, slots, bound, out);
-            bound.push(var);
-            slot_reads(some, slots, bound, out);
-            bound.pop();
-        }
-        Expr::Let {
-            name, value, body, ..
-        } => {
-            slot_reads(value, slots, bound, out);
-            bound.push(name);
-            slot_reads(body, slots, bound, out);
-            bound.pop();
-        }
-        Expr::Arrow { params, body, .. } => {
-            bound.extend(params.iter().map(String::as_str));
-            slot_reads(body, slots, bound, out);
-            bound.truncate(bound.len() - params.len());
         }
     }
 }

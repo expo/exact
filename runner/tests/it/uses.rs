@@ -365,3 +365,21 @@ fn dates_are_a_date_or_time_control() {
     assert!(!used("component A\n  view\n    input value=\"\"\n").has(Capability::Dates));
     assert!(!used("component A\n  view\n    input type=\"file\"\n").has(Capability::Dates));
 }
+
+/// LLP 1035.006.000 D5: a tip links the tips capability (TipKit on Apple);
+/// one whose title is always empty shows nothing and links nothing.
+#[test]
+fn tips_are_an_element_with_a_tip() {
+    let button = |attrs: &str| {
+        format!("component A\n  state t = \"\"\n  view\n    button id=\"add\"{attrs}\n      text \"Add\"\n")
+    };
+    let tipped = used(&button(" tip=\"Add a station\""));
+    assert!(tipped.has(Capability::Tips));
+    assert_eq!(tipped.to_string(), "tips");
+    assert!(
+        used(&button(" tip=t")).has(Capability::Tips),
+        "a computed title may be one"
+    );
+    assert!(!used(&button(" tip=\"\"")).has(Capability::Tips));
+    assert!(!used(&button("")).has(Capability::Tips));
+}

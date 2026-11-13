@@ -32,7 +32,7 @@ use std::rc::Rc as SurfaceRef;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc as SurfaceRef;
 
-pub use exact_plan::Value;
+pub use exact_plan::{surface_arguments, Value};
 pub use wgpu;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -41,11 +41,14 @@ mod binding;
 #[cfg(target_os = "android")]
 mod buffers;
 mod children;
+#[cfg(all(test, target_os = "macos"))]
+mod color_space_tests;
 mod frame;
 #[cfg(all(test, target_os = "macos"))]
 mod hdr_tests;
 mod input;
 mod pace;
+mod performance;
 pub use pace::{lower_cap, FrameTiming, HostTiming, ThermalState};
 #[cfg(not(target_arch = "wasm32"))]
 mod readback;
@@ -53,9 +56,11 @@ mod release;
 #[cfg(any(target_os = "android", test))]
 mod ring_order;
 pub use input::{InputEvent, PointerKind, PointerPhase, SensorKind};
+pub mod haptics;
 pub mod json;
 pub mod shaders;
 mod target;
+pub use target::ColorSpace;
 pub mod tier;
 pub use tier::{set_thread_tier, set_tier, tier, GpuTier};
 mod uniform;
@@ -230,6 +235,12 @@ pub trait Surface {
     /// The canvas's inputs from the plan, as typed values; before the
     /// first render and whenever they change. A refusal names the input.
     fn bind(&mut self, inputs: &[Value], at_ms: Option<f64>) -> Result<(), SurfaceError>;
+    /// The canvas's size in points, given before a bind when the host knows
+    /// it, since a stamped bind may advance the surface's state before its
+    /// first `render`. True when it changed what the canvas shows.
+    fn size(&mut self, _width: f32, _height: f32) -> bool {
+        false
+    }
     /// Drain asset requests and retirements together; hosts cancel old flights first.
     fn assets(&mut self) -> AssetChanges {
         AssetChanges::default()
@@ -320,15 +331,37 @@ pub trait Surface {
     fn high_dynamic_range(&self) -> bool {
         false
     }
+    /// The SDR target's RGB primaries. Display P3 is granted only when the
+    /// target supports it; a granted HDR request keeps extended sRGB.
+    /// Asked when the target is configured, including after restoration.
+    fn color_space(&self) -> ColorSpace {
+        ColorSpace::Srgb
+    }
+    /// The target's granted RGB primaries, after `device_ready` and before
+    /// preparation or drawing, on attachment, device restoration and retiering.
+    /// HDR uses sRGB primaries; its range is reported separately by headroom.
+    /// Offscreen and Android hardware-buffer targets always report sRGB.
+    /// Every native readback reports sRGB before capture, including after
+    /// detachment, then restores any P3 presentation grant after capture.
+    fn color_space_granted(&mut self, _space: ColorSpace) {}
     /// Every output pixel of this instance has alpha one under its current
     /// clear/background policy. Evaluated after binding, never by surface type.
-    /// Allows a host to present a full-window canvas beneath its UI.
+    /// Allows a host to present a full-window canvas beneath its UI. On Android
+    /// that is a `SurfaceView` the system compositor takes as its own layer; a
+    /// canvas that is not opaque is composed into the window instead, so every
+    /// frame it draws makes HWUI redraw the window.
     fn opaque(&self) -> bool {
         false
     }
     /// Raw input inside this canvas (LLP 1046.002 S1); app gestures elsewhere are untouched.
     fn wants_input(&self) -> bool {
         false
+    }
+    /// Whether this canvas reads gamepads; a host whose pad service costs
+    /// something to open (Apple's GameController) opens it only for one that
+    /// does. Every canvas that takes input does unless it says otherwise.
+    fn wants_pads(&self) -> bool {
+        self.wants_input()
     }
     /// One device event in canvas points, stamped with the host's clock.
     fn input(&mut self, _event: &InputEvent) {}
@@ -341,7 +374,7 @@ pub trait Surface {
         true
     }
     /// Strings posted to the app, drained after render, input and agent calls (S2).
-    /// The host consumes `"exact:audio"` instead of dispatching it to the app.
+    /// The host consumes `"exact:audio"` and [`haptics::Haptic::message`]'s instead.
     /// On iOS/tvOS it asks for the app's `audio_session` configuration and activation;
     /// first success sends no reply. Failure sends `Lifecycle::Interrupted`,
     /// retries after 300 live display-link frames, on becoming visible or a
@@ -356,10 +389,28 @@ pub trait Surface {
         Vec::new()
     }
     /// The surface's public record — one JSON object — when it changed since last
-    /// asked. The host offers it to the app as `exactSurface("<name>")`.
-    /// The first live instance owns a surface name; other instances cannot publish or clear its record.
+    /// asked. The host offers it to the app as `exactSurface("<name>")`, with the
+    /// module's `presented` member added (LLP 1009), a name the record
+    /// cannot use. The first live instance owns a surface name; other
+    /// instances cannot publish or clear its record.
     fn published(&mut self) -> Option<String> {
         None
+    }
+    /// Enable bounded, read-only performance collection for an authored HUD.
+    /// Disabled by default; collection must not affect saved state or replay.
+    fn set_performance_reporting(&mut self, _enabled: bool) {}
+    /// The latest snapshot as a JSON object, without unavailable metrics or the module's
+    /// own (`processMemoryBytes`, `gameHeapBytes`, `cpuSubmitMs`, `cpuSubmitMaxMs`).
+    /// Called only while enabled, at most once a second; `now_ms` is the host's
+    /// monotonic clock, polled while rendering is idle too.
+    fn take_performance(&mut self, _now_ms: f64) -> Option<String> {
+        None
+    }
+    /// Which picture the surface draws (a world restarted or restored draws a
+    /// new one): a change makes the canvas's `presented` false until a frame
+    /// of the new picture is presented.
+    fn generation(&self) -> u64 {
+        0
     }
     /// An agent request and reply as JSON objects; the host adds clock and size (S3).
     fn agent(&mut self, _request: &str) -> Option<String> {
@@ -487,6 +538,7 @@ pub(crate) fn swapchains<R>(f: impl FnOnce() -> R) -> R {
     f()
 }
 
+mod presented;
 mod recovery;
 
 /// Frames a presented canvas may have queued for the compositor. Android
@@ -504,6 +556,7 @@ struct Instance {
     surface: Box<dyn Surface>,
     messages: Vec<String>,
     published: Option<String>,
+    performance: performance::Reporting,
     /// An acquired image retained while the surface prepares a complete
     /// frame: it drops before `presentation`, its surface ([`release`]).
     held: Option<wgpu::SurfaceTexture>,
@@ -525,10 +578,14 @@ struct Instance {
     outstanding: BTreeSet<String>,
     answered: BTreeSet<String>,
     bound: bool,
+    /// The inputs its last accepted bind gave its surface ([`Module::bind_changed_json`]).
+    inputs: Vec<Value>,
     dirty: bool,
     /// Its first frame has been handed to the compositor (`Module::seen`);
     /// shared with the callback that says so.
     seen: Arc<AtomicBool>,
+    /// Whether its current picture has been presented, for its record.
+    presented: presented::Presented,
     children: Option<Children>,
     children_generation: u32,
     /// Per-child textures (LLP 1014 D5), by index.
@@ -573,6 +630,7 @@ impl Instance {
         if let Some(record) = self.surface.published() {
             self.published = Some(record);
         }
+        self.presented.generation(self.surface.generation());
     }
 }
 
@@ -649,21 +707,26 @@ impl Module {
             self.pipeline_cache = PipelineCache::for_module(&gpu.device, self.cache_artifact);
         }
         for inst in self.instances.values_mut() {
-            let format = if let (Some(target), Some(config)) = (&inst.presentation, &inst.config) {
-                swapchains(|| target.configure(&gpu.device, config));
-                view_format(config)
-            } else {
-                if inst.config.is_some() {
+            let format =
+                if let (Some(target), Some(config)) = (&inst.presentation, &mut inst.config) {
+                    let caps = target.get_capabilities(&gpu.adapter);
+                    inst.hdr = target::configure(&*inst.surface, &gpu.adapter, &caps, config);
+                    inst.alpha_modes = caps.alpha_modes;
+                    swapchains(|| target.configure(&gpu.device, config));
+                    view_format(config)
+                } else {
+                    if inst.config.is_some() {
+                        continue;
+                    }
+                    // Web targets are reattached by web::recover; native offscreen
+                    // surfaces use the same format as readback.
+                    #[cfg(target_arch = "wasm32")]
                     continue;
-                }
-                // Web targets are reattached by web::recover; native offscreen
-                // surfaces use the same format as readback.
-                #[cfg(target_arch = "wasm32")]
-                continue;
-                #[cfg(not(target_arch = "wasm32"))]
-                inst.offscreen_format()
-            };
+                    #[cfg(not(target_arch = "wasm32"))]
+                    inst.offscreen_format()
+                };
             inst.surface.device_ready(gpu.device.features());
+            inst.report_color_space();
             inst.surface.prepare_assets(&gpu.device, &gpu.queue, format);
             inst.dirty = true;
         }
@@ -754,166 +817,6 @@ impl Module {
         None
     }
 
-    /// Create a canvas's surface by name on a platform target; `None` (and
-    /// [`Module::take_error`]) when the name is unknown or the target refused.
-    pub fn create(
-        &mut self,
-        name: &str,
-        target: wgpu::Surface<'static>,
-        width: u32,
-        height: u32,
-    ) -> Option<u32> {
-        self.check_device();
-        let Some(gpu) = self.gpu.as_ref() else {
-            return self.fail("no device");
-        };
-        let Some((_, _, factory)) = self.registry.surfaces.iter().find(|(n, _, _)| *n == name)
-        else {
-            return self.fail(format!("no surface named `{name}` in this module"));
-        };
-        // Every shader this module's surfaces bind against has its text, at
-        // the interface the binary was built for (LLP 1030 D8): a pipeline
-        // built over nothing would be wgpu's error, not a refusal by name.
-        if let Some(why) = shaders::missing(self.registry.shaders) {
-            return self.fail(why);
-        }
-        let Some(mut config) = target.get_default_config(&gpu.adapter, width.max(1), height.max(1))
-        else {
-            return self.fail("the adapter cannot present to this target");
-        };
-        let caps = target.get_capabilities(&gpu.adapter);
-        let surface = factory();
-        let hdr = target::configure(&*surface, &gpu.adapter, &caps, &mut config);
-        config.present_mode = wgpu::PresentMode::AutoVsync;
-        config.desired_maximum_frame_latency = FRAME_LATENCY;
-        swapchains(|| target.configure(&gpu.device, &config));
-        let id = self.insert(surface, Some((target, config)))?;
-        if let Some(inst) = self.instances.get_mut(&id) {
-            inst.hdr = hdr;
-            inst.alpha_modes = caps.alpha_modes;
-        }
-        Some(id)
-    }
-
-    /// Whether canvas `id` draws above SDR white: it asked, and its target
-    /// is extended sRGB (LLP 1100 D12b).
-    pub fn high_dynamic_range(&self, id: u32) -> bool {
-        self.instances.get(&id).is_some_and(|i| i.hdr)
-    }
-
-    /// The headroom an HDR canvas draws its next frames to (LLP 1100 D12b);
-    /// at least 1.
-    pub fn set_headroom(&mut self, id: u32, headroom: f32) {
-        if let Some(inst) = self.instances.get_mut(&id) {
-            let h = if headroom.is_finite() {
-                headroom.max(1.0)
-            } else {
-                1.0
-            };
-            if inst.headroom != h {
-                inst.headroom = h;
-                inst.dirty = true;
-            }
-        }
-    }
-
-    /// Give a canvas made without a target ([`Module::create_headless`]) a
-    /// platform target to present to, configured as [`Module::create`] does
-    /// (a host whose windows come after the surface, as Android's do).
-    pub fn attach(
-        &mut self,
-        id: u32,
-        target: wgpu::Surface<'static>,
-        width: u32,
-        height: u32,
-    ) -> bool {
-        self.settle(id);
-        self.detach(id);
-        self.check_device();
-        let Some(gpu) = self.gpu.as_ref() else {
-            return self.fail::<()>("no device").is_some();
-        };
-        if let Some(why) = shaders::missing(self.registry.shaders) {
-            return self.fail::<()>(why).is_some();
-        }
-        let Some(mut config) = target.get_default_config(&gpu.adapter, width.max(1), height.max(1))
-        else {
-            return self
-                .fail::<()>("the adapter cannot present to this target")
-                .is_some();
-        };
-        let caps = target.get_capabilities(&gpu.adapter);
-        config.present_mode = wgpu::PresentMode::AutoVsync;
-        config.desired_maximum_frame_latency = FRAME_LATENCY;
-        let features = gpu.device.features();
-        let Some(inst) = self.instances.get_mut(&id) else {
-            return self.fail::<()>(format!("no canvas {id}")).is_some();
-        };
-        inst.alpha_modes = caps.alpha_modes.clone();
-        inst.hdr = target::configure(&*inst.surface, &gpu.adapter, &caps, &mut config);
-        swapchains(|| target.configure(&gpu.device, &config));
-        inst.seen = Default::default();
-        inst.presentation = Some(SurfaceRef::new(target));
-        inst.config = Some(config);
-        inst.surface.device_ready(features);
-        inst.dirty = true;
-        true
-    }
-
-    /// Drop a canvas's target (its window is going); its state stays. This
-    /// never waits for the compositor ([`release`]).
-    pub fn detach(&mut self, id: u32) {
-        self.settle(id);
-        self.release(id);
-    }
-
-    /// Give a canvas made without a target buffers to render into, which a
-    /// reader draws itself ([`buffers`]); `false` when the device cannot
-    /// (the canvas then needs a window).
-    #[cfg(target_os = "android")]
-    pub fn attach_buffers(&mut self, id: u32, width: u32, height: u32) -> bool {
-        // A frame rendered into the target these replace is submitted into
-        // it, and presented, first (`detach`).
-        self.settle(id);
-        self.check_device();
-        let Some(gpu) = self.gpu.as_ref() else {
-            return self.fail::<()>("no device").is_some();
-        };
-        if let Some(why) = shaders::missing(self.registry.shaders) {
-            return self.fail::<()>(why).is_some();
-        }
-        let format = self
-            .instances
-            .get(&id)
-            .map_or(buffers::FORMAT, Instance::offscreen_format);
-        let Some(ring) = buffers::Ring::new(gpu, width, height, format) else {
-            return self
-                .fail::<()>("the device cannot render into hardware buffers")
-                .is_some();
-        };
-        let features = gpu.device.features();
-        self.release(id);
-        let Some(inst) = self.instances.get_mut(&id) else {
-            return self.fail::<()>(format!("no canvas {id}")).is_some();
-        };
-        inst.ring = Some(ring);
-        inst.surface.device_ready(features);
-        inst.dirty = true;
-        true
-    }
-
-    /// The newest frame a canvas with buffers has finished: `[generation,
-    /// slot, serial]` and the `AHardwareBuffer*`.
-    #[cfg(target_os = "android")]
-    pub fn buffer(&mut self, id: u32) -> Option<([u32; 3], *mut std::ffi::c_void)> {
-        if let Some(gpu) = &self.gpu {
-            let _ = gpu.device.poll(wgpu::PollType::Poll);
-        }
-        let ring = self.instances.get_mut(&id)?.ring.as_mut()?;
-        ring.settle();
-        ring.take()
-    }
-
     /// Create surface ownership without a device, target, or registered shaders.
     pub fn create_headless(&mut self, name: &str) -> Option<u32> {
         let Some((_, _, factory)) = self.registry.surfaces.iter().find(|(n, _, _)| *n == name)
@@ -933,6 +836,7 @@ impl Module {
         surface.clock(self.seekable);
         if let Some(gpu) = &self.gpu {
             surface.device_ready(gpu.device.features());
+            surface.color_space_granted(target::granted(presentation.as_ref().map(|(_, c)| c)));
         }
         let (presentation, config) = presentation.map_or((None, None), |(target, config)| {
             (Some(SurfaceRef::new(target)), Some(config))
@@ -943,6 +847,7 @@ impl Module {
                 surface,
                 messages: Vec::new(),
                 published: None,
+                performance: performance::Reporting::default(),
                 presentation,
                 config,
                 held: None,
@@ -959,8 +864,10 @@ impl Module {
                 outstanding: BTreeSet::new(),
                 answered: BTreeSet::new(),
                 bound: false,
+                inputs: Vec::new(),
                 dirty: false,
                 seen: Default::default(),
+                presented: Default::default(),
                 children: None,
                 children_generation: 0,
                 each: Vec::new(),
@@ -1052,9 +959,11 @@ impl Module {
             .unwrap_or_default()
     }
 
-    /// Take the latest changed public record exactly once.
+    /// Take the latest changed public record exactly once, with its
+    /// `presented` member; the last record again when only that changed.
     pub fn take_published(&mut self, id: u32) -> Option<String> {
-        self.instances.get_mut(&id).and_then(|i| i.published.take())
+        let inst = self.instances.get_mut(&id)?;
+        inst.presented.take(inst.published.take())
     }
 
     /// Ask this canvas an agent question; an answer or posted message marks it dirty.
@@ -1090,6 +999,7 @@ impl Module {
             Ok(()) => {
                 inst.drain();
                 inst.bound = true;
+                inst.inputs = inputs.to_vec();
                 inst.dirty = true;
                 true
             }
@@ -1189,6 +1099,8 @@ impl Module {
                 // be delivered alongside the restored state. Refusals keep them.
                 inst.messages.clear();
                 inst.published = None;
+                inst.presented.forget_record();
+                inst.presented.reset();
                 inst.drain();
                 inst.dirty = true;
                 true

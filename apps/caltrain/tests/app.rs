@@ -58,8 +58,9 @@ fn the_app_compiles_deterministically_and_bakes_its_first_frame() {
     assert_eq!(a.slots.len(), 22);
     // Seven data-crate resources, `delivery` — the runner's own
     // `exactDelivery` (LLP 1030 D7), read by the update banner — and
-    // `viewport`, whose `pointer` says a TV, and `exactActivities`.
-    assert_eq!(a.resources.len(), 10);
+    // `viewport`, whose `pointer` says a TV, `exactActivities`, and
+    // `exactTime`, which moves an activity's instants onto the real clock.
+    assert_eq!(a.resources.len(), 11);
     // …and `activateUpdate`, the banner's `deliveryActivate`, and
     // `reloadApp`, the header's Reload, and the departure and service-alert actions.
     assert_eq!(a.actions.len(), 24);
@@ -374,13 +375,25 @@ fn hover_focus_and_keys_reach_their_actions() {
     ));
 }
 
+/// The real clock's epoch at zero in the activity tests: 2027-01-15, months
+/// after the seeded day.
+const LAUNCHED: f64 = 1_800_000_000_000.0;
+
 #[test]
 fn an_explicit_activity_update_sends_the_changed_state() {
     let mut app = caltrain::boot(caltrain::build().unwrap(), Kernel::with_monospace()).unwrap();
     app.link_activities().unwrap();
+    // The system draws the activity on the real clock: its train leaves ten
+    // minutes after launch there, not on the seeded day.
+    app.set_time(LAUNCHED, 0.0).unwrap();
     // A completed start can be used before the asynchronous source snapshot arrives.
     app.act("startTracking", vec![]).unwrap();
     let start = app.take_requests().remove(0);
+    let payload = std::str::from_utf8(&start.request.body).unwrap();
+    assert!(
+        payload.contains(&format!("\"at\":{}", LAUNCHED + 600_000.0)),
+        "{payload}"
+    );
     app.fulfill(
         start.ticket,
         exact_runner::Outcome::Response(exact_runner::Response {
@@ -406,7 +419,10 @@ fn an_explicit_activity_update_sends_the_changed_state() {
         payload.contains("\"status\":\"Delayed by 10 minutes\""),
         "{payload}"
     );
-    assert!(payload.contains("\"at\":1787916600000"), "{payload}");
+    assert!(
+        payload.contains(&format!("\"at\":{}", LAUNCHED + 1_200_000.0)),
+        "{payload}"
+    );
     assert!(payload.contains("\"train-id\""), "{payload}");
 }
 
@@ -414,10 +430,15 @@ fn an_explicit_activity_update_sends_the_changed_state() {
 fn service_alert_controls_end_their_own_activity_after_recovery() {
     let mut app = caltrain::boot(caltrain::build().unwrap(), Kernel::with_monospace()).unwrap();
     app.link_activities().unwrap();
+    app.set_time(LAUNCHED, 0.0).unwrap();
     app.act("startAlert", vec![]).unwrap();
     let start = app.take_requests().remove(0);
     let payload = std::str::from_utf8(&start.request.body).unwrap();
     assert!(payload.contains("service-alert"), "{payload}");
+    assert!(
+        payload.contains(&format!("\"updatedAt\":{LAUNCHED}")),
+        "{payload}"
+    );
     app.fulfill(
         start.ticket,
         exact_runner::Outcome::Response(exact_runner::Response {

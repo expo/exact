@@ -257,6 +257,14 @@ export function refreshSymbols() {
   }
 }
 export function writeValue(el, value) {
+  // An option's value getter falls back to its label, so a bound value equal to the label is written still: the
+  // attribute holds it when the label changes.
+  if (el.localName === "option") {
+    if (el.getAttribute("value") !== value) {
+      el.value = value;
+    }
+    return;
+  }
   if (el.exactMarkup) {
     el.exactMarkup.setValue(value);
     return;
@@ -334,7 +342,7 @@ export function syncMarkup(el) {
     });
   }).catch((error) => console.error("exact: Markdown editor:", error));
 }
-export function applyProps(el, set, clear) {
+export function applyProps(el, set, clear, adopting = false) {
   syncMedia(el, set, clear);
   if (set && "data-scrolldocument" in set) {
     scrollDocs.add(el);
@@ -367,7 +375,11 @@ export function applyProps(el, set, clear) {
       }
     } else if (name === "value") {
       el.exactValue = undefined;
-      writeValue(el, "");
+      if (el.localName === "option") {
+        el.removeAttribute("value");
+      } else {
+        writeValue(el, "");
+      }
     } else if (name === "checked") {
       el.exactChecked = undefined;
       el.checked = false;
@@ -411,7 +423,7 @@ export function applyProps(el, set, clear) {
         el.textContent = value;
       }
     } else if (name === "markupPieces") {
-      renderMarkup(el, value);
+      if (!renderMarkup(el, value, adopting)) continue;
       if (el.hasAttribute("data-atoms") && !globalThis.exact.atoms) {
         loadAfterPaint("./atoms.js", "atoms").then(() => {
           if (el.isConnected) {

@@ -42,6 +42,18 @@ impl<D: DataSource> Host<D> {
     /// layout's own batch also loses its motion samples; later batches keep
     /// theirs, as nothing would send them again.
     pub(super) fn write(&mut self, mut batch: Batch, error: Option<&str>) -> String {
+        if let Some(preloads) = &self.preloads {
+            if self.preload_accepted {
+                preloads.committed(std::mem::take(&mut self.preload_content), self.runner.seq());
+            }
+            for fact in preloads.journal() {
+                self.runner.log(format!(
+                    "preload {} {} {:?}",
+                    fact.name, fact.origin, fact.outcome
+                ));
+            }
+            batch.journal.extend(self.runner.take_journal());
+        }
         if batch.layout_provisional {
             self.withhold_layout();
         }
@@ -317,28 +329,23 @@ impl<D: DataSource> Host<D> {
             let parent = node.parent.filter(|_| block.is_none());
             let parent = parent.and_then(|p| kernel.node(p)).map(|p| p.frame);
             let rel = relative(node.frame, parent);
-            // A sheet sized to its route's content reads that extent too
-            // (LLP 1075.003 §9.11). A route that scrolls itself keeps its
-            // scroll extent; any other (one that only clips too) is measured
-            // laid out alone (`emit_fitted`) whenever its subtree changes.
+            // The detent measures the route alone, independently of the
+            // extent its scroller needs in the current sheet.
             let overflow = style::effective_overflow(&node);
             let fits = node
                 .props
                 .str(PropId::NavigationDetent)
                 .is_some_and(|d| d.split(' ').any(|w| w == "fit-content"));
-            let scrolls = [overflow.0, overflow.1]
-                .iter()
-                .any(|o| matches!(o, Overflow::Scroll | Overflow::Auto));
-            if fits && !scrolls {
+            if fits {
                 if !self.fit_routes.iter().any(|(r, _)| *r == id) {
                     self.fit_routes.push((id, None));
                 }
             } else {
                 self.fit_routes.retain(|(r, _)| *r != id);
+                m.fit_height = None;
             }
             visited.push(id);
-            let content = (!(fits && !scrolls)
-                && overflow != (Overflow::Visible, Overflow::Visible))
+            let content = (!fits && overflow != (Overflow::Visible, Overflow::Visible))
                 .then(|| content_size(&node, kernel));
             // An ancestor hint may change without touching the editor. Pass
             // its effective value through native containment, or clear it to
@@ -450,7 +457,7 @@ impl<D: DataSource> Host<D> {
             if let Some(c) = content {
                 if self.layout_withheld || m.content != Some(c) {
                     m.content = Some(c);
-                    batch.content(id, c.0, c.1);
+                    batch.content(id, c.0, c.1, m.fit_height);
                 }
             }
             // @ref LLP 1063 — a moved box plays from where it was.
@@ -462,16 +469,19 @@ impl<D: DataSource> Host<D> {
         self.emit_extents(!visited.is_empty(), batch);
         self.snap_layout(batch);
         self.emit_sticky(batch);
+        self.place_timelines(batch);
         self.emit_fragments(batch);
         // A withheld batch held the scenes it placed: sent again
         if self.layout_withheld {
             self.svg.resend();
-            self.svg.emit(
+            for note in self.svg.emit(
                 self.runner.kernel(),
                 &self.engine,
                 &self.paint.motion,
                 batch,
-            );
+            ) {
+                self.runner.log(note);
+            }
         }
         self.layout_withheld = false;
         self.emit_ranks(batch);
@@ -564,7 +574,7 @@ impl<D: DataSource> Host<D> {
             let m = self.mirror.entry(id).or_default();
             if self.layout_withheld || m.content != Some(c) {
                 m.content = Some(c);
-                batch.content(id, c.0, c.1);
+                batch.content(id, c.0, c.1, m.fit_height);
             }
         }
     }
@@ -579,7 +589,7 @@ impl<D: DataSource> Host<D> {
     /// need not move the route's box or extent), or when its width,
     /// resolved padding, border or cover changed (a block route's
     /// percentage padding moves nothing it publishes); else the last
-    /// measure stands. A scroller of a fixed length height that did not
+    /// measure stands. A nested scroller of a fixed length height that did not
     /// move holds what changes inside it, as it does in the trial.
     fn emit_fitted(&mut self, visited: &[ViewId], moved: &IdSet<ViewId>, batch: &mut Batch) {
         let kernel = self.runner.kernel();
@@ -623,18 +633,29 @@ impl<D: DataSource> Host<D> {
             if !self.layout_withheld && !refit.contains(&id) && last == Some(sig) {
                 continue;
             }
+            let overflow = style::effective_overflow(&node);
+            let scrolls = [overflow.0, overflow.1]
+                .iter()
+                .any(|o| matches!(o, Overflow::Scroll | Overflow::Auto));
+            let extent = scrolls.then(|| content_size(&node, kernel));
             self.runner.count_kernel_layout();
-            let Some(height) = self.runner.kernel_mut().fit_content_height(key) else {
+            let height = self
+                .runner
+                .kernel_mut()
+                .fit_content_height(key)
+                .map(|h| (h - cover).max(0.0));
+            if height.is_some() {
+                self.fit_routes[i].1 = Some(sig);
+            }
+            let Some(c) = extent.or_else(|| height.map(|h| (sig[0], h))) else {
                 continue;
             };
-            self.fit_routes[i].1 = Some(sig);
-            let c = (sig[0], (height - cover).max(0.0));
             let m = self.mirror.entry(id).or_default();
-            // The detent reads the height alone: a route that does not
-            // scroll has no use for a new width.
-            if self.layout_withheld || m.content.map(|c| c.1) != Some(c.1) {
+            let fitted = height.or(m.fit_height);
+            if self.layout_withheld || m.fit_height != fitted || (scrolls && m.content != Some(c)) {
                 m.content = Some(c);
-                batch.content(id, c.0, c.1);
+                m.fit_height = fitted;
+                batch.content(id, c.0, c.1, m.fit_height);
             }
         }
     }

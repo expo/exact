@@ -305,17 +305,11 @@ fn elements<'n>(nodes: &'n [Node], f: &mut dyn FnMut(&'n [Attr])) {
                 elements(children, f);
             }
             Node::Use { children, .. } | Node::Each { body: children, .. } => elements(children, f),
-            Node::When {
-                then, otherwise, ..
-            } => {
-                elements(then, f);
-                elements(otherwise, f);
+            node => {
+                for list in node.child_lists() {
+                    elements(list, f);
+                }
             }
-            Node::Match { some, none, .. } => {
-                elements(&some.1, f);
-                elements(none, f);
-            }
-            Node::Children { .. } => {}
         }
     }
 }
@@ -648,46 +642,25 @@ type Labels<'a> = std::collections::HashMap<&'a str, Option<(&'a Expr, Vec<Strin
 /// arms, which of them names a button the view doesn't settle).
 fn texts_by_id<'a>(nodes: &'a [Node], bound: &mut Vec<String>, out: &mut Labels<'a>) {
     for n in nodes {
-        match n {
-            Node::Element {
-                tag,
-                attrs,
-                positional,
-                children,
-                ..
-            } => {
-                if let (true, Some(id), Some(words)) =
-                    (tag == "text", text(attrs, "id"), positional.first())
-                {
-                    let seen = out.contains_key(id);
-                    out.insert(id, (!seen).then(|| (words, bound.clone())));
-                }
-                texts_by_id(children, bound, out);
+        if let Node::Element {
+            tag,
+            attrs,
+            positional,
+            ..
+        } = n
+        {
+            if let (true, Some(id), Some(words)) =
+                (tag == "text", text(attrs, "id"), positional.first())
+            {
+                let seen = out.contains_key(id);
+                out.insert(id, (!seen).then(|| (words, bound.clone())));
             }
-            Node::Use { children, .. } => texts_by_id(children, bound, out),
-            Node::Each {
-                var, index, body, ..
-            } => {
-                let mark = bound.len();
-                bound.push(var.clone());
-                bound.extend(index.clone());
-                texts_by_id(body, bound, out);
-                bound.truncate(mark);
-            }
-            Node::When {
-                then, otherwise, ..
-            } => {
-                texts_by_id(then, bound, out);
-                texts_by_id(otherwise, bound, out);
-            }
-            Node::Match { some, none, .. } => {
-                let mark = bound.len();
-                bound.push(some.0.clone());
-                texts_by_id(&some.1, bound, out);
-                bound.truncate(mark);
-                texts_by_id(none, bound, out);
-            }
-            Node::Children { .. } => {}
+        }
+        for (list, binds) in n.scoped_child_lists() {
+            let mark = bound.len();
+            bound.extend(binds.iter().map(String::from));
+            texts_by_id(list, bound, out);
+            bound.truncate(mark);
         }
     }
 }
@@ -788,30 +761,14 @@ fn walk_buttons(nodes: &[Node], cx: &Buttons, bound: &mut Vec<String>, out: &mut
                 }
                 walk_buttons(children, cx, bound, out);
             }
-            Node::Use { children, .. } => walk_buttons(children, cx, bound, out),
-            Node::Each {
-                var, index, body, ..
-            } => {
-                let mark = bound.len();
-                bound.push(var.clone());
-                bound.extend(index.clone());
-                walk_buttons(body, cx, bound, out);
-                bound.truncate(mark);
+            node => {
+                for (list, binds) in node.scoped_child_lists() {
+                    let mark = bound.len();
+                    bound.extend(binds.iter().map(String::from));
+                    walk_buttons(list, cx, bound, out);
+                    bound.truncate(mark);
+                }
             }
-            Node::When {
-                then, otherwise, ..
-            } => {
-                walk_buttons(then, cx, bound, out);
-                walk_buttons(otherwise, cx, bound, out);
-            }
-            Node::Match { some, none, .. } => {
-                let mark = bound.len();
-                bound.push(some.0.clone());
-                walk_buttons(&some.1, cx, bound, out);
-                bound.truncate(mark);
-                walk_buttons(none, cx, bound, out);
-            }
-            Node::Children { .. } => {}
         }
     }
 }
@@ -1001,29 +958,14 @@ fn looks(
                 attrs, children, ..
             } => looks(attrs, children, cx, bound, out),
             Node::Use { args, children, .. } => looks(args, children, cx, bound, out),
-            Node::Each {
-                var, index, body, ..
-            } => {
-                let mark = bound.len();
-                bound.push(var.clone());
-                bound.extend(index.clone());
-                looks(&[], body, cx, bound, out);
-                bound.truncate(mark);
+            node => {
+                for (list, binds) in node.scoped_child_lists() {
+                    let mark = bound.len();
+                    bound.extend(binds.iter().map(String::from));
+                    looks(&[], list, cx, bound, out);
+                    bound.truncate(mark);
+                }
             }
-            Node::When {
-                then, otherwise, ..
-            } => {
-                looks(&[], then, cx, bound, out);
-                looks(&[], otherwise, cx, bound, out);
-            }
-            Node::Match { some, none, .. } => {
-                let mark = bound.len();
-                bound.push(some.0.clone());
-                looks(&[], &some.1, cx, bound, out);
-                bound.truncate(mark);
-                looks(&[], none, cx, bound, out);
-            }
-            Node::Children { .. } => {}
         }
     }
 }
@@ -1044,17 +986,11 @@ fn walk_controls(nodes: &[Node], comp: &str, out: &mut Controls) {
             Node::Use { children, .. } | Node::Each { body: children, .. } => {
                 walk_controls(children, comp, out)
             }
-            Node::When {
-                then, otherwise, ..
-            } => {
-                walk_controls(then, comp, out);
-                walk_controls(otherwise, comp, out);
+            node => {
+                for list in node.child_lists() {
+                    walk_controls(list, comp, out);
+                }
             }
-            Node::Match { some, none, .. } => {
-                walk_controls(&some.1, comp, out);
-                walk_controls(none, comp, out);
-            }
-            Node::Children { .. } => {}
         }
     }
 }

@@ -117,11 +117,21 @@ impl<D: DataSource> Bridge<D> {
     /// `env(viewport-segment-*)` lengths itself; the runner answers the
     /// three `exactViewport` fields. Bit 25 is reserved. Bits 26–27 carry
     /// gamut, 28 HDR, and 29–31 display mode; unpack these above the low
-    /// byte for the runner.
+    /// byte for the runner. `update` has no room here and keeps what
+    /// [`Bridge::set_update`] last said.
     pub fn set_preferences(&mut self, bits: u32) {
-        self.preferences =
-            exact_runner::Preferences::from_bits((bits & 0xff) | ((bits >> 26) << 8));
+        self.preferences = exact_runner::Preferences {
+            update: self.preferences.update,
+            ..exact_runner::Preferences::from_bits((bits & 0xff) | ((bits >> 26) << 8))
+        };
         self.fold = fold_bits(bits);
+    }
+
+    /// The page's `update` media feature (LLP 1101.003 D6): 0 `fast`, 1
+    /// `slow`, 2 `none`, as the native wire's bits 15–16 hold it. Taken by
+    /// the next boot or resize, which the page sends after this.
+    pub fn set_update(&mut self, code: u32) {
+        self.preferences.update = exact_runner::Preferences::from_bits((code & 3) << 15).update;
     }
 
     /// UTF-8 launch location carried after optional plan bytes.
@@ -281,6 +291,7 @@ impl<D: DataSource> Bridge<D> {
             height,
             preferences: self.preferences,
             fold: self.fold,
+            ..exact_runner::Viewport::default()
         };
         let (checkpoint, launch_facts) = (self.checkpoint.take(), self.launch());
         let booted = exact_runner::time::launching_with(launch_facts, || match checkpoint {
@@ -328,6 +339,7 @@ impl<D: DataSource> Bridge<D> {
             height,
             preferences: self.preferences,
             fold: self.fold,
+            ..exact_runner::Viewport::default()
         };
         let booted = exact_runner::time::launching_with(self.launch(), || {
             Host::boot_linked(
@@ -656,6 +668,7 @@ impl<D: DataSource> Bridge<D> {
             height,
             preferences: self.preferences,
             fold: self.fold,
+            ..exact_runner::Viewport::default()
         };
         let out = self.host.as_mut().map_or_else(
             || exact_runner::agent::error("not booted"),
@@ -1211,14 +1224,22 @@ macro_rules! host {
             EXACT_BRIDGE.with(|b| b.borrow().request_active(ticket))
         }
 
+        /// The page's `update` media feature, for the next boot or resize
+        /// (`Bridge::set_update`).
+        #[no_mangle]
+        pub extern "C" fn exact_set_update(code: u32) {
+            EXACT_BRIDGE.with(|b| b.borrow_mut().set_update(code))
+        }
+
         /// The viewport or the page's facts (bit 0 reduced motion, bit 1
         /// reduced transparency, bit 2 contrast more, bit 3 contrast less,
         /// bit 4 a dark system; bit 8 folded, bits 9–16 and 17–24 the
-        /// viewport segment columns and rows, LLP 1078 D6) changed; returns
-        /// the batch length.
+        /// viewport segment columns and rows, LLP 1078 D6) changed, with the
+        /// page's geometry in `geometry` bytes of the input buffer (none for
+        /// 0, LLP 1039 D9); returns the batch length.
         #[no_mangle]
-        pub extern "C" fn exact_resize(width: f64, height: f64, now_ms: f64, preferences: u32) -> u32 {
-            EXACT_BRIDGE.with(|b| b.borrow_mut().resize(width, height, preferences, now_ms))
+        pub extern "C" fn exact_resize(width: f64, height: f64, now_ms: f64, preferences: u32, geometry: u32) -> u32 {
+            EXACT_BRIDGE.with(|b| b.borrow_mut().resize_with(width, height, preferences, now_ms, geometry as usize))
         }
 
         /// The date: Unix ms at clock zero and minutes east of UTC.
@@ -1246,6 +1267,23 @@ macro_rules! host {
         #[no_mangle]
         pub extern "C" fn exact_set_display_scale(scale: f64) -> u32 {
             EXACT_BRIDGE.with(|b| b.borrow_mut().set_display_scale(scale))
+        }
+
+        /// The browser's document insets and segment rectangles in the input buffer.
+        #[no_mangle]
+        pub extern "C" fn exact_set_viewport_geometry(len: u32) -> u32 {
+            EXACT_BRIDGE.with(|b| b.borrow_mut().viewport_geometry(len as usize))
+        }
+
+        /// Whether this canvas name is read by a performance resource.
+        #[no_mangle]
+        pub extern "C" fn exact_canvas_performance_requested(len: u32) -> u32 {
+            EXACT_BRIDGE.with(|b| b.borrow().canvas_performance_requested(len as usize))
+        }
+        /// Publish or clear a canvas's performance record.
+        #[no_mangle]
+        pub extern "C" fn exact_canvas_performance_record(len: u32) -> u32 {
+            EXACT_BRIDGE.with(|b| b.borrow_mut().canvas_performance_record(len as usize))
         }
 
         /// The aborts a realm heard between batches.

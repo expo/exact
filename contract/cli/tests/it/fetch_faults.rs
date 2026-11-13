@@ -243,7 +243,7 @@ fn state_says_why_a_resource_failed_until_it_answers() {
 }
 
 /// A source that lets a failed fetch through, as a TypeScript module that
-/// does not catch it (js/src/prelude.js `fail`), throws on `/boom`, throws
+/// does not catch it (js/src/reply.js `fail`), throws on `/boom`, throws
 /// a Snapback refusal naming its reason on `/full` (the snapback4 driver's
 /// `refused`), and answers wider than its shape on `/wide`.
 struct Through;

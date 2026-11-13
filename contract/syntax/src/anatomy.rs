@@ -109,18 +109,12 @@ fn walk(nodes: &mut [Node], own: bool, marks: &mut Vec<Mark>) {
                 });
                 walk(children, own, marks);
             }
-            Node::Use { children, .. } => walk(children, false, marks),
-            Node::Children { .. } => {}
-            Node::When {
-                then, otherwise, ..
-            } => {
-                walk(then, own, marks);
-                walk(otherwise, own, marks);
-            }
-            Node::Each { body, .. } => walk(body, own, marks),
-            Node::Match { some, none, .. } => {
-                walk(&mut some.1, own, marks);
-                walk(none, own, marks);
+            // A use's slot fill is the user's view, not the component's.
+            node => {
+                let own = own && !matches!(node, Node::Use { .. });
+                for list in node.child_lists_mut() {
+                    walk(list, own, marks);
+                }
             }
         }
     }

@@ -4,7 +4,7 @@
 // (`panel-fill`), a host wrapped by another (`wrapped`), and the root past the last copy.
 component App
   view
-    column testId="root" width="100%" padding=4 padding-top=240
+    column testId="root" width="100%" box-sizing="border-box" padding=4 padding-top=240
       Post()
       Panel()
         text "panel fill" testId="panel-fill"

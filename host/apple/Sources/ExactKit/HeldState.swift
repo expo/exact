@@ -154,8 +154,8 @@ enum HeldState {
         while let n = at {
             if let view = presenter.views[n] {
                 if view.disabled { return (nil, "disabled", false) }
-                // Active feedback follows the nearest declared press handler.
-                if state != "active" || view.handlers.contains("press") { found = view; break }
+                // Active feedback follows the nearest press: a declared handler or a link (LLP 1121 D8).
+                if state != "active" || view.handlers.contains("press") || view.defaultLink != nil { found = view; break }
             } else if state != "active" { return (nil, "gone", false) }
             at = presenter.logicalParent(of: n)
         }

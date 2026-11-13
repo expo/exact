@@ -156,6 +156,7 @@ impl Lowerer<'_> {
         menus::check_menu_keys(expanded, parent_tag.is_none())?;
         values::check_position_area(expanded)?;
         menus::check_invoker(tag, expanded)?;
+        crate::tips::check(expanded, *span)?;
         crate::alert_parts::check_authored(expanded)?;
         tags::check_exclusion(&t, expanded, self.parent_positioned)?;
         // @ref LLP 1121 D3 — a motion token an expansion carried in (a
@@ -356,7 +357,9 @@ impl Lowerer<'_> {
         // @ref LLP 1116.009 D3 — and a sheet is never transparent.
         let sheet_page = self.nav_place.sheet_page(expanded, *span);
         let expanded = sheet_page.as_deref().unwrap_or(expanded);
-        let nav_place = self.nav_place.enter(tag, expanded, children, *span)?;
+        let nav_place = self
+            .nav_place
+            .enter(first, tag, expanded, children, *span)?;
         // @ref LLP 1038 D8 — only the first root selects navigation; an
         // iframe's `navigate` is its guest's (LLP 1020.002 D2). The history
         // swipe and the ways through history offered are the root's too
@@ -594,6 +597,10 @@ impl Lowerer<'_> {
             {
                 continue;
             }
+            if let Some(e) = crate::handlers::unheard_toggle(tag, expanded, a) {
+                self.errors.push(e);
+                continue;
+            }
             if let Err(e) = self.attr(
                 tag,
                 contract_syntax::payload_control(tag, attrs),
@@ -753,6 +760,23 @@ impl Lowerer<'_> {
                 );
             }
         }
+        // @ref LLP 1123 D4 — the opt-out is a content owner's: a route or a
+        // tab panel, whose host clears its chrome. On any other box it would
+        // turn nothing off.
+        if let Some(a) = expanded.iter().find(|a| a.name == "-exact-safe-area") {
+            let owner = expanded.iter().any(|b| {
+                b.name == "navigationKey"
+                    || (b.name == "role"
+                        && matches!(&b.value, contract_syntax::Expr::Str(r, _) if r == "tabpanel"))
+            });
+            if !owner {
+                return err(
+                    "lower-attr-value",
+                    format!("`{}` turns off a content owner's clearance of its chrome, so it goes on a route (a box with `navigationKey`) or a `tabpanel`; elsewhere pad with `var(--exact-safe-area-inset-*)`", a.name),
+                    a.span,
+                );
+            }
+        }
         // @ref LLP 1057.003 C6 — a transform drag needs both halves:
         // the page's geometry and the release. A handle with one is
         // never admitted by any host, so it would sit inert, unsaid.
@@ -842,20 +866,17 @@ impl Lowerer<'_> {
             );
         }
         if t.node_type.is_text_leaf() {
-            // Regions have no node of their own: a dynamic Markdown
-            // paragraph's each/when still produces only text runs.
-            // An image in the text is the paragraph's own child (LLP
-            // 1011.002), never a run's: its box is placed in the paragraph.
+            // Regions have no node of their own: a `for`, `if` or `match`
+            // among a paragraph's runs produces only its runs (LLP 1011.002
+            // D1). An image in the text is the paragraph's own child, never
+            // a run's: its box is placed in the paragraph.
             fn run(c: &Node, images: bool) -> bool {
                 match c {
                     Node::Element { tag, .. } => {
                         matches!(tag.as_str(), "text" | "time") || images && tag == "image"
                     }
-                    Node::Each { body, .. } => body.iter().all(|c| run(c, images)),
-                    Node::When {
-                        then, otherwise, ..
-                    } => then.iter().chain(otherwise).all(|c| run(c, images)),
-                    _ => false,
+                    Node::Use { .. } | Node::Children { .. } => false,
+                    region => region.children().all(|c| run(c, images)),
                 }
             }
             // A `text` that holds runs, not a string or a `time` value.
@@ -868,11 +889,8 @@ impl Lowerer<'_> {
             fn has_image(c: &Node) -> bool {
                 match c {
                     Node::Element { tag, .. } => tag == "image",
-                    Node::Each { body, .. } => body.iter().any(has_image),
-                    Node::When {
-                        then, otherwise, ..
-                    } => then.iter().chain(otherwise).any(has_image),
-                    _ => false,
+                    Node::Use { .. } | Node::Children { .. } => false,
+                    region => region.children().any(has_image),
                 }
             }
             let columns = expanded

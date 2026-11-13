@@ -174,10 +174,10 @@
               "apple": {
                 "active": true,
                 "passive": true,
-                "withPublicKey": true
+                "withPublicKey": false
               },
               "google": {
-                "active": true
+                "active": false
               }
             }
           },
@@ -185,7 +185,7 @@
             "available": true,
             "providers": {
               "google": {
-                "active": true
+                "active": false
               }
             }
           },

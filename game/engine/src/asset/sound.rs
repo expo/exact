@@ -143,11 +143,7 @@ impl<G: crate::Game> crate::Sim<G> {
         }
         let sound = SoundAsset::new(&data);
         let assets = &mut self.world_mut().assets;
-        if assets
-            .identities
-            .get(name)
-            .is_some_and(|old| *old != sound.digest)
-        {
+        if assets.identity(name).is_some_and(|old| old != sound.digest) {
             return Err(format!(
                 "sound `{name}` cannot change after delivery; restart with the new sound"
             ));

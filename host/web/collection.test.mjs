@@ -8,7 +8,9 @@ import { need } from '../../scripts/coverage.mjs';
 
 const { unavailable } = chromium();
 const test = need('chrome', unavailable, { test: bunTest });
-let server, suite, cdp, evaluate, protocol;
+let server, cdp, evaluate, protocol;
+// The shared browser registers its shutdown hook at the file's level, before beforeAll runs.
+const suite = unavailable ? null : await cdpBrowser();
 beforeAll(async () => {
   if (unavailable) return;
   server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch(req) {
@@ -17,7 +19,6 @@ beforeAll(async () => {
       headers: { 'content-type': new URL(req.url).pathname.endsWith('.js') ? 'text/javascript' : 'text/html' },
     });
   }});
-  suite = await cdpBrowser();
   ({ cdp } = suite);
   const { sessionId } = await suite.page();
   const call = (method, params) => cdp.send(method, params, sessionId);
@@ -72,10 +73,8 @@ test('the production page reset leaves native and appearance-none checkboxes bor
     return {native:read(native),plain:read(plain)};
   })()`);
   expect(result.native).toEqual({appearance:'auto',boxSizing:'border-box',padding:'0px',width:13,height:13});
-  expect(result.plain.appearance).toBe('none');
-  expect(result.plain.boxSizing).toBe('border-box');
-  expect(result.plain.padding).toBe('10px');
-  expect(result.plain.width).toBe(200);
+  expect(result.plain.appearance).toBe('none'); expect(result.plain.boxSizing).toBe('border-box');
+  expect(result.plain.padding).toBe('10px'); expect(result.plain.width).toBe(200);
 });
 
 bunTest('LE feedback preserves u64 identity and rejects invalid geometry before admission', () => {
@@ -97,8 +96,7 @@ test('LLP 1010 §6.9: a padding change alone, which keeps a border-box list\'s s
   expect(r).toEqual({ reported: true, idle: true, size: 180, grew: 1 }); });
 test('actual nested scrollport, content padding, mounted rows, and coalesced scroll without authored handler', async () => {
   const result = await evaluate(`(() => { const f=fixture(); f.controller.commit([f.snapshot()]); f.port.scrollTop=110; for(let i=0;i<100;i++) f.port.dispatchEvent(new Event('scroll')); const queued=f.frames.size; f.flush(); return {queued,last:f.reports.at(-1),inner:f.port.clientWidth,anchor:getComputedStyle(f.views.get(1)).overflowAnchor}; })()`);
-  expect(result.queued).toBe(1);
-  expect(result.last.top).toBe(50);
+  expect(result.queued).toBe(1); expect(result.last.top).toBe(50);
   expect(result.last.height).toBe(180);
   expect(result.last.width).toBe(result.inner);
   expect(result.last.rowWidth).toBe(result.inner - 24);
@@ -135,10 +133,10 @@ test('observer baseline: commit to feedback to real observer reads each row once
   })()`);
   expect(result.wire).toEqual([...collectionBytes({view:1,revision:'7',scroll_sequence:'1',offset:50,
     port_cross:result.width,port_main:180,cross:result.width-24,padding:[10,10],focus_view:3,interaction_view:5,
-    measurements:[{view:2,epoch:'9007199254740993',size:40.5},{view:4,epoch:'2',size:60.25}]},{limit:1,scrolling:true})]);
+    measurements:[{view:2,epoch:'9007199254740993',size:40.5},{view:4,epoch:'2',size:60.25}]},{limit:1,scrolling:true,viewOffset:50})]);
   expect(result.deliveries.flat().filter(v=>v==='2')).toHaveLength(1);
   expect(result.deliveries.flat().filter(v=>v==='4')).toHaveLength(1);
-  expect([result.reports,result.flags,result.pending]).toEqual([2,0,0]);
+  expect([result.reports,result.flags,result.pending]).toEqual([2,256,0]);
   console.log('observer baseline commit/feedback/observer',JSON.stringify(result));
   expect(result.commit).toEqual([1,1,0,0]);
   expect(result.feedback.slice(2)).toEqual([1,1]);
@@ -207,7 +205,7 @@ test('observer baseline: external growth coalesced after final own commit surviv
   expect(result.last.rows[0]).toEqual({view:2,epoch:'9007199254740993',size:97.25});
   expect(result.wire).toEqual([...collectionBytes({view:1,revision:'3',scroll_sequence:result.last.sequence,
     offset:result.last.top,port_cross:result.last.width,port_main:180,cross:result.last.rowWidth,
-    padding:[10,10],focus_view:null,interaction_view:null,measurements:[{view:2,epoch:'9007199254740993',size:97.25},{view:4,epoch:'2',size:60}]},{limit:1})]);
+    padding:[10,10],focus_view:null,interaction_view:null,measurements:[{view:2,epoch:'9007199254740993',size:97.25},{view:4,epoch:'2',size:60}]},{limit:1,viewOffset:result.last.top})]);
   expect([result.reports,result.idle,result.pending]).toEqual([3,true,0]);
   console.log('observer baseline coalesced external growth',JSON.stringify(result));
 });
@@ -237,8 +235,11 @@ test('observer baseline: hidden pending row resumes on an external show without 
     await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));f.flush();
     return {hidden,last,idle:f.reports.length===n,pending:f.frames.size};
   })()`);
-  expect(result.hidden).toBe(0);expect(result.last.rows[0].size).toBe(40);
-  expect(result.idle).toBe(true);expect(result.pending).toBe(0);
+  expect(result.hidden).toBe(0);expect(result.last.rows[0].size).toBe(40);expect(result.idle).toBe(true);expect(result.pending).toBe(0);
+});
+test('a row hidden with its root, as a list with a gap hides one, has no extent: the rest measure and a scroll reports', async () => {
+  const r=await evaluate(`(() => {const f=fixture();for(const v of [4,5]) f.views.get(v).style.display='none';f.controller.commit([f.snapshot()]);f.flush();const first=f.reports.at(-1)?.rows.map(r=>r.size);f.port.scrollTop=110;f.port.dispatchEvent(new Event('scroll'));f.flush();return {first,n:f.reports.length,top:f.reports.at(-1).top,rows:f.reports.at(-1).rows.map(r=>r.size)};})()`);
+  expect(r.first).toEqual([40,0]);expect(r.n).toBe(2);expect(r.top).toBe(50);expect(r.rows).toEqual([40,0]);
 });
 test('collection read reuse: correction-free commit reads only list and port baselines', async () => {
   const result=await evaluate(`(() => {const f=fixture(),reads=(${collectionReads})(f);
@@ -246,7 +247,7 @@ test('collection read reuse: correction-free commit reads only list and port bas
     return {commit,wire:f.wires.at(-1),width:f.port.clientWidth};})()`);
   expect(result.wire).toEqual([...collectionBytes({view:1,revision:'1',scroll_sequence:'0',offset:-10,
     port_cross:result.width,port_main:180,cross:result.width-24,padding:[10,10],focus_view:null,interaction_view:null,
-    measurements:[{view:2,epoch:'9007199254740993',size:40},{view:4,epoch:'2',size:60}]},{limit:1})]);
+    measurements:[{view:2,epoch:'9007199254740993',size:40},{view:4,epoch:'2',size:60}]},{limit:1,viewOffset:-10})]);
   expect(result.commit).toEqual([1,1,0,0]);
 });
 test('collection read reuse: one row sample preserves fractional wire, epochs and both pins', async () => {
@@ -258,7 +259,7 @@ test('collection read reuse: one row sample preserves fractional wire, epochs an
     return {beforeReport,wire:f.wires.at(-1),width:f.port.clientWidth,pending:f.frames.size};})()`);
   expect(result.wire).toEqual([...collectionBytes({view:1,revision:'7',scroll_sequence:'1',offset:50,
     port_cross:result.width,port_main:180,cross:result.width-24,padding:[10,10],focus_view:3,interaction_view:5,
-    measurements:[{view:2,epoch:'9007199254740993',size:40.5},{view:4,epoch:'2',size:60.25}]},{limit:1,scrolling:true})]);
+    measurements:[{view:2,epoch:'9007199254740993',size:40.5},{view:4,epoch:'2',size:60.25}]},{limit:1,scrolling:true,viewOffset:50})]);
   expect(result.pending).toBe(0);
   expect(result.beforeReport.slice(2)).toEqual([1,1]);
 });
@@ -430,7 +431,7 @@ test('collection read reuse: synchronous report replacement samples new nodes an
   ]);
   for(const [i,r] of result.reports.entries())expect(result.wires[i]).toEqual([...collectionBytes({view:1,
     revision:r.revision,scroll_sequence:r.sequence,offset:-10,port_cross:r.width,port_main:180,
-    cross:r.rowWidth,padding:r.padding,focus_view:null,interaction_view:null,measurements:r.rows},{limit:1})]);
+    cross:r.rowWidth,padding:r.padding,focus_view:null,interaction_view:null,measurements:r.rows},{limit:1,viewOffset:-10})]);
 });
 test('collection read reuse: width wrapping keeps actual fractional heights and fresh later-pass dimensions', async () => {
   const result=await evaluate(`(() => {const f=fixture(),row=f.views.get(2);row.style.cssText='font:16px monospace;line-height:20.25px';row.textContent='word '.repeat(41);
@@ -450,9 +451,8 @@ test('collection read reuse: zero-height attached rows measure, hidden and detac
     f.views.get(4).style.display='';row.remove();f.controller.commit([f.snapshot('3')]);f.flush();const detached=f.reports.length;
     f.views.get(1).prepend(row);row.style.height='12.75px';f.controller.commit([f.snapshot('4')]);f.flush();
     return {zero,hidden,detached,last:f.reports.at(-1),count:f.reports.length,pending:f.frames.size};})()`);
-  expect(result.zero).toBe(0);expect(result.hidden).toBe(1);expect(result.detached).toBe(1);
-  expect(result.last.revision).toBe('4');expect(result.last.rows[0].size).toBe(12.75);
-  expect(result.count).toBe(2);expect(result.pending).toBe(0);
+  expect(result.zero).toBe(0);expect(result.hidden).toBe(1);expect(result.detached).toBe(1);expect(result.last.revision).toBe('4');
+  expect(result.last.rows[0].size).toBe(12.75);expect(result.count).toBe(2);expect(result.pending).toBe(0);
 });
 test('integer DOM end retains fractional measured extent in actual collection feedback', async () => {
   const result = await evaluate(`(() => {
@@ -1439,7 +1439,7 @@ test('a row list reports scrollLeft, the port width and height, its rows\' heigh
   expect(result.overflowAnchor).toBe('none');
   expect(result.wire).toEqual([...collectionBytes({ view: 1, revision: '1', scroll_sequence: '1', offset: 40, port_main: result.w,
     port_cross: result.h, cross: result.h - 12, padding: [0, 0], focus_view: null, interaction_view: null,
-    measurements: [{ view: 2, epoch: '1', size: 100 }, { view: 4, epoch: '1', size: 150.5 }] }, { limit: 1, scrolling: true })]);
+    measurements: [{ view: 2, epoch: '1', size: 100 }, { view: 4, epoch: '1', size: 150.5 }] }, { limit: 1, scrolling: true, viewOffset: 40 })]);
 });
 test('a correction on x moves scrollLeft; not while the strip moves, and a column list keeps correcting', async () => {
   const run = axis => evaluate(`(() => { const f=(${axisFixture})('${axis}'), l=f.list, n=f.name;

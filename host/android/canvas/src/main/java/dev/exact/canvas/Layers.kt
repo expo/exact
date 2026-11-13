@@ -18,7 +18,7 @@ internal inline fun Structure.walkColorLayer(ops: IntArray, visit: (Int) -> Unit
 }
 
 /**
- * Nodes exact2's reader animates (host/linux/src/lower.rs): each a RenderNode drawn by reference from its row (op 29),
+ * Nodes exact2's reader animates (host/painted/src/lower.rs): each a RenderNode drawn by reference from its row (op 29),
  * recorded from op 30, moved and faded every display frame from its keyframes (op 31) as a browser's compositor plays
  * them, so no row is recorded again for them. The sampling is the engine's (exact2's motion/src/animation.rs:
  * phases, fill, iterations, direction, keyframe intervals and their easings), on the engine's clock (op 33).
@@ -430,15 +430,21 @@ internal class Layers(
             return current / jumps
         }
 
-        private fun piecewise(p: FloatArray, x: Double): Double {
+        /** CSS linear(), matching motion/src/easing.rs, including Chrome's rule for duplicate first inputs. */
+        internal fun piecewise(p: FloatArray, x: Double): Double {
             val n = p.size / 2
-            if (x <= p[0]) return p[1].toDouble()
-            if (x >= p[2 * n - 2]) return p[2 * n - 1].toDouble()
-            for (k in 0 until n - 1) {
-                val ai = p[2 * k].toDouble(); val ao = p[2 * k + 1].toDouble(); val bi = p[2 * k + 2].toDouble(); val bo = p[2 * k + 3].toDouble()
-                if (x >= ai && x <= bi) return if (bi == ai) bo else ao + (bo - ao) * (x - ai) / (bi - ai)
+            if (n == 0) return x
+            if (n == 1) return p[1].toDouble()
+            for (k in n - 1 downTo 0) {
+                if (x == p[2 * k].toDouble()) return p[2 * k + 1].toDouble()
             }
-            return p[2 * n - 1].toDouble()
+            var b = 1
+            while (b < n - 1 && p[2 * b] <= x) b++
+            val ai = p[2 * b - 2].toDouble()
+            val ao = p[2 * b - 1].toDouble()
+            val bi = p[2 * b].toDouble()
+            val bo = p[2 * b + 1].toDouble()
+            return if (bi == ai) bo else ao + (bo - ao) * (x - ai) / (bi - ai)
         }
     }
 }

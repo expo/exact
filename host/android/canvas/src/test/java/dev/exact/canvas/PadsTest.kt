@@ -5,6 +5,7 @@ import android.hardware.input.InputManager
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
+import java.lang.ref.WeakReference
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
@@ -25,34 +26,61 @@ import org.robolectric.util.ReflectionHelpers
 class PadsTest {
     @Implements(Exact::class, isInAndroidSdk = false)
     class Host {
-        @Implementation fun pad(index: Int, connected: Boolean, values: FloatArray) {
-            reports += values.toList()
+        @Implementation fun pad(index: Int, connected: Boolean, values: FloatArray, at: Long) {
+            reports += Report(index, connected, values.toList())
+            times += at
         }
-        companion object { val reports = ArrayList<List<Float>>() }
+        @Implementation fun hidden(hidden: Boolean) {}
+        @Implementation fun drainStore(ms: Long) = true
+        data class Report(val index: Int, val connected: Boolean, val values: List<Float>)
+        companion object {
+            val reports = ArrayList<Report>()
+            val times = ArrayList<Long>()
+        }
     }
 
     @Before fun connect() {
         Host.reports.clear()
+        Host.times.clear()
         val context = RuntimeEnvironment.getApplication()
         val manager = context.getSystemService(Context.INPUT_SERVICE) as InputManager
         val device = ShadowInputDevice.makeInputDeviceNamed("Controller")
         ReflectionHelpers.setField(device, "mId", 7)
+        ReflectionHelpers.setField(device, "mDescriptor", "controller-7")
         ReflectionHelpers.setField(device, "mSources", InputDevice.SOURCE_GAMEPAD or InputDevice.SOURCE_JOYSTICK)
         ReflectionHelpers.setField(device, "mMotionRanges", ArrayList<InputDevice.MotionRange>())
         shadowOf(manager).addInputDevice(device)
         Pads.attach(context)
     }
 
-    @After fun disconnect() { Pads.onInputDeviceRemoved(7) }
+    @After fun disconnect() {
+        Exact.reader = null
+        Pads.onInputDeviceRemoved(7)
+    }
 
-    private fun key(code: Int, action: Int = KeyEvent.ACTION_DOWN, repeat: Int = 0, flags: Int = 0) =
-        KeyEvent(0, 0, action, code, repeat, 0, 7, 0, flags, InputDevice.SOURCE_GAMEPAD)
+    private fun key(code: Int, action: Int = KeyEvent.ACTION_DOWN, repeat: Int = 0, flags: Int = 0, at: Long = 0) =
+        KeyEvent(0, at, action, code, repeat, 0, 7, 0, flags, InputDevice.SOURCE_GAMEPAD)
+
+    private fun motion(): MotionEvent {
+        val coordinates = MotionEvent.PointerCoords().apply {
+            setAxisValue(MotionEvent.AXIS_X, 0.75f)
+            setAxisValue(MotionEvent.AXIS_HAT_Y, -1f)
+        }
+        return MotionEvent.obtain(0, 0, MotionEvent.ACTION_MOVE, 1,
+            arrayOf(MotionEvent.PointerProperties().apply { id = 0 }), arrayOf(coordinates),
+            0, 0, 1f, 1f, 7, 0, InputDevice.SOURCE_JOYSTICK, 0)
+    }
+
+    private fun activity() = Robolectric.buildActivity(ExactActivity::class.java).get().apply {
+        ReflectionHelpers.setField(this, "view", ExactView(this, false) {})
+        ReflectionHelpers.setField(this, "requests", Requests(this).apply { perform(intArrayOf(14, 1, 1, 1)) })
+    }
 
     @Test fun buttonsRemainUnhandledWithoutACanvasButTheirStateIsObserved() {
         assertFalse("B must reach Android's Back fallback", Pads.key(key(KeyEvent.KEYCODE_BUTTON_B), false))
         assertEquals(1f, Pads.values(0)!![1])
         assertEquals(0, Pads.current)
-        assertEquals(1f, Host.reports.last()[1])
+        assertEquals(1f, Host.reports.last().values[1])
     }
 
     @Test fun canvasRoutingControlsButtonsReleasesAndRepeats() {
@@ -95,14 +123,30 @@ class PadsTest {
         assertTrue(Host.reports.isEmpty())
     }
 
-    @Test fun joystickMotionRemainsUnhandledWithoutACanvas() {
-        val coordinates = MotionEvent.PointerCoords().apply {
-            setAxisValue(MotionEvent.AXIS_X, 0.75f)
-            setAxisValue(MotionEvent.AXIS_HAT_Y, -1f)
+    /** A press and release delivered late together keep the times the events carried (LLP 1127.003's final
+     * review): a 150 ms press's sends are 150 ms apart, a 210 ms one's 210, however long they waited. */
+    @Test fun aDeliveredPressKeepsItsEventTimes() {
+        for (span in listOf(150L, 210L)) {
+            val first = Host.times.size
+            Pads.key(key(KeyEvent.KEYCODE_BUTTON_A, KeyEvent.ACTION_DOWN, at = 5000), false)
+            Pads.key(key(KeyEvent.KEYCODE_BUTTON_A, KeyEvent.ACTION_UP, at = 5000 + span), false)
+            assertEquals(span, Host.times.last() - Host.times[first])
         }
-        val event = MotionEvent.obtain(0, 0, MotionEvent.ACTION_MOVE, 1,
+    }
+
+    @Test fun motionCarriesItsEventTime() {
+        val coordinates = MotionEvent.PointerCoords().apply { setAxisValue(MotionEvent.AXIS_X, 0.5f) }
+        val event = MotionEvent.obtain(0, 7000, MotionEvent.ACTION_MOVE, 1,
             arrayOf(MotionEvent.PointerProperties().apply { id = 0 }), arrayOf(coordinates),
             0, 0, 1f, 1f, 7, 0, InputDevice.SOURCE_JOYSTICK, 0)
+        try {
+            Pads.motion(event, false)
+            assertEquals(7000L, Host.times.last())
+        } finally { event.recycle() }
+    }
+
+    @Test fun joystickMotionRemainsUnhandledWithoutACanvas() {
+        val event = motion()
         try {
             assertFalse("Android must synthesize navigation keys", Pads.motion(event, false))
             assertEquals(0.75f, Pads.values(0)!![17])
@@ -110,5 +154,79 @@ class PadsTest {
             assertTrue("a canvas consumes motion even when the reading is unchanged", Pads.motion(event, true))
             assertFalse("leaving a canvas restores navigation", Pads.motion(event, false))
         } finally { event.recycle() }
+    }
+
+    @Test fun windowFocusLossReleasesHeldReadingsUntilTheNextInput() {
+        val reader = activity()
+        Exact.reader = WeakReference(reader)
+        val event = motion()
+        try {
+            assertTrue(reader.dispatchKeyEvent(key(KeyEvent.KEYCODE_BUTTON_A)))
+            assertTrue(reader.dispatchGenericMotionEvent(event))
+            val held = Pads.values(0)!!.toList()
+            assertEquals(1f, held[0])
+            assertEquals(1f, held[12])
+            assertEquals(0.75f, held[17])
+            val count = Host.reports.size
+            reader.onWindowFocusChanged(true)
+            assertEquals(count, Host.reports.size)
+            assertEquals(held, Pads.values(0)!!.toList())
+
+            reader.onWindowFocusChanged(false)
+            assertFalse("focus loss does not stop the activity", ReflectionHelpers.getField(reader, "stopped"))
+            assertEquals(Host.Report(0, true, List(21) { 0f }), Host.reports.last())
+            assertTrue(Pads.values(0)!!.all { it == 0f })
+            assertEquals(listOf(0 to 7), Pads.list().map { (slot, device) -> slot to device.id })
+            assertEquals(0, Pads.current)
+
+            val released = Host.reports.size
+            reader.onWindowFocusChanged(true)
+            assertTrue(reader.dispatchKeyEvent(key(KeyEvent.KEYCODE_BUTTON_A, repeat = 1)))
+            assertTrue(reader.dispatchKeyEvent(key(KeyEvent.KEYCODE_BUTTON_A, action = KeyEvent.ACTION_UP)))
+            assertEquals("focus gain and repeats restore no held input", released, Host.reports.size)
+            assertTrue(Pads.values(0)!!.all { it == 0f })
+            assertTrue(reader.dispatchGenericMotionEvent(event))
+            assertEquals(0f, Pads.values(0)!![0])
+            assertEquals(1f, Pads.values(0)!![12])
+            assertEquals(0.75f, Pads.values(0)!![17])
+            assertTrue(reader.dispatchKeyEvent(key(KeyEvent.KEYCODE_BUTTON_A)))
+            assertEquals(held, Pads.values(0)!!.toList())
+            assertTrue(Host.reports.all { it.index == 0 && it.connected })
+        } finally { event.recycle() }
+    }
+
+    @Test fun repeatedFocusLossAndStopKeepThePadConnectedAndReleased() {
+        val reader = activity()
+        Exact.reader = WeakReference(reader)
+        reader.dispatchKeyEvent(key(KeyEvent.KEYCODE_BUTTON_A))
+        reader.onWindowFocusChanged(false)
+        reader.onWindowFocusChanged(false)
+        ReflectionHelpers.callInstanceMethod<Unit>(reader, "onStop")
+        reader.onWindowFocusChanged(false)
+        assertTrue(Pads.values(0)!!.all { it == 0f })
+        assertTrue(Host.reports.all { it.index == 0 && it.connected })
+        assertEquals(listOf(0 to 7), Pads.list().map { (slot, device) -> slot to device.id })
+        assertEquals(0, Pads.current)
+
+        reader.onWindowFocusChanged(true)
+        reader.dispatchKeyEvent(key(KeyEvent.KEYCODE_BUTTON_B))
+        assertEquals(1f, Pads.values(0)!![1])
+        ReflectionHelpers.callInstanceMethod<Unit>(reader, "onStop")
+        assertEquals(Host.Report(0, true, List(21) { 0f }), Host.reports.last())
+    }
+
+    @Test fun aReplacedActivityCannotReleaseTheActiveReadersPads() {
+        val replaced = activity()
+        val reader = activity()
+        Exact.reader = WeakReference(reader)
+        reader.dispatchKeyEvent(key(KeyEvent.KEYCODE_BUTTON_A))
+        val held = Pads.values(0)!!.toList()
+        val count = Host.reports.size
+        replaced.onWindowFocusChanged(false)
+        ReflectionHelpers.callInstanceMethod<Unit>(replaced, "onStop")
+        assertEquals(count, Host.reports.size)
+        assertEquals(held, Pads.values(0)!!.toList())
+        reader.onWindowFocusChanged(false)
+        assertEquals(Host.Report(0, true, List(21) { 0f }), Host.reports.last())
     }
 }

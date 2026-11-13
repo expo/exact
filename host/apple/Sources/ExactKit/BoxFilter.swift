@@ -8,7 +8,12 @@
 // The picture is drawn again when a batch touches the box or anything in
 // it, when its size, scale or appearance changes, and after an image or
 // text raster under it publishes pixels; after any other batch it only
-// follows the box. An animation under a filtered box is sampled instead of
+// follows the box. A box whose layer tree reads as it did at its last
+// drawing (`RenderInputs`) is not drawn again: the picture follows it, and
+// the chain runs over the last drawing if the chain changed. So the box's
+// own motion, opacity and `filter` draw nothing of its subtree, while any
+// change in the subtree, an op's or not, is drawn wherever a batch touching
+// the box asks. An animation under a filtered box is sampled instead of
 // lowered (`svg_lower::eligibility`, and `svg_lower::resample` when the
 // filter comes after the animation).
 //
@@ -21,7 +26,8 @@
 //
 // A lone `drop-shadow()` is none of that: it is Core Animation's own
 // shadow on the box's layer, as a hand-built view casts one under an icon
-// over a photo, and the render server draws it.
+// over a photo, and the render server draws it. On UIKit a lone `opacity()`
+// multiplies the layer's opacity and its press and look fades instead.
 import CoreGraphics
 import QuartzCore
 
@@ -42,6 +48,10 @@ final class BoxFilter {
     /// `drop-shadow()`; the layer casting it now.
     private var shadow: (light: FilterShadow, dark: FilterShadow)?
     private weak var caster: CALayer?
+    private(set) var opacity: Float?
+    private weak var faded: CALayer?
+    private var baseOpacity: Float = 1
+    var unfilteredOpacity: Float? { faded == nil ? nil : baseOpacity }
     /// What the picture shows: the node, its size, scale and appearance.
     private struct Drawn: Equatable { var node: UInt32, size: CGSize, scale: CGFloat, dark: Bool }
     private var drawn: Drawn?
@@ -49,12 +59,19 @@ final class BoxFilter {
     /// for it to finish. Each drawing is numbered; one numbered `cleared`
     /// or below is not shown.
     private struct Job { let source: CGImage, program: [Float], rect: CGRect, scale: CGSize, generation: Int }
+    /// The last drawing, the chain run over it, and its layer tree's inputs
+    /// as drawn (nil: unknowable, so it is drawn again whenever asked).
+    private struct Kept { let job: Job; let inputs: RenderInputs? }
+    private var kept: Kept?
+    /// The last unfiltered drawing of the box, for tests.
+    var lastDrawing: CGImage? { kept?.job.source }
     private var running = false
     private var waiting: Job?
     private var generation = 0, cleared = 0
     var drawing: Bool { running }
     /// The box casts its filter as a layer shadow: nothing to draw.
     var casts: Bool { caster != nil }
+    var snapshots: Bool { opacity == nil && !casts }
     private static let queue = DispatchQueue(label: "exact.box-filter", qos: .userInteractive)
 
     init() {
@@ -67,25 +84,52 @@ final class BoxFilter {
     }
 
     /// The style's `filter` (`{"p": [...], "pd": [...], "rc": [...]}`);
-    /// whether the box is filtered (a chain this host runs, on a device with
-    /// a GPU).
+    /// whether a layer effect or this device's GPU can run the chain.
     func set(_ value: BatchValue?) -> Bool {
         guard case .object(let o)? = value, let p = o["p"]?.numbers, p.count > 5 else { return false }
         program = p.map(Float.init)
         darkProgram = o["pd"]?.numbers.map { $0.map(Float.init) }.flatMap { $0.count == program.count ? $0 : nil }
+        #if os(iOS) || os(tvOS)
+        opacity = Self.loneOpacity(p)
+        if let pd = o["pd"]?.numbers, Self.loneOpacity(pd) != opacity { opacity = nil }
+        #endif
         shadow = FilterShadow(program: p).flatMap { light in
             guard let pd = o["pd"]?.numbers else { return (light, light) }
             return FilterShadow(program: pd).map { (light, $0) }
         }
-        return shadow != nil || SvgFilterGPU.runs(program)
+        return opacity != nil || shadow != nil || SvgFilterGPU.runs(program)
+    }
+
+    /// The component transfer emitted for one CSS `opacity()` by
+    /// `svg::scene::box_filter`: identity RGB and the alpha table [0, factor].
+    private static func loneOpacity(_ p: [Double]) -> Float? {
+        let prefix: [Double] = [0, 0, 0, 0, 1, 9, -1, -3, -1e6, -1e6, 2e6, 2e6, 0, 0, 0, 0, 1, 2, 0]
+        guard p.count == 20, p.dropLast().elementsEqual(prefix), let factor = p.last,
+              factor.isFinite, (0...1).contains(factor) else { return nil }
+        return Float(factor)
+    }
+
+    /// An engine opacity write retains its value even under `opacity(0)`.
+    func presentOpacity(_ value: Float, on box: CALayer) {
+        let value = min(1, max(0, value))
+        guard let opacity else { unfade(); box.opacity = value; return }
+        if faded !== box { unfade(); faded = box }
+        baseOpacity = value
+        box.opacity = value * opacity
+    }
+
+    private func unfade() {
+        faded?.opacity = baseOpacity
+        faded = nil
     }
 
     /// Stand where the box stands and, when `fresh` (what the box shows
-    /// changed) or its size, scale or appearance did, draw its picture
-    /// again, `scale` pixels per point. `clip`: the box's `clip-path` as a
+    /// may have changed: drawn again unless its layer tree reads as it did)
+    /// or its size, scale or appearance changed, draw its picture again,
+    /// `scale` pixels per point. `clip`: the box's `clip-path` as a
     /// mask for the picture. `node`: the box's node, a new one in a reused
     /// view. `shown`: whether the box is on screen, where its first picture
-    /// is waited for. `landed`: a picture drawn off the main thread showed.
+    /// is waited for. `landed`: new filtered pixels or a layer effect showed.
     func render(_ box: CALayer, clip: CALayer?, scale: CGFloat, dark: Bool, node: UInt32, fresh: Bool = true,
                 shown: Bool = true, landed: @escaping () -> Void = {}) {
         let program = dark ? darkProgram ?? self.program : self.program
@@ -93,6 +137,22 @@ final class BoxFilter {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
+        let oldOpacity = box.opacity, oldMask = box.mask
+        let oldShadow = (box.shadowColor, box.shadowOpacity, box.shadowRadius, box.shadowOffset)
+        defer {
+            if box.opacity != oldOpacity || box.mask !== oldMask || box.shadowColor != oldShadow.0
+                || box.shadowOpacity != oldShadow.1 || box.shadowRadius != oldShadow.2 || box.shadowOffset != oldShadow.3 {
+                landed()
+            }
+        }
+        if opacity != nil {
+            if picture.superlayer != nil { picture.removeFromSuperlayer(); clear(); drawn = nil }
+            uncast()
+            if box.mask !== clip { box.mask = clip }
+            presentOpacity(unfilteredOpacity ?? box.opacity, on: box)
+            return
+        }
+        unfade()
         // A layer that clips its bounds would clip its shadow, which CSS
         // draws past an `overflow: hidden` box: that box is pictured.
         if let shadow, !box.masksToBounds {
@@ -121,14 +181,24 @@ final class BoxFilter {
         if picture.mask !== clip { picture.mask = clip }
         let now = Drawn(node: node, size: b.size, scale: scale, dark: dark)
         guard fresh || drawn != now else { return }
+        let region = CGRect(x: b.minX + CGFloat(program[0]), y: b.minY + CGFloat(program[1]),
+                            width: b.width + CGFloat(program[2]), height: b.height + CGFloat(program[3]))
+        let extent = SvgIsland.extent(region, k: scale, seen: nil, limit: SvgIsland.budget / 24)
+        // The tree reads as drawn, over the same region: the drawing stands.
+        if drawn == now, let kept, let (rect, _, _, _) = extent, rect == kept.job.rect, let was = kept.inputs, RenderInputs(box) == was {
+            guard program != kept.job.program else { return }
+            generation += 1
+            let job = Job(source: kept.job.source, program: program, rect: rect, scale: kept.job.scale, generation: generation)
+            self.kept = Kept(job: job, inputs: was)
+            run(job, landed: landed)
+            return
+        }
         // Another node's picture (a reused view) is not this one's to show
         // while this one's is drawn.
         let first = drawn?.node != node
         if first { clear() }
         drawn = now
-        let region = CGRect(x: b.minX + CGFloat(program[0]), y: b.minY + CGFloat(program[1]),
-                            width: b.width + CGFloat(program[2]), height: b.height + CGFloat(program[3]))
-        guard let (rect, w, h, _) = SvgIsland.extent(region, k: scale, seen: nil, limit: SvgIsland.budget / 24),
+        guard let (rect, w, h, _) = extent,
               let space = CGColorSpace(name: CGColorSpace.sRGB),
               let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4, space: space,
                                   bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
@@ -153,6 +223,7 @@ final class BoxFilter {
         generation += 1
         let job = Job(source: source, program: program, rect: rect,
                       scale: CGSize(width: CGFloat(w) / rect.width, height: CGFloat(h) / rect.height), generation: generation)
+        kept = Kept(job: job, inputs: RenderInputs(box))
         if first && shown {
             show(Self.run(job), in: rect)
         } else {
@@ -197,6 +268,7 @@ final class BoxFilter {
     /// No picture, and none on its way.
     private func clear() {
         content.contents = nil
+        kept = nil
         cleared = generation
         waiting = nil
     }
@@ -207,6 +279,7 @@ final class BoxFilter {
         clear()
         drawn = nil
         uncast()
+        unfade()
     }
 
     private func uncast() {
@@ -261,7 +334,7 @@ final class BoxFilters {
     private var pending: Set<ObjectIdentifier> = []
     private var queued = false
     /// Whether any box is pictured, as the last batch left them: a screen
-    /// whose filters are all layer shadows walks up from no touched node.
+    /// whose filters are all layer effects walks up from no touched node.
     private var pictured = false
 
     func add(_ view: NodeView, render: @escaping (_ fresh: Bool) -> Void) {
@@ -292,8 +365,7 @@ final class BoxFilters {
         schedule()
     }
 
-    /// `view`'s picture landed: the filtered boxes above it, which drew the
-    /// old one, draw again.
+    /// `view`'s filtered output changed: the filtered boxes above it draw again.
     func landed(_ view: NodeView) {
         guard let parent = view.superview else { return }
         changed(parent)
@@ -323,6 +395,15 @@ final class BoxFilters {
         for (key, entry) in views where !pending.contains(key) { entry.render(false) }
         pending.removeAll(keepingCapacity: true)
         draw(fresh)
-        pictured = views.values.contains { $0.view?.boxFilter?.casts == false }
+        pictured = views.values.contains { $0.view?.boxFilter?.snapshots == true }
     }
 }
+
+#if os(iOS) || os(tvOS)
+extension NodeView {
+    func presentOpacity(_ value: CGFloat) {
+        if let boxFilter { boxFilter.presentOpacity(Float(value), on: layer) } else { alpha = value }
+        refreshPressOpacity()
+    }
+}
+#endif

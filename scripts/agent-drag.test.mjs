@@ -4,6 +4,49 @@ import { test, expect } from 'bun:test';
 import { dragTap, heldDown, heldPhase, heldRead, heldTick, HELD_LEAD, HELD_READ, HELD_STEP, STROKES, TICK_STEP } from './agent-drag.mjs';
 import { DRAG_BOUNDS, realTap, REACH_MS, TICK_MARGIN } from '../host/apple/touches.mjs';
 
+import assert from 'node:assert/strict';
+import { open } from './agent.mjs';
+import { chromium } from './agent-launch.mjs';
+import { need } from './coverage.mjs';
+
+need('chrome', chromium().unavailable)('a web contact reports browser cancellation and scrolling only for the affected finger', async () => {
+  const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response(`<!doctype html>
+    <style>body{margin:0}#target{height:2000px;background:#ddd}</style>
+    <main id="exact-root" data-boot-ms="0"><div id="target"><div id="inner" style="height:2000px"></div></div></main>
+    <script>globalThis.exact = {ready: Promise.resolve(), views: new Map([[1, document.querySelector('#target')]]),
+      agentSettled: async req => ({clock:0, nodes: req.op === 'layout' ? [{id:1, x:0, y:0, w:400, h:2000}] : []})};</script>`,
+    { headers: { 'content-type': 'text/html' } },
+  ) });
+  let session;
+  try {
+    for (const mode of ['pan-y', 'auto', 'ancestor', 'scroller', 'changed', 'none', 'mouse']) {
+      session = await open({ host: 'web', url: server.url.href, size: [400, 400] });
+      const c = session.carrier;
+      await c.evaluate(`
+        const target = document.querySelector('#target'), root = document.querySelector('#exact-root');
+        target.style.touchAction = '${mode === 'ancestor' ? 'pan-y pinch-zoom' : mode === 'none' ? 'none' : ['pan-y', 'ancestor', 'scroller'].includes(mode) ? 'pan-y' : 'auto'}';
+        root.style.touchAction = '${mode === 'ancestor' ? 'pan-y' : mode === 'scroller' ? 'none' : 'auto'}';
+        ${mode === 'scroller' ? "target.style.cssText += ';height:400px;overflow:auto'" : ''};
+        ${mode === 'changed' ? "window.addEventListener('pointerdown', () => { target.style.touchAction = 'none'; root.style.touchAction = 'none'; }, {once:true, capture:true})" : ''};
+        globalThis.cancelTarget = null;
+        window.addEventListener('pointercancel', e => globalThis.cancelTarget = e.target.id, {once:true});
+        scrollTo(0, 0)`);
+      await c.input(1, 'down', { x: 100, y: 300, mouse: mode === 'mouse' });
+      if (mode === 'changed') assert.equal(await c.evaluate("getComputedStyle(document.querySelector('#target')).touchAction"), 'none');
+      await c.input(null, 'move', { x: 100, y: 100, ms: 200 });
+      const up = await c.input(null, 'up', {});
+      if (['auto', 'pan-y', 'ancestor', 'scroller', 'changed'].includes(mode)) {
+        assert.equal(await c.evaluate('globalThis.cancelTarget'), 'inner', mode);
+        const own = ['auto', 'changed'].includes(mode) ? 'auto' : mode === 'ancestor' ? 'pan-y pinch-zoom' : 'pan-y';
+        const effective = mode === 'ancestor' ? 'pan-y' : own;
+        assert.match(up.note ?? '', new RegExp(`pointercancel.*node #1.*touch-action ${own}; effective ${effective}`));
+        assert.match(up.note, /scroll/);
+      } else assert.equal(up.note, undefined, mode);
+      await session.close(); session = null;
+    }
+  } finally { try { await session?.close(); } finally { server.stop(true); } }
+}, 30_000);
+
 /** A session and carrier whose journal says `lines` during the drag; replies settle a tick later. */
 function drive(lines, { touches = false, notes = {} } = {}) {
   const later = (v) => new Promise((done) => setTimeout(() => done(v), 1));
@@ -641,4 +684,45 @@ test('a real clock step stops advancing as soon as its held touch ends', async (
   expect(requests).toHaveLength(1);
   expect(s.now).toBe(requests[0].to);
   expect(s.held).toBe(null);
+});
+
+// A real drag may end over the software keyboard while it shows, as a person's drag to dismiss it does (LLP 1080.000
+// §11). Under `interactive-widget="resizes-content"` the viewport stops at the keyboard's top, so its end lies below it.
+test('a real drag may end over a visible keyboard, and not past it', async () => {
+  const aim = (keyboard) => ({ orientation: 'portrait', session: 'main', generation: 1, screen: { x: 0, y: 0, w: 400, h: 800 }, point: [30, 400], fixed: [30, 400], fixedAxes: [[1, 0], [0, 1]], display: [400, 800], viewport: [400, 500], at: [30, 400], window: [30, 400], seq: 4, hit: 7, keyboard });
+  const began = { seq: 5, touch: 1, phase: 'began', t: 1, at: [30, 400], view: 'Control', node: 7, session: 'main', generation: 1 };
+  const injected = [];
+  const drag = (keyboard, dy) => realTap({ id: 7, drag: { dx: 0, dy, press: 0, over: 100, hold: 0 },
+    ask: async (req) => req.aim ? { aim: aim(keyboard) } : { log: [began,
+      { ...began, seq: 6, phase: 'moved', t: 1.1, at: [30, 400 + dy / 2] },
+      { ...began, seq: 7, phase: 'ended', t: 1.2, at: [30, 400 + dy] }], truncated: false },
+    touches: { async ask(req) { if (req.op !== 'foreground') injected.push(req.to); return req.op === 'foreground' ? { state: 'runningForeground' } : { injected: {} }; } } });
+  expect((await drag([0, 500, 400, 300], 300)).delivery).toBe('platform');
+  expect(injected).toEqual([[30, 700]]);
+  await expect(drag([0, 500, 400, 300], 450)).rejects.toThrow('outside the viewport (400 × 500) and the software keyboard');
+  await expect(drag(null, 300)).rejects.toThrow('outside the viewport (400 × 500) and no software keyboard shows');
+  expect(injected).toHaveLength(1);
+});
+
+// The driver sends that drag to the touch runner, never to the scroller's own drag it takes past the viewport.
+test('a scroller dragged over a visible keyboard is a real touch, not the scroll view\'s drag', async () => {
+  const later = (v) => new Promise((done) => setTimeout(() => done(v), 1));
+  const run = async (keyboard) => {
+    const sent = [];
+    const s = {
+      contact: null, held: null, now: 0,
+      async layout() { return later({ nodes: [{ id: 7, x: 0, y: 0, w: 400, h: 500, type: 'ScrollView' }], viewport: { w: 400, h: 500 }, screen: { x: 0, y: 0, w: 400, h: 800 } }); },
+      async op(req) { return later(req.op === 'state' ? { keyboard } : { lines: [], next: 5 }); },
+      async landed(r) { return later(r); },
+    };
+    const carrier = {
+      touches: true,
+      async input(id, phase) { sent.push(phase); return later({ tapped: id, delivery: 'platform' }); },
+      async ask(req) { sent.push(req.scrollDrag ? 'scrollDrag' : req.op); return later({ scrolledBy: [0, 1] }); },
+    };
+    await dragTap({ s, carrier, node: { id: 7 }, target: 'transcript', host: 'ios', timing: 'agent', tapRefusal: async (_, __, e) => e }, { dx: 0, dy: 400, from: [200, 300] });
+    return sent;
+  };
+  expect(await run({ visible: true, top: 500, overlap: 300 })).toEqual(['drag']);
+  expect(await run({ visible: false, overlap: 0 })).toEqual(['scrollDrag']);
 });

@@ -62,10 +62,10 @@ impl<D: DataSource> Host<D> {
         if node.node_type != NodeType::View || kernel.arena().children(node.key.index).is_empty() {
             return None;
         }
-        let env = kernel.arena().env();
+        let env = kernel.env_of(id);
         let (exact_kernel::Dimension::Points(w), exact_kernel::Dimension::Points(h)) = (
-            node.style.width.resolve(env),
-            node.style.height.resolve(env),
+            node.style.width.resolve(&env),
+            node.style.height.resolve(&env),
         ) else {
             return None;
         };
@@ -278,11 +278,9 @@ impl<D: DataSource> Host<D> {
                 shown.set(Property::Color, self.paint.runs.get(&id).copied());
                 // An image's box is in its paragraph's font, as the kernel measures it.
                 let styled = inline.and(run.parent).and_then(|p| kernel.node(p));
-                let (style, _) = style::style_json_inherited(
-                    styled.as_ref().unwrap_or(&run),
-                    &kernel.env(),
-                    &shown,
-                );
+                let styled = styled.as_ref().unwrap_or(&run);
+                let env = kernel.env_of(styled.id);
+                let (style, _) = style::style_json_inherited(styled, &env, &shown);
                 let handlers: Vec<_> = self
                     .inline_runs
                     .get(&id)
@@ -387,7 +385,7 @@ impl<D: DataSource> Host<D> {
         if let Some(size) = self.face_box_size(id) {
             props.insert("faceBoxSize", size);
         }
-        let env = self.runner.kernel().env();
+        let env = self.runner.kernel().env_of(id);
         let (style, _skipped) = style::style_json_for(&node, &env);
         let handlers: Vec<&str> = events.iter().copied().filter_map(handler_name).collect();
         if handlers.contains(&"heightrelease") {
@@ -447,7 +445,7 @@ impl<D: DataSource> Host<D> {
         if let Some(size) = self.face_box_size(id) {
             props.insert("faceBoxSize", size);
         }
-        let env = self.runner.kernel().env();
+        let env = self.runner.kernel().env_of(id);
         let (style, _skipped) = style::style_json_for(&node, &env);
         if self.mirror.get(&id).and_then(|m| m.props.get("spellcheck")) != props.get("spellcheck") {
             self.queue_layout_subtree(id);
@@ -567,7 +565,7 @@ impl<D: DataSource> Host<D> {
         let key = motion_node(node.key);
         let shown = self.shown_paint(key);
         let color = shown.get(Property::Color);
-        let env = kernel.env();
+        let env = kernel.env_of(view);
         let mut restyled = vec![(view, style::style_json_presented(&node, &env, &shown).0)];
         let mut runs = Vec::new();
         if inherits {
@@ -731,6 +729,17 @@ pub(super) fn props_for(node: &NodeRef<'_>) -> exact_kernel::SortedMap<&'static 
         if let Some(value) = node.spellcheck() {
             out.insert("spellcheck", value.to_string());
         }
+    }
+    // @ref LLP 1035.006.000 D1 — a tip's symbol by its SF Symbols name.
+    if let Some(role) = node
+        .props
+        .str(PropId::TipImage)
+        .and_then(|s| s.strip_prefix("symbol:"))
+    {
+        out.insert(
+            "tipSymbolName",
+            exact_kernel::apple_symbol_name(role).into(),
+        );
     }
     if node.node_type == NodeType::Image {
         if let Some(role) = node

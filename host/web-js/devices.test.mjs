@@ -55,6 +55,16 @@ test('a port streams each byte once, with errors at their offsets, and ends unpl
   expect(w.call('serial.getPorts')).toEqual([{ id: 's3', name: '', connected: false, granted: true }]);
 });
 
+test('a read of several megabytes arrives whole', () => {
+  const w = world(), chunk = 'x'.repeat(3 << 20);
+  w.preferred.set('serial.ports', [{ id: 's3', input: [{ at: 0, data: b64(chunk) }, { at: 0, data: b64('\xff\x00') }] }]);
+  w.dv.preferred('serial.ports');
+  w.call('serial.open', { port: 's3', baudRate: 115200 });
+  const read = w.call('serial.serialInput', { connection: 'serial-1' });
+  expect(read.position).toBe(chunk.length + 2);
+  expect(atob(read.data)).toBe(chunk + '\xff\x00');
+});
+
 test('the chooser offers the preferred devices and remembers the one chosen', () => {
   const w = world();
   w.preferred.set('hid.devices', [{ id: 'b1', vendorId: 10168, productId: 493, productName: 'blink(1) mk3' }]);

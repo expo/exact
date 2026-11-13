@@ -14,11 +14,12 @@ import { basename, resolve } from 'node:path';
 import { browserDiagnosticNoise, open as openAgent, render, runTests as runAgentTests } from './agent.mjs';
 import { driveStore, pollUntil } from './agent-launch.mjs';
 import { HOST_DEV, authoredTests, resolveApp, withAppFixture } from './app.mjs';
-import { agree, explainNode, hostSections, httpFrameSmoke, formControlsSmoke, poolingDrive, messageKeys, rebooted, isDeckURL } from './smoke-inspect.mjs';
+import { agree, explainNode, hostSections, httpFrameSmoke, formControlsSmoke, poolingDrive, messageKeys, rebooted, isDeckURL, webSmokeBuild, webSmokeSweep } from './smoke-inspect.mjs';
 import { DirectoryOrigin, parseWebRoot, webReleasePath, webRootPath } from './origin.mjs';
 import { jsTargetBuild, readStaticFile, serveStatic } from '../host/web/serve.mjs';
-import { canonicalBytes, channelOf, publicKeyFromRaw, webRelease } from './deploy.mjs';
+import { canonicalBytes, channelOf, publicKeyFromRaw, readAssetIndex, webRelease } from './deploy.mjs';
 import { crop, decodePng, diff, encodePng } from './png.mjs';
+import { requireNativeBuilds } from './parity.mjs';
 import { fileURLToPath } from 'node:url';
 
 const argv = process.argv.slice(2);
@@ -36,9 +37,11 @@ if (app.name === 'exact-live' && ['web', 'macos', 'linux'].includes(argv[0])) {
 }
 let selectedWebDist = null;
 let fixtureWebDist = null; // the router sweep's wasm build, linking every capability (LLP 1047 D7)
+let fixtureOptions = null;
 const device = argv.includes('--device');
 const phone = argv.includes('--phone') ? argv[argv.indexOf('--phone') + 1] : undefined;
 const open = (options) => openAgent({ device, phone, ...options, app: options.app ?? appName, webDist: options.webDist ?? selectedWebDist }); // a plan: its JS build (`--plan`)
+const openFixture = (options) => open({ ...options, ...fixtureOptions });
 const runTests = (options) => runAgentTests({ device, phone, ...options, app: options.app ?? appName, webDist: options.webDist ?? selectedWebDist });
 
 // 0. The transcript form (LLP 1012 §7): the one text rendering of the
@@ -111,25 +114,15 @@ check(!browserDiagnosticNoise('console.error: exact: failed'), 'page/runtime err
 check(browserDiagnosticNoise('[1:2:0927/223530.638588:ERROR:components/page_load_metrics/browser/page_load_metrics_update_dispatcher.cc:179] Invalid first_paint 0.059 s for first_image_paint 0.057 s'), 'Chrome\'s paint-timing bookkeeping is no longer classified as browser noise');
 check(!browserDiagnosticNoise('[1:2:0927/223530.286557:ERROR:components/os_crypt/common/keychain_password_mac.mm:102] Keychain lookup failed'), 'a keychain lookup must fail the smoke: the carrier launches Chrome with a mock keychain');
 
-// SVG parity (LLP 1055.000 §5): apps/svg-gallery on each native host against
-// Chrome's, fixture by fixture (scripts/svgparity.mjs).
-if (host === 'svg') {
-  const { svgParity } = await import('./svgparity.mjs');
+// SVG (LLP 1055.000 §5) and motion parity (LLP 1011.000, LLP 1055 D7): each
+// gallery on the requested native hosts against Chrome's at fixed clock times.
+// Missing native builds are reported together before any capture starts.
+if (host === 'svg' || host === 'motion') {
   const hosts = argv.includes('--hosts') ? argv[argv.indexOf('--hosts') + 1].split(',') : ['linux', ...(process.platform === 'darwin' ? ['macos', 'ios'] : [])];
-  await svgParity({ open: (o) => openAgent({ device, phone, ...o }), check, hosts });
-  console.log(`svg smoke: ${failures.length ? `${failures.length} failure(s)` : 'ok'} in ${((Date.now() - t0) / 1000).toFixed(1)} s`);
-  if (failures.length) { for (const f of failures) console.error('FAIL ' + f); process.exit(1); }
-  process.exit(0);
-}
-
-// Motion parity (LLP 1011.000, LLP 1055 D7): apps/motion-gallery's animated
-// images and keyframes on each native host against Chrome's at fixed clock
-// times (scripts/motionparity.mjs).
-if (host === 'motion') {
-  const { motionParity } = await import('./motionparity.mjs');
-  const hosts = argv.includes('--hosts') ? argv[argv.indexOf('--hosts') + 1].split(',') : ['linux', ...(process.platform === 'darwin' ? ['macos', 'ios'] : [])];
-  await motionParity({ open: (o) => openAgent({ device, phone, ...o }), check, hosts });
-  console.log(`motion smoke: ${failures.length ? `${failures.length} failure(s)` : 'ok'} in ${((Date.now() - t0) / 1000).toFixed(1)} s`);
+  requireNativeBuilds(`${host}-gallery`, hosts, { device });
+  const parity = host === 'svg' ? (await import('./svgparity.mjs')).svgParity : (await import('./motionparity.mjs')).motionParity;
+  await parity({ open: (o) => openAgent({ device, phone, ...o }), check, hosts });
+  console.log(`${host} smoke: ${failures.length ? `${failures.length} failure(s)` : 'ok'} in ${((Date.now() - t0) / 1000).toFixed(1)} s`);
   for (const f of failures) console.error('FAIL ' + f); process.exit(failures.length ? 1 : 0);
 }
 
@@ -254,9 +247,9 @@ if (host === 'deploy') {
       const head = JSON.parse(headOf(id).toString('utf8'));
       const ok = verify(null, canonicalBytes(head), publicKeyFromRaw(Buffer.from(publicKey, 'base64')), Buffer.from(head.signature.ed25519, 'base64'));
       check(ok && head.stream.seq === 1 && head.stream.compatibilityId === id && head.stream.channel === channel && head.signature.keyId === keyId, `the head of ${id.slice(0, 8)} verifies and names its stream`);
-      const cards = [head.plan, ...head.assets];
+      const blob = (card) => resolve(origin, '.exact', 'blobs', card.sha256), listed = head.assets ? readAssetIndex(head.assets, readFileSync(blob(head.assets))) : [];
       check(!existsSync(resolve(origin, '.exact', channel, id, 'app.plan'))
-        && cards.every((card) => card.url === `../../blobs/${card.sha256}` && existsSync(resolve(origin, '.exact', 'blobs', card.sha256)))
+        && [head.plan, ...(head.assets ? [head.assets] : []), ...listed].every((card) => card.url === (listed.includes(card) ? `./${card.sha256}` : `../../blobs/${card.sha256}`) && existsSync(blob(card)))
         && readdirSync(resolve(origin, '.exact', channel, id, 'releases')).length === 1,
       `the stream ${id.slice(0, 8)} points at immutable blobs and has one release record`);
     }
@@ -295,7 +288,7 @@ if (host === 'deploy') {
       check([...oldEntries].every(entry => pathOf(entry) === pointerPath || newEntries.has(entry))
         && [...newEntries].every(entry => oldEntries.has(entry) || allowed.has(pathOf(entry))), 'repeat publication rewrote or added files outside its new graph and pointer');
     }
-    // 4. An asset edit: bundle seq 2 naming it; the record's previous is the old head's digest; the old blob is kept.
+    // 4. An asset edit: bundle seq 2 naming it; the record's previous is the old head's digest; the old blobs are kept (the asset's and the index's).
     if (assetPath) {
       const first = ids[0];
       const prev = sha(headOf(first));
@@ -305,7 +298,7 @@ if (host === 'deploy') {
       const pub2 = table('--yes', '--dirty');
       const head2 = JSON.parse(headOf(first).toString('utf8'));
       const record = JSON.parse(readFileSync(resolve(origin, '.exact', channel, first, 'releases', `${pub2.release}.json`), 'utf8'));
-      check(head2.stream.seq === 2 && record.previous === prev && record.seq === 2 && readdirSync(resolve(origin, '.exact/blobs')).length === blobs1 + 1, `seq 2: head seq ${head2.stream.seq}, previous ${record.previous === prev}, blobs ${readdirSync(resolve(origin, '.exact/blobs')).length} (was ${blobs1})`);
+      check(head2.stream.seq === 2 && record.previous === prev && record.seq === 2 && readdirSync(resolve(origin, '.exact/blobs')).length === blobs1 + 2, `seq 2: head seq ${head2.stream.seq}, previous ${record.previous === prev}, blobs ${readdirSync(resolve(origin, '.exact/blobs')).length} (was ${blobs1})`);
       writeFileSync(assetPath, asset0);
     }
     // 5. A publisher meets its stream locked (the restored asset makes the
@@ -505,16 +498,7 @@ component App
 // it stages nothing), into this smoke's private dist before its many sessions. Another
 // build cannot swap a different app under the run; agent.open proves its identity.
 if (host === 'web') {
-  const webBuild = mkdtempSync(resolve(tmpdir(), 'exact-smoke-web-'));
-  selectedWebDist = resolve(webBuild, 'dist');
-  process.on('exit', () => rmSync(webBuild, { recursive: true, force: true }));
-  const built = spawnSync(process.execPath, [resolve(ROOT, 'host/web/build.mjs'), app.crate('web')], { cwd: ROOT, stdio: 'inherit', env: { ...process.env, EXACT_APP_DIR: app.dir, EXACT_WEB_DIST: selectedWebDist } });
-  if (built.status !== 0) process.exit(built.status ?? 1);
-  if (!argv.includes('--app-only')) { // the router sweep swaps plans into a page: the wasm runner's
-    fixtureWebDist = resolve(webBuild, 'fixtures');
-    const fixtures = spawnSync(process.execPath, [resolve(ROOT, 'host/web/build.mjs'), app.crate('web'), '--wasm'], { cwd: ROOT, stdio: 'inherit', env: { ...process.env, EXACT_APP_DIR: app.dir, EXACT_WEB_DIST: fixtureWebDist, EXACT_WEB_LINK: 'all' } });
-    if (fixtures.status !== 0) process.exit(fixtures.status ?? 1);
-  }
+  ({ selectedWebDist, fixtureWebDist, fixtureOptions } = webSmokeBuild(app, argv.includes('--app-only')));
 }
 
 // A fresh named store admits app storage without sharing another drive's profile or port.
@@ -793,8 +777,7 @@ try {
 // 8. The nested case (LLP 1010, the scroll fixture): a scroll node that
 // overflows on a page that overflows. A wheel over the node scrolls it; at
 // its edge the wheel chains to the page.
-// A paired module client cannot boot unrelated bare plans. --app-only keeps
-// the complete app drive and its Contract tests, excluding host-only fixtures.
+// --app-only keeps the selected app's drive and Contract tests; generic web plans have their own carrier.
 if (!argv.includes('--app-only')) {
 if (apple && !device) await httpFrameSmoke({ host, open, check });
 // Launch facts reach a real runner on every carrier, including Linux's t() table.
@@ -809,7 +792,7 @@ if (apple && !device) await httpFrameSmoke({ host, open, check });
   const compiled = spawnSync('cargo', ['run', '-q', '--profile', HOST_DEV, '-p', 'contract', '--', 'build', source, '-o', plan], {cwd:ROOT, encoding:'utf8'});
   check(compiled.status === 0, 'launch facts fixture compiles: ' + compiled.stderr);
   if (compiled.status === 0) for (const options of [{}, {}, {seed:42, locale:'fr-CA', timeZone:'America/Toronto', epoch:'2026-09-21T14:13:20Z'}, {seed:42, locale:'ar-EG', timeZone:'UTC'}, {epoch:'now'}, {locale:'en-US', formatLocale:'en-KR'}]) {
-    const launched = Date.now(), f = await open({host, browser: 'chrome', plan, ...options});
+    const launched = Date.now(), f = await openFixture({host, browser: 'chrome', plan, ...options});
     try {
       const lang = options.locale === 'ar-EG' ? 'ar' : options.locale?.startsWith('fr') ? 'fr' : 'en';
       const dir = lang === 'ar' ? 'rtl' : 'ltr';
@@ -829,10 +812,11 @@ if (apple && !device) await httpFrameSmoke({ host, open, check });
       if (host === 'web') {
         const attrs = await f.carrier.evaluate('({lang:document.documentElement.lang,dir:document.documentElement.dir})');
         check(attrs.lang === lang && attrs.dir === dir, 'the document element carries lang and dir');
-        if (jsTargetBuild(selectedWebDist)) { // a JS page (the plan compiled ahead) reloads, its launch facts in its URL
+        if (jsTargetBuild(fixtureOptions?.webDist ?? selectedWebDist)) { // a JS page reloads, its launch facts in its URL
+          const before = await f.carrier.evaluate('performance.timeOrigin');
           await f.carrier.evaluate('location.reload()').catch(() => {});
-          await rebooted(f.carrier);
-          await f.carrier.evaluate('exact.ready'); } else await f.carrier.evaluate('fetch("/__plan").then(r => r.arrayBuffer()).then(b => exact.reload(new Uint8Array(b)))');
+          await rebooted(f.carrier, before);
+        } else await f.carrier.evaluate('fetch("/__plan").then(r => r.arrayBuffer()).then(b => exact.reload(new Uint8Array(b)))');
         check(byTestId(await f.tree(), 'place')?.props.text === expected, 'web reload retains launch facts');
         const attrsAfter = await f.carrier.evaluate('({lang:document.documentElement.lang,dir:document.documentElement.dir})');
         check(attrsAfter.lang === lang && attrsAfter.dir === dir, 'web reload retains lang and dir');
@@ -843,14 +827,14 @@ if (apple && !device) await httpFrameSmoke({ host, open, check });
   rmSync(tmp, {recursive:true, force:true});
   console.log(`${host} launch facts: date, defaults, repeated drive, overrides, translation, lang/dir${host === 'web' ? ', reload' : ''}`);
 }
-if (!device) await formControlsSmoke({ host, open, check });
+if (!device) await formControlsSmoke({ host, open: openFixture, check });
 
 const tmp = mkdtempSync(resolve(tmpdir(), 'exact-smoke-'));
 const plan = resolve(tmp, 'scroll.plan');
 const c = spawnSync('cargo', ['run', '-q', '--profile', HOST_DEV, '-p', 'contract', '--', 'build', resolve(ROOT, 'contract/corpus/scroll.contract'), '-o', plan], { cwd: ROOT, encoding: 'utf8' });
 if (c.status !== 0) failures.push('the scroll fixture did not compile: ' + c.stderr);
 else {
-  const f = await open({ host, browser: 'chrome', plan });
+  const f = await openFixture({ host, browser: 'chrome', plan });
   try {
     let l = await f.layout();
     check(box(l, 'rows') && box(l, 'root'), 'the fixture did not boot');
@@ -909,6 +893,7 @@ if (caltrainFixture) {
     // over the pinned font the driver sets (§5): the same bytes on every
     // machine, so the reference below is exact, not a band — the GPU painter
     // is held to it by `tests/paint.rs`'s band instead.
+    // This plan uses Caltrain's surfaces, so it keeps the selected app's module.
     const f = await open({ host, browser: 'chrome', plan, env: host === 'linux' ? { EXACT_PAINTER: 'cpu' } : undefined });
     try {
       let t = await f.tree();
@@ -1057,7 +1042,7 @@ if (deckFixture) {
   else {
     const w = (l, id) => box(l, id)?.w, x = (l, id) => box(l, id)?.x, both = l => [w(l, 'timed'), x(l, 'slid') - x(l, 'linear')]; // `slid`: 0 to 100 right of `linear` (unscaled here) under its layout transition
     const near = (a, b, tol = 0.05) => Math.abs(a - b) <= tol;
-    const m = await open({ host, browser: 'chrome', plan });
+    const m = await openFixture({ host, browser: 'chrome', plan });
     try {
       await m.tap('toggle');
       // Frozen: the press started two transitions; a wall-clock pause between
@@ -1088,10 +1073,10 @@ if (deckFixture) {
     }
     // One seek across the timer versus stepping across it: the transition is
     // born at the timer's due time either way.
-    const once = await open({ host, browser: 'chrome', plan });
+    const once = await openFixture({ host, browser: 'chrome', plan });
     let oneShot;
     try { await once.clock(1250); oneShot = both(await once.layout()); await once.clock(1500); oneShot.push(...both(await once.layout())); } finally { await once.close(); }
-    const steps = await open({ host, browser: 'chrome', plan });
+    const steps = await openFixture({ host, browser: 'chrome', plan });
     let stepwise;
     try { await steps.clock(1000); stepwise = both(await steps.layout()); await steps.clock(1250); stepwise.push(...both(await steps.layout())); await steps.clock(1500); stepwise.push(...both(await steps.layout())); } finally { await steps.close(); }
     check(oneShot.join() === '75,50,100,100', `one seek to 1250 then 1500 across the timer, the scaled box's width and the slid box's offset: ${oneShot.join(', ')} (expected 75, 50, 100, 100)`);
@@ -1116,7 +1101,7 @@ if (deckFixture) {
   const c = spawnSync('cargo', ['run', '-q', '--profile', HOST_DEV, '-p', 'contract', '--', 'build', resolve(ROOT, 'contract/corpus/precedence.contract'), '-o', plan], { cwd: ROOT, encoding: 'utf8' });
   if (c.status !== 0) failures.push('the precedence fixture did not compile: ' + c.stderr);
   else {
-    const g = await open({ host, browser: 'chrome', plan });
+    const g = await openFixture({ host, browser: 'chrome', plan });
     try {
       const slots = async () => { const { slots } = await g.state(); return `${slots.replies}/${slots.panned}/${slots.pressed}`; };
       const drag = async (target, at, moves) => {
@@ -1168,7 +1153,7 @@ if (deckFixture) {
   const c = spawnSync('cargo', ['run', '-q', '--profile', HOST_DEV, '-p', 'contract', '--', 'build', resolve(ROOT, 'contract/corpus/insets.contract'), '-o', plan], { cwd: ROOT, encoding: 'utf8' });
   if (c.status !== 0) failures.push('the insets fixture did not compile: ' + c.stderr);
   else {
-    const f = await open({ host, browser: 'chrome', plan });
+    const f = await openFixture({ host, browser: 'chrome', plan });
     try {
       let l = await f.layout();
       const env = l.env ?? {};
@@ -1260,7 +1245,7 @@ if (deckFixture) {
   const c = spawnSync('cargo', ['run', '-q', '--profile', HOST_DEV, '-p', 'contract', '--', 'build', resolve(ROOT, 'contract/corpus/keyboard-bar.contract'), '-o', plan], { cwd: ROOT, encoding: 'utf8' });
   if (c.status !== 0) failures.push('the keyboard-bar fixture did not compile: ' + c.stderr);
   else {
-    const f = await open({ host, browser: 'chrome', plan });
+    const f = await openFixture({ host, browser: 'chrome', plan });
     try {
       let l = await f.layout();
       const viewport0 = l.viewport, bottom0 = l.env['safe-area-inset-bottom'];
@@ -1316,7 +1301,7 @@ if ((host === 'web' || apple || host === 'linux') && !argv.includes('--app-only'
   const c = spawnSync('cargo', ['run', '-q', '--profile', HOST_DEV, '-p', 'contract', '--', 'build', resolve(ROOT, 'contract/corpus/accessibility.contract'), '-o', plan], { cwd: ROOT, encoding: 'utf8' });
   check(c.status === 0, 'accessibility fixture compiles: ' + c.stderr);
   if (c.status === 0) {
-    const f = await open({host, browser: 'chrome', plan, ...(host === 'macos' ? {env:{EXACT_DEV_PLAN:plan}} : {})});
+    const f = await openFixture({host, browser: 'chrome', plan, ...(host === 'macos' ? {env:{EXACT_DEV_PLAN:plan}} : {})});
     try {
       let t = await f.tree();
       check(byTestId(t, 'first')?.focused === true, 'autofocus takes focus after mount');
@@ -1360,7 +1345,7 @@ if ((host === 'web' || apple || host === 'linux') && !argv.includes('--app-only'
   const c = spawnSync('cargo', ['run', '-q', '--profile', HOST_DEV, '-p', 'contract', '--', 'build', resolve(ROOT, 'contract/corpus/share.contract'), '-o', plan], { cwd: ROOT, encoding: 'utf8' });
   check(c.status === 0, 'share fixture compiles: ' + c.stderr);
   if (c.status === 0) {
-    const f = await open({host, browser: 'chrome', plan, ...(host === 'macos' ? {env:{EXACT_DEV_PLAN:plan}} : {})});
+    const f = await openFixture({host, browser: 'chrome', plan, ...(host === 'macos' ? {env:{EXACT_DEV_PLAN:plan}} : {})});
     try {
       await f.tap('share-link');
       const held = (await f.state()).pending?.find((p) => p.device?.capability === 'share');
@@ -1388,7 +1373,7 @@ if ((host === 'web' || apple || host === 'linux') && !argv.includes('--app-only'
   const c = spawnSync('cargo', ['run', '-q', '--profile', HOST_DEV, '-p', 'contract', '--', 'build', resolve(ROOT, 'contract/corpus/file-pickers.contract'), '-o', plan], { cwd: ROOT, encoding: 'utf8' });
   check(c.status === 0, 'pickers fixture compiles: ' + c.stderr);
   if (c.status === 0) {
-    const f = await open({host, browser: 'chrome', plan, ...(host === 'macos' ? {env:{EXACT_DEV_PLAN:plan}} : {})});
+    const f = await openFixture({host, browser: 'chrome', plan, ...(host === 'macos' ? {env:{EXACT_DEV_PLAN:plan}} : {})});
     const held = async (capability) => (await f.state()).pending?.find((p) => p.device?.capability === capability);
     const text = async (id) => byTestId(await f.tree(), id)?.props.text;
     try {
@@ -1490,9 +1475,7 @@ if (streamFixture) {
 
 // The oracle sweep is explicit browser work, never an implicit Cargo pass.
 if (host === 'web' && !argv.includes('--app-only')) {
-  const sweep = spawnSync('cargo', ['test', '-p', 'exact-web', '--test', 'it', 'navigation::', '--', '--ignored', '--nocapture'], {
-    cwd: ROOT, stdio: 'inherit', env: { ...process.env, EXACT_ROUTER_DIST: fixtureWebDist }, // its own plan, on the wasm runner
-  });
+  const sweep = webSmokeSweep(fixtureWebDist);
   check(sweep.status === 0, 'router browser sweep failed');
 }
 

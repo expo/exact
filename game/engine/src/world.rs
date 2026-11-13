@@ -1029,11 +1029,17 @@ impl World {
     pub fn journal(&self) -> Vec<Event> {
         self.journal.borrow().iter().cloned().collect()
     }
-    /// Publish to the app and journal only changes to this key.
+    /// Publish to the app and journal only changes to this key. `presented`
+    /// is the host's (whether the canvas's picture is on screen, LLP 1009)
+    /// and panics.
     pub fn publish<'a>(&self, key: &str, value: impl Into<crate::Published<'a>>) {
         self.publish_value(key, value.into().0);
     }
     pub(crate) fn publish_value(&self, key: &str, value: crate::values::Incoming<'_>) {
+        assert!(
+            key != "presented",
+            "`presented` is the host's field in the canvas's record (whether its picture is on screen); publish under another name"
+        );
         self.sim_writes(format_args!("published `{key}`"));
         let mut p = self.published.borrow_mut();
         let stored = p.get_mut(key);

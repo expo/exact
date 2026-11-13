@@ -125,7 +125,7 @@ fn run() -> ExitCode {
         Some("types") => types(&args[1..], "types", "app.d.ts", |path| {
             let (plan, _) = contract::compile_path_all_unchecked(path, false)
                 .map_err(|mut all| all.swap_remove(0).to_string())?;
-            contract::typescript_exporting(&plan, contract::design_exports(path).as_deref())
+            contract::typescript_exporting(&plan, contract::design_exports(path).as_deref(), &[])
                 .map_err(|e| format!("{}: {e}", path.display()))
         }),
         Some("rust") => types(&args[1..], "rust", "shapes.rs", |path| {

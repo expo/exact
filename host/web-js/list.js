@@ -10,8 +10,7 @@
 // reorder drag; not carried (refused at build): a dynamic `virtualized`.
 import { inactive } from "./document.js";
 import { rt as runtime } from './rt-link.js';
-import { presenceRows } from "./presence-bindings.js";
-import { sig, effect, scope, end, untracked, write, writeItem, owner, onEnd, viewId, Views, inflight, Before, After, rev, ticket, journal, Resources, Mutations, unadopted, adopting, adoptRow, settled, Refusal, Hosts, exitView, clock, eq } from "./rt.js";
+import { sig, effect, scope, end, untracked, write, writeItem, owner, onEnd, viewId, Views, inflight, Before, After, rev, ticket, journal, Resources, Mutations, unadopted, adopting, adoptRow, settled, Refusal, Hosts, exitView, clock, eq, presentRows } from "./rt.js";
 
 const BOOTSTRAP_ROWS = 16, ESTIMATED = 32, LEAD_SECONDS = 0.25, FAR_VIEWPORTS = 2, KEPT = 4096;
 // A port less than END_SLACK from a followed end already sent is at it: hosts round or floor offsets (start.rs `at_target`).
@@ -105,7 +104,7 @@ function positive(t, band, out, n = 1, s = 0, e = t.base) {
 }
 
 class SizeIndex {
-  constructor(est) { this.est = est; this.order = []; this.pos = new Map(); this.h = []; this.gen = []; this.me = []; this.epoch = 1; this.next = 0; this.t = tree([], []); this.trailing = 0; this.leading = 0; }
+  constructor(est, gap = 0) { this.est = est; this.gap = gap; this.order = []; this.pos = new Map(); this.h = []; this.gen = []; this.me = []; this.epoch = 1; this.next = 0; this.t = tree([], []); this.trailing = 0; this.leading = 0; }
   get len() { return this.h.length; }
   replace(keys) {
     if (keys.length === this.order.length && keys.every((k, i) => k === this.order[i])) return;
@@ -121,7 +120,16 @@ class SizeIndex {
     Object.assign(this, { order: keys, pos, h, gen, me });
   }
   prefix(end) { return prefixT(this.t, end); }
-  get total() { return this.t.sums[1]; }
+  // Each row's height counts the list's gap after it (index.rs `total_height`).
+  get total() { return this.h.length ? Math.max(0, this.t.sums[1] - this.gap) : this.t.sums[1]; }
+  /** A new estimate (the gap after a row included) and gap: the rows at `kept` keep their sizes, moved by the change
+   * of gap; every other row takes the estimate, unmeasured (index.rs `resize`). */
+  resize(est, gap, kept) {
+    // A kept row of no extent is one not displayed, with no gap around it: it stays at none.
+    this.h = this.h.map((h, i) => kept.has(i) ? (h > 0 ? Math.max(gap, h - this.gap + gap) : 0) : est);
+    this.me = this.me.map((m, i) => kept.has(i) ? m : 0);
+    this.t = tree(this.h, this.me); this.est = est; this.gap = gap;
+  }
   // Sufficient bound: every candidate leaf and padding <= H. B >= 1 is
   // power-of-two; monotone nonnegative addition bounds each subtree by its
   // leaf count * H using exact doubling. Root <= B*H, either padded order
@@ -258,9 +266,12 @@ const Held = new Set(); // collections whose edge waits for their covered route 
 class Collection {
   constructor(el, o, own) {
     this.el = el; this.view = viewId(el); this.axis = o.x ? "x" : "y"; this.own = own; this.o = o;
-    this.est = o.est ?? ESTIMATED;
-    if (!(isFinite(this.est) && this.est > 0)) throw new Refusal("estimated item height must be positive and finite");
-    this.index = new SizeIndex(this.est);
+    // The estimate and a row list's gap, read again as they change (sizing.rs): `est` is a row's extent before it
+    // is measured, the gap after it included.
+    this.estimate = read(o.est) ?? ESTIMATED; this.gap = listGap(o.x, read(o.gap));
+    if (!(isFinite(this.estimate) && this.estimate > 0)) throw new Refusal("estimated item height must be positive and finite");
+    this.est = this.estimate + this.gap;
+    this.index = new SizeIndex(this.est, this.gap);
     // The list's literal size along its axis bounds an inner list's first rows.
     const sizes = (o.x ? o.pw : o.ph).filter(n => typeof n === "number" && isFinite(n) && n > 0);
     this.port = sizes.length ? Math.min(...sizes) : null;
@@ -274,7 +285,7 @@ class Collection {
     const g = this.geometry;
     return { view: this.view, axis: this.axis, ...(this.parent != null ? { parent: this.parent } : {}), ...(this.restored ? { restored: true } : {}), ...(this.target ? { [this.requestWaits() ? "waiting" : "seeking"]: true, request: this.request } : {}),
       revision: this.revision, scrollSequence: g ? g.scroll_sequence : 0, count: this.index.len, totalExtent: this.index.total,
-      rows: this.mounted.map(m => ({ view: m.view, root: m.root, index: m.position, start: this.index.prefix(m.position), size: this.index.h[m.position], epoch: m.epoch, measured: this.index.measured(this.index.order[m.position]) })),
+      rows: this.mounted.map(m => ({ view: m.view, root: m.root, index: m.position, start: this.index.prefix(m.position), size: Math.max(0, this.index.h[m.position] - this.gap), epoch: m.epoch, measured: this.index.measured(this.index.order[m.position]) })),
       pending: this.pending || (this.atEnd && this.index.len > 0) || this.portUnknown || (!!this.target && !this.requestWaits()), correction: this.correction }; // opening, an admitted request, or an unknown port owes another report (into_view.rs `asks_report`)
   }
   scrollAnchor() {
@@ -336,6 +347,8 @@ class Collection {
     try { this.realize(false, { limit: 0 }); } finally { this.instant = false; }
     const now = this.snapshot();
     if (!previous || previous !== JSON.stringify(now)) this.revision++;
+    // The rows' own effects have written their roots' styles by then.
+    if (this.gap) queueMicrotask(() => { if (this.syncUndisplayed()) publish(); });
   }
   changedPositions(items, idents) {
     const positions = [];
@@ -359,6 +372,22 @@ class Collection {
       if (this.zeros.delete(key)) { const t = this.index.token(key); if (t) this.index.setMeasured(key, t, this.est); }
       this.index.invalidateRow(key);
     }
+  }
+  /** The estimate or the gap changed (sizing.rs `resize`): a new estimate is what every row the list has not mounted
+   * takes, unmeasured; a mounted row keeps its size until measured again. A new gap moves every row after the first by
+   * it. The list keeps what shows. An estimate that is not a positive number changes nothing. */
+  resize(e, g) {
+    const estimate = isFinite(e) && e > 0 ? e : this.estimate, gap = listGap(this.axis === "x", g);
+    if (estimate === this.estimate && gap === this.gap) return;
+    if (this.preview) this.endPreview();
+    const anchor = this.anchor();
+    const kept = new Set(estimate === this.estimate ? this.index.h.keys() : this.mounted.map(m => m.position));
+    this.index.resize(estimate + gap, gap, kept);
+    Object.assign(this, { estimate, gap, est: estimate + gap });
+    for (const key of [...this.zeros]) if (!kept.has(this.index.pos.get(key))) this.zeros.delete(key);
+    if (this.portUnknown) this.correction = null; else this.restore(anchor);
+    this.realize(false, { limit: 0 });
+    this.revision++;
   }
   anchor() { const g = this.geometry; return g && this.index.anchor(this.anchorOffset(g.offset, g.port_main), g.port_main, this.follows()); }
   // ------------------------------------------------ scroll-start: end (start.rs)
@@ -508,6 +537,11 @@ class Collection {
     const w = served ?? document.createElement("div");
     w.$exactTree = true;
     w.style.cssText = WRAP[this.axis];
+    // LLP 1055 D13: bootstrap rows wait for the first port report too.
+    if (this.o.animations) {
+      const g = this.geometry, offset = this.viewOffset ?? g?.offset, start = this.index.prefix(p), size = this.index.h[p];
+      if (!g || !(start < offset + g.port_main && start + size > offset)) w.setAttribute("data-exact-await-view", "");
+    }
     w.setAttribute("role", "listitem");
     w.setAttribute("data-listitemkey", key);
     const position = sig(p);
@@ -522,6 +556,13 @@ class Collection {
       this.o.row(w, m.item, m.index, m.key);
     }, this.own);
     m.s = served ? adoptRow(w, build) : unadopted(build);
+    // The document may have painted before adoption; this is the row's live mount.
+    if (served && w.hasAttribute("data-exact-await-view")) {
+      for (const a of w.getAnimations({ subtree: true })) {
+        if (a.animationName !== undefined && (!a.timeline || a.timeline instanceof DocumentTimeline)
+          && a.effect?.target?.getAttribute("data-exact-animation-trigger") !== "none") a.currentTime = 0;
+      }
+    }
     m.view = viewId(w); w.dataset.view = m.view;
     m.root = w.firstElementChild ? viewId(w.firstElementChild) : m.view;
     if (this.dups.get(p)) journal.push(`list: a key repeats; this row is ${key}`);
@@ -536,13 +577,47 @@ class Collection {
     if (!(left && exitView(m.wrapper, m.wrapper.firstElementChild))) m.wrapper.remove();
     Views.delete(m.view); Views.delete(m.root);
   }
+  revealAt(offset, port) {
+    if (!this.o.animations) return;
+    for (const m of this.mounted) {
+      if (!m.wrapper.hasAttribute("data-exact-await-view")) continue;
+      const start = this.index.prefix(m.position), size = this.index.h[m.position];
+      if (start < offset + port && start + size > offset) m.wrapper.removeAttribute("data-exact-await-view");
+    }
+  }
+  /** A row whose root is not displayed is no flex item either: its wrapper goes, so no gap is laid out around it, as
+   * CSS Flexbox lays none around an item that is not displayed (sizing.rs `sync_undisplayed`), and its extent is
+   * nothing; shown again, it is measured again. Whether one changed. */
+  syncUndisplayed() {
+    let changed = false;
+    for (const m of this.mounted) {
+      const root = m.wrapper.firstElementChild, none = this.gap > 0 && !!root && getComputedStyle(root).display === "none";
+      if (!!m.undisplayed === none) continue;
+      m.undisplayed = none; m.wrapper.style.display = none ? "none" : "flex"; changed = true;
+      // A row of no extent leaves the window; the list revives it at the estimate when its rows may change (`zeros`).
+      if (none) { const t = this.index.token(m.key); if (t) this.index.setMeasured(m.key, t, 0); this.zeros.add(m.key); }
+      else this.index.invalidateRow(m.key);
+    }
+    if (!changed) return false;
+    this.emit(); this.revision++;
+    // A hidden wrapper's root shown again changes no layout a report would see: its style is watched instead.
+    this.shownAgain?.disconnect();
+    const hidden = this.mounted.filter(m => m.undisplayed && m.wrapper.firstElementChild);
+    if (hidden.length) {
+      this.shownAgain ??= new MutationObserver(() => { if (this.syncUndisplayed()) publish(); });
+      for (const m of hidden) this.shownAgain.observe(m.wrapper.firstElementChild, { attributes: true, attributeFilter: ["style", "class"] });
+    }
+    return true;
+  }
   emit() {
     const kids = [];
     let cursor = 0, n = 0;
     for (let i = 0; i <= this.mounted.length; i++) {
       const p = i < this.mounted.length ? this.mounted[i].position : this.index.len;
-      const gap = this.index.prefix(p) - this.index.prefix(cursor);
-      if (gap > 0) {
+      const skipped = this.index.prefix(p) - this.index.prefix(cursor);
+      if (skipped > 0) {
+        // The rows' extents count a gap after each; the list lays its own out after the spacer (views.rs).
+        const gap = Math.max(0, skipped - this.gap);
         let s = this.spacers[n];
         if (!s) { const el = document.createElement("div"); el.$exactTree = true; el.setAttribute("aria-hidden", "true"); el.style.cssText = SPACER[this.axis]; s = this.spacers[n] = { el, size: null }; }
         if (s.size !== gap) { s.el.style.setProperty(MAIN[this.axis], num(gap) + "px"); s.size = gap; }
@@ -782,7 +857,7 @@ class Collection {
   // Within the port less its scroll-padding (into_view.rs `aligned`), down to the padding before the first row.
   aligned(p, align, current, offset) {
     if (offset != null) return Math.min(Math.max(this.index.prefix(p) + offset, -this.index.leading), this.index.maxOffset(this.geometry?.port_main ?? 0));
-    const [before, after] = this.margins(p);
+    const [before, gapless] = this.margins(p), after = gapless + this.gap;
     const start = this.index.prefix(p) + before, size = Math.max(0, this.index.h[p] - before - after), port = this.geometry?.port_main ?? 0;
     const [i0, i1] = this.scrollPadding(), low = i0, high = Math.max(i0, port - i1), view = high - low;
     const at = align === "start" ? start - low : align === "center" ? start + size / 2 - (low + high) / 2 : align === "end" ? start + size - high
@@ -920,7 +995,12 @@ class Collection {
 /** A virtualized `list`'s rows: `o` carries the key and row builders, the
  * edges' handlers, and what the runner reads when the list is created. */
 export function vl(el, subject, key, row, o) {
-  row = presenceRows(row, subject, key, (value, unique) => collectionKey(value, unique)[0]);
+  if (o.animations && !document.getElementById("exact-animation-view")) {
+    const style = document.head.appendChild(document.createElement("style"));
+    style.id = "exact-animation-view";
+    style.textContent = '[data-exact-await-view] :not([data-exact-animation-trigger="none"], [data-exiting], [data-exiting] *){animation-play-state:paused!important}';
+  }
+  row = presentRows(row, subject, key, (value, unique) => collectionKey(value, unique)[0]);
   const own = owner();
   let outer = null;
   for (let s = own; s && !outer; s = s.up) outer = s.$row;
@@ -940,6 +1020,8 @@ export function vl(el, subject, key, row, o) {
   onEnd(() => Lists.delete(c.view));
   let first = true, previousInputs;
   if (o.follow) effect(() => { c.followEnd = !!o.follow(); });
+  // A computed estimate or gap is read again as it changes.
+  effect(() => { const e = read(o.est), g = read(o.gap); if (!first) untracked(() => c.resize(e, g)); });
   // A changed set mounts its rows and lets the others go after the commit,
   // in the update's pass when the data changed too (mod.rs `update_data`).
   if (o.keep) effect(() => {
@@ -964,6 +1046,10 @@ export function vl(el, subject, key, row, o) {
   load();
 }
 let jumps = null;
+/** A row list's `column-gap`, a nonnegative number of points; a vertical list is a block, with none (sizing.rs). */
+const listGap = (row, g) => row && typeof g === "number" && isFinite(g) && g > 0 ? g : 0;
+/** An option the emitter writes as a function where it is computed and a value where it is literal. */
+const read = v => typeof v === "function" ? v() : v;
 const ALIGN = ["start", "center", "end", "nearest"];
 const Refused = [];
 /** The command (`scrollIntoView("id", key, block=, inline=, behavior=,
@@ -1073,13 +1159,21 @@ function load() {
 function report(bytes, f, fill) {
   f = { ...f, revision: Number(f.revision), scroll_sequence: Number(f.scroll_sequence), focus_view: f.focus_view ?? null, interaction_view: f.interaction_view ?? null };
   fill = { velocity: fill?.velocity ?? 0, limit: Number.isInteger(fill?.limit) ? fill.limit : null, ancestorMoving: !!fill?.ancestorMoving,
-    scrolling: !!fill?.scrolling, gesture: !!fill?.gesture, animating: !!fill?.animating };
+    scrolling: !!fill?.scrolling, gesture: !!fill?.gesture, animating: !!fill?.animating, viewOffset: fill?.viewOffset };
   const c = Lists.get(f.view);
+  // A row's extent in the index is its size and the gap after it, but for one that is not displayed (mod.rs `feedback`).
+  if (c?.gap) {
+    c.syncUndisplayed();
+    const none = new Set(c.mounted.filter(m => m.undisplayed).map(m => m.view));
+    f.measurements = f.measurements.map(m => ({ ...m, size: m.size + (none.has(m.view) ? 0 : c.gap) }));
+  }
   const byView = c?.prepare(f);
   if (!byView) { publish(); return false; }
   const cats = [f.focus_view != null, f.interaction_view != null];
   if (cats[0] || cats[1]) for (const o of Lists.values()) if (o !== c && !o.contains(c)) o.releasePins(cats);
+  c.viewOffset = fill?.viewOffset ?? f.offset;
   const [, edge] = c.feedback(f, byView, fill);
+  c.revealAt(c.viewOffset, c.geometry.port_main);
   settled();
   if (edge) edges(c, edge);
   return true;

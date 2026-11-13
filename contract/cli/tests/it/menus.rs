@@ -763,6 +763,25 @@ fn popover_action_commands_and_toggle_payload_compile() {
     assert!(exact_runner::Event::of_host_kind(50, "closed,maybe").is_err());
 }
 
+/// Issue #364: `toggle` fires at the popover, never at the button that opens
+/// it, so on an element with no `popover` it would never run. It is refused
+/// there, the native button's included, which would otherwise have become a
+/// bare box without a word; a `popover` written as a choice keeps it.
+#[test]
+fn toggle_is_refused_where_no_popover_can_fire_it() {
+    for element in [
+        "button press=go toggle=seen\n        text \"Add\"",
+        "button appearance=\"auto\" press=go toggle=seen\n        text \"Add\"",
+        "row toggle=seen\n        text \"Tip\"",
+        "dialog toggle=seen\n        text \"Hi\"",
+    ] {
+        let e = contract::compile(&format!("component App\n  state n = 0\n  action go\n    n = n + 1\n  action seen\n    n = n + 1\n  view\n    column\n      {element}\n")).unwrap_err();
+        assert_eq!(e.id, "lower-handler-tag", "{element}: {e}");
+        assert!(e.message.contains("has no `popover`"), "{element}: {e}");
+    }
+    contract::compile("component App\n  state open = false\n  action seen\n    open = not open\n  view\n    column\n      column id=\"m\" popover=(open ? some(\"manual\") : none) toggle=seen\n        text \"Tip\"\n").unwrap();
+}
+
 #[test]
 fn popover_commands_check_their_id_and_source() {
     for command in [

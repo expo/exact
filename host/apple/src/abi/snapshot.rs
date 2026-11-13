@@ -8,12 +8,17 @@ impl<D: DataSource> Bridge<D> {
         plan: usize,
         kind: usize,
         props: usize,
+        configuration: usize,
         data: D,
         hooks: Hooks,
         width: f32,
         height: f32,
     ) -> u32 {
-        let Some(total) = plan.checked_add(kind).and_then(|n| n.checked_add(props)) else {
+        let Some(total) = plan
+            .checked_add(kind)
+            .and_then(|n| n.checked_add(props))
+            .and_then(|n| n.checked_add(configuration))
+        else {
             return self.refuse("entry input overflow");
         };
         if total > self.input.len() {
@@ -37,7 +42,8 @@ impl<D: DataSource> Bridge<D> {
                 PlanBytes::Entry(
                     &bytes[..plan],
                     kind_name,
-                    (props > 0).then_some(&bytes[plan + kind..]),
+                    (props > 0).then_some(&bytes[plan + kind..plan + kind + props]),
+                    (configuration > 0).then_some(&bytes[plan + kind + props..]),
                 ),
                 data,
                 measurer,
@@ -193,7 +199,7 @@ mod tests {
     }
     fn entry() -> Vec<u8> {
         contract::snapshot::compile("shape Props\n  title: string\ncomponent Card\n  props\n    title: string\n  view\n    text title\n", &contract::Widget { requires_secrets: false,
-            kind: "card".into(), title: None, description: None, families: vec!["systemSmall".into()], watch_families: vec![], component: "Card".into(), props: "Props".into(), refresh: "refresh".into(), preview: serde_json::json!({"title":"preview"})
+            kind: "card".into(), title: None, description: None, families: vec!["systemSmall".into()], watch_families: vec![], component: "Card".into(), props: "Props".into(), refresh: "refresh".into(), preview: serde_json::json!({"title":"preview"}), configuration: None
         }).unwrap().encode()
     }
     #[test]
@@ -207,6 +213,7 @@ mod tests {
         bridge.boot_entry(
             entry.len(),
             4,
+            0,
             0,
             Data {
                 asks: asks.clone(),
@@ -238,6 +245,7 @@ mod tests {
                 entry.len(),
                 4,
                 props.len(),
+                0,
                 Data {
                     asks: asks.clone(),
                     writes: false,
@@ -267,6 +275,7 @@ mod tests {
             entry.len(),
             4,
             11,
+            0,
             Data {
                 asks: asks.clone(),
                 writes: false,
@@ -289,5 +298,64 @@ mod tests {
             160.0,
         );
         assert!(String::from_utf8_lossy(&bridge.output).contains("error"));
+    }
+
+    /// A configured widget renders the values the host supplies, its
+    /// defaults when it supplies none, and defaults removed values and parameters.
+    #[test]
+    fn entry_boot_renders_the_chosen_configuration() {
+        let manifest = contract::Manifest {
+            json: serde_json::json!({"widgets":[{"kind":"card","families":["systemSmall"],"component":"Card",
+                "props":"Props","refresh":"refresh","preview":{"title":"preview"},
+                "configuration":{"title":"Card","parameters":[{"name":"rows","type":"enum","title":"Rows","default":"three",
+                    "values":[{"value":"one","title":"1"},{"value":"three","title":"3"}]}]}}]}),
+            id: "test.app".into(),
+            name: "Test".into(),
+            declared: true,
+        };
+        let widget = manifest.widgets().unwrap().remove(0);
+        for field in ["string", "enum<\"one\", \"three\">"] {
+            let entry = contract::snapshot::compile(&"shape Props\n  title: string\nshape Rows\n  rows: enum<\"one\", \"three\">\ncomponent Card\n  props\n    title: string\n  inject\n    snapshot_configuration: Rows\n  view\n    text `${title} rows=${snapshot_configuration.rows}`\n".replace("enum<\"one\", \"three\">", field), &widget).unwrap().encode();
+            let mut bridge = Bridge::new();
+            for (props, configuration, expected) in [
+                ("", "", "preview rows=three"),
+                ("", "{\"rows\":\"one\"}", "preview rows=one"),
+                (
+                    "",
+                    "{\"rows\":\"one\",\"removed\":\"old\"}",
+                    "preview rows=one",
+                ),
+                ("", "{}", "preview rows=three"),
+                (
+                    "{\"title\":\"supplied\"}",
+                    "{\"rows\":\"one\"}",
+                    "supplied rows=one",
+                ),
+                ("", "{\"rows\":\"seven\"}", "preview rows=three"),
+                ("", "{\"columns\":\"one\"}", "preview rows=three"),
+            ] {
+                let mut bytes = entry.clone();
+                bytes.extend_from_slice(b"card");
+                bytes.extend_from_slice(props.as_bytes());
+                bytes.extend_from_slice(configuration.as_bytes());
+                bridge.input_write(&bytes);
+                bridge.boot_entry(
+                    entry.len(),
+                    4,
+                    props.len(),
+                    configuration.len(),
+                    Data {
+                        asks: Arc::new(AtomicUsize::new(0)),
+                        writes: false,
+                        unlinked: false,
+                    },
+                    Hooks::none(),
+                    160.0,
+                    160.0,
+                );
+                let output = String::from_utf8_lossy(&bridge.output);
+                assert!(output.contains(expected), "{configuration}: {output}");
+            }
+        }
     }
 }

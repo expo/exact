@@ -427,7 +427,13 @@ pub(crate) fn engine_hash(s: &taffy::Style) -> u64 {
     use taffy::style::GridPlacement;
     let mut h = crate::id::IdHasher::default();
     let mut len = |l: taffy::CompactLength| {
-        h.write_u64(((l.tag() as u64) << 32) | u64::from(l.value().to_bits()));
+        // A calc length is a handle whose low three bits are its tag (0):
+        // `tag()` and `value()` would read only its bits 0–7 and 32–63, and
+        // the handles that differ only in bits 8–31 would share a bucket.
+        h.write_u64(match l.is_calc() {
+            true => l.calc_value() as usize as u64,
+            false => ((l.tag() as u64) << 32) | u64::from(l.value().to_bits()),
+        });
     };
     len(s.size.width.into_raw());
     len(s.size.height.into_raw());
@@ -548,6 +554,30 @@ mod tests {
             }
         }
         assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    /// Distinct calc widths are distinct handles, each its own bucket.
+    #[test]
+    fn engine_calc_lookups_take_linear_comparisons() {
+        let env = crate::style::Env::default();
+        let mut props = StyleProps::default();
+        let n = 4096;
+        let styles: Vec<_> = (1..=n)
+            .map(|i| {
+                props
+                    .set_dynamic(
+                        StyleId::Width,
+                        &StyleValue::Text(format!("calc(50% + {i}px)").into()),
+                    )
+                    .unwrap();
+                props.to_taffy(crate::NodeType::View, &env)
+            })
+            .collect();
+        let comparisons = engine_comparisons(styles);
+        assert!(
+            comparisons <= 2 * n,
+            "{n} styles, {comparisons} comparisons"
+        );
     }
 
     #[test]

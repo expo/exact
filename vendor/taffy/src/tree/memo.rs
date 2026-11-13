@@ -78,6 +78,8 @@ pub(crate) enum Event {
     Query { node: u32, input: LayoutInput, output: LayoutOutput },
     /// A visited container's result, as its cache takes it.
     Store { node: u32, input: LayoutInput, output: LayoutOutput },
+    /// EXACT PATCH 72: a size probe changed its children's layouts.
+    InvalidateLayout { node: u32 },
     /// A layout written.
     Layout { node: u32, layout: Layout },
     /// A static position written.
@@ -153,6 +155,7 @@ impl Event {
                 a == b && x == u && y == v
             }
             (Event::Origin { node: a, origin: x }, Event::Origin { node: b, origin: y }) => a == b && x == y,
+            (Event::InvalidateLayout { node: a }, Event::InvalidateLayout { node: b }) => a == b,
             (Event::End { output: a }, Event::End { output: b }) => a == b,
             _ => false,
         }

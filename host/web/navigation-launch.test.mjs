@@ -54,3 +54,16 @@ test('every History entry keeps a drive\'s formatLocale, so navigation and reloa
     expect(launchLocation({ location: { pathname: next.pathname, search: next.search } })).toBe('/next?page=2');
   } finally { if (saved) Object.defineProperty(globalThis, 'location', saved); else delete globalThis.location; }
 });
+
+test('a History entry keeps a route whose first segment is empty, and a reload launches there', () => {
+  // The router keeps `//b` as a path, never a network-path reference (route/tests/corpus.json).
+  const saved = Object.getOwnPropertyDescriptor(globalThis, 'location');
+  Object.defineProperty(globalThis, 'location', { configurable: true, value: { origin: 'http://127.0.0.1:9', href: 'http://127.0.0.1:9/' } });
+  try {
+    expect(historyURL('//b')).toBe('http://127.0.0.1:9//b');
+    expect(historyURL('///b')).toBe('http://127.0.0.1:9///b');
+    const entry = new URL(historyURL('//item/7?q=a#moves'));
+    expect(entry.href).toBe('http://127.0.0.1:9//item/7?q=a#moves');
+    expect(launchLocation({ location: entry })).toBe('//item/7?q=a#moves');
+  } finally { if (saved) Object.defineProperty(globalThis, 'location', saved); else delete globalThis.location; }
+});

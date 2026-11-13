@@ -4,10 +4,10 @@ import { existsSync, readFileSync } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { appleRunBinary, appleArtifacts, assertAppleIdentity } from '../host/apple/build.mjs';
-import { phone, phoneBridge, forwardedEnv, crashReports } from '../host/apple/devices.mjs';
+import { phone, phoneBridge, phoneStartupFailure, forwardedEnv, crashReports } from '../host/apple/devices.mjs';
 import { resolveApp, executableName, linuxBinary, bakeOutput, bakeTarget } from './app.mjs';
 import { linuxRebuild, nativeBuild, ownVerb, planOverride, rebuildCommand, refuseBuild } from './agent-build.mjs';
-import { refuseStale, proofProductChanges, unchecked, packagedBuildChanges, depInfoChanges, depInfoNewer, newerThan, bakedSettingChanges } from './agent-launch.mjs';
+import { refuseStale, refuseBackendOrigin, refuseBinaryBackend, proofProductChanges, unchecked, packagedBuildChanges, depInfoChanges, depInfoNewer, newerThan, bakedSettingChanges } from './agent-launch.mjs';
 import { androidBinary, androidDeploy, apkRecord } from './agent-android.mjs';
 import { nativeKey, mouseContact } from './agent-keys.mjs';
 import { jsonLines, hangup, waitAtMost, bootRefusal, REPLY_MS } from './agent-wire.mjs';
@@ -25,8 +25,10 @@ export function apkChanges(a, apk) {
   return [...depInfoNewer(since, record.library, record.library.replace(/\.so$/, '.d'), record.workspace), ...newerThan(since, record.sources)];
 }
 
-/** One JSON-lines protocol over stdio on desktop hosts, or a phone's outbound socket. */
-export async function openStdio({ host, plan, world, size, app, env: extra = {}, session, documents = [], device = false, phone: pick, onProcess }) {
+/** One JSON-lines protocol over stdio on desktop hosts, or a phone's outbound socket. `reader`: on Android, the app
+ * on the Canvas reader (its APK), not the Linux host headless; unsaid, EXACT_ANDROID_READER decides (how a script
+ * that opens a drive says it). */
+export async function openStdio({ host, plan, world, size, app, env: extra = {}, session, documents = [], device = false, phone: pick, reader = !!process.env.EXACT_ANDROID_READER, onProcess }) {
   const a = resolveApp(app);
   const linux = host === 'linux', android = host === 'android'; // @ref LLP 1107 — Android: the Linux host on a phone, under adb
   const windows = host === 'windows', portable = linux || windows || android;
@@ -34,12 +36,20 @@ export async function openStdio({ host, plan, world, size, app, env: extra = {},
   const artifacts = portable ? null : appleArtifacts(a, { destination: device ? 'ios' : 'macos', host: sample });
   const deviceBundle = artifacts?.bundle;
   const bin = windows ? (process.env.EXACT_WINDOWS_BIN ?? resolve(a.dir, 'dist-windows', `${executableName(a)}.exe`))
-    : android ? (process.env.EXACT_ANDROID_BIN ?? androidBinary(a)) : linux ? (process.env.EXACT_LINUX_BIN ?? linuxBinary(a)) : (process.env.EXACT_MAC_BIN ?? appleRunBinary(a, sample));
+    : android ? (process.env.EXACT_ANDROID_BIN ?? androidBinary(a, undefined, reader)) : linux ? (process.env.EXACT_LINUX_BIN ?? linuxBinary(a)) : (process.env.EXACT_MAC_BIN ?? appleRunBinary(a, sample));
   // The macOS build by its own record (agent-build.mjs, which an app's exact.mjs runs first to build it, or bakes its plan-only edit).
-  const macBuild = !portable && !device && !process.env.EXACT_MAC_BIN ? nativeBuild('macos', a, { sample, checked: process.env.EXACT_BUILD_CHECKED }) : null, macPlan = macBuild && !plan && !sample ? planOverride('macos', a, macBuild) : null;
+  const macBuild = !portable && !device && !process.env.EXACT_MAC_BIN ? nativeBuild('macos', a, { sample, checked: process.env.EXACT_BUILD_CHECKED }) : null;
+  if (macBuild && !macBuild.missing) refuseBackendOrigin(macBuild, a);
+  const macPlan = macBuild && !plan && !sample ? planOverride('macos', a, macBuild) : null;
   if (macPlan) plan = macPlan.plan; else if (macBuild) refuseBuild('macos', macBuild, a, { sample });
   const windowsRebuild = () => ownVerb(a, 'windows') ?? `bun host/windows/build.mjs ${a.crate('windows')}`;
-  if (!existsSync(device ? deviceBundle : bin)) throw new Error(device ? 'run bun host/apple/build.mjs --device first' : windows ? `run ${windowsRebuild()} first` : android ? `run ${androidRebuild(a, !!process.env.EXACT_ANDROID_READER)} first` : linux ? `run ${linuxRebuild(a)} first` : `EXACT_MAC_BIN names no file: ${bin}`);
+  const rebuild = device ? 'bun host/apple/build.mjs --device' : windows ? windowsRebuild() : android ? androidRebuild(a, reader) : linux ? linuxRebuild(a) : null;
+  if (!existsSync(device ? deviceBundle : bin)) throw new Error(rebuild ? `run ${rebuild} first` : `EXACT_MAC_BIN names no file: ${bin}`);
+  if (!macBuild) {
+    const receipt = portable ? undefined : device ? resolve(deviceBundle, 'receipt.json')
+      : /\.app\/Contents\/MacOS\/[^/]+$/.test(resolve(bin)) ? resolve(bin, '../../Resources/receipt.json') : resolve(dirname(bin), 'receipt.json');
+    refuseBinaryBackend(bin, a, { receipt, packaged: windows, command: rebuild });
+  }
   if (!portable) assertAppleIdentity(a, device ? resolve(deviceBundle, artifacts.executable) : bin);
   if (portable && process.env.EXACT_PROOF_PRODUCTS) refuseStale(host, bin, proofProductChanges(process.env.EXACT_PROOF_PRODUCTS, bin, a), 'rerun the proof'); else if (windows && process.env.EXACT_WINDOWS_BIN) unchecked('windows', 'EXACT_WINDOWS_BIN');
   else if (windows) {
@@ -111,7 +121,7 @@ export async function openStdio({ host, plan, world, size, app, env: extra = {},
     }) : lines.next();
     // An Android launch is adb's round trips (about a second each to an emulator through a tunnel) and the app's cold start.
     const ready = await Promise.race([readyLine, new Promise((_, reject) => {
-      readyTimeout = setTimeout(() => reject(new Error('the app never became ready; ' + hostLines.join('\n'))), android ? 60000 : 20000);
+      readyTimeout = setTimeout(() => reject(new Error('the app never became ready; ' + (hostLines.join('\n') || 'the app printed nothing'))), android ? 60000 : 20000);
     })]);
     clearTimeout(readyTimeout);
     if (!ready.ready) throw new Error('unexpected first line: ' + JSON.stringify(ready));
@@ -163,6 +173,7 @@ export async function openStdio({ host, plan, world, size, app, env: extra = {},
     };
   } catch (e) {
     await close();
+    if (device) throw new Error(phoneStartupFailure(e.message, hostLines), { cause: e });
     throw e;
   } finally {
     clearTimeout(readyTimeout);

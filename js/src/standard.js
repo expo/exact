@@ -332,7 +332,7 @@
   })();
 
   // `AbortSignal.timeout` is an answer's timer, on the runner's clock: the
-  // prelude installs it (binary.js `timers`). Ibex's internal hooks
+  // prelude installs it (time.js `timers`). Ibex's internal hooks
   // (`__ibex2_abort`) stay for the prelude's `fetch`, which takes and
   // deletes them before any module runs.
 })(globalThis);

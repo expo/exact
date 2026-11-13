@@ -79,7 +79,7 @@ if (cross) {
   // module: Hermes has no Windows build, and its Linux bundle is not one this Mac needs. The bake still runs (its
   // `packages.rs` is what composes `linux/lib.rs`), so the package's Rust is compiled for each target.
   const name = JSON.parse(readFileSync(join(app, 'linux/Cargo.toml'), 'utf8').match(/^name = (".*")$/m)[1]).replace(/-linux$/, '');
-  const exact2 = readFileSync(join(app, 'linux/Cargo.toml'), 'utf8').match(/^exact-linux = \{ path = "(.*)\/host\/linux" \}$/m)[1];
+  const exact2 = readFileSync(join(app, 'linux/Cargo.toml'), 'utf8').match(/^exact-painted = \{ path = "(.*)\/host\/painted" \}$/m)[1];
   const run_composed = { linux: 'exact_linux::run_composed::<NoData>(PLAN, COMPAT, composed)', windows: 'exact_windows::run_composed::<NoData>("Fixture", Default::default(), PLAN, COMPAT, composed)' };
   for (const os of ['linux', 'windows']) {
     const dir = join(app, `check-${os}`);
@@ -92,9 +92,9 @@ publish = false
 build = "build.rs"
 
 [dependencies]
-exact-linux = { path = "${exact2}/host/linux" }
+exact-painted = { path = "${exact2}/host/painted" }
 exact-runner = { path = "${exact2}/runner" }
-${os === 'windows' ? `exact-windows = { path = "${exact2}/host/windows" }\n` : ''}
+${os === 'windows' ? `exact-windows = { path = "${exact2}/host/windows" }\n` : `exact-linux = { path = "${exact2}/host/linux" }\n`}
 [build-dependencies]
 exact-js-bake = { path = "${exact2}/js/bake" }
 `);
@@ -113,7 +113,7 @@ impl exact_runner::DataSource for NoData {
 }
 
 fn main() {
-    let composed = exact_linux::Composed { packages: exact_packages(), ..Default::default() };
+    let composed = exact_painted::Composed { packages: exact_packages(), ..Default::default() };
     std::process::exit(${run_composed[os]});
 }
 `);

@@ -89,7 +89,7 @@ test('metrics passes its path-selected app to web rebuilds and Apple builds', ()
     import * as fs from 'node:fs';
     import * as serving from './host/web/serve.mjs';
     import * as launch from './scripts/agent-launch.mjs';
-    const dir = ${JSON.stringify(dir)}, root = ${JSON.stringify(ROOT)}, builds = [];
+    const dir = ${JSON.stringify(dir)}, root = ${JSON.stringify(ROOT)}, builds = [], measurements = [];
     const spawnSync = processes.spawnSync, read = fs.readFileSync, mkdir = fs.mkdirSync, done = new Error('builds checked');
     delete process.env.EXACT_APP_DIR;
     process.env.EXACT_DIAGNOSTIC_ROOT = root;
@@ -106,6 +106,12 @@ test('metrics passes its path-selected app to web rebuilds and Apple builds', ()
     mock.module('node:child_process', () => ({ ...processes,
       spawnSync(command, args, options) {
         if (command === 'rustc') return spawnSync(command, args, options);
+        if (command === 'cargo' && args.includes('--bin')) {
+          const bin = args[args.indexOf('--bin') + 1];
+          assert.ok(['metrics', 'plan-metrics'].includes(bin));
+          assert.ok(args.includes('--release'));
+          measurements.push(bin);
+        }
         if (args[0]?.endsWith('/host/web/build.mjs') || args[0]?.endsWith('/host/apple/build.mjs')) {
           const kind = args[0].includes('/web/') ? 'web' : 'apple';
           const probe = 'import { resolveApp } from "./scripts/app.mjs"; console.log(resolveApp('
@@ -131,6 +137,7 @@ test('metrics passes its path-selected app to web rebuilds and Apple builds', ()
     try { await import('./scripts/metrics.mjs'); assert.fail('did not reach all build calls'); }
     catch (error) { assert.equal(error, done); }
     assert.deepEqual(builds, [['web', false], ['web', false], ['apple', false], ['apple', false], ['apple', true]]);
+    assert.deepEqual(measurements, ['metrics', 'plan-metrics']);
   `;
   try {
     const r = spawnSync(process.execPath, ['-e', script], { cwd: ROOT, encoding: 'utf8', timeout: 20_000 });

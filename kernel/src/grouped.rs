@@ -13,9 +13,33 @@ use crate::generated::{
 };
 use crate::id::ViewId;
 use crate::kernel::{Kernel, NodeRef};
-use crate::style::{ColorValue, Env};
+use crate::style::ColorValue;
+
+/// Box styles a standard cell cannot preserve (LLP 1084 D7, LLP 1115 D1).
+/// A row's minimum height remains UIKit's; a column's alignment is authored.
+/// Lowering uses the same rule before adding the subtitle sheet.
+pub fn authored_row_box(written: StyleMask, column: bool) -> bool {
+    [
+        StyleId::Height,
+        StyleId::BackgroundColor,
+        StyleId::BorderRadiusTopLeft,
+        StyleId::BorderRadiusTopRight,
+        StyleId::BorderRadiusBottomLeft,
+        StyleId::BorderRadiusBottomRight,
+    ]
+    .iter()
+    .any(|&id| written.has(id))
+        || column && (written.has(StyleId::AlignItems) || written.has(StyleId::JustifyContent))
+}
+
+/// A nested subtitle column's minimum height also needs its own views.
+pub fn authored_subtitle_box(written: StyleMask) -> bool {
+    authored_row_box(written, true) || written.has(StyleId::MinHeight)
+}
 
 mod separator;
+#[cfg(test)]
+mod tests;
 pub use separator::GroupedSeparator;
 
 /// A grouped list as a host draws it.
@@ -346,7 +370,7 @@ impl Kernel {
         };
         // A section's percentage margin is of the list's content box
         let basis = crate::svg::scene::content_box(self, &self.node(view)?).2;
-        authored_space(&mut list, &shown, self.arena().env(), basis);
+        authored_space(&mut list, &shown, self.arena(), basis);
         Some(list)
     }
 
@@ -382,7 +406,9 @@ impl Kernel {
                 FlexDirection::Column | FlexDirection::ColumnReverse
             )
         {
-            if (1..=2).contains(&parts.len()) && parts.iter().all(|p| p.node_type == NodeType::Text)
+            if (1..=2).contains(&parts.len())
+                && parts.iter().all(|p| p.node_type == NodeType::Text)
+                && !authored_row_box(row.style.written, true)
             {
                 out.texts(&parts[0], parts.get(1), true);
             }
@@ -465,6 +491,7 @@ impl Kernel {
                 let lines = shown(stack);
                 if lines.iter().all(|l| l.node_type == NodeType::Text)
                     && (1..=2).contains(&lines.len())
+                    && !authored_subtitle_box(stack.style.written)
                 {
                     out.texts(&lines[0], lines.get(1), true);
                 } else {
@@ -477,10 +504,10 @@ impl Kernel {
             out.custom = true;
         }
         // UIKit's content configuration draws none of the row's box: a row
-        // whose author wrote an edge of it, or its background image, is its
-        // own views, carried, as every other host draws it (LLP 1084 D7).
+        // with an authored box or edge keeps its views (LLP 1084 D7).
         let w = &row.style.written;
         if out.authored_edge
+            || authored_row_box(row.style.written, false)
             || [
                 (StyleId::BorderWidthTop, StyleId::BorderStyleTop),
                 (StyleId::BorderWidthRight, StyleId::BorderStyleRight),
@@ -506,7 +533,8 @@ impl Kernel {
             && !out.subtitle
             && !out.custom;
         if out.custom {
-            // A custom row is its views, accessory and all.
+            // A custom row draws its own controls. Keep a radio's target
+            // so selecting the cell still checks it.
             out = GroupedRow {
                 view: out.view,
                 custom: true,
@@ -515,6 +543,10 @@ impl Kernel {
                 disabled: out.disabled,
                 authored_edge: out.authored_edge,
                 next_authored_top: out.next_authored_top,
+                accessory: match out.accessory {
+                    radio @ Accessory::Radio(..) => radio,
+                    _ => Accessory::None,
+                },
                 ..GroupedRow::default()
             };
         }
@@ -631,8 +663,8 @@ pub(crate) fn apply_margins(arena: &NodeArena, slot: u32, s: &mut taffy::style::
         // Its widest, the card less its insets, moves with its inset.
         if let crate::style::Dimension::Calc(percent, points) = arena.style(slot).max_width {
             if !written.has(StyleId::MaxWidth) {
-                s.max_size.width =
-                    crate::style::Dimension::Calc(percent, points - by).floor_lpa(arena.env());
+                s.max_size.width = crate::style::Dimension::Calc(percent, points - by)
+                    .floor_lpa(&arena.env_of(slot));
             }
         }
     } else if !content && !control && !written.has(StyleId::PaddingLeft) {
@@ -753,11 +785,13 @@ fn collapse(a: f32, b: f32) -> f32 {
 /// margins that meet there collapsed, as block margins do (§6.4). A margin
 /// is the author's when its row says so (LLP 1115.000 D2), whatever its
 /// number; the sheet's (LLP 1084 §2) stands in for the platform's gap.
-fn authored_space(list: &mut GroupedList, shown: &[NodeRef<'_>], env: &Env, basis: f32) {
+fn authored_space(list: &mut GroupedList, shown: &[NodeRef<'_>], arena: &NodeArena, basis: f32) {
     use crate::style::Dimension;
     let mut below: Option<(f32, bool)> = None;
     for (section, node) in list.sections.iter_mut().zip(shown) {
-        let points = |d: Dimension| d.at_basis(env, basis);
+        // Each section's margins are its own lengths (LLP 1123 D9)
+        let env = arena.env_of(node.key.index);
+        let points = |d: Dimension| d.at_basis(&env, basis);
         let top = points(node.style.margin_top.clone());
         let authored = node.style.written.has(StyleId::MarginTop);
         section.space_above = match below {

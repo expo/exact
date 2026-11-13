@@ -433,3 +433,271 @@ fn a_dropped_bound_member_reply_retires_its_provisional_request() {
         .iter()
         .all(|b| b.get("dispose").is_none()));
 }
+
+#[test]
+fn a_background_action_refuses_foreground_calls_even_in_a_visible_session() {
+    let mut b = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
+    let string = b.primitive(TypeKind::String);
+    let source = b.source("openBrowser", &[], string);
+    b.module(
+        source,
+        ("browser", "@fixture/browser"),
+        "openBrowser",
+        true,
+        false,
+        "never",
+        "",
+        r#"{"origin":"app","foreground":true}"#,
+    );
+    b.node(NodeType::View as u8, None, None, 0, &[], &[], None);
+    let mut r = boot(b.finish().unwrap());
+    let row = r.plan.modules[0].clone();
+    for hidden in [false, true] {
+        r.page.hidden = hidden;
+        assert!(
+            r.admit(&row, &serde_json::json!({}), super::CallOrigin::Action)
+                .is_err(),
+            "hidden={hidden}"
+        );
+    }
+}
+
+#[test]
+fn an_action_without_a_handler_has_a_terminal_outcome() {
+    let mut r = boot(plan("never"));
+    assert!(r
+        .raise_action(
+            "notifications",
+            "notificationclick",
+            "[]",
+            crate::WakeHow {
+                id: 0,
+                cold: false,
+                hidden: false
+            },
+            "unheard"
+        )
+        .is_err());
+    assert_eq!(
+        r.ended_actions(),
+        serde_json::json!([{"id":"unheard","outcome":"unheard"}])
+    );
+}
+
+#[test]
+fn a_native_statement_is_owned_until_its_reply_or_expiry() {
+    use std::sync::{Arc, Mutex};
+    let mut b = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
+    let string = b.primitive(TypeKind::String);
+    let source = b.source("showNotification", &[], string);
+    b.module(
+        source,
+        ("notifications", "@fixture/notifications"),
+        "showNotification",
+        true,
+        false,
+        "never",
+        "",
+        r#"{"effect":true,"takes":[]}"#,
+    );
+    let name = b.str("showNotification");
+    let mut body = Asm::new();
+    body.command(name, 0);
+    let body = b.code(body);
+    let action = b.action("clicked", &[], &[], body);
+    b.module_event(
+        ("notifications", "@fixture/notifications"),
+        "notificationclick",
+        action,
+        "activation",
+        16,
+        0,
+    );
+    b.module_event(
+        ("geofencing", "@fixture/geofencing"),
+        "geofenceenter",
+        action,
+        "wake",
+        16,
+        30_000,
+    );
+    b.node(NodeType::View as u8, None, None, 0, &[], &[], None);
+    let mut r = boot(b.finish().unwrap());
+    let replies: Arc<Mutex<Vec<crate::Reply>>> = Default::default();
+    let held = replies.clone();
+    r.native_slot()
+        .host(Some(Arc::new(move |body: Vec<u8>, reply: crate::Reply| {
+            let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            if body["send"] != "showNotification" {
+                return;
+            }
+            held.lock().unwrap().push(reply);
+        })));
+    r.bind_extensions(&["notifications"], &[]);
+    for (id, outcome, expired) in [
+        ("success", serde_json::json!(null), false),
+        (
+            "failure",
+            serde_json::json!({"error":"NotAllowedError"}),
+            false,
+        ),
+        ("expired", serde_json::json!(null), true),
+    ] {
+        r.raise_action(
+            "notifications",
+            "notificationclick",
+            "[]",
+            crate::WakeHow::default(),
+            id,
+        )
+        .unwrap();
+        assert!(r.step_wakes().1.is_none());
+        assert!(
+            !r.ended_actions()
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|a| a["id"] == id),
+            "the native reply has not arrived"
+        );
+        if expired {
+            assert!(r.expire_action(id).1.is_none());
+            assert_eq!(
+                r.ended_actions().as_array().unwrap().last().unwrap()["outcome"],
+                "expired"
+            );
+        }
+        replies
+            .lock()
+            .unwrap()
+            .pop()
+            .expect("the handler posted a notification")
+            .send(super::response(&outcome));
+        r.apply_announced();
+        assert!(r.step_wakes().1.is_none());
+        let ended = r.ended_actions();
+        let mine: Vec<_> = ended
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|a| a["id"] == id)
+            .collect();
+        assert_eq!(mine.len(), 1, "{ended}");
+        assert_eq!(
+            mine[0]["outcome"],
+            if expired { "expired" } else { "completed" }
+        );
+    }
+    r.raise_wake(
+        "geofencing",
+        "geofenceenter",
+        "[]",
+        crate::WakeHow {
+            id: 1,
+            cold: false,
+            hidden: true,
+        },
+    )
+    .unwrap();
+    assert!(r.step_wakes().1.is_none());
+    assert_eq!(
+        replies.lock().unwrap().len(),
+        1,
+        "the wake posted a notification"
+    );
+    let ended = r.take_ended_wakes();
+    assert_eq!(
+        ended.len(),
+        1,
+        "a wake's statement does not wait for its native reply"
+    );
+    assert!(ended[0].contains("completed"), "{ended:?}");
+    replies
+        .lock()
+        .unwrap()
+        .pop()
+        .unwrap()
+        .send(super::response(&serde_json::json!(null)));
+    r.apply_announced();
+    assert!(r.step_wakes().1.is_none());
+    assert!(
+        r.take_ended_wakes().is_empty(),
+        "a late statement reply cannot end the wake twice"
+    );
+}
+
+#[test]
+fn every_action_ending_survives_a_single_turn_until_the_host_drains_it() {
+    use std::sync::{Arc, Mutex};
+    let mut b = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
+    let string = b.primitive(TypeKind::String);
+    let source = b.source("post", &[], string);
+    b.module(
+        source,
+        ("notifications", "@fixture/notifications"),
+        "post",
+        true,
+        false,
+        "never",
+        "",
+        r#"{"effect":true,"takes":[]}"#,
+    );
+    let name = b.str("post");
+    let mut body = Asm::new();
+    body.command(name, 0);
+    let body = b.code(body);
+    let clicked = b.action("clicked", &[], &[], body);
+    b.module_event(
+        ("notifications", "@fixture/notifications"),
+        "notificationclick",
+        clicked,
+        "activation",
+        16,
+        0,
+    );
+    b.node(NodeType::View as u8, None, None, 0, &[], &[], None);
+    let mut r = boot(b.finish().unwrap());
+    let replies: Arc<Mutex<Vec<crate::Reply>>> = Default::default();
+    let held = replies.clone();
+    r.native_slot()
+        .host(Some(Arc::new(move |_: Vec<u8>, reply: crate::Reply| {
+            held.lock().unwrap().push(reply);
+        })));
+    r.bind_extensions(&["notifications"], &[]);
+    for id in 0..40 {
+        r.raise_action(
+            "notifications",
+            "notificationclick",
+            "[]",
+            crate::WakeHow::default(),
+            &id.to_string(),
+        )
+        .unwrap();
+    }
+    assert!(r.step_wakes().1.is_none());
+    assert!(r.ended_actions().as_array().unwrap().is_empty());
+    r.native_slot()
+        .host(Some(Arc::new(|_: Vec<u8>, reply: crate::Reply| {
+            reply.send(super::response(&serde_json::json!(null)));
+        })));
+    replies
+        .lock()
+        .unwrap()
+        .pop()
+        .unwrap()
+        .send(super::response(&serde_json::json!(null)));
+    r.apply_announced();
+    assert!(r.step_wakes().1.is_none());
+    let ended = r.take_ended_actions();
+    assert_eq!(
+        ended.as_array().unwrap().len(),
+        40,
+        "no ending may be evicted before the host reads it"
+    );
+    assert!(r.take_ended_actions().as_array().unwrap().is_empty());
+    assert_eq!(r.ended_actions().as_array().unwrap().len(), 32);
+    for id in 0..40 {
+        assert_eq!(ended[id]["id"], id.to_string());
+        assert_eq!(ended[id]["outcome"], "completed");
+    }
+}

@@ -41,6 +41,20 @@ fn field(tag: &str, attrs: &[Attr]) -> bool {
     }
 }
 
+fn always_none(value: &Expr) -> bool {
+    match value {
+        Expr::Str(v, _) => v == "none",
+        Expr::Ternary(_, yes, no, _)
+        | Expr::Match {
+            some: yes,
+            none: no,
+            ..
+        } => always_none(yes) && always_none(no),
+        Expr::Let { body, .. } | Expr::Typed(body, _, _) => always_none(body),
+        _ => false,
+    }
+}
+
 /// `::placeholder`'s `color` (LLP 1104 D3) colours a text field's
 /// placeholder, and only a text field has one.
 pub(crate) fn placeholder_refusal(name: &str, tag: &str, control: Option<&str>) -> Option<String> {
@@ -174,12 +188,10 @@ impl Lowerer<'_> {
                 });
             }
         }
-        // A field that is never native whose author wrote `appearance="none"`
-        // already has that row, and it is the author's (LLP 1115.000 D2): an
-        // implied one after it would win and take the bit off.
-        let said = !native
-            && appearance
-                .is_some_and(|a| a.written && matches!(&a.value, Expr::Str(v, _) if v == "none"));
+        // A non-native field's authored `none`, in every branch, already
+        // supplies its appearance. An implied row after it would replace
+        // the author's bit (LLP 1115.000 D2).
+        let said = !native && appearance.is_some_and(|a| a.written && always_none(&a.value));
         if (!native && !said) || (native && explicit.is_none() && !rows.is_empty()) {
             let none = self.fixed(true, "none");
             bindings.push(crate::style_row(StyleId::Appearance, none, crate::IMPLIED));

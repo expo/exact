@@ -216,7 +216,7 @@ pub fn open(len: usize, compat: &str, plan: &[u8]) -> u32 {
     else {
         return emit(b"exact_update_open: the payload names no base and assets".to_vec());
     };
-    match Client::open(Path::new(&base), Path::new(&assets), compat, plan) {
+    match Client::open(Some(Path::new(&base)), Path::new(&assets), compat, plan) {
         Ok(client) => {
             refresh(&client);
             *lock(&CLIENT) = Some(client);
@@ -576,7 +576,7 @@ pub fn discard(token: u64) {
 
 /// What the store has to say, into a runner's delivery facts (LLP 1030
 /// D7): the stream, the running and embedded `seq`, whether an entry is
-/// staged, the sunset. The binary's own three (`with_compat`) are left as
+/// staged, the sunset. The binary's own facts (`with_compat`) are left as
 /// they were; with no store open nothing changes.
 pub fn status_into(delivery: &mut Delivery) {
     let snap = lock(&SNAPSHOT);
@@ -602,8 +602,14 @@ pub fn prepared_delivery(token: u64, compat: &str) -> Option<Delivery> {
         );
     }
     delivery.seq = pinned.selection.generation.seq;
-    // Both an initial running selection and a committed activation are unstaged.
-    delivery.staged = false;
+    // Activation consumes the pending entry. A launch can have another one waiting.
+    if lock(&GENERATIONS)
+        .candidate
+        .as_ref()
+        .is_some_and(|p| p.token == token)
+    {
+        delivery.staged = false;
+    }
     Some(delivery)
 }
 
@@ -705,12 +711,19 @@ mod tests {
     }
 
     fn head(seq: u64, plan: &[u8]) -> Vec<u8> {
-        format!(r#"{{"exact":1,"app":{{"id":"com.exact.host-cache"}},"plan":{{"url":"./app.plan","sha256":"{}","bytes":{}}},"assets":[],"stream":{{"channel":"prod","compatibilityId":"abc","seq":{seq}}}}}"#, exact_update::sha256_hex(plan), plan.len()).into_bytes()
+        format!(r#"{{"exact":1,"app":{{"id":"com.exact.host-cache"}},"plan":{{"url":"./app.plan","sha256":"{}","bytes":{}}},"stream":{{"channel":"prod","compatibilityId":"abc","seq":{seq}}}}}"#, exact_update::sha256_hex(plan), plan.len()).into_bytes()
     }
 
     #[test]
     fn a_stalled_check_allows_selection_session_boot_and_activation() {
         let _test = lock(&TEST_STORE);
+        let mut compat: serde_json::Value = serde_json::from_str(COMPAT).unwrap();
+        compat["embedded"] = serde_json::json!({
+            "seq": 0, "genesis": true, "entryDigest": null, "assets": [],
+            "plan": {"sha256": exact_update::sha256_hex(b"embedded plan"), "bytes": b"embedded plan".len()},
+            "version": "2.3.4", "buildNumber": "56"
+        });
+        let compat = compat.to_string();
         for block_head in [true, false] {
             let base = std::env::temp_dir().join(format!(
                 "exact-apple-stalled-{}-{block_head}",
@@ -719,7 +732,7 @@ mod tests {
             let _ = std::fs::remove_dir_all(&base);
             let plan = caltrain::build().unwrap().encode();
             let mut client =
-                Client::open_at(&base, &base, COMPAT, b"embedded plan", Some(ORIGIN)).unwrap();
+                Client::open_at(&base, &base, &compat, b"embedded plan", Some(ORIGIN)).unwrap();
             assert!(matches!(
                 client.check(&mut |url| Ok(if url.ends_with("exact.json") {
                     head(1, &plan)
@@ -750,9 +763,16 @@ mod tests {
                 .recv_timeout(std::time::Duration::from_secs(5))
                 .unwrap();
             let (responsive_tx, responsive_rx) = std::sync::mpsc::channel();
+            let thread_compat = compat.clone();
             let foreground = std::thread::spawn(move || {
                 assert!(prepare() > 0);
                 let token = lock(&GENERATIONS).candidate.as_ref().unwrap().token;
+                let prepared = prepared_delivery(token, &thread_compat).unwrap();
+                assert_eq!(
+                    (&*prepared.version, &*prepared.build_number),
+                    ("2.3.4", "56")
+                );
+                assert_eq!(prepared.seq, 1);
                 assert_eq!(commit(token), 0);
                 assert!(select() > 0);
                 let (_, bytes) = selected_plan().unwrap();
@@ -768,8 +788,12 @@ mod tests {
                 assert_eq!(super::plan(token) as usize, bytes.len());
                 boot_started();
                 boot_succeeded(token);
-                let mut delivery = Delivery::default();
+                let mut delivery = Delivery::default().with_compat(&thread_compat);
                 status_into(&mut delivery);
+                assert_eq!(
+                    (&*delivery.version, &*delivery.build_number),
+                    ("2.3.4", "56")
+                );
                 responsive_tx.send((delivery.seq, delivery.staged)).unwrap();
             });
             let response = responsive_rx.recv_timeout(std::time::Duration::from_secs(2));
@@ -784,9 +808,13 @@ mod tests {
             assert_eq!((download.seq, download.files), (2, 1));
             assert!(download.ms >= 0.0 && !download.entry.is_empty());
             assert_eq!(response.unwrap(), (1, false));
-            let mut delivery = Delivery::default();
+            let mut delivery = Delivery::default().with_compat(&compat);
             status_into(&mut delivery);
             assert_eq!(delivery.seq, 1);
+            assert_eq!(
+                (&*delivery.version, &*delivery.build_number),
+                ("2.3.4", "56")
+            );
             assert!(delivery.staged);
             *lock(&CLIENT) = None;
             let _ = std::fs::remove_dir_all(base);
@@ -802,6 +830,124 @@ mod tests {
             staged: false,
             sunset: None,
             entry: Some("stale-entry".into()),
+        }
+    }
+
+    #[test]
+    fn a_relaunch_preserves_pending_delivery_facts_until_activation() {
+        let _test = lock(&TEST_STORE);
+        let compat = COMPAT.replace("next-launch", "app-decides");
+        let plan = caltrain::build().unwrap().encode();
+        for selected in [false, true] {
+            let base = std::env::temp_dir().join(format!(
+                "exact-apple-pending-{}-{selected}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&base);
+            let mut client = Client::open_at(&base, &base, &compat, &plan, Some(ORIGIN)).unwrap();
+            let stage = |client: &mut Client, seq| {
+                assert!(matches!(
+                    client.check(&mut |url| Ok(if url.ends_with("exact.json") {
+                        head(seq, &plan)
+                    } else {
+                        plan.clone()
+                    })),
+                    exact_update::Outcome::Staged { .. }
+                ));
+            };
+            if selected {
+                stage(&mut client, 1);
+                let candidate = client.prepare_activation().unwrap().unwrap();
+                client.commit_activation(&candidate.generation).unwrap();
+            }
+            stage(&mut client, 2);
+            drop(client);
+            let client = Client::open_at(&base, &base, &compat, &plan, Some(ORIGIN)).unwrap();
+            refresh(&client);
+            *lock(&CLIENT) = Some(client);
+            {
+                let mut g = lock(&GENERATIONS);
+                g.initialized = false;
+                g.live = None;
+                g.candidate = None;
+            }
+            let mut facts = Delivery::default().with_compat(&compat);
+            status_into(&mut facts);
+            if let Some(live) = initial_selection() {
+                facts = prepared_delivery(live.token, &compat).unwrap();
+            }
+            assert_eq!(facts.seq, u64::from(selected));
+            assert!(
+                facts.staged,
+                "a pending update survives a relaunch beside entry zero or a selected entry"
+            );
+            let mut bridge = exact_apple::abi::Bridge::new();
+            bridge.set_delivery(Some(&crate::HOOKS));
+            bridge.input_write(&plan);
+            bridge.prepare_plan_with_delivery(
+                plan.len(),
+                caltrain_data::Caltrain,
+                exact_apple::abi::Hooks::none(),
+                390.0,
+                844.0,
+                Some(facts),
+            );
+            bridge.commit_plan();
+            let read = |bridge: &mut exact_apple::abi::Bridge<caltrain_data::Caltrain>, op| {
+                let request = format!("{{\"op\":\"{op}\"}}");
+                let len = bridge.input_write(request.as_bytes());
+                let count = bridge.agent(len);
+                String::from_utf8(bridge.output_bytes(count as usize).to_vec()).unwrap()
+            };
+            let ready = |bridge: &mut exact_apple::abi::Bridge<caltrain_data::Caltrain>, staged| {
+                let state: serde_json::Value =
+                    serde_json::from_str(&read(bridge, "state")).unwrap();
+                assert_eq!(state["delivery"]["staged"], staged);
+                assert_eq!(read(bridge, "tree").contains("An update is ready"), staged);
+            };
+            ready(&mut bridge, true);
+            let check = |seq| {
+                let (entered, _entered_rx) = std::sync::mpsc::channel();
+                let (release_tx, release) = std::sync::mpsc::channel();
+                release_tx.send(()).unwrap();
+                run_check_with(&StalledTransport {
+                    block_head: true,
+                    entered,
+                    release: Mutex::new(release),
+                    head: head(seq, &plan),
+                    plan: plan.clone(),
+                })
+                .0
+            };
+            assert_eq!(check(2), "current");
+            bridge.sync_delivery();
+            ready(&mut bridge, true);
+            prepare();
+            let token = lock(&GENERATIONS).candidate.as_ref().unwrap().token;
+            let facts = prepared_delivery(token, &compat).unwrap();
+            assert_eq!(facts.seq, 2);
+            assert!(
+                !facts.staged,
+                "the candidate consumes its pending update only on activation"
+            );
+            bridge.input_write(&plan);
+            bridge.prepare_plan_with_delivery(
+                plan.len(),
+                caltrain_data::Caltrain,
+                exact_apple::abi::Hooks::none(),
+                390.0,
+                844.0,
+                Some(facts),
+            );
+            assert_eq!(commit(token), 0);
+            bridge.commit_plan();
+            bridge.sync_delivery();
+            ready(&mut bridge, false);
+            assert!(check(3).starts_with("staged seq 3"));
+            bridge.sync_delivery();
+            ready(&mut bridge, true);
+            *lock(&CLIENT) = None;
+            let _ = std::fs::remove_dir_all(base);
         }
     }
 
@@ -838,12 +984,16 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
         let plan_bytes = b"verified plan";
         let asset_bytes = b"verified asset";
+        // The asset card is in the index the head names, beside it.
+        let index = format!("{{\"assets\":[{{\"name\":\"assets/a\",\"url\":\"./assets/a\",\"sha256\":\"{}\",\"bytes\":{}}}]}}", exact_update::sha256_hex(asset_bytes), asset_bytes.len());
         let header = String::from_utf8(head(1, plan_bytes)).unwrap().replace(
-            "\"assets\":[]", &format!("\"assets\":[{{\"name\":\"assets/a\",\"url\":\"./assets/a\",\"sha256\":\"{}\",\"bytes\":{}}}]", exact_update::sha256_hex(asset_bytes), asset_bytes.len()));
+            "\"stream\"", &format!("\"assets\":{{\"url\":\"./assets.json\",\"sha256\":\"{}\",\"bytes\":{},\"count\":1}},\"stream\"", exact_update::sha256_hex(index.as_bytes()), index.len()));
         let mut client = Client::open_at(&base, &base, COMPAT, b"embedded", Some(ORIGIN)).unwrap();
         assert!(matches!(
             client.check(&mut |url| Ok(if url.ends_with("exact.json") {
                 header.as_bytes().to_vec()
+            } else if url.ends_with("assets.json") {
+                index.as_bytes().to_vec()
             } else if url.ends_with("app.plan") {
                 plan_bytes.to_vec()
             } else {

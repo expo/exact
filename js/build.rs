@@ -16,6 +16,7 @@ use std::process::Command;
 
 fn main() {
     println!("cargo:rustc-check-cfg=cfg(exact_js_engine)");
+    println!("cargo:rustc-check-cfg=cfg(exact_js_intl)");
     for name in ["BUN", "EXACT_JS_ENGINE", "EXACT_ROLLDOWN"] {
         println!("cargo:rerun-if-env-changed={name}");
     }
@@ -28,6 +29,14 @@ fn main() {
         "src/standard.js",
         "src/streams.js",
         "src/binary.js",
+        "src/time.js",
+        "src/crypto.js",
+        "src/module-work.js",
+        "src/fetch.js",
+        "src/auth.js",
+        "src/store.js",
+        "src/storage.js",
+        "src/reply.js",
         "src/prelude.js",
         "src/process.js",
         "src/intl.js",
@@ -84,6 +93,13 @@ fn main() {
     } else if target_os != "linux" {
         shim.flag("-stdlib=libc++");
     }
+    if matches!(target_os.as_str(), "linux" | "windows")
+        || (target_os == "android"
+            && env::var("DEP_HERMES_LEAN_ANDROID_INTL").as_deref() == Ok("1"))
+    {
+        shim.define("EXACT_JS_INTL", None);
+        println!("cargo:rustc-cfg=exact_js_intl");
+    }
     shim.compile("exact_js_shim");
     println!("cargo:rustc-cfg=exact_js_engine");
 
@@ -113,12 +129,22 @@ fn main() {
 
     // Ibex installs PURE | CRYPTO | ABORT before Exact's trusted policy
     // and data-seam layers; application bytecode follows after
-    // Adapter::capture_intrinsics() and Adapter::harden().
+    // Adapter::capture_intrinsics() and Adapter::harden(). The web's module
+    // realm evaluates binary.js and then the prelude's scripts, time.js
+    // through prelude.js, in this order (host/web-js/glue.mjs `MODULE_PRELUDE`).
     let prelude = [
         "src/pure.js",
         "src/standard.js",
         "src/streams.js",
         "src/binary.js",
+        "src/time.js",
+        "src/crypto.js",
+        "src/module-work.js",
+        "src/fetch.js",
+        "src/auth.js",
+        "src/store.js",
+        "src/storage.js",
+        "src/reply.js",
         "src/prelude.js",
         "src/process.js",
         "src/intl.js",
@@ -216,7 +242,7 @@ fn main() {
         "timers",
         "outlive",
         "kept-json",
-        "nul",
+        "nul-byte",
     ] {
         let source = manifest.join(format!("tests/fixtures/{name}.ts"));
         println!("cargo:rerun-if-changed={}", source.display());

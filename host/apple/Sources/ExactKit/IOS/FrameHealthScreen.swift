@@ -31,8 +31,10 @@ final class FrameHealthScreen {
     var willDraw: (() -> Void)?
     /// The app session's workload flags (`FrameHealth.workload`), which each frame records as its update is scheduled
     var workload: (() -> UInt64)?
-    /// A diagnostic recorder consumes numeric boundaries without a card or a frame-rate request
-    var completedUpdate: ((_ scheduled: Double, _ start: Double, _ deadline: Double, _ beforeCommit: Double, _ finished: Double, _ waited: Double) -> Void)?
+    /// A diagnostic recorder consumes numeric boundaries without a card or a frame-rate request; `card` is the seconds of
+    /// the card's own work within the update
+    var completedUpdate: ((_ scheduled: Double, _ start: Double, _ deadline: Double, _ beforeCommit: Double, _ finished: Double,
+                           _ waited: Double, _ card: Double) -> Void)?
     /// Seconds: one refresh at the display's highest rate
     private(set) var refresh = 1.0 / 60
     private(set) var running = false
@@ -171,6 +173,7 @@ final class FrameHealthScreen {
         // Its work is the main thread's time in it, less its waits, taken to begin that much after the update was
         // scheduled and to end at the commit
         let start = min(finished, update.start + update.waited)
+        health.expireCapture(at: start)
         // Its work split, for a late frame the capture keeps
         if health.captureID != 0, finished > update.deadline {
             health.split(at: start, waited: update.waited, exact: end.phases - update.phases, card: end.card,
@@ -178,9 +181,10 @@ final class FrameHealthScreen {
         }
         health.record(arrival: start, target: update.deadline, period: 0, finished: finished,
             flags: health.captureID == 0 ? 0 : health.environmentFlags | update.flags)
-        completedUpdate?(update.start, start, update.deadline, update.beforeCommit, finished, update.waited)
+        completedUpdate?(update.start, start, update.deadline, update.beforeCommit, finished, update.waited, end.card)
         chart?.screenFrame(at: presented, work: finished - start, budget: update.deadline - start)
         newest = max(newest, presented)
+        health.maintain(at: now)
     }
 
     /// What asked for an update as it was scheduled: the app session's `workload`, and, from bit 40, each of Exact's

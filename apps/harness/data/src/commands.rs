@@ -1,6 +1,7 @@
-//! The sends: `submit` (a prompt or a slash command), `approve`,
-//! `interrupt`, `setModel`, `setKey`, `retire`. Each returns whether it was taken; the work a
-//! prompt starts runs on the agent's thread.
+//! The sends: `submit` (a prompt or a slash command), `submitPrompt` (a
+//! prompt, never a command), `approve`, `interrupt`, `setModel`, `setKey`,
+//! `retire`. Each returns whether it was taken; the work a prompt starts
+//! runs on the agent's thread.
 
 use crate::agent;
 use crate::art;
@@ -18,19 +19,7 @@ pub fn submit(shared: &Arc<Shared>, text: &str) -> bool {
         return false;
     }
     let Some(command) = text.trim_start().strip_prefix('/') else {
-        // A prompt waits its turn (P16): queued, shown, started when the
-        // running turn ends however it ends.
-        let queued = {
-            let mut s = shared.lock();
-            s.queue.push_back(text.to_string());
-            s.busy()
-        };
-        if queued {
-            shared.changed();
-        } else {
-            agent::pump(shared);
-        }
-        return true;
+        return prompt(shared, text);
     };
     let (name, rest) = command
         .split_once(char::is_whitespace)
@@ -47,6 +36,30 @@ pub fn submit(shared: &Arc<Shared>, text: &str) -> bool {
     let ok = run(shared, name, rest);
     shared.changed();
     ok
+}
+
+/// `submitPrompt(text)`: `text` asked of the model as written, a leading
+/// `/` included (LLP 1101.003 D4): a command line's `--prompt "/model gpt"`
+/// is a question, never a slash command.
+pub fn submit_prompt(shared: &Arc<Shared>, text: &str) -> bool {
+    let text = text.trim_end();
+    !text.trim().is_empty() && prompt(shared, text)
+}
+
+/// A prompt waits its turn (P16): queued, shown, started when the running
+/// turn ends however it ends.
+fn prompt(shared: &Arc<Shared>, text: &str) -> bool {
+    let queued = {
+        let mut s = shared.lock();
+        s.queue.push_back(text.to_string());
+        s.busy()
+    };
+    if queued {
+        shared.changed();
+    } else {
+        agent::pump(shared);
+    }
+    true
 }
 
 fn notice_md(shared: &Shared, md: &str) {

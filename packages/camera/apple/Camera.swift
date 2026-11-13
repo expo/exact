@@ -21,6 +21,13 @@
 //   the package's test card, read from this checkout (a drive runs on this
 //   Mac or its simulators), or the app asset `prefer extension
 //   camera.picture={"path":…}` names.
+// - `takePhotoWithCameraApp` on iOS is the system camera UI
+//   (`UIImagePickerController` with `.camera`), with its shutter, flash and
+//   review; the kept photo is written as JPEG with the camera's metadata. It
+//   needs the camera's usage key (the `device.camera` line) and asks the
+//   camera's permission as the picker would. The simulator has no camera:
+//   `NotFoundError`. Under the agent the runner holds the person's sheet,
+//   and `take` writes the agent's picture. macOS has no such UI.
 // - Tier 3 (D5): the photo output when it is added (`photoOutputHatch`, on
 //   the session's queue), each capture's settings before it is taken
 //   (`photoSettingsHatch`, main, may return a replacement), each photo
@@ -87,6 +94,7 @@ public final class CameraModule: ExactPackage {
     public func later(_ name: String, _ args: [String: Any], preferred: Any?, reply: @escaping ([String: Any]) -> Void) {
         switch name {
         case "takePhoto": takePhoto(args, reply)
+        case "takePhotoWithCameraApp": cameraApp(args, tap: (preferred as? [String: Any])?["tap"] as? String, reply)
         case "getPhotoCapabilities": reply(capabilities(args))
         case "picture": reply(["path": picture ?? ""])
         default: reply(["error": "NotSupportedError"])
@@ -108,6 +116,7 @@ public final class CameraModule: ExactPackage {
     public func destroy(_ done: @escaping () -> Void) {
         for v in views.values { v.sub?.leave() }
         views = [:]
+        if cameraAppUp { endCameraApp("the session ended") }
         done()
     }
 
@@ -207,19 +216,8 @@ public final class CameraModule: ExactPackage {
             return reply(["error": "InvalidStateError"])
         }
         let origin = context.origin
-        let took = { [self] (path: String, data: Data) in
-            say("took \(path) (\(data.count) bytes\(context.agent ? ", the agent's picture" : ""), sha256 \(Self.sha256(data)))")
-            // Under the agent, each photo for `state.extensions` (§9, Disclosure).
-            photos.append(["path": path, "sha256": Self.sha256(data), "track": id, "origin": origin])
-            context.state(["photos": photos])
-        }
-        let written = { [self] (ext: String) -> (String, URL)? in
-            let path: String
-            if let p = args["path"] as? String, !p.isEmpty { path = p.hasSuffix(".\(ext)") ? p : "\(p).\(ext)" } else { taken += 1; path = "app:/tmp/camera/\(taken).\(ext)" }
-            guard let url = context.file(path) else { return nil }
-            try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            return (path, url)
-        }
+        let took = { [self] (path: String, data: Data) in took(path, data, track: id, origin: origin) }
+        let written = { [self] (ext: String) in place(args, ext) }
         if context.agent {
             guard let data = agentPictureData(), let (path, url) = written("jpg") else { return reply(["error": "UnknownError"]) }
             do { try data.write(to: url) } catch { return reply(["error": "UnknownError"]) }
@@ -251,6 +249,153 @@ public final class CameraModule: ExactPackage {
             }
         }
     }
+
+    /// A photo written: journaled, and under the agent listed for `state.extensions` (§9, Disclosure); one from the
+    /// camera app names no track.
+    private func took(_ path: String, _ data: Data, track: String?, origin: String) {
+        say("took \(path) (\(data.count) bytes\(context.agent ? ", the agent's picture" : ""), sha256 \(Self.sha256(data)))")
+        photos.append(["path": path, "sha256": Self.sha256(data), "track": track ?? NSNull(), "origin": origin])
+        context.state(["photos": photos])
+    }
+
+    /// Where a photo of format `ext` goes: the call's `path` with the extension, else `app:/tmp/camera/<n>.<ext>`.
+    private func place(_ args: [String: Any], _ ext: String) -> (String, URL)? {
+        let path: String
+        if let p = args["path"] as? String, !p.isEmpty { path = p.hasSuffix(".\(ext)") ? p : "\(p).\(ext)" } else { taken += 1; path = "app:/tmp/camera/\(taken).\(ext)" }
+        guard let url = context.file(path) else { return nil }
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        return (path, url)
+    }
+
+    // MARK: the camera app (`takePhotoWithCameraApp`)
+
+    /// Whether the system's camera UI is up, or asked for, for a call: one at a time.
+    private var cameraAppUp = false
+    /// The runner's number for that call, which a `cancel` names.
+    private var cameraAppRequest: Int?
+    /// Moved when the call ends unanswered (let go, or the session's end): an answer to the camera's permission asked
+    /// before then shows nothing.
+    private var cameraAppTurn = 0
+    #if os(iOS)
+    private var cameraAppDelegate: CameraAppDelegate?
+    private weak var cameraAppPicker: UIImagePickerController?
+    /// What the camera app reads of the platform; a test stands in for a camera and its permission.
+    static var cameraAppPlatform = CameraAppPlatform()
+    #endif
+
+    /// The send let go (LLP 1133.016 D15 item 2): its camera UI goes, and nothing answers.
+    public func cancel(_ request: Int) {
+        guard cameraAppUp, request == cameraAppRequest else { return }
+        endCameraApp("let go")
+    }
+
+    /// The camera app's call ends unanswered: the picker is dismissed and a pending permission's answer ignored.
+    private func endCameraApp(_ why: String) {
+        cameraAppTurn += 1
+        cameraAppUp = false
+        cameraAppRequest = nil
+        #if os(iOS)
+        cameraAppDelegate = nil
+        cameraAppPicker?.presentingViewController?.dismiss(animated: true)
+        cameraAppPicker = nil
+        #endif
+        say("camera app: \(why)")
+    }
+
+    /// The photo the person takes and keeps in the system's camera UI (`UIImagePickerController` with `.camera`), as
+    /// `takePhoto` answers one; `tap` is the agent's on the runner's sheet.
+    private func cameraApp(_ args: [String: Any], tap: String?, _ reply: @escaping ([String: Any]) -> Void) {
+        guard !cameraAppUp else { return reply(["error": "InvalidStateError", "message": "the camera is showing"]) }
+        let origin = context.origin
+        if context.agent {
+            guard tap == "take" else {
+                say("camera app: cancelled (the agent's sheet)")
+                return reply(["error": "AbortError"])
+            }
+            guard let data = agentPictureData(), let (path, url) = place(args, "jpg") else { return reply(["error": "UnknownError"]) }
+            do { try data.write(to: url) } catch { return reply(["error": "UnknownError"]) }
+            took(path, data, track: nil, origin: origin)
+            return reply(Self.photo(path: path, data: data))
+        }
+        #if os(iOS)
+        let platform = Self.cameraAppPlatform
+        // The simulator has none (Apple: "test your camera app on actual devices").
+        guard platform.available() else {
+            say("camera app: this device has no camera")
+            return reply(["error": "NotFoundError"])
+        }
+        // Without the key iOS ends the app at the camera's first use; the `device.camera` line writes it.
+        guard platform.described() else {
+            say("camera app: the app has no NSCameraUsageDescription")
+            return reply(["error": "NotAllowedError", "message": "iOS shows the camera's purpose: grant `device.camera <purpose>`"])
+        }
+        cameraAppRequest = context.request
+        switch platform.status() {
+        case .authorized: showCameraApp(args, origin: origin, reply)
+        case .notDetermined:
+            cameraAppUp = true
+            let turn = cameraAppTurn
+            platform.ask { [weak self] granted in
+                DispatchQueue.main.async {
+                    guard let self, turn == self.cameraAppTurn else { return }
+                    self.cameraAppUp = false
+                    if granted { self.showCameraApp(args, origin: origin, reply) } else { reply(["error": "NotAllowedError"]) }
+                }
+            }
+        default:
+            say("camera app: the camera is not allowed")
+            reply(["error": "NotAllowedError"])
+        }
+        #else
+        reply(["error": "NotSupportedError"])
+        #endif
+    }
+
+    #if os(iOS)
+    private func showCameraApp(_ args: [String: Any], origin: String, _ reply: @escaping ([String: Any]) -> Void) {
+        // The session's own window, key or not (LLP 1133.027 D17 item 3), and what it presents now.
+        var top = context.presentation?.rootViewController
+        while let presented = top?.presentedViewController { top = presented }
+        guard let top else { return reply(["error": "InvalidStateError", "message": "no window to show the camera in"]) }
+        let picker = UIImagePickerController()
+        picker.sourceType = .camera
+        picker.mediaTypes = ["public.image"]
+        switch args["facingMode"] as? String {
+        case "user" where UIImagePickerController.isCameraDeviceAvailable(.front): picker.cameraDevice = .front
+        case "environment" where UIImagePickerController.isCameraDeviceAvailable(.rear): picker.cameraDevice = .rear
+        default: break
+        }
+        let delegate = CameraAppDelegate { [weak self] result in
+            guard let self else { return }
+            cameraAppDelegate = nil
+            cameraAppPicker = nil
+            cameraAppUp = false
+            cameraAppRequest = nil
+            switch result {
+            case .failure(let failure):
+                say("camera app: \(failure.code == "AbortError" ? "cancelled" : failure.code)")
+                reply(["error": failure.code])
+            case .success(let data):
+                guard let (path, url) = place(args, "jpg") else { return reply(["error": "UnknownError"]) }
+                DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                    let ok = (try? data.write(to: url)) != nil
+                    DispatchQueue.main.async {
+                        guard let self else { return }
+                        guard ok else { return reply(["error": "UnknownError"]) }
+                        self.took(path, data, track: nil, origin: origin)
+                        reply(Self.photo(path: path, data: data))
+                    }
+                }
+            }
+        }
+        picker.delegate = delegate
+        cameraAppDelegate = delegate
+        cameraAppPicker = picker
+        cameraAppUp = true
+        say("camera app shown")
+        top.present(picker, animated: true)
+    }
+    #endif
 
     /// `Photo`: its size as it is shown, its orientation applied.
     static func photo(path: String, data: Data) -> [String: Any] {
@@ -398,6 +543,73 @@ final class PhotoOutput: NSObject {
         }
     }
 }
+
+#if os(iOS)
+/// What the camera app reads of the platform: a camera, the usage key, the camera's permission, and asking for it.
+struct CameraAppPlatform {
+    var available: () -> Bool = { UIImagePickerController.isSourceTypeAvailable(.camera) }
+    var described: () -> Bool = { Bundle.main.object(forInfoDictionaryKey: "NSCameraUsageDescription") != nil }
+    var status: () -> AVAuthorizationStatus = { AVCaptureDevice.authorizationStatus(for: .video) }
+    var ask: (@escaping (Bool) -> Void) -> Void = { AVCaptureDevice.requestAccess(for: .video, completionHandler: $0) }
+}
+
+/// The system camera UI's delegate: the kept photo as JPEG with the camera's metadata, or the person's cancel, once.
+final class CameraAppDelegate: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+    private var done: ((Result<Data, PhotoFailure>) -> Void)?
+    init(_ done: @escaping (Result<Data, PhotoFailure>) -> Void) { self.done = done }
+
+    func finish(_ result: Result<Data, PhotoFailure>) {
+        let d = done
+        done = nil
+        d?(result)
+    }
+
+    func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
+        picker.dismiss(animated: true)
+        finish(Self.kept(info))
+    }
+
+    func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+        picker.dismiss(animated: true)
+        finish(.failure(PhotoFailure("AbortError")))
+    }
+
+    /// The photo the picker's `info` holds, as JPEG.
+    static func kept(_ info: [UIImagePickerController.InfoKey: Any]) -> Result<Data, PhotoFailure> {
+        guard let image = info[.originalImage] as? UIImage, let data = jpeg(image, metadata: info[.mediaMetadata] as? [String: Any]) else {
+            return .failure(PhotoFailure("UnknownError"))
+        }
+        return .success(data)
+    }
+
+    /// `image` as JPEG with the camera's metadata: the sensor's pixels, turned by the EXIF orientation the image has,
+    /// as the camera writes them.
+    static func jpeg(_ image: UIImage, metadata: [String: Any]?) -> Data? {
+        guard let cg = image.cgImage else { return image.jpegData(compressionQuality: 0.9) }
+        let out = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(out, "public.jpeg" as CFString, 1, nil) else { return nil }
+        var properties = metadata ?? [:]
+        properties[kCGImagePropertyOrientation as String] = orientation(image.imageOrientation)
+        CGImageDestinationAddImage(destination, cg, properties as CFDictionary)
+        return CGImageDestinationFinalize(destination) ? out as Data : nil
+    }
+
+    /// `UIImage.Orientation` as EXIF's (`CGImagePropertyOrientation`).
+    static func orientation(_ o: UIImage.Orientation) -> Int {
+        switch o {
+        case .up: return 1
+        case .upMirrored: return 2
+        case .down: return 3
+        case .downMirrored: return 4
+        case .leftMirrored: return 5
+        case .right: return 6
+        case .rightMirrored: return 7
+        case .left: return 8
+        @unknown default: return 1
+        }
+    }
+}
+#endif
 
 struct PhotoFailure: Error {
     let code: String

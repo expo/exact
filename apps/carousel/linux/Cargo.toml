@@ -21,6 +21,7 @@ ibex2-sqlite = { path = "../../../vendor/ibex/crates/ibex2-sqlite" }
 exact-logic = { path = "../../../logic" }
 carousel-data = { path = "../data" }
 exact-linux = { path = "../../../host/linux" }
+exact-painted = { path = "../../../host/painted" }
 
 
 [build-dependencies]

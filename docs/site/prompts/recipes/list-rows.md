@@ -1,5 +1,5 @@
 ```prompt Add search, swipe and a menu to a list
-Give a list in the Exact app in this folder a search field, swipe to delete, a filter and a long-press menu. Use https://github.com/expo/exact/blob/main/docs/recipes/list-rows.md as the source for each step. The exact2 checkout has the same page at docs/recipes/list-rows.md.
+Give a list in the Exact app in this folder a search field, swipe to delete, a filter and a long-press menu. Use https://github.com/expo/exact/blob/main/docs/recipes/list-rows.md as the source for each step. The Exact checkout has the same page at docs/recipes/list-rows.md.
 
 1. If this folder is not an Exact app (it has no exact.mjs and app.contract), stop and tell me.
 2. If I did not say which list, and which of search, swipe to delete, a filter and a long-press menu it gets, propose them from the app and ask me before you write code.

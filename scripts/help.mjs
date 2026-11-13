@@ -19,6 +19,9 @@ import { writeSync } from 'node:fs';
 const specs = (row) => row.split(' · ');
 const name = (spec) => spec.split(' ')[0];
 const takesValue = (spec) => spec.includes(' ');
+/** Whether the argument after a flag that takes a value is none: absent, or another flag (`--archive --unsigned`).
+ * A negative number is a value. */
+export const missingValue = (arg) => arg === undefined || /^-[^\d.]/.test(arg);
 
 // The drive flags `scripts/agent-launch.mjs` `parseFlags` takes, shared by `agent` and `test`
 // (`runTests` reads all but those `test` lists as internal). A default said as exact.mjs's is the app
@@ -26,7 +29,7 @@ const takesValue = (spec) => spec.includes(' ');
 // which the repository's smokes and pixel fixtures are written against.
 const DRIVE = [
   ['--port <n>', 'web: the page’s port (or EXACT_PORT); backend origins remain those app.ts grants'],
-  ['--backend <url>', 'web: select the backend origin for this build'],
+  ['--backend <url>', "select the backend for this build: app.ts needs one top-level const origin, a literal or import.meta.env.NAME ?? '<literal>', used in net.fetch ${origin}"],
   ['--storage <name>', 'a scratch store, kept on native hosts; Chrome\'s starts empty'],
   ['--keep-storage · --reset-storage', 'reopen a named store (Chrome, or a compare) · empty a named store first, on any host'],
   ['--size <w>x<h>', 'the viewport (default 420x900; a simulator\'s own)'],
@@ -43,10 +46,10 @@ const DRIVE = [
   ['--device · --phone <udid|name> · --reader · --headless', 'a connected iPhone (built with ios --device), and which · Android: the APK (an `exact new` app\'s default) · the Linux host under adb shell'],
   ['--plan <file>', 'a compiled plan (contract build -o) in place of the app\'s'],
   ['--world <file> · --open <file>', 'a game: a saved world to load · macOS: a document on its command line'],
-  ['--family <name> · --mode fullColor|accented|vibrant · --scheme light|dark · --props <json> · --placement <name> · --state <json>', 'gallery: widget variant/props or activity placement/state; --size large|xxxl is widget text size'],
+  ['--family <name> · --mode fullColor|accented|vibrant · --scheme light|dark · --props <json> · --configuration <json> · --placement <name> · --state <json>', 'gallery: widget variant/props/configuration choices or activity placement/state; --size large|xxxl is widget text size'],
   ['--json', 'one compact JSON object per op reply, one per line (default: short text)'],
 ];
-const TEST_IGNORES = ['--bind <extension>', '--timing <v>', '--world <file>', '--open <file>', '--json', '--family <name>', '--mode <name>', '--scheme <name>', '--props <json>', '--placement <name>', '--state <json>'];
+const TEST_IGNORES = ['--bind <extension>', '--timing <v>', '--world <file>', '--open <file>', '--json', '--family <name>', '--mode <name>', '--scheme <name>', '--props <json>', '--configuration <json>', '--placement <name>', '--state <json>'];
 // The drive flags a first build reaches for; `--help all` shows the rest.
 const DRIVE_FIRST = ['--storage', '--size', '--chrome', '--epoch', '--sim', '--json'];
 const naming = (names, keep) => ([row]) => specs(row).some((spec) => names.includes(name(spec))) === keep;
@@ -54,7 +57,7 @@ const DRIVE_INTERNAL = ['--app <name>', '--session <label>', '--pid <pid>', '--o
 const NATIVE_PORTS = 'iOS simulator: a Unix socket; --device: a free TCP port; macOS, Linux, Android: stdio.';
 
 // host/apple/build.mjs's flags, which `ios` and `mac` both run: each documents its own, and takes the rest.
-const APPLE = ['--painted-benchmark', '--watchos', '--watch-sim <udid>', '--ios', '--tvos', '--device', '--run', '--no-install', '--prebuild', '--release', '--host', '--embed', '--bundle', '--distribution', '--unsigned', '--test', '--only <Class,…>',
+const APPLE = ['--painted-benchmark', '--watchos', '--watch-sim <udid>', '--ios', '--tvos', '--device', '--run', '--no-install', '--prebuild', '--release', '--host', '--embed', '--bundle', '--distribution', '--unsigned', '--development', '--extensions <kinds>', '--test', '--only <Class,…>',
   '--archive <out.ipa>', '--sim <udid|name>', '--phone <udid|name>', '--url <url>', '--optimize <speed|size>', '--link <plan>', '--widget-gallery'];
 const appleRest = (documented) => APPLE.filter((spec) => !documented.some(([row]) => specs(row).some((d) => name(d) === name(spec))));
 const OPTIMIZE = ['--optimize speed|size', 'production Rust and ExactKit; default size on iOS/tvOS and embeds, speed on Mac; a game keeps speed and refuses size; app.json host.ios|macos.optimize overrides the default'];
@@ -69,6 +72,7 @@ export const HELP = {
     usage: 'bun exact.mjs backend [dev|serve <release>] [flags]',
     flags: [],
     body: 'Runs the backend package installed above the app, on app.ts’s loopback origin. Use snapback --port <n> to move it.',
+    example: 'bun exact.mjs backend',
   },
   snapback: {
     line: 'wire Snapback',
@@ -78,8 +82,9 @@ export const HELP = {
       ['--artifact-only', 'with --rebuild: repair the device without changing wiring'],
       ['--rebuild', 'rebuild a missing or stale device after updating Snapback4']],
     body: 'Mounts the driver and generated operations, builds assets/snapback4.wasm, and names the server to start.',
+    example: 'bun exact.mjs snapback --port 4410',
   },
-  status: {line:'web/prove status', usage:'bun exact.mjs status', flags:[], body:'Lists web/prove invocations with their phase, elapsed time, previous duration and exit status.', example:'bun exact.mjs status'},
+  status: {line:'the game\'s web and prove runs: phase and elapsed time', usage:'bun exact.mjs status', flags:[], body:'Lists the game\'s web and prove invocations with their phase, elapsed time, previous duration and exit status.', example:'bun exact.mjs status'},
   web: {
     line: 'the web dev loop: serves the app, reloading the page on every save (foreground)',
     usage: 'bun exact.mjs web [--port <n>] [--lan] [--allow-host <name>]… [--wasm]',
@@ -116,7 +121,7 @@ export const HELP = {
       ['--render rust|js|none', 'pre-rendered pages: rust (the app\'s <app>-render entry; the default where it has one), js (Bun; the default otherwise), none'],
       jsonBuilt(),
     ],
-    internal: ['--js', '--wasm', '--bake'],
+    internal: ['--js', '--wasm', '--bake', '--check'],
     body: `Builds the JS target (a game: wasm) into the app's target/web-dist; about a second when
 nothing changed. A capability the JS runtime lacks fails the build, named. Beside the pages
 are shell.html and routes.json, the route table a static host serves them by (serve).
@@ -197,6 +202,7 @@ Ports    web: --port/EXACT_PORT, else a named store’s port (20000-47999), else
     usage: 'bun exact.mjs verify [web|ios|windows|android] [--sim <udid|name>] [--shots <dir>] [--rescroll] [--strict] [--json]',
     common: ['verify [ios] [--shots <dir>] [--sim <name>]    done when it says "verify: clean"'],
     flags: [
+      DRIVE.find(([flag]) => flag === '--backend <url>'),
       ['--sim <udid|name>', 'iOS: which simulator (else EXACT_SIM, a booted iPhone, or the newest Pro)'],
       ['--shots <dir>', 'also copy every screenshot it captured there, named as in .exact/verify/ (a test\'s own `screenshot` steps too)'],
       ['--rescroll · --strict', 'ios: measure scrolling again though nothing it depends on changed · exit 1 on any counted problem (for CI)'],
@@ -207,19 +213,18 @@ Ports    web: --port/EXACT_PORT, else a named store’s port (20000-47999), else
 app.contract or app.ts runs its new plan, no native rebuild), each on a fresh scratch store, and runs check
 light and dark on the screen it opens to. The tests are app.test.contract's, then each other *.test.contract's
 beside it, as test runs them. Each test's last screen is checked the same way in the test's own session (web: at
-both widths; ios runs the tests with UIKit's bars). Then the app relaunches once, on real time, on the store a
-passing test left, and says whether its first screen shows what that test stored. One short report: the build if
-it built, the compiler's warnings (as contract build says them, built or not), the tests, check's findings (each
+both widths; ios runs them with UIKit's bars). A real-time relaunch checks what a passing test stored.
+One report: the build if it built, compiler warnings (as contract build prints them), the tests, check's findings (each
 once, naming the screens it was on), the relaunch, then "verify: clean" or "verify: N problems". A clean verify
 is done. One screenshot of each screen goes to .exact/verify/ (the first screen's per width and scheme, each
 test's named by the test, the relaunch's): look at them when the features work.
 Large    each of those screens again at the largest text size (ios: the simulator's, put back
          after; web: a 53 px root, iOS's body there, at 390x844, and the tests run again there
-         to read up to 12 screens they pass through): what spills (past the edge, squeezed,
-         overlapping) in the app's own layout, each with a remedy that gives the text room; a
-         smaller or fixed font is the tell, and so is a line-clamp in a list's row or hyphens="auto"
-         on a text of several words (a UILabel hyphenates only a word longer than its line; a
-         grouped list's rows hyphenate as cells do). Counted ("3 at the largest text size"), never failing.
+         to read up to 12 screens they pass through). Reports spills past an edge, squeezing and
+         overlap, with remedies that give text room. The web comparison leaves out content iOS
+         projects into its navigation bar and its tab bar. A smaller or fixed font is the tell, as is a line-clamp
+         in a list's row or hyphens="auto" on several words (a UILabel hyphenates only a word longer
+         than its line; grouped list rows hyphenate as cells do). Counted ("3 at the largest text size"), never failing.
 Native   windows: headless at app.json's window size, then the desktop's window (windows-window.png); android: the APK, light and dark. Neither checks, reads the largest text or scrolls yet.
 Scroll   ios: ~15 s of real touches on a long first-screen list, once per build (host/apple/feel): "like UIKit", or
          a counted finding per metric the app can fix; Exact's own one uncounted line; load > cores: physics only.
@@ -235,12 +240,12 @@ Ports    none to choose: test's and agent's (headless Chrome over a pipe; a simu
     example: 'bun exact.mjs verify            # bun exact.mjs verify ios once at the end, for an iPhone app',
   },
   ios: {
-    line: 'build for an iOS simulator and install it (--run launches it)',
+    line: 'build for an iOS simulator; macOS installs it (--run launches)',
     usage: 'bun exact.mjs ios [--run|--prebuild|--no-install] [--json] [--release] [--sim <udid|name>] [--device [--phone <udid|name>]] [--url <url>] [--optimize speed|size]',
     common: ['ios [--run] [--sim <name>]    build for a simulator; --run launches it'],
     flags: [
       ['--run', 'also launch it (in Simulator.app, or on the phone); returns once launched'],
-      ['--no-install', 'build and sign the simulator .app, and install it on no simulator'],
+      ['--no-install', 'build and sign the simulator .app, and install it on no simulator; the default on Linux/WSL'],
       jsonBuilt(', signing (an identity\'s SHA-1, or ad-hoc), installed ({name, udid}, unless --no-install, --unsigned or --archive)', '; not with --run, --prebuild or --test'),
       PREBUILD,
       RELEASE,
@@ -249,12 +254,15 @@ Ports    none to choose: test's and agent's (headless Chrome over a pipe; a simu
       ['--phone <udid|name>', 'which phone, with --device'],
       ['--archive <out.ipa>', 'with --device: an .ipa to distribute (EXACT_IDENTITY, EXACT_PROFILE), no phone; production trust, so with an update store EXACT_UPDATE_RECEIPT or EXACT_UPDATE_GENESIS=1'],
       ['--unsigned', 'with --device: ad-hoc signed .app, no phone, profile, identity or install; no --run; --archive writes an .ipa for re-signing'],
+      ['--development', 'with --archive --unsigned: the development build --run installs, as an .ipa (development trust, host-dev; no update store receipt)'],
+      ['--extensions <kinds>', 'which app extensions to package: all (the default), none, or a list of widgets,activities,intents,alarms; the bake still compiles every entry, and app code that reaches a missing one is refused, not crashed'],
       ['--tvos', 'an Apple TV simulator instead (with --device, an Apple TV)'],
       ['--url <url>', 'connect the client to that dev server (web\'s URL) for live reload'],
       OPTIMIZE,
     ],
     get internal() { return appleRest(this.flags); },
-    body: `The first build takes minutes, later ones a minute or two. Of several booted simulators it
+    body: `Linux/WSL builds an ARM64 simulator bundle without installing it. Use macOS to run the
+simulator. The first build takes minutes, later ones a minute or two. Of several booted simulators it
 takes the one the app is installed on, else refuses to guess (--sim or EXACT_SIM). test ios
 and agent ios run it first themselves when the build is missing or older than its sources;
 an edit to only app.contract or what app.ts imports runs its new plan on the existing build
@@ -312,20 +320,28 @@ Ports    none. Runs to completion.`,
   },
   android: {
     line: 'build the APK and install it (test, agent and verify android drive it)',
-    usage: 'bun exact.mjs android [--run] [--headless] [--json]',
+    usage: 'bun exact.mjs android [--run | --no-install | --bundle] [--release] [--headless] [--json]',
     flags: [
       ['--run', 'launch it once installed'],
+      ['--no-install', 'build without querying or installing on a device'],
+      ['--release', 'optimize the APK for speed; set EXACT_UPDATE_TRUST=production for distribution'],
+      ['--bundle', 'build a production .aab with an upload key; implies --release and no install'],
       ['--headless', 'build the Linux host for Android instead (agent android --headless runs it under adb shell)'],
+      ['--write-locks', 'regenerate gradle.lockfile and gradle-verification.xml after graph changes; review and commit both'],
       jsonBuilt(', installed (the device\'s serial, or null with none ready)', '; printed after the install; not with --run'),
     ],
-    // `--apk --install` are the verb's own; --release builds the release profile, for measuring; --write-locks writes
-    // the Gradle lock and verification files of an app whose modules name Maven libraries.
-    internal: ['--apk', '--install', '--release', '--write-locks'],
+    // `--apk --install` are the verb's own.
+    internal: ['--apk', '--install'],
     body: `Builds android/ for aarch64-linux-android, packages it with exact2's Canvas reader
 (host/android) into an APK under target/android/, prints its path and installs it on the
 device: ANDROID_SERIAL, else the one adb lists (with several and none named, it refuses).
 With no device it builds and says so. test android and agent android drive the installed
 APK and refuse one older than its sources, naming this command.
+CI       EXACT_BUILD_NUMBER (1 by default) is versionCode; EXACT_VERSION (0.1.0) is versionName.
+         EXACT_KEYSTORE, EXACT_KEYSTORE_PASSWORD, EXACT_KEY_ALIAS and EXACT_KEY_PASSWORD sign
+         with an upload key. All four are required together, and --bundle requires them.
+         An APK without them uses the debug key. --bundle writes
+         target/android/app/outputs/bundle/release/app-release.aab; --json reports its path.
 Needs    the SDK (ANDROID_HOME) with platform 37.2 and an NDK, a JDK 17+ (JAVA_HOME), the
          pinned toolchain's aarch64-linux-android target and the Android Hermes bundle (exact
          setup installs both).
@@ -348,9 +364,11 @@ artifacts under game/target only. Ports none. Runs to completion.`,
     usage: 'bun exact.mjs contract <subcommand> …      (paths from where you run it)',
     common: ['contract build <file> --json · contract vocab <name>…    diagnostics · any tag, property, colour role or recipe (no name: the card)'],
     flags: [],
-    body: `  build <file.contract> [--stdin] [-o <file.plan>] [--json] [--errors-only] [--map (requires -o)] [--entry <kind> (requires -o; no --map or --stdin)]
+    body: `  build <file.contract> [--stdin] [-o <file.plan>] [--json] [--errors-only] [--map (requires -o)] [--entry <kind> (requires -o; no --map or --stdin)] [--surface terminal (no --entry)]
                                           --json: [] or each diagnostic with its range; --errors-only: omit warnings
                                           --entry: the named widget's plan, from app.json beside the input
+                                          --surface terminal: a plan the terminal host runs, to measure a GUI
+                                          source there; what a terminal entry refuses is a warning
                                           app.contract: app.ts type-checked too, as every host's build does
   types <file.contract> [-o <app.d.ts>]   the types app.ts imports (build app.contract, test, web refresh them)
   vocab [--json] [--all] [<name> …]       no name: the card, what an app writes, in one read (--all: every
@@ -438,10 +456,12 @@ completion.`,
   add: {
     line: 'a standard module (geolocation): its dependency in package.json, installed',
     usage: 'bun exact.mjs add <module> [<app>]',
-    flags: [],
+    flags: [['--no-install', 'write the dependency and install nothing']],
     body: `In an app, omit <app>; from the checkout, name it. <module> is one of exact2's
 (geolocation, or @exact/geolocation): a path into this checkout,
-so it compiles against the SDK the app uses. Then name what you use; when the module
+so it compiles against the SDK the app uses. The app's package manager installs it:
+the packageManager the nearest package.json up to the repository names, else the one
+whose lockfile is nearest (pnpm, Yarn, npm), else Bun. Then name what you use; when the module
 has grants, add their line: docs/recipes/permissions.md.
 Ports    none. Runs to completion.`,
     example: 'bun exact.mjs add @exact/in-app-browser',
@@ -546,10 +566,10 @@ Ports    none; send makes one HTTPS request. Runs to completion.`,
   // exact2's own verb that makes an app (scripts/exact.mjs new), not one of an app's.
   new: {
     line: 'a new app outside this repo, using this checkout',
-    usage: 'bun <exact2>/scripts/exact.mjs new <path> [--name <name>] [--bundle-id <id>] [--with ios,mac,linux,android,windows] [--game [--assets]]',
+    usage: 'bun <exact2>/scripts/exact.mjs new <path> [--name <name>] [--bundle-id <id>] [--with ios,mac,linux,android,windows]\n       bun <exact2>/scripts/exact.mjs new <path> --game [--assets]',
     flags: [
-      ['--name <name>', 'the name people see (app.json app.name); default: the path\'s last part, capitalised'],
-      ['--bundle-id <id>', 'the reverse-DNS id (app.json app.id); default: com.example.<name>-<hex>'],
+      ['--name <name>', 'app only: the name people see (app.json app.name); default: the path\'s last part, capitalised'],
+      ['--bundle-id <id>', 'app only: the reverse-DNS id (app.json app.id); default: com.example.<name>-<hex>'],
       ['--with <platforms>', 'name native platforms in app.json now (a native verb names its own the first time it runs); repeatable'],
       ['--online', 'use the server without a local device'],
       ['--snapback', 'write a guestbook wired to the Snapback backend above the app'],
@@ -565,6 +585,8 @@ in app.json the first time it runs and builds in a workspace generated under .ex
 --name and --bundle-id here, before the first build: a later change to the id makes the next build cold
 and leaves the old app installed. Then cd there: its exact.mjs runs everything, and bun exact.mjs help
 lists its verbs. Read docs/start-here-site.md first for a website, else docs/start-here.md.
+A game uses --game without --name or --bundle-id. Set app.name and app.id in its generated app.json
+before the first build.
 Ports    none. Runs to completion.`,
     example: 'bun scripts/exact.mjs new ~/notes --name Notes --bundle-id com.yourcompany.notes && cd ~/notes && bun exact.mjs test web',
   },
@@ -617,31 +639,47 @@ const documented = (verb) => [...HELP[verb].flags, ...(HELP[verb].more ?? [])];
 /** Every flag a verb's script takes, documented or not, by name: whether it takes a value. */
 export const knownFlags = (verb) => new Map([...documented(verb).flatMap(([row]) => specs(row)), ...(HELP[verb].internal ?? [])].map((spec) => [name(spec), takesValue(spec)]));
 
-/** Why an Apple device build cannot use these signing and packaging options, or null. */
-export function appleBuildRefusal(args, env = process.env) {
+/** Why an Apple build cannot take these options (signing, packaging, linking), or null. */
+export function appleBuildRefusal(args, env = process.env, platform = process.platform) {
+  // Linux has no simulator, phone discovery or launcher: it builds bundles and archives only.
+  if (platform === 'linux' && args.includes('--run')) return '--run needs an iOS simulator or connected iPhone, which Linux has neither of: build without --run';
+  if (platform === 'linux' && args.includes('--device') && !args.includes('--archive')) return '--device on Linux needs --archive: no phone is discovered there to sign a bundle for';
   const unsigned = args.includes('--unsigned'), archive = args.includes('--archive');
+  // link.mjs `linksByPlan` reads any other word as no flag, and the build links every capability.
+  if (args.includes('--link') && args[args.indexOf('--link') + 1] !== 'plan') return `--link takes plan, not ${args[args.indexOf('--link') + 1] ?? 'nothing'}`;
   if (unsigned && args.includes('--watchos')) return '--unsigned takes no --watchos: a watch build is the simulator companion, which no one re-signs';
   if (unsigned && !args.includes('--device')) return '--unsigned needs --device: it builds an ad-hoc signed device bundle';
+  if (args.includes('--development') && !(archive && unsigned)) return '--development needs --archive and --unsigned: it packages the development build as an .ipa a service re-signs';
+  if (args.includes('--development') && (args.includes('--release') || env.EXACT_UPDATE_TRUST === 'production')) return '--development packages the development build, so it takes neither --release nor EXACT_UPDATE_TRUST=production';
   if (unsigned && args.includes('--run')) return '--unsigned takes no --run: an ad-hoc signed device bundle cannot launch on a stock device; use a development profile and identity';
   if (archive && (!args.includes('--device') || args.includes('--run') || args.includes('--host') || !unsigned && (!env.EXACT_IDENTITY || !env.EXACT_PROFILE))) return '--archive needs --device and EXACT_IDENTITY and EXACT_PROFILE (or --unsigned), and takes neither --run nor --host';
   return null;
 }
 
 /** A dispatched script's first call. `--help`/`-h` prints `verb`'s help and exits 0; a flag the
- * verb's script does not take is refused with the ones it does, exit 2. With `parsed`, `argv` is
- * what the script's own parser left, so every flag still in it is unknown (agent.mjs). */
+ * verb's script does not take is refused with the ones it does, and one that takes a value is refused
+ * when the value is absent or another flag (`missingValue`), exit 2: a script reading `args[i + 1]`
+ * would take the next flag, or nothing and so its default. A value in brackets (`--login [hidden]`)
+ * is optional. With `parsed`, `argv` is what the script's own parser left, so every flag still in it
+ * is unknown (agent.mjs). */
 export function guardFlags(verb, argv, { parsed = false, say = console.log, fail = console.error, exit = process.exit } = {}) {
   if (argv.includes('--help') || argv.includes('-h')) { say(helpText(verb, { all: argv.includes('all') })); return exit(0); }
-  const entry = HELP[verb], known = knownFlags(verb);
-  const unknown = [];
+  const known = knownFlags(verb), valued = new Map([...documented(verb).flatMap(([row]) => specs(row)), ...(HELP[verb].internal ?? [])].filter(takesValue).map((spec) => [name(spec), spec]));
+  const unknown = [], valueless = [];
   for (let i = 0; i < argv.length; i++) {
     if (!/^-[^\d.]/.test(argv[i])) continue; // a positional, or a negative number
-    if (!parsed && known.has(argv[i])) { if (known.get(argv[i])) i++; continue; }
+    if (!parsed && known.has(argv[i])) {
+      if (!known.get(argv[i])) continue;
+      if (!missingValue(argv[i + 1])) i++;
+      else if (!valued.get(argv[i]).includes(' [')) valueless.push(valued.get(argv[i]));
+      continue;
+    }
     unknown.push(argv[i]);
   }
-  if (!unknown.length) return argv;
+  if (!unknown.length && !valueless.length) return argv;
+  if (valueless.length) fail(`${verb}: ${valueless.map((spec) => `${name(spec)} needs a value (${spec})`).join('; ')}`);
   const takes = documented(verb).flatMap(([row]) => specs(row).map(name)).join(', ');
-  fail(`${verb}: unknown flag ${unknown.join(', ')}. ${takes ? `It takes ${takes} (--help says what each takes and does).` : 'It takes no flags.'}`);
+  if (unknown.length) fail(`${verb}: unknown flag ${unknown.join(', ')}. ${takes ? `It takes ${takes} (--help says what each takes and does).` : 'It takes no flags.'}`);
   return exit(2);
 }
 

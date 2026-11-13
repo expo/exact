@@ -94,6 +94,40 @@ fn surface_inputs_are_published_when_they_change_and_only_then() {
 }
 
 #[test]
+fn an_absolute_canvas_restyles_when_its_parents_justify_items_changes() {
+    let plan = contract::compile(
+        r#"component App
+  state centered = false
+  action toggle
+    centered = not centered
+  view
+    box testId="parent" press=toggle position="relative" width=100 height=20 justify-items=(centered ? "center" : "normal")
+      canvas testId="canvas" position="absolute" width=20 height=10
+"#,
+    )
+    .unwrap();
+    exact_web::link(exact_web_capabilities::ALL);
+    let (mut host, first) = Host::boot(&plan.encode(), NoData, Default::default(), "/").unwrap();
+    let (parent, canvas) = (view(&host, "parent"), view(&host, "canvas"));
+    for (op, batch, forced) in std::iter::once(("create", first, true)).chain(
+        [false, true]
+            .into_iter()
+            .map(|forced| ("style", host.dispatch(parent, Event::Press), forced)),
+    ) {
+        let batch: serde_json::Value = serde_json::from_str(&batch).unwrap();
+        let style = batch["ops"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["op"] == op && row["id"] == canvas)
+            .unwrap_or_else(|| panic!("no canvas {op}: {batch}"));
+        let css = style["css"].as_str().unwrap();
+        assert!(css.contains("position:absolute;"), "{css}");
+        assert_eq!(css.contains("justify-self:start;"), forced, "{css}");
+    }
+}
+
+#[test]
 fn the_caltrain_app_boots_with_its_gpu_surface_and_a_2d_map() {
     let plan = caltrain::build().unwrap();
     exact_web::link(exact_web_capabilities::ALL);

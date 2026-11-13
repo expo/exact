@@ -31,7 +31,8 @@ settlement waits on its `pending` reads rather than failing with them.
   source or mutation answering a value of the wrong shape), a number that
   is not finite crossing a boundary (a derive, a slot written or
   initialized, a source's or action's argument, a row key: `ValTy` admits
-  NaN and the infinities, `conforms` does not), the host's own input (no element with
+  NaN and the infinities, `conforms` does not; a value of another type at a
+  derive, a slot written or a slot initialized is `Err.type`, `unfit`), the host's own input (no element with
   that `testId`, no handler for that event, a payload that does not fit the
   action's remaining parameters), the router (a forged router value
   committed, a verb or read of a value of the shape `Router` that is not a
@@ -41,7 +42,8 @@ settlement waits on its `pending` reads rather than failing with them.
   (the interpreter's fuel, the timer fire limit), and a configuration
   already poisoned.
 * `unsupported` is what the semantics leaves out (`format*`, geometry
-  reads, a payload for a form control, frame tasks, a mutation's `then`). -/
+  reads, a payload for a form control, a source the runner answers from its
+  transport or MIDI ports). -/
 inductive Legitimate : Err → Prop
   | refused (why : String) : Legitimate (.refused why)
   | unsupported (what : String) : Legitimate (.unsupported what)
@@ -165,7 +167,7 @@ theorem settleEnvOK {p : Program} (hp : WellTyped p) {slots : List (String × Va
     SettleHyps p (settleScope p) slots now := by
   refine ⟨⟨hp.fns, hp.routeShapes⟩, fun d hd => ?_, fun r hr => (hp.resources r hr).imp fun _ h => h.1,
     hp.resourceGates, fun st hst => ?_⟩
-  · obtain ⟨t, ht, -⟩ := hp.derives d hd; exact ⟨t, ht⟩
+  · exact hp.derives d hd
   have := envOKE_gen (E := Legit) (L := lifted p)
     (env := { prog := p, slots, derives := st.derives, resources := st.resources, now, idle := st.idle })
     hp (fun _ h _ => h) rfl hpres hslots RowsOK.nil hst (.inl trivial)
@@ -298,7 +300,13 @@ theorem runAction_sound {p : Program} (hp : WellTyped p) {o c name args rows c' 
     rw [he] at this; exact this
   next answered hans =>
   split at h
-  · exact keep h (refusedS _)
+  · have hfx : FxOK p fx := hexec
+    have hall : ((fx.writes ++ fx.rowWrites).all fun (x, v) => typed p v (slotTy p x)) = true := by
+      simp only [List.all_eq_true]
+      rintro ⟨x, v⟩ hm
+      exact typed_of_valTy _ (hfx.1 _ hm)
+    rw [unfit_typed hall] at h
+    exact keep h (refusedS _)
   next hw =>
   generalize hS : List.foldl _ c.slots (answered ++ fx.writes) = S at h
   have hSeq : S = applyWrites c.slots (answered ++ fx.writes) := by rw [← hS]; rfl
@@ -640,6 +648,8 @@ theorem advance_go_sound {p : Program} (hp : WellTyped p) {o due pick finish}
     split
     · obtain ⟨h1, h2⟩ := hfinish c hc; rw [h2]; exact ⟨h1, trivial⟩
     next tm i hd =>
+    split
+    · exact ⟨hc, trivial⟩
     have htm := hdue c tm i hd
     have hpres := hc.present.resolve_right fun ⟨_, ht, _⟩ => by simp [ht] at htm
     obtain ⟨⟨a, ha, hpa⟩, hgk⟩ := hc.timers tm htm
@@ -648,13 +658,17 @@ theorem advance_go_sound {p : Program} (hp : WellTyped p) {o due pick finish}
       · exact hc.timers y hy
       · unfold Timer.fired; split <;> (try split) <;> (try split) <;> exact ⟨⟨a, ha, hpa⟩, hgk⟩
     dsimp only
-    generalize hr : runAction p o { c with timers := c.timers.set i tm.fired, now := tm.next }
+    generalize hr : runAction p o { c with timers := c.timers.set i tm.fired, now := if tm.change && tm.next < c.now then c.now else tm.next }
       tm.action [] [] = r
     obtain ⟨c₂, out₂⟩ := r
-    have hc₁ := hc.withTimers hpres hset tm.next
+    have hc₁ := hc.withTimers hpres hset (if tm.change && tm.next < c.now then c.now else tm.next)
     obtain ⟨hc₂, hout₂⟩ := runAction_sound hp hc₁ hpres ⟨a, ha⟩ hr
     cases out₂ with
-    | ok => exact advance_go_sound hp hdue hpick hpickN hfinish n c₂ hc₂
+    | ok =>
+      dsimp only
+      split
+      · exact ⟨hc₂, trivial⟩
+      · exact advance_go_sound hp hdue hpick hpickN hfinish n c₂ hc₂
     | refused => exact ⟨hc₂, hout₂⟩
     | poisoned => exact ⟨hc₂, hout₂⟩
 

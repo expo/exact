@@ -2,7 +2,7 @@
 // over @exact/media-capture's video half, each answer shown by testId for the
 // suite. The viewfinder can be hidden by `display: none` and removed.
 use getUserMedia, applyConstraints, stopTrack, mediaStreamTrack, enumerateDevices, cameraStatus, MediaStream, MediaStreamTrack, MediaDeviceList, CameraStatus from "@exact/media-capture"
-use takePhoto, getPhotoCapabilities, Photo, PhotoCapabilities from "@exact/camera"
+use takePhoto, takePhotoWithCameraApp, getPhotoCapabilities, Photo, PhotoCapabilities from "@exact/camera"
 
 component Fixture
   state track = ""
@@ -36,6 +36,9 @@ component Fixture
     send shot = takePhoto(track=track)
   action keep
     send shot = takePhoto(track=track, path="app:/data/kept")
+  // The system camera UI (Android's camera app, iOS's picker, the web's file input with `capture`); NotSupportedError on a Mac.
+  action cameraApp
+    send shot = takePhotoWithCameraApp()
   action front
     send changed = applyConstraints(track=track, facingMode="user")
   action stop
@@ -68,6 +71,8 @@ component Fixture
         text "Open built-in"
       button press=shutter testId="shutter"
         text "Shutter"
+      button press=cameraApp testId="camera-app"
+        text "Camera app"
       button press=keep testId="keep"
         text "Keep"
       button press=front testId="front"

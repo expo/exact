@@ -16,6 +16,11 @@ impl<D: DataSource> Host<D> {
         self.advanced(a)
     }
 
+    /// Action endings are delivery, separate from the agent's recent history.
+    pub fn take_ended_actions(&mut self) -> String {
+        format!("{{\"ended\":{}}}", self.runner.take_ended_actions())
+    }
+
     /// The agent API's read operations (LLP 1012): `tree`, `state`, and
     /// `logs` from the runner; `settle` — the clock at which the last
     /// transition in flight ends, milliseconds, `null` when quiescent — from

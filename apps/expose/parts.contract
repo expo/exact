@@ -171,7 +171,7 @@ component AppTile
         text glyph font-family="glyphFace" font-weight=900 font-size=(small ? 24 : 34) line-height="40px" color=ink
         if badge > 0
           column position="absolute" top=-6 right=-6 min-width=22 height=22 border-radius=11 background-color="signal" align-items="center" justify-content="center" padding-left=6 padding-right=6 box-sizing="border-box"
-            text badge.toString() font-size=12 font-weight=700 color="AccentColorText"
+            text badge.toString() font-size=12 font-weight=700 color="signalInk"
       text label font-size=12 font-weight=500 color="onDark85" line-clamp=1
 
 // The same tile in the dock, without a label.

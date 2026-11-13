@@ -5,6 +5,7 @@
 //! builds (LLP 1069.001 D5), a radio's group (x2apps survey #2), a
 //! grouped list's sections (LLP 1084), and
 //! whether a followed link names one of the app's routes (LLP 1038 §7),
+//! a scroll that moves the timelines a scroller drives (LLP 1057.003 D5),
 //! where the host's own Back goes (LLP 1115 D5), and a package's call of
 //! the app's handler (LLP 1133.016 D15 item 1).
 use super::Bridge;
@@ -180,6 +181,16 @@ impl<D: DataSource> Bridge<D> {
         }
     }
 
+    /// `exact_timeline_scrolled`: a scroller a scroll or view timeline reads
+    /// (the page's for `page`) now stands at `left`, `top` CSS px; its
+    /// consumers, presented in that scroll (LLP 1057.003 D5).
+    pub fn timeline_scrolled(&mut self, page: bool, view: u32, left: f64, top: f64) -> u32 {
+        let out = self.host.as_mut().map_or_else(super::not_booted, |h| {
+            h.timeline_scrolled((!page).then_some(view), left, top)
+        });
+        self.emit(out)
+    }
+
     /// `exact_top_layer`: the presenter's open top-layer boxes, and where
     /// the frontmost modal presentation begins among them.
     pub fn top_layer(
@@ -209,6 +220,7 @@ impl<D: DataSource> Bridge<D> {
         }
         host.set_canvas_deferred(self.canvas_deferred);
         host.runner_mut().use_native_timers(self.native_timers);
+        host.runner_mut().set_row_reuse(self.row_reuse);
         host.runner_mut()
             .hold_waits(exact_runner::WaitKinds::from_bits(self.wait_kinds));
         host.runner_mut()

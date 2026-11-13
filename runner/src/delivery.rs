@@ -1,9 +1,8 @@
 //! What this binary knows about its own delivery (LLP 1030 D4, D7).
 //!
-//! Two facts are the binary's and never change while it runs — `L`, whether
-//! an update store is linked at all, and `E`, which executors it links —
-//! and the rest is what the store has to say: the stream this client
-//! belongs to, the entry it is running, the entry it shipped with, whether
+//! The binary pins its version, build number, `L` (whether an update store
+//! is linked), and `E` (which executors it links). The store supplies the
+//! stream this client belongs to, the entry it is running, the entry it shipped with, whether
 //! a newer one is staged, a sunset notice, and which of the app's sources
 //! are interpreted rather than native.
 //!
@@ -51,7 +50,7 @@ pub fn production(json: &str) -> bool {
 
 /// Every field the runner can fill, by the name a declared shape gives it.
 /// A shape that names anything else is refused at bake (`bake-delivery-field`).
-pub const FIELDS: [&str; 7] = [
+pub const FIELDS: [&str; 9] = [
     "stream",
     "seq",
     "embeddedSeq",
@@ -59,11 +58,17 @@ pub const FIELDS: [&str; 7] = [
     "sunset",
     "interpreted",
     "compatibilityId",
+    "version",
+    "buildNumber",
 ];
 
 /// The delivery facts, as the runner holds them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Delivery {
+    /// The installed binary's version, unchanged by over-the-air updates.
+    pub version: String,
+    /// The installed binary's build number, kept as the build supplied it.
+    pub build_number: String,
     /// The cohort this binary belongs to (LLP 1030 D3a): bake's digest of
     /// everything a bundle may depend on and cannot replace. Empty until a
     /// host hands the runner its `compat.json`.
@@ -93,6 +98,8 @@ impl Default for Delivery {
     /// The embedded answer: this binary, its own entry, nothing staged.
     fn default() -> Delivery {
         Delivery {
+            version: String::new(),
+            build_number: String::new(),
             compatibility_id: String::new(),
             store: 'A',
             executors: vec!["native".to_string()],
@@ -119,11 +126,13 @@ impl Delivery {
             "sunset" => Value::str(self.sunset.as_deref().unwrap_or("")),
             "interpreted" => Value::list(self.interpreted.iter().map(|s| Value::str(s)).collect()),
             "compatibilityId" => Value::str(&self.compatibility_id),
+            "version" => Value::str(&self.version),
+            "buildNumber" => Value::str(&self.build_number),
             _ => return None,
         })
     }
 
-    /// The binary's id, `store.L`, executor set, and embedded sequence from
+    /// The binary's id, `store.L`, executors, version and embedded sequence from
     /// its archive's `compat.json`, as
     /// `exact_bake::Compat::to_json` writes them. Everything the store has to
     /// say is left as it was; a field the text does not carry is left as it
@@ -155,6 +164,18 @@ impl Delivery {
             out.embedded_seq = seq;
             if out.stream == "embedded" {
                 out.seq = seq;
+            }
+        }
+        if let Some(embedded) = member(json, "embedded") {
+            for (name, target) in [
+                ("version", &mut out.version),
+                ("buildNumber", &mut out.build_number),
+            ] {
+                if let Some(value) =
+                    member(embedded, name).and_then(|v| string_at(v).map(|(s, _)| s))
+                {
+                    *target = value;
+                }
             }
         }
         out
@@ -315,6 +336,28 @@ mod tests {
         assert_eq!(d.field("compatibilityId"), Some(Value::str("")));
         assert_eq!(d.field("sunset"), Some(Value::str("")));
         assert_eq!(d.field("nope"), None);
+    }
+
+    #[test]
+    fn the_binary_version_comes_only_from_its_embedded_record() {
+        let d = Delivery::default()
+            .with_compat(r#"{"embedded":{"version":"2.3.4","buildNumber":"56"}}"#);
+        assert_eq!(d.field("version"), Some(Value::str("2.3.4")));
+        assert_eq!(d.field("buildNumber"), Some(Value::str("56")));
+        for old in [
+            "{}",
+            r#"{"embedded":{"seq":0}}"#,
+            r#"{"version":"wrong","embedded":{"assets":[{"buildNumber":"wrong"}]}}"#,
+        ] {
+            let d = Delivery::default().with_compat(old);
+            assert_eq!(d.field("version"), Some(Value::str("")));
+            assert_eq!(d.field("buildNumber"), Some(Value::str("")));
+        }
+        assert_eq!(
+            d.with_compat(r#"{"embedded":{"version":"","buildNumber":""}}"#)
+                .version,
+            ""
+        );
     }
 
     #[test]

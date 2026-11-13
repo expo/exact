@@ -1,6 +1,7 @@
-// What an Apple app links: the capabilities its composition names, and the
-// SDK its executable records, with the device launch link of LLP 1047.001.001.
-import { spawnSync } from 'node:child_process';
+// What an Apple app links: the capabilities its composition names, the deployment
+// targets it compiles and links for, and the SDK its executable records, with the
+// device launch link of LLP 1047.001.001.
+import { spawnSync } from './toolchain.mjs';
 import { readFileSync, mkdirSync, rmSync, cpSync, statSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 
@@ -39,15 +40,47 @@ export function appleProduction(app, platform, args = []) {
   return { optimize, profile: optimize === 'size' ? 'size' : 'release' };
 }
 
+/** A Linux builder can target an ARM simulator on another machine, independently of its host CPU. */
+export function iosSimulatorTarget(arch = process.env.EXACT_IOS_SIM_ARCH ?? (process.platform === 'linux' ? 'arm64' : process.arch)) {
+  const cpu = arch === 'arm64' ? 'arm64' : ['x64', 'x86_64'].includes(arch) ? 'x86_64' : null;
+  if (!cpu) throw new Error(`host/apple: unsupported iOS simulator architecture ${arch}; EXACT_IOS_SIM_ARCH is arm64 or x86_64`);
+  return { target: cpu === 'arm64' ? 'aarch64-apple-ios-sim' : 'x86_64-apple-ios', triple: `${cpu}-apple-ios17.0-simulator` };
+}
+
+const newer = (a, b) => (a.split('.').map(Number).reduce((x, n, i) => x || n - (b.split('.').map(Number)[i] ?? 0), 0) > 0 ? a : b);
+/** The deployment targets an app builds for: its manifest's `minimumOS`, never
+ * below the host's own floor (Package.swift's). They are what its Info.plist
+ * declares, what its executable links for, and what its own Swift modules and
+ * packages compile for (Swift refuses an API newer than the target at compile
+ * time); `compiledTargets` is what the rest compiles for. */
+export function deploymentTargets(app) {
+  return {
+    ios: newer(String(app.manifest.host?.ios?.minimumOS ?? '17.0'), '17.0'),
+    macos: newer(String(app.manifest.host?.macos?.minimumOS ?? '14.0'), '14.0'),
+  };
+}
+/** The deployment targets the SDK's units compile for: its Rust and C (the
+ * app's crate with them, in one Cargo build), the Swift host, its arms and
+ * extensions, and the filter kernels. Outside production trust they compile
+ * for iOS's floor whatever the app's `minimumOS`, so every app shares one
+ * compile of each, which a minimum of its own compiled cold (about 440 s).
+ * Code built for 17.0 runs on every later iOS, and the app installs only where
+ * its Info.plist says. Rust and C check no availability as they compile, so the
+ * app's crate loses nothing at the floor. An app with `launch` modules keeps
+ * its own minimum: their Swift compiles inside the host's package
+ * (`ExactLaunchParts`), where Swift checks availability. */
+export const compiledTargets = (app, trust = process.env.EXACT_UPDATE_TRUST ?? 'development') =>
+  trust === 'production' || app.manifest.launch?.length ? deploymentTargets(app) : { ...deploymentTargets(app), ios: '17.0' };
+
 /** The capabilities with a Swift half, by name, and the product of
  * `Package.swift` (its `capabilities` table) each is. */
-const SWIFT_CAPABILITIES = [['grouped_lists', 'ExactGroupedLists'], ['markdown', 'ExactMarkdown'], ['surfaces', 'ExactSurfaces'], ['drag', 'ExactDrag'], ['media_picker', 'ExactMediaPicker'], ['auth_session', 'ExactAuthSession'], ['numerals', 'ExactNumerals']];
+const SWIFT_CAPABILITIES = [['grouped_lists', 'ExactGroupedLists'], ['markdown', 'ExactMarkdown'], ['surfaces', 'ExactSurfaces'], ['drag', 'ExactDrag'], ['media_picker', 'ExactMediaPicker'], ['auth_session', 'ExactAuthSession'], ['numerals', 'ExactNumerals'], ['tips', 'ExactTips']];
 
 /** The capabilities a development build links only as production would
  * (LLP 1047.001.000 F): each links a framework that costs every iOS launch
- * its images (PhotosUI, AuthenticationServices, ~300 each; SwiftUI), and the
- * agent's substitutes answer without the first two. */
-const BY_USE_IN_DEVELOPMENT = ['media_picker', 'auth_session', 'numerals'];
+ * its images (PhotosUI, AuthenticationServices, ~300 each; SwiftUI; TipKit),
+ * and the agent's substitutes answer without the first two. */
+const BY_USE_IN_DEVELOPMENT = ['media_picker', 'auth_session', 'numerals', 'tips'];
 
 /** What the archive links (LLP 1047.001 D2, D4, D6; LLP 1047 D8): for a
  * production build, the plan's use-set, as the bake's graph names it, the
@@ -70,11 +103,12 @@ export function appleComposition(graph, production, ahead = [], granted = false)
   return { link, products };
 }
 
-/** The system frameworks only a capability's Swift half brings, and so
- * absent from an executable whose composition does not link it (LLP
- * 1047.001.000 §6, the check's first form). SafariServices belongs to
- * @exact/in-app-browser in ExactAppModules, not a SwiftPM capability product. */
-const CAPABILITY_FRAMEWORKS = [['@exact/in-app-browser', 'SafariServices'], ['ExactMediaPicker', 'PhotosUI'], ['ExactAuthSession', 'AuthenticationServices'], ['ExactNumerals', 'SwiftUI'], ['ExactSnapshot', 'WidgetKit'], ['ExactSnapshot', 'ActivityKit']];
+/** The system frameworks only a capability's Swift half brings, each with
+ * the products that may bring it, and so absent from an executable whose
+ * composition links none of them (LLP 1047.001.000 §6, the check's first
+ * form). SafariServices belongs to @exact/in-app-browser in ExactAppModules,
+ * not a SwiftPM capability product. */
+const CAPABILITY_FRAMEWORKS = [['SafariServices', ['@exact/in-app-browser']], ['PhotosUI', ['ExactMediaPicker']], ['AuthenticationServices', ['ExactAuthSession']], ['SwiftUI', ['ExactNumerals', 'ExactTips']], ['TipKit', ['ExactTips']], ['WidgetKit', ['ExactSnapshot']], ['ActivityKit', ['ExactSnapshot']]];
 
 export function appleLaunchFrameworks(destination, product) {
   return destination === 'ios' && ['ExactIOS', 'ExactHostIOS'].includes(product) ? ['SafariServices'] : [];
@@ -91,32 +125,69 @@ export function appleLaunchLinkArgs(destination, product) {
  * Read from the file, since `otool` takes a path ending in `name(member)`
  * for an archive's member (#234). */
 export function loadedDylibs(executable) {
-  const bytes = readFileSync(executable), names = new Set();
-  const thin = (at) => {
-    if (bytes.readUInt32LE(at) !== 0xfeedfacf) throw new Error(`host/apple: ${basename(executable)} is not a 64-bit Mach-O`);
+  return [...new Set(machoCommands(executable).flatMap(commands => commands.flatMap(({ cmd, bytes }) => {
+    if (![0xc, 0x80000018, 0x8000001f, 0x20, 0x80000023].includes(cmd)) return [];
+    return [dylibName(executable, bytes)];
+  })))];
+}
+
+function dylibName(executable, bytes) {
+  const at = bytes.length >= 24 ? bytes.readUInt32LE(8) : -1, end = bytes.indexOf(0, at);
+  if (at < 24 || at >= bytes.length || end < at) throw new Error(`host/apple: ${basename(executable)} has an invalid dylib load command`);
+  return bytes.toString('utf8', at, end);
+}
+
+/** One LC_ID_DYLIB per slice; null means that slice is not a dynamic library. */
+export function dylibInstallNames(executable) {
+  return machoCommands(executable).map(commands => {
+    const ids = commands.filter(({ cmd }) => cmd === 0xd);
+    return ids.length === 1 ? dylibName(executable, ids[0].bytes) : null;
+  });
+}
+
+/** Load commands bounded by their own slice, so build checks need no host's Mach-O tools. */
+function machoCommands(executable) {
+  let bytes;
+  try { bytes = readFileSync(executable); } catch (e) { throw new Error(`host/apple: cannot read ${executable}: ${e.message}`); }
+  const invalid = () => { throw new Error(`host/apple: ${basename(executable)} has an invalid 64-bit Mach-O`); };
+  const slice = (at, size) => {
+    if (!Number.isSafeInteger(at) || !Number.isSafeInteger(size) || at < 0 || size < 32 || at + size > bytes.length) invalid();
+    if (bytes.readUInt32LE(at) !== 0xfeedfacf) invalid();
+    const count = bytes.readUInt32LE(at + 16), end = at + 32 + bytes.readUInt32LE(at + 20), commands = [];
+    if (end > at + size || count > (end - at - 32) / 8) invalid();
     let cursor = at + 32;
-    for (let i = 0, n = bytes.readUInt32LE(at + 16); i < n; i++) {
-      const cmd = bytes.readUInt32LE(cursor), size = bytes.readUInt32LE(cursor + 4);
-      if ([0xc, 0x80000018, 0x8000001f, 0x20, 0x80000023].includes(cmd)) {
-        const name = cursor + bytes.readUInt32LE(cursor + 8);
-        names.add(bytes.toString('utf8', name, bytes.indexOf(0, name)));
-      }
-      cursor += size;
+    for (let i = 0; i < count; i++) {
+      if (cursor + 8 > end) invalid();
+      const cmd = bytes.readUInt32LE(cursor), length = bytes.readUInt32LE(cursor + 4);
+      if (length < 8 || length % 4 || cursor + length > end) invalid();
+      commands.push({ cmd, bytes: bytes.subarray(cursor, cursor + length) });
+      cursor += length;
     }
+    if (cursor !== end) invalid();
+    return commands;
   };
-  if (bytes.readUInt32BE(0) === 0xcafebabe) {
-    for (let i = 0, n = bytes.readUInt32BE(4); i < n; i++) thin(bytes.readUInt32BE(8 + i * 20 + 8));
-  } else thin(0);
-  return [...names];
+  if (bytes.length < 4) invalid();
+  const magic = bytes.readUInt32BE(0);
+  if (magic !== 0xcafebabe && magic !== 0xcafebabf) return [slice(0, bytes.length)];
+  if (bytes.length < 8) invalid();
+  const count = bytes.readUInt32BE(4), width = magic === 0xcafebabf ? 32 : 20;
+  if (!count || count > (bytes.length - 8) / width) invalid();
+  return Array.from({ length: count }, (_, i) => {
+    const at = 8 + i * width;
+    const offset = width === 32 ? Number(bytes.readBigUInt64BE(at + 8)) : bytes.readUInt32BE(at + 8);
+    const size = width === 32 ? Number(bytes.readBigUInt64BE(at + 16)) : bytes.readUInt32BE(at + 12);
+    if (offset < 8 + count * width) invalid();
+    return slice(offset, size);
+  });
 }
 
 /** An executable links no framework that only an unlinked capability
  * brings: the next import of one into the core fails the build by name
  * instead of costing every launch silently. */
-export function assertCapabilityFrameworks(executable, products, allowedFrameworks = []) {
+export function assertCapabilityFrameworks(executable, products, allowedFrameworks = [], frameworks = CAPABILITY_FRAMEWORKS) {
   const loaded = loadedDylibs(executable);
-  const stray = CAPABILITY_FRAMEWORKS.filter(([product, framework]) => !products.includes(product) && !allowedFrameworks.includes(framework) && loaded.some((path) => path.includes(`/${framework}.framework/`) && path.endsWith(`/${framework}`)));
-  if (stray.length) throw new Error(`host/apple: ${basename(executable)} links ${stray.map(([product, framework]) => `${framework} (only ${product} may)`).join(', ')}, which its composition does not link: an import outside the capability's module brings it to every launch`);
+  const stray = frameworks.filter(([framework, owners]) => !owners.some((owner) => products.includes(owner)) && !allowedFrameworks.includes(framework) && loaded.some((path) => path.includes(`/${framework}.framework/`) && path.endsWith(`/${framework}`)));
+  if (stray.length) throw new Error(`host/apple: ${basename(executable)} links ${stray.map(([framework, owners]) => `${framework} (only ${owners.join(' or ')} may)`).join(', ')}, which its composition does not link: an import outside the capability's module brings it to every launch`);
 }
 
 /** Whether a build links by its plan (LLP 1047.001 D6): production always;
@@ -130,16 +201,18 @@ export function linksByPlan(production, args) {
 /** The SDK the linker recorded in an executable (`LC_BUILD_VERSION`) is the
  * one asked for: AppKit draws its design by that number, so a link that
  * records another (as SwiftPM's did, LLP 1069.011 §7) changes every app's
- * look without a word. Compared to major.minor. Read by `vtool`, which
- * takes any path as a file: the executable is named for its app, and
- * `otool` takes a path ending in `name(member)`, such as "T3 Code (Exact)",
- * for an archive's member (#234). */
+ * look without a word. Compare major.minor in every slice, reading the file
+ * directly so the same check runs on Linux and accepts names ending in parentheses (#234). */
 export function assertLinkedSdk(executable, expected) {
-  const shown = spawnSync('xcrun', ['vtool', '-show-build', executable], { encoding: 'utf8' });
-  if (shown.status !== 0) throw new Error(`host/apple: xcrun vtool -show-build failed (${shown.status ?? shown.signal ?? shown.error?.message}) on ${executable}${shown.stderr?.trim() ? ': ' + shown.stderr.trim() : ''}`);
-  const recorded = /cmd LC_BUILD_VERSION[\s\S]*?\n\s*sdk (\S+)/.exec(shown.stdout)?.[1];
   const majorMinor = (v) => String(v).split('.').slice(0, 2).map(Number).join('.');
-  if (!recorded || majorMinor(recorded) !== majorMinor(expected)) {
-    throw new Error(`host/apple: ${basename(executable)} records SDK ${recorded ?? '(none)'}, not ${expected}: AppKit would draw it in another design`);
+  for (const commands of machoCommands(executable)) {
+    const versions = commands.filter(({ cmd }) => cmd === 0x32);
+    const command = versions.length === 1 ? versions[0].bytes : null;
+    const sdk = command?.length >= 24 ? command.readUInt32LE(16) : null;
+    // As vtool prints it: the patch only when it is not 0.
+    const recorded = sdk == null ? null : `${sdk >>> 16}.${(sdk >>> 8) & 255}${sdk & 255 ? `.${sdk & 255}` : ''}`;
+    if (!recorded || majorMinor(recorded) !== majorMinor(expected)) {
+      throw new Error(`host/apple: ${basename(executable)} records SDK ${recorded ?? '(none)'}, not ${expected}: AppKit would draw it in another design`);
+    }
   }
 }

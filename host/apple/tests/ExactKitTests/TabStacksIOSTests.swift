@@ -40,14 +40,14 @@ final class TabStacksIOSTests: XCTestCase {
         XCTAssertGreaterThan(root.view.safeAreaInsets.bottom, 0, "the route's safe area clears the tab bar")
         XCTAssertEqual(navigation.observation()["stack"] as? [String], [root.key])
         XCTAssertTrue(navigation.tabStacks.values.allSatisfy { $0 is UINavigationController }, "both panels draw their stack")
-        let titled = try XCTUnwrap(tabs.viewControllers?[1] as? UINavigationController, "a tab not built yet is its navigation controller")
+        let titled = try XCTUnwrap(tabs.tabControllers?[1] as? UINavigationController, "a tab not built yet is its navigation controller")
         XCTAssertTrue(titled.viewControllers.isEmpty, "with no routes")
         try press(session, "tab-titled")
         waitFor("Titled is selected") { tabs.selectedIndex == 1 && titled.viewControllers.count == 1 }
-        XCTAssertTrue(tabs.viewControllers?[1] === titled, "the tab keeps its controller")
+        XCTAssertTrue(tabs.tabControllers?[1] === titled, "the tab keeps its controller")
         XCTAssertFalse(titled.isNavigationBarHidden, "its root's bar")
         XCTAssertTrue(navigation.primaryNavigation === titled)
-        XCTAssertTrue(tabs.viewControllers?[0] === nav)
+        XCTAssertTrue(tabs.tabControllers?[0] === nav)
     }
 
     func testABarlessTabsFirstPushAnimatesInItsOwnController() throws {
@@ -61,7 +61,7 @@ final class TabStacksIOSTests: XCTestCase {
         XCTAssertEqual(nav.viewControllers.count, 2)
         XCTAssertNotNil(nav.transitionCoordinator, "the push animates")
         XCTAssertTrue(nav.viewControllers.first === root)
-        XCTAssertTrue(tabs.viewControllers?.first === nav, "the tab keeps its controller")
+        XCTAssertTrue(tabs.tabControllers?.first === nav, "the tab keeps its controller")
         waitFor("the push is over") { nav.transitionCoordinator == nil && !navigation.changing }
         XCTAssertEqual(navigation.observation()["stack"] as? [String], nav.viewControllers.compactMap { ($0 as? RouteController)?.key })
         XCTAssertEqual(navigation.agentBack(), "", "the platform's Back goes")
@@ -99,7 +99,7 @@ final class TabStacksIOSTests: XCTestCase {
         waitFor("the bar shows") { !nav.isNavigationBarHidden }
         XCTAssertEqual(root.navigationItem.title, "barless")
         XCTAssertTrue(nav.viewControllers == [root])
-        XCTAssertTrue(tabs.viewControllers?.first === nav)
+        XCTAssertTrue(tabs.tabControllers?.first === nav)
         XCTAssertTrue(navigation.primaryNavigation === nav)
     }
 
@@ -116,9 +116,34 @@ final class TabStacksIOSTests: XCTestCase {
         XCTAssertEqual(navigation.observation()["route"] as? String, (nav.viewControllers.last as? RouteController)?.key, "no Back was read")
     }
 
-    private func fixture(_ label: String) throws -> ExactSession {
+    /// A tabpanel inside its root's tablist: the tab bar takes the tabs'
+    /// place, and the panel's routes stay in the page, shown and pressed.
+    func testAPanelInsideTheTablistStaysInThePage() throws {
+        let session = try fixture("nested-panel", plan: "EXACT_NESTED_PANEL_TABS_PLAN")
+        let navigation = session.presenter.navigation
+        XCTAssertNotNil(navigation.tabController, "the tab bar shows")
+        XCTAssertEqual(navigation.covers[try node(session, "tab-home").id], .whole, "the tab is the bar's")
+        XCTAssertNil(navigation.covers[try node(session, "tabs").id], "the tablist keeps the panel's room")
+        try assertReached(session, "push")
+        try press(session, "push")
+        waitFor("Detail is pushed") { (navigation.activeRoute?.node.props["testId"]) == "route-detail" && !navigation.inTransition }
+        try assertReached(session, "body")
+    }
+
+    /// The node is in the window with a size, and a touch at its center reaches it.
+    private func assertReached(_ session: ExactSession, _ testId: String) throws {
+        let view = try node(session, testId)
+        let window = try XCTUnwrap(view.window, "\(testId) is in the window")
+        window.layoutIfNeeded()
+        let frame = view.convert(view.bounds, to: window)
+        XCTAssertGreaterThan(frame.width * frame.height, 0, "\(testId) has a size: \(frame)")
+        let hit = window.hitTest(CGPoint(x: frame.midX, y: frame.midY), with: nil)
+        XCTAssertTrue(hit?.isDescendant(of: view) == true, "a touch at \(testId)'s center reaches it, not \(String(describing: hit))")
+    }
+
+    private func fixture(_ label: String, plan key: String = "EXACT_BARLESS_TAB_PLAN") throws -> ExactSession {
         let env = ProcessInfo.processInfo.environment
-        let plan = try Data(contentsOf: URL(fileURLWithPath: try XCTUnwrap(env["EXACT_BARLESS_TAB_PLAN"], "build.mjs --test --ios compiles the barless-tab fixture")))
+        let plan = try Data(contentsOf: URL(fileURLWithPath: try XCTUnwrap(env[key], "build.mjs --test --ios compiles the fixture")))
         let session = ExactApp.shared.makeSession(label: label)
         sessions.append(session)
         let view = ExactView(session: session)
@@ -149,7 +174,7 @@ final class TabStacksIOSTests: XCTestCase {
     /// The Barless tab's navigation controller and its root, as installed.
     private func barless(_ session: ExactSession) throws -> (tabs: UITabBarController, nav: UINavigationController, root: RouteController) {
         let tabs = try XCTUnwrap(session.presenter.navigation.tabController)
-        let nav = try XCTUnwrap(tabs.viewControllers?.first as? UINavigationController, "Barless's panel draws its stack")
+        let nav = try XCTUnwrap(tabs.tabControllers?.first as? UINavigationController, "Barless's panel draws its stack")
         let root = try XCTUnwrap(nav.viewControllers.first as? RouteController)
         return (tabs, nav, root)
     }

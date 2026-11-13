@@ -15,7 +15,7 @@
 
 use crate::encode::{self, Accepts, Variants};
 use crate::files::{asset_shaped, named_build, percent_decode, static_file, AUTH_CALLBACK};
-use crate::{page, render_with, Ids, Projection, Rendered};
+use crate::{page, render_with_at, Ids, Projection, Rendered};
 use exact_plan::{Plan, RenderPolicy};
 use exact_runner::DataSource;
 use exact_web::document::{canonical_location, route_at, Site};
@@ -104,6 +104,7 @@ impl Stopper {
 struct Shared {
     serve: Serve,
     plan: Plan,
+    delivery: exact_runner::delivery::Delivery,
     shell: String,
     /// A page's CSP header lines, none when the app sends none (D11).
     csp: String,
@@ -175,6 +176,7 @@ impl Server {
             .iter()
             .find_map(|name| std::fs::read_to_string(serve.dist.join(name)).ok())
             .ok_or_else(|| std::io::Error::other("the dist has no shell"))?;
+        let delivery = crate::delivery::beside(&serve.dist.join("app.plan"))?;
         let listener = TcpListener::bind(("127.0.0.1", serve.port))?;
         let csp = csp::headers(grants, &serve.dist, &shell, serve.origin.as_deref())
             .map_err(std::io::Error::other)?;
@@ -224,6 +226,7 @@ impl Server {
             shared: Shared {
                 serve,
                 plan,
+                delivery,
                 shell,
                 csp,
                 page_headers,
@@ -1250,6 +1253,7 @@ fn document<D: DataSource + 'static>(
                 location,
                 &site,
                 serve.deadline,
+                &shared.delivery,
                 &shared.shell,
                 at,
                 late,
@@ -1265,7 +1269,7 @@ fn document<D: DataSource + 'static>(
         }
         // A JavaScript page drops the document's view ids (page::for_runtime).
         let ids = if shared.js { Ids::Any } else { Ids::Runtime };
-        render_with(
+        render_with_at(
             &shared.plan,
             &data,
             viewport,
@@ -1274,6 +1278,8 @@ fn document<D: DataSource + 'static>(
             serve.deadline,
             ids,
             projection,
+            crate::render_time(),
+            &shared.delivery,
         )
         .and_then(|rendered| {
             let html = match &flush {

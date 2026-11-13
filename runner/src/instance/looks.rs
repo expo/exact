@@ -28,12 +28,16 @@ pub struct Looks {
 }
 
 impl Looks {
-    /// Each state's rows resolved in the tuple now set, for `Op::SetLooks`.
-    pub fn resolve(&self, plan: &Plan) -> Vec<(u8, StyleProps)> {
-        self.states
-            .iter()
+    /// Each state's rows resolved in `tuple`, and the tokens they read
+    /// there: a token's new value may read one its old value didn't (a
+    /// shadow over a base, LLP 1121 stage 12 B3).
+    pub fn resolve_in(&self, plan: &Plan, tuple: u32) -> (Vec<(u8, StyleProps)>, u64) {
+        exact_kernel::style::theme::take_named();
+        let _tuple = super::theme::Bound::new(tuple);
+        let looks = (self.states.iter())
             .map(|(state, rows)| (*state, patch(rows, plan)))
-            .collect()
+            .collect();
+        (looks, exact_kernel::style::theme::take_named())
     }
 }
 
@@ -59,18 +63,11 @@ fn patch(rows: &[Row], plan: &Plan) -> StyleProps {
     patch
 }
 
-/// `view`'s looks, resolved in `tuple`, as `Op::SetLooks` (empty: none),
-/// and the tokens they read as resolved: a token's new value may read one
-/// its old value didn't (a shadow over a base, LLP 1121 stage 12 B3).
+/// `view`'s looks, resolved in their tuple, as `Op::SetLooks` (empty:
+/// none), and the tokens they read ([`Looks::resolve_in`]).
 pub(crate) fn op(view: ViewId, looks: &Looks, plan: &Plan) -> (Op, u64) {
-    exact_kernel::style::theme::take_named();
-    let _tuple = bridge::set_tuple(looks.tuple);
-    let op = Op::SetLooks {
-        id: view,
-        looks: looks.resolve(plan),
-    };
-    bridge::set_tuple(_tuple);
-    (op, exact_kernel::style::theme::take_named())
+    let (looks, tokens) = looks.resolve_in(plan, looks.tuple);
+    (Op::SetLooks { id: view, looks }, tokens)
 }
 
 impl NodeInst {
@@ -109,11 +106,8 @@ impl NodeInst {
             tokens: 0,
             states,
         };
-        exact_kernel::style::theme::take_named();
-        let _tuple = bridge::set_tuple(looks.tuple);
-        let resolved = looks.resolve(plan);
-        bridge::set_tuple(_tuple);
-        looks.tokens = exact_kernel::style::theme::take_named();
+        let (resolved, tokens) = looks.resolve_in(plan, looks.tuple);
+        looks.tokens = tokens;
         u.ops.push(Op::SetLooks {
             id: self.view,
             looks: resolved,

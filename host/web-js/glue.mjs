@@ -50,7 +50,7 @@ export const localImports = text => text
 // A group's files import statically only from it or base (web-host-groups.test.mjs): base's documents-glue.js
 // reads storage-environment.js, so it ships in base, not only with storage.
 const WEB_HOST_GROUPS = {
-  base: ['glue.js', 'navigation.js', 'frame-messages.js', 'frame-navigation.js', 'textflow-glue.js', 'timer-glue.js', 'timer-waits-glue.js', 'timer-observations.js', 'input-glue.js', 'agent-input.js',
+  base: ['glue.js', 'navigation.js', 'audio-session.js', 'frame-messages.js', 'frame-navigation.js', 'textflow-glue.js', 'timer-glue.js', 'timer-waits-glue.js', 'timer-observations.js', 'input-glue.js', 'agent-input.js',
     'http-body.js', 'grant-admission.js', 'faults.js', 'address-space.js', 'media-glue.js', 'list-selection.js', 'markup-editor.js', 'atoms.js', 'decorations.js', 'live-time-glue.js', 'document-glue.js',
     'motion-glue.js', 'group-glue.js', 'collection-glue.js', 'canvas2d-glue.js', 'presence-glue.js', 'picker-glue.js',
     'documents-glue.js', 'storage-environment.js', 'auth-glue.js', 'image-glue.js', 'geometry-glue.js', 'resize-glue.js', 'intersect-glue.js', 'sound-glue.js', 'midi-glue.js', 'prompt-glue.js', 'alert-message.js', 'wakelock-glue.js', 'orientationlock-glue.js', 'menu-rows.js', 'fragment.js'],
@@ -69,10 +69,17 @@ const WEB_HOST_GROUPS = {
 export function webHostFiles(...groups) {
   return Object.fromEntries((groups.length ? groups : Object.keys(WEB_HOST_GROUPS))
     .flatMap(group => WEB_HOST_GROUPS[group]).map(name => [name,
-      name === 'module-prelude.js' ? 'js/src/prelude.js' : name === 'module-binary.js' ? 'js/src/binary.js'
+      name === 'module-binary.js' ? 'js/src/binary.js'
         : name.startsWith('sqlite3.') ? 'node_modules/@sqlite.org/sqlite-wasm/dist/' + (name === 'sqlite3.mjs' ? 'index.mjs' : name)
-          : ['glue.js', 'navigation.js', 'grant-admission.js'].includes(name) ? 'target/web-host/' + name : 'host/web/' + name]));
+          : ['glue.js', 'navigation.js', 'grant-admission.js', 'module-prelude.js'].includes(name) ? 'target/web-host/' + name : 'host/web/' + name]));
 }
+
+/** The data module realm's prelude (LLP 1027 D1a): these scripts, in this order, after module-binary.js, as
+ * js/build.rs joins them natively. The realm evaluates them as one script, `module-prelude.js`, whose hash the
+ * served page's CSP names; each file is a script of its own whose prelude.js takes the parts the others leave. */
+export const MODULE_PRELUDE = ['time.js', 'crypto.js', 'module-work.js', 'fetch.js', 'auth.js', 'store.js', 'storage.js', 'reply.js', 'prelude.js'].map(f => 'js/src/' + f);
+/** `module-prelude.js`'s text, from the repository at `root`. */
+export const modulePrelude = root => MODULE_PRELUDE.map(f => readFileSync(resolve(root, f), 'utf8')).join('\n');
 
 
 /** The two entry modules' static sources, for build invalidation. */
@@ -143,8 +150,9 @@ export async function buildHostGlue(root, { production = false, out = resolve(ro
     }
     const admission = await import(resolve(root, 'host/web/grant-admission.js'));
     writeFileSync(resolve(stage, 'grant-admission.js'), `export { ${Object.keys(admission).join(', ')} } from './navigation.js';\n`);
+    writeFileSync(resolve(stage, 'module-prelude.js'), modulePrelude(root));
     // Readers may already have a published module open while another build finishes.
-    for (const name of ['glue.js', 'navigation.js', 'grant-admission.js']) {
+    for (const name of ['glue.js', 'navigation.js', 'grant-admission.js', 'module-prelude.js']) {
       renameSync(resolve(stage, name), resolve(out, name));
     }
   } finally {

@@ -37,9 +37,12 @@ final class BatchDecodeTests: XCTestCase {
     private var paragraphs = 0
 
     @discardableResult
-    func compare(_ data: Data, decoded: Batch? = nil, file: StaticString = #filePath, line: UInt = #line) throws -> Batch {
-        let old = try JSONDecoder().decode(OracleBatch.self, from: data)
-        let new = decoded ?? Batch.decode(data)
+    func compare(_ data: Data, decoded: Batch? = nil, resolver: AssetResolver? = nil,
+                 file: StaticString = #filePath, line: UInt = #line) throws -> Batch {
+        let decoder = JSONDecoder()
+        decoder.userInfo[.oracleAssets] = resolver
+        let old = try decoder.decode(OracleBatch.self, from: data)
+        let new = decoded ?? Batch.decode(data, resolver: resolver)
         XCTAssertEqual(new.error, old.error, file: file, line: line)
         XCTAssertEqual(new.timers, old.timers, file: file, line: line)
         XCTAssertEqual(new.motion, old.motion, file: file, line: line)
@@ -57,6 +60,7 @@ final class BatchDecodeTests: XCTestCase {
             XCTAssertEqual(a.ids, b.ids, file: file, line: line)
             XCTAssertEqual(a.property, b.property, file: file, line: line)
             XCTAssertEqual([a.x, a.y, a.w, a.h].map(\.bitPattern), [b.x, b.y, b.w, b.h].map(\.bitPattern), file: file, line: line)
+            XCTAssertEqual(a.fitHeight, b.fitHeight, file: file, line: line)
             XCTAssertEqual(a.style, b.style.mapValues(convert), file: file, line: line)
             // A canvas's lists cross as `[address, length]` in the runtime's
             // memory, which the reader copies out (still valid here).
@@ -92,6 +96,51 @@ final class BatchDecodeTests: XCTestCase {
     }
     private func compare(_ text: String) throws -> Batch { try compare(Data(text.utf8)) }
 
+    func testInlineColorWireForms() throws {
+        let light: [Double] = [1, 2, 3, 4], dark: [Double] = [5, 6, 7, 8]
+        let fixtures: [(String, [Double], [Double], Bool, Bool)] = [
+            (#"[1,2,3,4]"#, light, light, false, true),
+            (#"[[1,2,3,4],[5,6,7,8]]"#, light, dark, true, true),
+            (#"{"sys":"exactMissingColor","c":[1,2,3,4]}"#, light, light, true, false),
+            (#"{"c":[[1,2,3,4],[5,6,7,8]],"sys":"exactMissingColor"}"#, light, dark, true, false),
+            (#"{"sys":"named:ExactMissingAsset","c":[[1,2,3,4],[5,6,7,8]]}"#, light, dark, true, true),
+            (#"{"cs":[{"s":"display-p3","v":[1,0,0,1]}],"c":[1,2,3,4]}"#,
+             light + [1, 1, 0, 0, 1], light + [1, 1, 0, 0, 1], false, true),
+            (#"{"cs":[{"s":"srgb","v":[1,0,0,1]},{"s":"display-p3","v":[0,1,0,1]}],"c":[[1,2,3,4],[5,6,7,8]]}"#,
+             light + [0, 1, 0, 0, 1], dark + [1, 0, 1, 0, 1], true, true),
+            (#"{"cs":[{"s":"srgb-linear","v":[-0.5,2,0,0.5]}],"c":[1,2,3,4]}"#,
+             light + [2, -0.5, 2, 0, 0.5], light + [2, -0.5, 2, 0, 0.5], false, true),
+            (#"{"cs":[{"s":"cg:kCGColorSpaceSRGB","i":"relative-colorimetric","v":[0,0,0,1]}]}"#,
+             [0, 0, 0, 255, 0, 0, 0, 0, 1], [0, 0, 0, 255, 0, 0, 0, 0, 1], false, true),
+            (#"{"cs":[{"s":"cg:kCGColorSpaceGenericGrayGamma2_2","i":"perceptual","v":[0,0.5]}]}"#,
+             [0, 0, 0, 128, 0, 0, 0, 0, 0.5], [0, 0, 0, 128, 0, 0, 0, 0, 0.5], false, true)
+        ]
+        for (color, expectedLight, expectedDark, paired, fixed) in fixtures {
+            let batch = try compare(#"{"ops":[{"op":"paragraph","id":1,"runs":[{"id":2,"parent":1,"style":{"text_color":\#(color)}}]}]}"#)
+            let run = try XCTUnwrap(batch.ops.first?.runs.first)
+            XCTAssertNil(batch.error, color)
+            XCTAssertEqual(run.hasSchemeColor, paired, color)
+            XCTAssertEqual(run.run(dark: false).color, expectedLight, color)
+            XCTAssertEqual(run.run(dark: true).color, expectedDark, color)
+            XCTAssertEqual(run.run(dark: false).fixedInk, fixed, color)
+            XCTAssertEqual(run.run(dark: true).fixedInk, fixed, color)
+        }
+        #if os(macOS)
+        let name = "textColor"
+        #else
+        let name = "labelColor"
+        #endif
+        for name in [name, "@tint", "@tint/0.2"] {
+            let batch = try compare(#"{"ops":[{"op":"paragraph","id":1,"runs":[{"id":2,"parent":1,"style":{"text_color":{"sys":"\#(name)","c":[1,2,3,4]}}}]}]}"#)
+            let run = try XCTUnwrap(batch.ops.first?.runs.first)
+            XCTAssertTrue(run.hasSchemeColor)
+            for dark in [false, true] {
+                XCTAssertNotEqual(run.run(dark: dark).color, light, name)
+                XCTAssertFalse(run.run(dark: dark).fixedInk, name)
+            }
+        }
+    }
+
     func testInlineVisibilityInEitherOperationFieldOrder() throws {
         for (style, hidden) in [("{}", false), (#"{"visibility":"visible"}"#, false),
                                 (#"{"visibility":"hidden"}"#, true), (#"{"visibility":"collapse"}"#, true)] {
@@ -106,6 +155,21 @@ final class BatchDecodeTests: XCTestCase {
         }
     }
 
+    func testInlineICCColorWireForm() throws {
+        let profile = try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB)?.copyICCData()) as Data
+        let resolver = AssetResolver(root: URL(fileURLWithPath: "/"), names: ["assets/brand.icc"]) { _ in profile }
+        for intent in ["relative-colorimetric", "absolute-colorimetric", "perceptual", "saturation"] {
+            let data = Data(#"{"ops":[{"op":"paragraph","id":1,"runs":[{"id":2,"parent":1,"style":{"text_color":{"cs":[{"s":"icc:assets/brand.icc","i":"\#(intent)","v":[0,0,0,1]}]}}}]}]}"#.utf8)
+            let batch = try compare(data, resolver: resolver)
+            let run = try XCTUnwrap(batch.ops.first?.runs.first)
+            XCTAssertFalse(run.hasSchemeColor)
+            for dark in [false, true] {
+                XCTAssertEqual(run.run(dark: dark).color, [0, 0, 0, 255, 0, 0, 0, 0, 1], intent)
+                XCTAssertTrue(run.run(dark: dark).fixedInk, intent)
+            }
+        }
+    }
+
     func testEveryOperationAndAdapterPayload() throws {
         let rows = [
             #"{"op":"create","id":4294967295,"kind":"text","props":{"text":"α 👩‍🚀 é\n\"\\\u0001"},"style":{"opacity":0.5,"text_color":[[1,2,3,4],[5,6,7,8]],"future":{"b":true,"n":null}},"handlers":["press","press","change"]}"#,
@@ -116,6 +180,7 @@ final class BatchDecodeTests: XCTestCase {
             #"{"op":"paragraph","id":1,"runs":[{"id":2,"parent":1,"paint":true,"props":{"text":"a","href":"/"},"style":{"line_height":1.25,"font_size":17.3,"font_weight":600,"font_family":1,"letter_spacing":0.1,"font_style":"italic","text_decoration_line":"underline","text_color":[[1,2,3,4],[5,6,7,8]],"ignored":[true]},"handlers":["press"]},{"id":3,"parent":2,"style":{"line_height":"21px","text_color":[1,2,3,4]}}]}"#,
             #"{"op":"frame","id":1,"x":-0,"y":0.1,"w":1e3,"h":1.7976931348623157e308}"#,
             #"{"op":"content","id":1,"w":2,"h":3}"#,
+            #"{"op":"content","id":1,"w":2,"h":3,"fitHeight":180.5}"#,
             #"{"op":"present","id":1,"property":"translate","x":-2.5,"y":0.125}"#,
             #"{"op":"destroy","id":1,"ignored":{"deep":[null,true,"x"]}}"#,
             #"{"op":"flow","id":1,"shapes":[{"rect":[0,1,2,3]}]}"#,
@@ -206,6 +271,12 @@ final class BatchDecodeTests: XCTestCase {
             XCTAssertEqual(Batch.decode(Data(text.utf8)).error, "unreadable batch", text)
             XCTAssertTrue(Batch.decode(Data(text.utf8)).ops.isEmpty, text)
         }
+        for color in [#"{}"#, #"{"sys":"exactMissingColor"}"#, #"{"sys":"exactMissingColor","c":[1,2,3]}"#] {
+            let data = Data(#"{"ops":[{"op":"paragraph","runs":[{"id":1,"parent":0,"style":{"text_color":\#(color)}}]}]}"#.utf8)
+            XCTAssertThrowsError(try JSONDecoder().decode(OracleBatch.self, from: data), color)
+            XCTAssertEqual(Batch.decode(data).error, "unreadable batch", color)
+            XCTAssertTrue(Batch.decode(data).ops.isEmpty, color)
+        }
         for text in [#"{"error":"a"}"#, #"{"ops":[{"op":"paragraph","runs":[{"id":1,"parent":0}]}]}"#] {
             let bytes = Data(text.utf8)
             for end in 0..<bytes.count { XCTAssertEqual(Batch.decode(bytes.prefix(end)).error, "unreadable batch") }
@@ -245,7 +316,7 @@ extension BatchDecodeTests {
         window.contentView = session.presenter.viewport
         session.clock = 0
         session.runtime.observeBatch = { [unowned self] data, batch in
-            do { try self.compare(data, decoded: batch) }
+            do { try self.compare(data, decoded: batch, resolver: ExactApp.shared.resolver) }
             catch { XCTFail("Foundation refused real session batch: \(error)") }
         }
         defer { session.runtime.observeBatch = nil; session.destroy(); window.close() }

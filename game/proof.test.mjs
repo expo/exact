@@ -699,7 +699,7 @@ for (const scenario of ['report','repin','external-repin', ...['ordinary','repea
 
 
 test('clock settle diagnostic names busy, held input, and logs on a real unsettled reply', async () => {
-  const source=readFileSync(resolve(import.meta.dir,'../scripts/agent.mjs'),'utf8');
+  const source=readFileSync(resolve(import.meta.dir,'../scripts/agent-session.mjs'),'utf8');
   const a=source.indexOf("    async clock("), b=source.indexOf('\n    /** Pixels as PNG',a);
   expect(a).toBeGreaterThanOrEqual(0); expect(b).toBeGreaterThan(a);
   const s={now:0,op:async req=>{expect(req).toEqual({op:'clock',settle:true});return {clock:100,settled:false,world:{changing:['player']}};}};
@@ -716,7 +716,7 @@ test('clock settle diagnostic names busy, held input, and logs on a real unsettl
 function pinLiterals(path, text) {
   const evidence=/(^|\/)(artifacts|diaries)\/|^game\/(bench|bakeoff\/[^/]+)\/results\/|^(llp|issues|vendor)\//;
   if(/(^|\/)(Cargo\.lock|bun\.lock|shells\.lock)$/.test(path) || path.endsWith('/pins.json') || evidence.test(path) || path==='scripts/fixtures/fonts/SOURCE.md') return [];
-  const generated = path === '.llp/skills-receipt.json' || path.endsWith('/.baked-assets.json') || ['update/tests/it/fixtures/publisher/canonical.bin','update/tests/it/fixtures/publisher/exact.json'].includes(path);
+  const generated = path === '.llp/skills-receipt.json' || path.endsWith('/.baked-assets.json') || ['update/tests/it/fixtures/publisher/canonical.bin','update/tests/it/fixtures/publisher/exact.json','update/tests/it/fixtures/publisher/assets.json'].includes(path);
   if (generated) return [];
   const samples = new Set(['b510eca2e2ef33f62f9ed57d6e7ce2d10'+'ebb2bdebc4a8e59d347719ba81abdf4', 'a1e3b04de97b11de564ce6e53b95f02954'+'a297f0008183ac63a4f5974f6b32d8', 'd97044e701822bac5a62696459b27d7b3'+'75aada5de8574ed4362edbba94771f7']);
   const constants=new Set(['9e3779b1'+'85ebca87','c2b2ae3d'+'27d4eb4f'].map(v=>'0x'+v));

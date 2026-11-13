@@ -597,7 +597,7 @@ final class FlatLeaves {
             view.frame = placed.drawn
             view.grid = placed
             if let content = leaf.content { view.applyKernelContentBox(content.box, padding: content.padding) }
-            view.alpha = CGFloat(leaf.opacity)
+            view.presentOpacity(CGFloat(leaf.opacity))
         }
         presenter.views[id] = view
         if leaf.rank != 0 { view.setRank(leaf.rank) }

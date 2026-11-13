@@ -144,10 +144,11 @@ function documentBoot(options) {
   const kinds = ["click", "input", "change", "focusin", "focusout", "keydown", "keyup", "compositionstart", "compositionend"];
   for (const kind of kinds) root.addEventListener(kind, record, true);
   for (const kind of ["pointerdown", "keydown", "focusin"]) root.addEventListener(kind, intent, true);
-  // Opening a grouped alert is intent too, even by an invoker with no handler: its message's Tab stop waits for the
-  // runtime (alert-message.js)
-  root.addEventListener("beforetoggle", event => { if (holding && event.newState === "open" && event.target.querySelector?.(':scope > [data-alertpart="message"]')) start(); }, true);
-  if (root.querySelector('dialog[open] > [data-alertpart="message"]')) start(); // one opened before this loaded
+  // Opening a grouped alert or a menu is intent too, even by an invoker with no handler: the alert's message's Tab stop
+  // and the menu's focus and arrows wait for the runtime (alert-message.js, menu-rows.js, input-glue.js)
+  const wakes = el => el.matches?.('[popover][role="menu"]') || el.querySelector?.(':scope > [data-alertpart="message"]');
+  root.addEventListener("beforetoggle", event => { if (holding && event.newState === "open" && wakes(event.target)) start(); }, true);
+  if (root.querySelector('dialog[open] > [data-alertpart="message"], [popover][role="menu"]:popover-open')) start(); // one opened before this loaded
   for (const event of options.early?.splice(0) ?? []) record(event);
   if (!interaction) {
     // Beside the wasm: now, when its download began at the first paint;

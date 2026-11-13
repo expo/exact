@@ -285,7 +285,8 @@ export function render(op, r, how = {}) {
     case 'state': {
       if (!r || typeof r !== 'object') return q(r);
       if (Array.isArray(r)) return stateCap(q(r), r, how);
-      if (r.draws || r.visible || r.look) return renderLook(r);
+      // Routed by what was asked: a world's `perf` has a `draws` (the last frame's count) and a `look` too.
+      if (how.look) return renderLook(r);
       // One line a section: pretty-printing cost an app's state more than half again its JSON (Caltrain, 2026-10-09).
       const { epoch, incarnation, clock, ...rest } = r, app = 'slots' in r;
       const head = [epoch != null && `epoch ${epoch}`, incarnation != null && `incarnation ${incarnation}`, clock != null && `clock ${clock} ms`].filter(Boolean).join(' · ');
@@ -501,9 +502,9 @@ export async function readTrack(s, cursor = trackCursors.get(s)) {
 export async function perfOp(s, args, line, step) {
   if (args[0] === 'frames') {
     if (args[1] === 'health') {
-      const source = ['app', 'scroll'].includes(args[2]) ? args[2] : undefined;
+      const source = ['app', 'scroll', 'window'].includes(args[2]) ? args[2] : undefined;
       const end = source ? 3 : 2;
-      if (args.length !== end && args[end] !== 'during') throw new MalformedOperation('perf frames health [app|scroll] [during "<op>" …]');
+      if (args.length !== end && args[end] !== 'during') throw new MalformedOperation('perf frames health [app|scroll|window] [during "<op>" …]');
       const read = cursor => s.op({ op: 'perf', frames: true, health: true, ...(source ? { source } : {}), ...(cursor ? { cursor } : {}) });
       let before;
       try { before = await read(); }
@@ -521,7 +522,7 @@ export async function perfOp(s, args, line, step) {
       return read(before.cursor);
     }
     if (args[1] === 'report') {
-      if (args.length > 3 || (args[2] !== undefined && !['app', 'scroll'].includes(args[2]))) throw new MalformedOperation('perf frames report [app|scroll]');
+      if (args.length > 3 || (args[2] !== undefined && !['app', 'scroll', 'window'].includes(args[2]))) throw new MalformedOperation('perf frames report [app|scroll|window]');
       return s.op({ op: 'perf', frames: true, report: true, ...(args[2] ? { source: args[2] } : {}) });
     }
     if (args[1] === 'track') {
@@ -558,7 +559,10 @@ export async function perfOp(s, args, line, step) {
           (action !== 'start' && args.length !== 3) || !Number.isInteger(durationMs) || durationMs < 1 || durationMs > 120000) {
         throw new MalformedOperation('perf frames capture start [1–120000 ms] | stop | clear');
       }
-      return s.op({ op: 'perf', frames: true, capture: action, ...(action === 'start' ? { durationMs } : {}) });
+      const reply = await s.op({ op: 'perf', frames: true, capture: action, ...(action === 'start' ? { durationMs } : {}) });
+      // Android's lease lends the display the clock; once it is returned, the driver's goes on from where it stands.
+      if (s.host === 'android' && Number.isFinite(reply.clock)) s.now = reply.clock;
+      return reply;
     }
     const at = word => { const i = args.indexOf(word); return i < 0 ? undefined : Number(args[i + 1]); };
     const live = at('live'), late = at('late');
@@ -574,6 +578,25 @@ export async function perfOp(s, args, line, step) {
         await new Promise(resolve => setTimeout(resolve, live));
         return await s.op({ op: 'perf', frames: true, health: true, cursor: before.cursor });
       } finally { await s.op({ op: 'perf', frames: true, capture: 'stop' }); }
+    }
+    if (live !== undefined && s.host === 'android') {
+      // Android's capture lease lends the display the clock (LLP 1079.000 §7.1), so the window's frames are real ones:
+      // the baseline is read once it is lent, and the lease ends with the window, giving the driver its clock back.
+      if (live > 30000 || late !== undefined || args.length !== 3 || args[1] !== 'live') throw new MalformedOperation('perf frames live <1–30000 ms> on Android; use report for hitch detail');
+      const capture = await s.op({ op: 'perf', frames: true, capture: 'start', durationMs: live + 5000 });
+      if (!capture.capture) return capture;
+      try {
+        // Both sources over the same window: Exact's turns, and the window's frames beside them.
+        const read = (source, cursor) => s.op({ op: 'perf', frames: true, health: true, source, ...(cursor ? { cursor } : {}) });
+        const before = await read('app'), window = await read('window');
+        if (before.error || !before.available) return before;
+        await new Promise(resolve => setTimeout(resolve, live));
+        const after = await read('app', before.cursor);
+        return window.cursor ? { ...after, windowFrames: await read('window', window.cursor) } : after;
+      } finally {
+        const stopped = await s.op({ op: 'perf', frames: true, capture: 'stop' });
+        if (Number.isFinite(stopped.clock)) s.now = stopped.clock;
+      }
     }
     return s.perf(null, { frames: true, late, ...(live !== undefined ? { live } : {}) });
   }
@@ -949,7 +972,8 @@ export function renderTrace(t) {
 /** Quantiles are bounds from finalized populations; frame rates from callbacks never certify presentation. */
 export function renderFrameHealthMetrics(report) {
   if (report.error) return `frame health unavailable: ${report.error} · ${report.reason ?? 'read a fresh baseline'}`;
-  if (Buffer.byteLength(JSON.stringify(report), 'utf8') > 4000) throw new Error('Frame health metrics exceed the 4 KB limit. Request a fresh snapshot with a matching Exact reader.');
+  // Each source's reply has its own budget: Android's live window carries the window's frames beside it.
+  if (Buffer.byteLength(JSON.stringify({ ...report, windowFrames: undefined }), 'utf8') > 4000) throw new Error('Frame health metrics exceed the 4 KB limit. Request a fresh snapshot with a matching Exact reader.');
   const frames = report.frames ?? {}, work = report.work ?? {}, window = report.window ?? {};
   const bounds = value => Array.isArray(value) && value.length === 2 ? `${(Number(value[0]) / 1e6).toFixed(2)}–${value[1] == null ? '∞' : (Number(value[1]) / 1e6).toFixed(2)} ms` : 'unknown';
   const { policy, cadence, target, contentLatency } = report.assessments ?? {};
@@ -966,10 +990,18 @@ export function renderFrameHealthMetrics(report) {
     `generation ${window.generation ?? '?'} · ${window.kind ?? '?'} · intervals finalized ${window.intervalFromNs ?? '?'}..${window.intervalThroughNs ?? '?'} ns · work finalized ${window.workFromNs ?? '?'}..${window.workThroughNs ?? '?'} ns`,
     `callbacks ${frames.callbacks ?? '?'} · held ${frames.held ?? '?'} · frame intervals ${frames.intervals ?? '?'} · ${frames.perSecond == null ? 'rate unknown' : `${frames.perSecond.toFixed(2)} FPS`} · missed ${frames.missedFrames ?? '?'} of ${frames.requestedSlots ?? '?'} requested slots`,
     `frame time median ${bounds(frames.medianBoundsNs)} · p99 ${bounds(frames.p99BoundsNs)} · pacing changes ${frames.pacingChanges ?? '?'} · schedule changes ${frames.cadenceChanges ?? '?'}`,
-    `work records ${work.records ?? '?'} · late ${work.late ?? `unknown${work.latenessUnknown ? ` (${work.latenessUnknown})` : ''}`} · in flight ${work.pending ?? '?'}, overdue ${work.overdue ?? 'unknown'} · median ${bounds(work.medianBoundsNs)} · p99 ${bounds(work.p99BoundsNs)} · maximum ${bounds(work.maximumBoundsNs)}`,
-    `coverage ${JSON.stringify(report.coverage ?? {})}`,
-    'Bounds include the lower value and exclude the upper value. A frame is a callback that started frame work, timed from the display link; presentation, Core Animation commits, input latency and GPU execution remain unmeasured, so a proxy pass covers callbacks and Exact\'s own work only.'].join('\n');
+    `work records ${work.records ?? '?'} · late ${work.late ?? `unknown${work.latenessUnknown ? ` (${work.latenessUnknown})` : ''}`} · in flight ${work.pending ?? '?'}, overdue ${work.overdue ?? 'unknown'}${work.lost > 0 ? `, lost ${work.lost}` : ''} · median ${bounds(work.medianBoundsNs)} · p99 ${bounds(work.p99BoundsNs)} · maximum ${bounds(work.maximumBoundsNs)}`,
+    `coverage ${JSON.stringify(report.coverage ?? {})}${report.droppedReports > 0 ? ` · ${report.droppedReports} reports lost before they were read` : ''}`,
+    `Bounds include the lower value and exclude the upper value. ${FRAME_SOURCES[report.source] ?? FRAME_SOURCES.apple}`,
+    ...(report.windowFrames ? ['', renderFrameHealthMetrics(report.windowFrames)] : [])].join('\n');
 }
+
+/** What a frame is, and what stays unmeasured, by source (LLP 1079.000 §6.1, §6.2). */
+const FRAME_SOURCES = {
+  apple: 'A frame is a callback that started frame work, timed from the display link; presentation, Core Animation commits, input latency and GPU execution remain unmeasured, so a proxy pass covers callbacks and Exact\'s own work only.',
+  'exact-app-choreographer': 'A frame is a Choreographer turn on exact2\'s thread, timed from its vsync until the main thread ingested what it published; presentation, RenderThread, input latency and GPU execution remain unmeasured, so a proxy pass covers turns and Exact\'s own work only.',
+  'android-frame-metrics': 'A frame is one the window drew, from its intended vsync for its FrameMetrics total duration, against its deadline; the window says nothing when it idles, so frame times and cadence are unknown, and presentation and SurfaceViews remain unmeasured.',
+};
 
 /** Exact's frame clock's users, from bit 40 of a screen's row (`FrameClock.Order`) */
 const SCREEN_ASKERS = ["the session's clock", "a list's offset correction", 'a navigation reveal', 'the scroll pump', 'heavy leaves', 'a live SVG filter', 'a resize grip'];
@@ -998,6 +1030,13 @@ export function renderFrameHealthReport(report) {
   out.push(`build ${identity.build ?? 'unknown'}${identity.buildDirty ? ' (dirty)' : ''} · app build ${identity.appBuild ?? 'unknown'} · ${identity.buildKind ?? 'unknown build kind'} · ${identity.simulator === true ? 'simulator' : identity.simulator === false ? 'physical device' : 'unknown device type'}`,
     `${identity.device ?? 'unknown device'} · ${identity.os ?? 'unknown OS'} · display maximum ${identity.displayMaximumHz ?? '?'} Hz · live-agent parity ${report.scope?.liveAgentParity ?? 'unknown'}`);
   if (report.time?.clamped) out.push('Timing values were clamped; exact durations are unavailable beyond the integer range.');
+  // Every frame since the collector's reset, which the rows' late frames are a few of: bin bounds, null unmeasured
+  const core = report.coreSinceReload ?? {};
+  const bounds = value => Array.isArray(value) && value.length === 2 ? `${(Number(value[0]) / 1e6).toFixed(2)}–${value[1] == null ? '∞' : (Number(value[1]) / 1e6).toFixed(2)} ms` : 'unknown';
+  const spread = b => b ? `median ${bounds(b.median)}, p99 ${bounds(b.p99)}, maximum ${bounds(b.maximum)}` : 'unmeasured';
+  out.push(`since reset: ${core.callbacks ?? '?'} ${screen ? 'updates' : 'callbacks'} · ${screen ? '' : `frame intervals ${core.frameIntervals ?? '?'} · missed ${core.missedFrames ?? 'unknown'} · `}late ${core.lateFrames ?? 'unknown'}`,
+    `  ${screen ? '' : `frame time ${spread(core.frameTimeBoundsNs)} · `}work ${spread(core.workBoundsNs)}`);
+  if (report.otherSources?.length) out.push(`other sources: ${report.otherSources.map(s => `${s.source} (${s.retainedEvents ?? '?'} retained)`).join(', ')} · ${report.selection ?? 'one source per report'}`);
   const ms = value => value == null ? 'unknown' : `${(value / 1e3).toFixed(3)} ms`;
   for (const row of hitches) {
     if (!Array.isArray(row) || row.length !== columns.length || row.slice(0, 3).some(value => typeof value !== 'string' || !/^\d{1,20}$/.test(value)) ||
@@ -1091,6 +1130,9 @@ function renderAgreement(a) {
   return out.join('\n');
 }
 
+/** The second words of `state` that read a world's look frame. */
+export const LOOK_READS = ['draws', 'visible', 'look'];
+
 /** The `state` op's words (LLP 1116.007 D3.9). `state` is the whole record; `state <target>` a world's own (a game's
  * `world:*` or `world:entity`: its entities; `state <canvas> input` its world's input); a name that is a state, derive or resource, or a field of the record
  * (`mediaSession`), reads that, down a dotted path (`groceries.0.done`) as an authored `expect state` does. Any other
@@ -1098,7 +1140,7 @@ function renderAgreement(a) {
  * or text (a sequencer's `transport` bar and the record's `transport`). */
 export async function stateOp(s, args) {
   // `state <canvas> draws`, `state <canvas>:<entity> visible` and `state <canvas> look` are a world's look frame (LLP 1127.000 D1, D4).
-  const look = ['draws', 'visible', 'look'].includes(args[1]) ? { [args[1]]: true, world: true } : {};
+  const look = LOOK_READS.includes(args[1]) ? { [args[1]]: true, world: true } : {};
   const page = { ...look, ...(args[1] === 'events' ? {world:true, events:true, ...(args[2] ? {event_type:args[2]} : {})} : {}), ...(args.includes('from') ? { from: Number(args[args.indexOf('from') + 1]) } : {}), ...(args.includes('limit') ? { limit: Number(args[args.indexOf('limit') + 1]) } : {}), ...(args.includes('resources') ? { resources: true } : {}) };
   const read = (target) => s.state(target, args[1] === 'under' ? args[2] : undefined, args[1] === 'pose', args[1] === 'busy', page);
   if (args[0] == null) return read();

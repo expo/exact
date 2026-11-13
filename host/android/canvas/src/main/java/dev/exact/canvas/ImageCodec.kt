@@ -20,7 +20,7 @@ import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Android's image codec (LLP 1133.019 D16), called from exact2's storage workers through JNI
- * (`host/linux/src/canvas/codec.rs`), which drives these steps in the order and with the search every codec shares:
+ * (`host/painted/src/canvas/codec.rs`), which drives these steps in the order and with the search every codec shares:
  * a decode upright, an edit (turn, flip, crop, size) as `Bitmap` transforms, an encode, and the metadata. A decoded
  * picture is held under a handle until it is closed. Steps run on the calling thread and never on the main one.
  *
@@ -191,10 +191,14 @@ object ImageCodec {
     )
 
     /** What the encoder writes of the picture's own structure, and the offsets of the file it came from. */
-    private fun structural(tag: String) = listOf("Pointer", "Offset", "ByteCount", "Interchange", "Thumbnail").any { it in tag } ||
-        tag in setOf("Orientation", "ImageWidth", "ImageLength", "PixelXDimension", "PixelYDimension", "BitsPerSample",
-            "Compression", "PhotometricInterpretation", "SamplesPerPixel", "PlanarConfiguration", "RowsPerStrip",
-            "YCbCrSubSampling", "YCbCrPositioning", "NewSubfileType", "SubfileType")
+    internal fun structural(tag: String) = tag in setOf(
+        "StripOffsets", "StripByteCounts", "TileOffsets", "TileByteCounts", "FreeOffsets", "FreeByteCounts",
+        "ExifIFDPointer", "GPSInfoIFDPointer", "InteroperabilityIFDPointer", "SubIFDPointer",
+        "JPEGInterchangeFormat", "JPEGInterchangeFormatLength", "ThumbnailImage", "ThumbnailImageWidth",
+        "ThumbnailImageLength", "ThumbnailOrientation",
+        "Orientation", "ImageWidth", "ImageLength", "PixelXDimension", "PixelYDimension", "BitsPerSample",
+        "Compression", "PhotometricInterpretation", "SamplesPerPixel", "PlanarConfiguration", "RowsPerStrip",
+        "YCbCrSubSampling", "YCbCrPositioning", "NewSubfileType", "SubfileType")
 
     /** Every tag `ExifInterface` names. */
     private val every: List<String> by lazy {
@@ -203,9 +207,9 @@ object ImageCodec {
     }
 
     /**
-     * [encoded] with [mode]'s set of [source]'s metadata (`keep`: every tag, location, maker note and XMP included;
-     * `no-location`: [described]), its orientation reset and its size [width]×[height]. Null where `ExifInterface`
-     * writes none for [type] (JPEG always; PNG and WebP from API 30).
+     * [encoded] with [source]'s EXIF and supported JPEG IPTC/XMP, its orientation reset and size rewritten.
+     * `no-location` keeps [described] and IPTC rights only. Null when preservation is unsupported or malformed;
+     * the caller then uses the encoded pixels and reports `metadata: "none"` (LLP 1133.019 D15).
      */
     @JvmStatic
     fun metadata(source: ByteArray, encoded: ByteArray, type: String, mode: String, width: Int, height: Int): ByteArray? {
@@ -214,15 +218,18 @@ object ImageCodec {
         val file = File.createTempFile("exact-edit", ".img")
         return try {
             val from = ExifInterface(ByteArrayInputStream(source))
+            val metadata = ImageMetadata.read(source, from.getAttributeBytes("Xmp"), mode, width, height)
+            if (metadata.segments.isNotEmpty() && type != "image/jpeg") return null
             file.writeBytes(encoded)
             val to = ExifInterface(file.path)
-            val tags = if (mode == "keep") every.filter { !structural(it) } else described
+            val tags = if (mode == "keep") every.filter { !structural(it) && it != "Xmp" } else described
             for (tag in tags) from.getAttribute(tag)?.let { to.setAttribute(tag, it) }
+            metadata.embeddedXmp?.let { to.setAttribute("Xmp", it) }
             to.setAttribute(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL.toString())
             to.setAttribute(ExifInterface.TAG_PIXEL_X_DIMENSION, width.toString())
             to.setAttribute(ExifInterface.TAG_PIXEL_Y_DIMENSION, height.toString())
             to.saveAttributes()
-            file.readBytes()
+            ImageMetadata.write(file.readBytes(), type, metadata.segments)
         } catch (e: Exception) {
             null
         } finally {

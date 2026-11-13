@@ -72,4 +72,4 @@ On Linux, the processes of an app share one queue file; each changes it under a 
 ## Tests
 
 `modules/observe/tests/wire.json` is one fixture that all three encoders must produce:
-`bun test ./modules/observe/tests/wire.test.mjs` checks Swift and JS. `bun test ./modules/observe/tests/tabs.test.mjs` runs the web service in two tabs of one Chromium profile. `cargo test -p exact-linux --test observe` checks Rust, including dispatch, retry, sampling and panic recovery.
+`bun test ./modules/observe/tests/wire.test.mjs` checks Swift and JS. `bun test ./modules/observe/tests/tabs.test.mjs` runs the web service in two tabs of one Chromium profile. `cargo test -p exact-painted --test observe` checks Rust, including dispatch, retry, sampling and panic recovery.

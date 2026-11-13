@@ -19,7 +19,7 @@ import android.view.HapticFeedbackConstants
  * What exact2 asks of the platform, acted on (LLP 1115.001 D5): the one channel out. exact2 queues a request and
  * wakes the reader; whoever holds the host takes the queue ([Native.requests], on exact2's thread) and hands it to
  * the main thread, where [perform] reads it. A request with an answer (the share sheet) is answered later by its id
- * ([Exact.answer]). `host/android/README.md` has the kinds and their words; `host/linux/src/presenter/requests.rs`
+ * ([Exact.answer]). `host/android/README.md` has the kinds and their words; `host/painted/src/presenter/requests.rs`
  * writes them.
  *
  * Everything here is the platform's own: an `Intent` for a link, `performHapticFeedback` for a haptic, the system's
@@ -35,6 +35,10 @@ internal class Requests(private val activity: ExactActivity) {
         private set
     /** The top layer's windows (LLP 1115.001 D10): what exact2 says of its open surface goes to them. */
     var surfaces: Surfaces? = null
+    /** The GPU surfaces' haptics (LLP 1009 D10), made at the first, and whether the activity is paused, which they are
+     * made with: the first may come after a pause. */
+    private var haptics: SurfaceHaptics? = null
+    private var paused = false
 
     /** `x_log_requests=1` (exact2's EXACT_LOG_REQUESTS): each request as it is acted on, to the log. A haptic or a
      * clipboard write shows nowhere else. */
@@ -52,6 +56,21 @@ internal class Requests(private val activity: ExactActivity) {
         }
     }
     private var listening = false
+    private var sound: SoundOutput? = null
+    private var foreground = true
+
+    fun foreground(on: Boolean) { foreground = on; sound?.foreground(on) }
+
+    private fun sounds(text: String) {
+        val body = org.json.JSONObject(text)
+        val ops = body.getJSONArray("ops")
+        if (sound == null && (0 until ops.length()).any { ops.getJSONObject(it).getInt("kind") == 1 }) {
+            val info = activity.packageManager.getApplicationInfo(activity.packageName, android.content.pm.PackageManager.GET_META_DATA)
+            val policy = SoundPolicy.of(info.metaData?.getString("dev.exact.audioSession") ?: "ambient")
+            sound = SoundOutput(activity, policy).also { if (!foreground) it.foreground(false) }
+        }
+        sound?.apply(body)
+    }
 
     private fun listen() {
         if (listening) return
@@ -87,6 +106,9 @@ internal class Requests(private val activity: ExactActivity) {
                     MODULE -> Extensions.call(id, string(words, body).first)
                     PRESENCE -> Presence.check(string(words, body).first)
                     ORIENTATION -> orientation.told(words, body)
+                    // The surface, then its message's JSON.
+                    SURFACE_HAPTIC -> (haptics ?: SurfaceHaptics(activity, paused).also { haptics = it }).told(words[body], string(words, body + 1).first)
+                    SOUND -> sounds(string(words, body).first)
                 }
             } catch (e: RuntimeException) {
                 // The platform refused (no activity to start from, a full clipboard transaction): the app goes on.
@@ -220,13 +242,20 @@ internal class Requests(private val activity: ExactActivity) {
     /** The activity is in front again. A share sheet that was up and has said nothing was dismissed: answered so a
      * moment later, since the sheet's word of a choice is a broadcast and may land just after. */
     fun resumed() {
+        paused = false
+        haptics?.suspended = false
         if (sharing.isEmpty()) return
         val waiting = sharing.toIntArray()
         activity.window.decorView.postDelayed({ for (id in waiting) if (sharing.remove(id)) Exact.answer(id, "dismissed") }, DISMISSED_MS)
     }
 
+    /** Paused: no surface's haptics play until [resumed]. */
+    fun paused() { paused = true; haptics?.suspended = true }
+
     /** The activity goes: no sheet of its answers any more, and each still up is cancelled. */
     fun destroy() {
+        haptics?.destroy()
+        sound?.destroy()
         if (listening) activity.unregisterReceiver(receiver)
         for (id in sharing) Exact.answer(id, null)
         sharing.clear()
@@ -257,6 +286,8 @@ internal class Requests(private val activity: ExactActivity) {
         const val PRESENCE = 12
         const val ORIENTATION = 13
         const val PAD_INPUT = 14
+        const val SURFACE_HAPTIC = 15
+        const val SOUND = 16
         /** How long after the activity is in front again a share sheet's choice is still waited for. */
         const val DISMISSED_MS = 500L
     }

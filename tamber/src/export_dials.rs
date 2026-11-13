@@ -95,7 +95,7 @@ fn same(a: &str, b: &str) -> bool {
 /// A CSS colour as the colour it reads as.
 pub(crate) fn read_css(text: &str) -> Option<exact_color::Wide> {
     match exact_color::parse(text)? {
-        exact_color::Parsed::Legacy(c) => Some(crate::Half::legacy(c).wide()),
+        exact_color::Parsed::Legacy(c, _) => Some(crate::Half::legacy(c).wide()),
         exact_color::Parsed::Wide(w) => Some(w),
         _ => None,
     }

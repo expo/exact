@@ -56,6 +56,13 @@ pub enum CallOrigin {
     Wake,
     /// A tool invocation (LLP 1111).
     Tool,
+    /// A notification's background action the person chose (LLP 1133.004
+    /// stage 2, as amended 2026-11-12): the person's act for that one
+    /// declared action, run with no view. It may call a name held to the
+    /// app (`"origin": "app"`) that shows nothing; it opens no UI, so a
+    /// prompt, a presence check, a name only the foreground may call and
+    /// the host commands a wake may not run are refused, as for a wake.
+    Action,
     /// A person's input, or the app's own code in a foreground session.
     #[default]
     App,
@@ -68,6 +75,7 @@ impl CallOrigin {
             CallOrigin::Device => "device",
             CallOrigin::Wake => "wake",
             CallOrigin::Tool => "tool",
+            CallOrigin::Action => "action",
             CallOrigin::App => "app",
         }
     }
@@ -231,9 +239,15 @@ impl<D: DataSource> Runner<D> {
     }
 
     /// Whether invocation `id` owns work in flight: a request, an armed
-    /// `then`, a held call or a queued send stamped with it.
+    /// `then`, a native statement, a held call or a queued send stamped with it.
     pub(in crate::runner) fn invocation_owns(&self, id: u64) -> bool {
-        !self.invocation_tickets(id).is_empty()
+        self.extensions
+            .declared
+            .statements
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains_key(&id)
+            || !self.invocation_tickets(id).is_empty()
             || (self.extensions.origins.then_ids.iter())
                 .any(|(m, i)| *i == id && self.then_due[*m].is_finite())
             || (self.extensions.held.iter()).any(|h| h.id == id)
@@ -656,6 +670,9 @@ impl<D: DataSource> Runner<D> {
             self.log(format!("{}: refused, {why}", self.key(row)));
             return Decision::Now(json!({ "error": code, "message": why }));
         }
+        if let Some(refused) = self.undeclared(row, args) {
+            return Decision::Now(refused);
+        }
         if let Err(why) = self.admit(row, args, origin) {
             self.log(format!("{}: refused, {why}", self.key(row)));
             if why.starts_with("person-required") {
@@ -741,6 +758,45 @@ impl<D: DataSource> Runner<D> {
         };
         self.span_admitted(row, args, origin, &decision);
         decision
+    }
+
+    /// An option whose values are the app's declarations takes one of them
+    /// (LLP 1133.004 stage 2): the platform shows only what was registered
+    /// at launch, so data code cannot add to it. The refusal, journaled.
+    pub(super) fn undeclared(&mut self, row: &ModulesRow, args: &Json) -> Option<Json> {
+        let sub = self.substitute(row);
+        let declares = sub["declares"].as_object()?;
+        let source = &self.plan.sources[row.source.0 as usize];
+        let shape = self
+            .plan
+            .source_params
+            .get(source.params.start as usize)
+            .and_then(|p| exact_js_value::Shape::from_plan(&self.plan, p.ty).ok());
+        let option = declares.iter().find(|(option, _)| {
+            let field = match &shape {
+                Some(exact_js_value::Shape::Record(fields)) => fields
+                    .iter()
+                    .find(|(name, _)| name == *option)
+                    .map(|(_, field)| field),
+                _ => None,
+            };
+            let normalize = |value: &Json| {
+                let mut value = value.clone();
+                if let Some(field) = field {
+                    super::absent_is_none(&mut value, field);
+                }
+                value
+            };
+            let given = normalize(&args[option.as_str()]);
+            let declared = sub["declared"][option.as_str()].as_array();
+            !given.is_null() && !declared.is_some_and(|d| d.iter().any(|v| normalize(v) == given))
+        })?;
+        let why = format!(
+            "{} not declared: only a literal the app's Contract writes declares them",
+            option.0
+        );
+        self.log(format!("{}: refused, {why}", self.key(row)));
+        Some(json!({ "error": "TypeError", "message": why }))
     }
 
     /// The permission a call of `row` with `args` asks: its declared one,
@@ -1054,7 +1110,11 @@ impl<D: DataSource> Runner<D> {
         // (LLP 1133.036 D3).
         let joins = (sub["samples"]["stream"].as_str()).is_some_and(|s| self.app_rate(s).is_some())
             || self.joins_running(row, args);
-        if applies && app_only && origin != CallOrigin::App && !joins {
+        // A background action is the person's act: it may call a name held
+        // to the app, which shows nothing there (the foreground rule below
+        // refuses one that would).
+        let persons = matches!(origin, CallOrigin::App | CallOrigin::Action);
+        if applies && app_only && !persons && !joins {
             return Err(format!("person-required ({} origin)", origin.word()));
         }
         // A call the app holds admits a capture's start while hidden on iOS
@@ -1066,7 +1126,10 @@ impl<D: DataSource> Runner<D> {
                 && origin == CallOrigin::App
                 && self.in_call()
         };
-        if applies && sub["foreground"] == true && self.page.in_background() && !calling() {
+        if applies
+            && sub["foreground"] == true
+            && (origin == CallOrigin::Action || (self.page.in_background() && !calling()))
+        {
             return Err("not in the foreground".into());
         }
         Ok(())
@@ -1109,10 +1172,11 @@ fn fetch_refusal(grants: &str, at: &str, given: &str) -> Option<String> {
 }
 
 /// Every origin, least privileged first.
-pub(in crate::runner) const ORIGINS: [CallOrigin; 4] = [
+pub(in crate::runner) const ORIGINS: [CallOrigin; 5] = [
     CallOrigin::Device,
     CallOrigin::Wake,
     CallOrigin::Tool,
+    CallOrigin::Action,
     CallOrigin::App,
 ];
 

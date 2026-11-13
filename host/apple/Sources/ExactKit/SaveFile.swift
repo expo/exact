@@ -34,13 +34,16 @@ extension Picker {
         if let text = ruling["text"] as? String {
             let dir = FileManager.default.temporaryDirectory.appendingPathComponent("exact-text-\(UUID().uuidString)", isDirectory: true)
             let file = dir.appendingPathComponent(name)
+            // The scratch copy holds the app's text, so it goes when the save ends.
+            let discard: () -> Void = { _ = try? FileManager.default.removeItem(at: dir) }
             do {
                 try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
                 try Data(text.utf8).write(to: file)
             } catch {
+                discard()
                 session.log("saveFile: refused: \(error.localizedDescription)"); saveCancelled(view); return
             }
-            presentSave(view: view, file: file, name: name)
+            presentSave(view: view, file: file, name: name, done: discard)
             return
         }
         guard let from = ruling["from"] as? String else { return }
@@ -101,8 +104,9 @@ extension Picker {
 
 #if os(tvOS)
 extension Picker {
-    func presentSave(view: UInt32, file _: URL, name _: String) {
+    func presentSave(view: UInt32, file _: URL, name _: String, done: () -> Void = {}) {
         // tvOS has no document picker to export through.
+        done()
         session.log("saveFile: refused: no document picker"); saveCancelled(view)
     }
 }
@@ -110,7 +114,9 @@ extension Picker {
 extension Picker {
     /// iOS: a scratch copy under the suggested name, handed to the
     /// exporting document picker, which moves a copy where the person says.
-    func presentSave(view: UInt32, file: URL, name: String) {
+    /// `done` runs once `file` is copied or refused: the picker reads only its copy.
+    func presentSave(view: UInt32, file: URL, name: String, done: () -> Void = {}) {
+        defer { done() }
         guard let controller = ViewPresentation.presenter(for: session.presenter.views[view] ?? session.presenter.root) else {
             session.log("saveFile: refused: no window"); saveCancelled(view); return
         }
@@ -140,13 +146,15 @@ extension Picker {
 extension Picker {
     /// macOS: an NSSavePanel sheet on the window, typed by the suggested
     /// name's extension; the copy replaces what the person agreed to replace.
-    func presentSave(view: UInt32, file: URL, name: String) {
+    /// `done` runs when the panel ends, saved or cancelled.
+    func presentSave(view: UInt32, file: URL, name: String, done: @escaping () -> Void = {}) {
         let panel = NSSavePanel()
         panel.nameFieldStringValue = name
         panel.canCreateDirectories = true
         let ext = (name as NSString).pathExtension
         if !ext.isEmpty, let type = UTType(filenameExtension: ext) { panel.allowedContentTypes = [type] }
         let finish: (NSApplication.ModalResponse) -> Void = { [weak self, weak panel] response in
+            defer { done() }
             guard let self else { return }
             guard response == .OK, let url = panel?.url else { self.saveCancelled(view); return }
             let scoped = url.startAccessingSecurityScopedResource()

@@ -34,10 +34,26 @@ export function observe(views, inactive = () => false) {
   const role = (el, prop) => /^var\(--exact-([\w-]+)/.exec(authored(el, prop))?.[1];
   const W = innerWidth, H = innerHeight, r2 = (x) => Math.round(x * 100) / 100;
   const modal = document.querySelector('dialog:modal');
-  const shown = (el, b) => b.width > 0 && b.height > 0
-    && (!el.checkVisibility || el.checkVisibility({ opacityProperty: true, visibilityProperty: true }))
-    && !inertAncestor(el) && !el.closest('[data-exiting]') && (!modal || modal.contains(el)) && !inactive(el);
-  const opacity = (el) => { let o = 1; for (let e = el; e && e !== document.documentElement; e = e.parentElement) o *= Number(getComputedStyle(e).opacity); return o; };
+  // Folded text has line boxes but no element box. Its nearest box controls rendering; its own visibility can
+  // override that box's, as an ordinary descendant's can.
+  const box = el => {
+    if (!el.hasAttribute('data-exact-text') || getComputedStyle(el).display !== 'contents') return el.getBoundingClientRect();
+    const words = document.createRange(); words.selectNodeContents(el);
+    return words.getBoundingClientRect();
+  };
+  const shown = (el, b) => {
+    let rendered = el;
+    if (getComputedStyle(el).display === 'contents') {
+      if (getComputedStyle(el).visibility !== 'visible') return false;
+      do { rendered = rendered.parentElement; } while (rendered && getComputedStyle(rendered).display === 'contents');
+      if (!rendered || getComputedStyle(rendered).contentVisibility === 'hidden') return false;
+    }
+    return b.width > 0 && b.height > 0
+      && (!rendered.checkVisibility || rendered.checkVisibility({ opacityProperty: true, visibilityProperty: rendered === el }))
+      && !inertAncestor(el) && !el.closest('[data-exiting]') && (!modal || modal.contains(el)) && !inactive(el);
+  };
+  const ownOpacity = el => { const s = getComputedStyle(el); return s.display === 'contents' ? 1 : Number(s.opacity); };
+  const opacity = (el) => { let o = 1; for (let e = el; e && e !== document.documentElement; e = e.parentElement) o *= ownOpacity(e); return o; };
   // What paints that a computed colour does not say: a picture, a native widget, a gradient.
   const opaque = (e, s) => /^(img|svg|canvas|video|iframe|picture|object|embed)$/.test(e.localName) || s.backgroundImage !== 'none'
     || (/^(button|input|select|textarea|progress|meter)$/.test(e.localName) && (s.appearance ?? s.webkitAppearance ?? 'none') !== 'none');
@@ -51,7 +67,7 @@ export function observe(views, inactive = () => false) {
     const cx = at.left + at.width / 2, cy = at.top + at.height / 2, chain = [];
     for (let e = el; e; e = e.parentElement) chain.push(e);
     const alpha = []; // each box's opacity times its ancestors'
-    for (let i = chain.length - 1, o = 1; i >= 0; i--) alpha[i] = o *= Number(getComputedStyle(chain[i]).opacity);
+    for (let i = chain.length - 1, o = 1; i >= 0; i--) alpha[i] = o *= ownOpacity(chain[i]);
     const layers = [];
     let by, accent = false, top = null;
     for (let i = 0; i < chain.length; i++) {
@@ -80,8 +96,10 @@ export function observe(views, inactive = () => false) {
       layers.push(canvasColor); top = document.documentElement;
     }
     // A box painted between the text and that fill, not one of its ancestors: an image under a title, a stacked sibling.
-    const stack = document.elementsFromPoint(Math.min(Math.max(cx, 0), W - 1), Math.min(Math.max(cy, 0), H - 1)), from = stack.indexOf(el);
-    if (from >= 0) for (const e of stack.slice(from + 1)) {
+    const stack = document.elementsFromPoint(Math.min(Math.max(cx, 0), W - 1), Math.min(Math.max(cy, 0), H - 1));
+    // A folded text has no hit-test entry. Include its nearest ancestor in the stack: it may be the opaque fill.
+    const anchor = chain.find(e => stack.includes(e));
+    if (anchor) for (const e of stack.slice(stack.indexOf(anchor))) {
       if (e === top) break;
       if (!e.contains(el) && !el.contains(e) && paints(e)) return null;
     }
@@ -109,11 +127,7 @@ export function observe(views, inactive = () => false) {
   };
   // Whether a box holds what a person reads or uses: a control, or a text whose words show. A bare text is
   // `display: contents`, with no box of its own: its words' box is its.
-  const holds = (el) => [...el.querySelectorAll(`[data-exact-text], ${CONTROL}`)].some((e) => {
-    if (getComputedStyle(e).display !== 'contents') return shown(e, e.getBoundingClientRect());
-    const words = document.createRange(); words.selectNodeContents(e);
-    return getComputedStyle(e).visibility === 'visible' && shown(e.parentElement, words.getBoundingClientRect());
-  });
+  const holds = (el) => [...el.querySelectorAll(`[data-exact-text], ${CONTROL}`)].some(e => shown(e, box(e)));
   const fixed = (el, upTo) => { for (let e = el; e && e !== upTo; e = e.parentElement) if (/^(fixed|sticky)$/.test(getComputedStyle(e).position)) return true; return false; };
   const scrolls = (e) => /^(auto|scroll)$/.test(getComputedStyle(e).overflowY) && e.scrollHeight > e.clientHeight + 1;
   // What keeps a box's sideways overflow its own: a box that clips on x, or one that scrolls sideways on purpose (an authored
@@ -179,9 +193,13 @@ export function observe(views, inactive = () => false) {
   const all = [...document.querySelectorAll('#exact-root *')];
   for (const el of all) {
     if (!ids.has(el) || el.namespaceURI !== 'http://www.w3.org/1999/xhtml') continue;
-    const b = el.getBoundingClientRect();
+    const b = box(el);
     if (!shown(el, b)) continue;
     const cs = getComputedStyle(el), item = { id: ids.get(el), x: r2(b.x), y: r2(b.y), w: r2(b.width), h: r2(b.height) };
+    // A run of a paragraph that wraps is a box per line (CSS Inline 3 §2): its box bounds them all, and takes in the ends of
+    // lines it shares with the runs before and after it. The driver judges such a run by its lines.
+    const lines = cs.display === 'inline' ? [...el.getClientRects()].filter((r) => r.width > 0 && r.height > 0) : [];
+    if (lines.length > 1) item.lines = lines.map((r) => ({ x: r2(r.left), y: r2(r.top), w: r2(r.width), h: r2(r.height) }));
     // A padded percentage width wider than its parent is a finding wherever the box lies, below the fold too.
     const padded = widerThanParent(el, cs);
     if (padded) item.padded = padded;
@@ -233,6 +251,8 @@ export function observe(views, inactive = () => false) {
         let inked = false;
         for (let a = el; a && !inked; a = a === e ? null : a.parentElement) inked = !!authored(a, 'color');
         if (!inked && e.hasAttribute('data-native')) item.platformInk = true;
+        // The tinted style's label in the button's accent, over a pale fill of it, as iOS's observer says (`tinted`).
+        if (!inked && e.getAttribute('data-button-style') === 'tinted') item.tinted = true;
         break;
       }
       const ellipsis = cs.textOverflow === 'ellipsis' && cs.overflowX !== 'visible';
@@ -280,26 +300,46 @@ export function observe(views, inactive = () => false) {
       item.control = el.localName === 'a' ? 'link' : el.localName === 'input' ? (el.type || 'text') : el.getAttribute('role') ?? (el.localName === 'button' || el.localName === 'select' || el.localName === 'textarea' ? el.localName : 'press');
       const own = SIZE.some((p) => authored(el, p));
       item.sized = !own && (el.hasAttribute('data-native') || el.matches(AGENT_SIZED)) ? 'platform' : 'author';
-      if (el.localName === 'a' && cs.display === 'inline') item.inline = true;
+      // A target in a sentence, its size the line's (WCAG 2.5.8's inline exception): a link or a pressable run in a
+      // paragraph that says more than it does.
+      if (cs.display === 'inline') {
+        let p = el.parentElement;
+        while (p && getComputedStyle(p).display === 'inline') p = p.parentElement;
+        if (p && p.textContent.trim() !== el.textContent.trim()) item.inline = true;
+      }
       if (el.matches(':disabled') || el.getAttribute('aria-disabled') === 'true') item.disabled = true;
+    }
+    // What lets taps through (`pointer-events: none`) is no target, and a hit test cannot say what lies over it. In an
+    // announcement laid over the page (a toast: a live region out of flow), it lies over what is beneath by design.
+    const through = cs.pointerEvents === 'none';
+    if (through) {
+      let live = false, out = false;
+      for (let e = el; e && e.id !== 'exact-root' && !live; e = e.parentElement) {
+        live = /^(polite|assertive)$/.test(e.getAttribute('aria-live') ?? '') || /^(status|alert)$/.test(e.getAttribute('role') ?? '');
+        out ||= /^(absolute|fixed)$/.test(getComputedStyle(e).position);
+      }
+      if (live && out) item.overlay = true;
     }
     // What a finger at its middle reaches; covered only where no scroller could move it clear. Past the screen's top
     // or bottom where nothing scrolls it in (a column taller than the screen) is out of reach: a control's finding.
-    if (item.control || text) {
-      const my = b.top + b.height / 2;
+    if ((item.control || text) && !through) {
+      // A wrapped run's middle may be another run's: a finger aims at its longest line.
+      const at = lines.length > 1 ? lines.reduce((p, q) => (q.width * q.height > p.width * p.height ? q : p)) : b;
+      const my = at.top + at.height / 2;
       if (my >= H || my < 0) { if (item.control && !reach(el, null, my < 0)) item.cover = { kind: 'offscreen', name: my < 0 ? 'the top of the screen' : 'the bottom of the screen' }; }
       else {
-        const cx = Math.min(Math.max(b.left + b.width / 2, 1), W - 1), hit = document.elementFromPoint(cx, my);
+        const cx = Math.min(Math.max(at.left + at.width / 2, 1), W - 1), hit = document.elementFromPoint(cx, my);
         if (hit && hit !== el && !el.contains(hit) && !hit.contains(el)) {
           // What is drawn over its middle at rest (the subtree beside it the hit is in), scrolled clear or not.
           let c = hit; while (c.parentElement && !c.parentElement.contains(el)) c = c.parentElement;
           const cb = c.getBoundingClientRect();
           item.beneath = { by: viewOf(c), x: r2(cb.left), y: r2(cb.top), w: r2(cb.width), h: r2(cb.height) };
-          if (!reach(el, hit, false, my) && !slides(el, b.left + b.width / 2)) item.cover = { by: viewOf(hit), name: hit.localName, kind: modal && !modal.contains(hit) ? 'sheet' : 'node' };
+          if (!reach(el, hit, false, my) && !slides(el, at.left + at.width / 2)) item.cover = { by: viewOf(hit), name: hit.localName, kind: modal && !modal.contains(hit) ? 'sheet' : 'node' };
         }
       }
-      if (text && !item.cut && b.bottom - H >= 2 && b.top < H && !reach(el, null, false)) item.cut = { edge: 'bottom', dx: 0, dy: r2(b.bottom - H) };
     }
+    // Past the screen's bottom where nothing scrolls to it: geometry, whether or not it takes taps.
+    if (text && !item.cut && b.bottom - H >= 2 && b.top < H && !reach(el, null, false)) item.cut = { edge: 'bottom', dx: 0, dy: r2(b.bottom - H) };
     // A card: a filled box, not itself text or a control, that holds a text or a control, its fill what sets that group
     // apart from the page. None is a box with square corners that reaches a side of the viewport (the page itself, or a
     // band across it); a list, whose ground is the page under its rows (a grouped list's grey, its sections the cards);

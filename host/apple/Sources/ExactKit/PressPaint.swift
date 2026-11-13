@@ -57,6 +57,7 @@ struct PressPaint {
     var focusShown = false
     /// The opacity the looks that hold show, if one names it.
     var lookOpacity: Float?
+    var lookMotionStates: UInt8 = 0
     /// The text colour the looks that hold show, if one names it, and the
     /// one the views below were last given (`inkLooks`).
     var lookInk: BatchValue?
@@ -103,15 +104,16 @@ extension NodeView {
     private func pressDepth(_ s: NodeStyle) -> Float {
         let shown = pressPaint.lookOpacity ?? ownOpacity
         if let to = s["press_opacity_to"]?.number {
-            return shown - Float(min(1, max(0, to)))
+            return (shown - Float(min(1, max(0, to)))) * filterOpacityFactor
         }
-        return shown * (1 - Float(min(1, max(0, s["press_opacity"]?.number ?? 1))))
+        return shown * (1 - Float(min(1, max(0, s["press_opacity"]?.number ?? 1)))) * filterOpacityFactor
     }
 
     /// The looks again, as they hold now: after a change the flags don't
     /// show (the node's `disabled`, a state held or let go).
     func relook() {
         HeldState.propsChanged() // a node disabled, or under a disabled one, holds no state
+        refreshLookMotion()
         guard let base = pressPaint.lookBase else { return }
         restyleForPress(pressPainted(looked(base)))
         inkLooks()
@@ -120,12 +122,13 @@ extension NodeView {
 
     /// AppKit's layer is optional, UIKit's not.
     private var paintLayer: CALayer? { layer }
-    /// The node's own opacity, as the engine presents it.
-    private var ownOpacity: Float {
+    var filterOpacityFactor: Float { boxFilter?.opacity ?? 1 }
+    /// The engine's opacity before the filter, retained even at `opacity(0)`.
+    var ownOpacity: Float {
         #if os(macOS)
         Float(alphaValue)
         #else
-        Float(alpha)
+        boxFilter?.unfilteredOpacity ?? (layer as? NodeLayer)?.ownOpacity ?? Float(alpha)
         #endif
     }
 
@@ -231,12 +234,17 @@ extension NodeView {
             guard let node = child as? NodeView else { inkBelow(child, ink: ink, inherited: inherited); continue }
             // (One an ancestor's press colours now takes this one's, if what it shows beneath is the same; not one
             // showing its own colour, a press's included, which is its subtree's boundary.)
-            guard !node.showsOwnTextColor, node.pressPaint.inkedBy.view === self || node.style["text_color"] == inherited
+            // A mode boundary (`-exact-mode`, LLP 1121 D7) writes the colour around it again in its own tuple, a
+            // value of its own: it takes the colour too, and the views below it that take that value. A control's
+            // colour is the platform's, never one it inherits.
+            let boundary = node.wrote("mode") && node.kind != "control"
+            guard !node.showsOwnTextColor, boundary || node.pressPaint.inkedBy.view === self || node.style["text_color"] == inherited
                 || (node.pressPaint.inkedBy.view != nil && node.pressPaint.rest["text_color"] ?? nil == inherited) else { continue }
+            let base = node.pressPaint.overlay["text_color"] == nil ? node.style["text_color"] : node.pressPaint.rest["text_color"] ?? nil
             if !pressPaint.inked.contains(where: { $0.view === node }) { pressPaint.inked.append(WeakNodeView(view: node)) }
             node.pressPaint.inkedBy = WeakNodeView(view: self)
             node.standInForPress(["text_color": ink])
-            inkBelow(node, ink: ink, inherited: inherited)
+            inkBelow(node, ink: ink, inherited: boundary ? base : inherited)
         }
     }
 
@@ -296,10 +304,31 @@ extension NodeView {
     /// they take it in place of: its press's while that is down (or its
     /// release waiting), else that of a look that holds.
     private var lent: (ink: BatchValue, inherited: BatchValue?)? {
-        if pressPaint.down || pressPaint.releaseHeld, let ink = Self.pressOverlay(style)["text_color"] {
-            return (ink, pressPaint.rest["text_color"] ?? nil)
-        }
+        if let ink = pressInk { return (ink, pressPaint.rest["text_color"] ?? nil) }
         return pressPaint.lookInk.map { ($0, pressPaint.lookBase?["text_color"]) }
+    }
+
+    /// Its press's colour while that is down (or its release waiting).
+    private var pressInk: BatchValue? {
+        pressPaint.down || pressPaint.releaseHeld ? Self.pressOverlay(style)["text_color"] : nil
+    }
+
+    /// The views a batch placed take the colour a node above lends now (a
+    /// look's or a press's), as the views already there do: each lender inks
+    /// its subtree again, once.
+    static func inkPlaced(_ views: some Sequence<NodeView>) {
+        var lenders = Set<ObjectIdentifier>()
+        for view in views {
+            // A colour lent by a node it is no longer below goes, with what it lent below.
+            if let by = view.pressPaint.inkedBy.view, !view.isDescendant(of: by) {
+                view.endLent(by: by)
+                by.endInk(below: view, by: by)
+            }
+        }
+        for view in views where !view.wrote("text_color") {
+            guard let lender = view.liveLender(), lenders.insert(ObjectIdentifier(lender)).inserted else { continue }
+            lender.inkAgain()
+        }
     }
 
     /// A style that removed this press's colour can expose an ancestor's
@@ -325,14 +354,12 @@ extension NodeView {
     /// one shows; the release lends the look's (`inkPress`).
     private func inkLooks() {
         let ink = pressPaint.lookInk
-        guard ink != pressPaint.lookInkLent else { return }
-        if pressPaint.down || pressPaint.releaseHeld, Self.pressOverlay(style)["text_color"] != nil { return }
+        guard ink != pressPaint.lookInkLent, pressInk == nil else { return }
         pressPaint.lookInkLent = ink
-        if let ink {
-            inkBelow(self, ink: ink, inherited: pressPaint.lookBase?["text_color"] ?? nil)
-            return
-        }
+        if ink != nil { inkAgain(); return }
+        // The views it inked, also one a batch moved out from under it since.
         endInk(below: self, by: self)
+        for view in pressPaint.inked.compactMap(\.view) where view !== self { view.endLent(by: self) }
         pressPaint.inked.removeAll { $0.view !== self }
         liveLender()?.inkAgain()
     }
@@ -373,10 +400,13 @@ extension NodeView {
     /// The press's opacity again when what it starts from or goes to moves
     /// (the node's own opacity, a look's, style `s`'s press rows): the fade on
     /// the same ease with the new depth; a press opacity no longer written goes
-    /// at once.
+    /// at once. The look's opacity is held again first, a native button's too.
     func refreshPressOpacity(_ s: NodeStyle? = nil) {
-        if isNativeButton { refreshNativeActivePresentation(); return }
         applyLookOpacity()
+        if isNativeButton { refreshNativeActivePresentation(); return }
+        #if os(iOS)
+        refreshDimOpacity()
+        #endif
         // Held, easing in or easing out: the fade is always `-depth ×
         // progress` on the press's own ease, so what shows moves with it, as
         // on the web and Linux (`shown + (to − shown) × progress`).
@@ -408,9 +438,25 @@ extension NodeView {
         #if os(iOS)
         lookHover(Self.look("hover", in: s) != nil) // a pointer's hover (LookHoverIOS.swift)
         #endif
+        refreshLookMotion()
         let shown = pressPainted(looked(s))
         applyLookOpacity()
         return shown
+    }
+
+    private func refreshLookMotion() {
+        let states: UInt8 = disabled ? 0 : (pressPaint.hovered || holds("hover") ? 1 : 0) | (pressPaint.focusShown || holds("focus-visible") ? 2 : 0)
+        guard states != pressPaint.lookMotionStates else { return }
+        pressPaint.lookMotionStates = states
+        let view = id
+        // A style can be arriving inside a batch. Observe after that batch is applied.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, id == view, let session = presenter?.session else { return }
+            session.whenIdle(bound: true) { [weak self, weak session] in
+                guard let self, id == view, let session else { return }
+                session.applyUnlessEmpty(session.runtime.lookMotion(view, states: pressPaint.lookMotionStates, now: session.now()))
+            }
+        }
     }
 
     private func looked(_ s: NodeStyle) -> NodeStyle {
@@ -422,11 +468,14 @@ extension NodeView {
         for (state, on) in [("hover", pressPaint.hovered || holds("hover")), ("focus_visible", pressPaint.focusShown || holds("focus-visible"))] where on {
             guard let look = Self.look(state, in: s) else { continue }
             for key in Self.lookRows {
-                // A row the look clears is null: the base's goes (no shadow).
-                if case .null? = look[key] { s.removeValue(forKey: key) } else if let value = look[key] { s[key] = value }
+                // A row the look clears is null: CSS's `unset`, for `color` the colour around (inherited), for the
+                // rest their initial value, none (no shadow).
+                if case .null? = look[key] {
+                    if key == "text_color", let around = nodeSuperview?.style["text_color"] { s[key] = around } else { s.removeValue(forKey: key) }
+                } else if let value = look[key] { s[key] = value }
             }
             if let o = look["opacity"]?.number { pressPaint.lookOpacity = Float(min(1, max(0, o))) }
-            if let ink = look["text_color"], ink != .null { pressPaint.lookInk = ink }
+            if look["text_color"] != nil, let ink = s["text_color"] { pressPaint.lookInk = ink }
         }
         return s
     }
@@ -438,8 +487,8 @@ extension NodeView {
         guard let to = pressPaint.lookOpacity else { layer.removeAnimation(forKey: "lookOpacity"); return }
         let hold = CABasicAnimation(keyPath: "opacity")
         hold.isAdditive = true
-        hold.fromValue = to - ownOpacity
-        hold.toValue = to - ownOpacity
+        hold.fromValue = (to - ownOpacity) * filterOpacityFactor
+        hold.toValue = hold.fromValue
         hold.duration = .greatestFiniteMagnitude
         hold.isRemovedOnCompletion = false
         hold.fillMode = .both

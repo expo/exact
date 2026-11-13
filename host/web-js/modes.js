@@ -6,10 +6,11 @@
 // (`data-x-pin`) over the tuple around it, and writes on the boundary every
 // inherited colour row it does not set, from the text of the nearest
 // ancestor's row when that row read a token, as the runner's implied rows
-// are (`instance/theme.rs`); a boundary that writes the colour again names
-// the state looks whose colour would reach it (`data-x-lc`), so it takes
-// theirs while one holds. It runs after each commit, a pin's change and
-// `setMode`. Like the runner's, the window's modes do not persist (§9 Q5).
+// are (`instance/theme.rs`); a boundary that does not set its own colour
+// names the state looks whose colour reaches it (`data-x-lc`), so it takes
+// theirs, resolved in its own modes, while one holds. It runs after each
+// commit, a pin's change and `setMode`. Like the runner's, the window's modes
+// do not persist (§9 Q5).
 import { After, PropHooks, inflight, say } from "./rt.js";
 
 // The rows by bit (`modes.rs` `CHANNELS`).
@@ -37,32 +38,32 @@ function pinned(text, base) {
 
 /** Row `j` at `e`, as the nearest element that sets it wrote it: its text
  * (`property:value`) when it read a token, null when it read none or none
- * sets it. A binding's is on its element (`Sx`), a class's in `Texts`. */
-function channel(e, j) {
+ * sets it. A binding's is on its element (`Sx`), a class's in `Texts`.
+ * `seen` takes the state looks (`data-exact-looks`) of the elements walked,
+ * that one included (`sets`: those whose `color` reaches `e`), and that
+ * element (`from`). */
+function channel(e, j, seen) {
   for (; e?.nodeType === 1; e = e.parentElement) {
+    const looks = seen && e.getAttribute("data-exact-looks");
+    if (looks) seen.sets.push(looks);
     const own = e.$xi?.[j];
-    if (own !== undefined) return own;
-    for (const c of e.classList) { const at = Classes[c]?.[j]; if (at !== undefined) return at >= 0 ? Texts[at] : null; }
+    if (own !== undefined) { if (seen) seen.from = e; return own; }
+    for (const c of e.classList) { const at = Classes[c]?.[j]; if (at !== undefined) { if (seen) seen.from = e; return at >= 0 ? Texts[at] : null; } }
   }
   return null;
 }
 
-/** The state looks (`data-exact-looks`) whose `color` reaches `e`: its own
- * and its ancestors', up to and with the nearest that sets its colour, as
- * `channel` walks, space-separated. */
-function looking(e) {
-  const sets = [];
-  for (; e?.nodeType === 1; e = e.parentElement) {
-    const at = e.getAttribute("data-exact-looks");
-    if (at) sets.push(at);
-    if (e.$xi?.[0] !== undefined || [...e.classList].some(c => Classes[c]?.[0] !== undefined)) break;
-  }
-  return sets.join(" ");
-}
-/** A boundary that writes the colour around it again takes the colour of
- * the looks `sets` names while one holds (the sheet's `[data-x-lc~=…]`
- * rules, looks.rs `colour_below`), as its subtree would inherit it. */
-const mark = (b, sets) => { if (sets) { if (b.getAttribute("data-x-lc") !== sets) b.setAttribute("data-x-lc", sets); } else if (b.getAttribute("data-x-lc") != null) b.removeAttribute("data-x-lc"); };
+/** A boundary that does not set its own colour takes the colour of the
+ * looks `sets` names, nearest first, while one holds (the sheet's
+ * `[data-x-lc~=…]` rules, looks.rs `colour_below`), resolved in its own
+ * modes, as a token it inherits is. Each is named by its position, so the
+ * nearest that holds wins; those past `LOOK_DEPTH` share the last. */
+const LOOK_DEPTH = 3;
+const mark = (b, sets) => {
+  const lc = sets.map((set, k) => `${Math.min(k + 1, LOOK_DEPTH)}:${set}`).join(" ") || null;
+  if (b.getAttribute("data-x-lc") === lc) return;
+  if (lc) b.setAttribute("data-x-lc", lc); else b.removeAttribute("data-x-lc");
+};
 
 /** The boundaries under `root`, in document order (the render DOM has no
  * selectors). */
@@ -99,20 +100,27 @@ function apply() {
     else b.$xbad = undefined;
     b.$xd = d;
     if (tuples) set(b, key(d));
-    const own = Number(b.getAttribute("data-x-b")), was = b.$xs ??= [];
+    const own = Number(b.getAttribute("data-x-b")), was = b.$xs ??= [], seen = { sets: [], from: null };
     for (let j = 0; j < CH.length; j++) {
       // Its own row stands, from its CSS or a binding that sets it now.
-      if (own & 1 << j || b.$xi?.[j] !== undefined) { was[j] = undefined; if (j === 0) mark(b, ""); continue; }
-      const text = channel(b.parentElement, j);
-      if (j === 0) mark(b, text == null ? "" : looking(b.parentElement));
+      if (own & 1 << j || b.$xi?.[j] !== undefined) { was[j] = undefined; continue; }
+      const text = channel(b.parentElement, j, j === 0 ? seen : null);
       if (was[j] === text) continue;
       write(b, j, was[j], text);
       was[j] = text;
     }
+    mark(b, seen.sets);
+    b.$xfrom = was[0] == null ? null : seen.from;
   }
   globalThis.exact?.repaintPress?.(); // a held press eases over the tuples as they are now (input-glue.js)
 }
 const set = (e, k) => { if (e.getAttribute("data-x-modes") !== k) e.setAttribute("data-x-modes", k); };
+
+/** The boundaries under `el` that write again a colour `el` gives them:
+ * one it sets or one from above it, no element between setting its own. A
+ * press's colour on `el` reaches them as the input glue paints it (its
+ * `paintRule`), as it reaches the text beside them. */
+(globalThis.exact ??= {}).pressBelow = el => [...boundaries(el)].filter(b => b.$xfrom && (b.$xfrom === el || !el.contains(b.$xfrom)));
 
 /** Row `j` written again on `b` as `text` (`property:value`), over `was`. An
  * accent names the property buttons read too, unless it names the accent

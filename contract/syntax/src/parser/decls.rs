@@ -190,6 +190,10 @@ impl Parser {
         if transient {
             self.next();
         }
+        let keep = self.at_ident("keep");
+        if keep {
+            self.next();
+        }
         self.newline()?;
         Ok(ResourceDecl {
             name,
@@ -200,6 +204,7 @@ impl Parser {
             placeholder,
             each,
             transient,
+            keep,
             gate,
             span,
         })
@@ -248,17 +253,20 @@ impl Parser {
             let mut kind = match f.as_str() {
                 "every" => TaskKind::Every,
                 "after" => TaskKind::After,
+                "change" => TaskKind::Change,
                 _ => {
                     return p.err(
                         "contract-task-body",
-                        "a task body is `every(ms, action)`, `every(frame, action)` or `after(ms, action)`",
+                        "a task body is `every(ms, action)`, `every(frame, action)`, `after(ms, action)` or `change(action)` with `key=`",
                     )
                 }
             };
             p.expect_punct("(")?;
             // `every(frame, a)`: `frame` there is a word, not an expression (LLP 1073 D1).
             let frame = p.at_ident("frame") && matches!(p.peek2(), TokenKind::Punct(","));
-            let ms = if frame {
+            let ms = if kind == TaskKind::Change {
+                Expr::Number(0.0, fspan)
+            } else if frame {
                 if kind == TaskKind::After {
                     return p.err(
                         "contract-task-body",
@@ -271,7 +279,9 @@ impl Parser {
             } else {
                 p.expr()?
             };
-            p.expect_punct(",")?;
+            if kind != TaskKind::Change {
+                p.expect_punct(",")?;
+            }
             let action = p.named_ident(fspan)?;
             while p.eat_punct(",") {
                 let (name, at) = p.ident()?;

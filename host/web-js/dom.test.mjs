@@ -81,7 +81,7 @@ async function withRenderRuntime(run) {
   const previous = globalThis.document, doc = createDocument();
   globalThis.document = doc;
   try {
-    const real = ['rt.js', 'elements.js', 'shape.js', 'overlay.js', 'held.js', 'roster.js', 'budget.js'];
+    const real = ['rt.js', 'clock.js', 'resources.js', 'tree.js', 'events.js', 'pieces.js', 'mount.js', 'strings.js', 'elements.js', 'shape.js', 'overlay.js', 'held.js', 'roster.js', 'budget.js'];
     for (const name of real) copyFileSync(resolve(import.meta.dir, name), resolve(dir, name));
     for (const [name, source] of standIns(real)) writeFileSync(resolve(dir, name), source);
     await run(doc, await import(resolve(dir, 'rt.js')));
@@ -111,6 +111,8 @@ test.each([['', false], ['b', false], ['', true], ['b', true]])(
     a.textContent = 'a'; settled(true);
     expect(select.options.map(o => o.hasAttribute('selected'))).toEqual([false, true]);
     expect(b.value).toBe('');
+    P(b, 'value', () => null); settled(true);
+    expect([b.getAttribute('value'), b.value]).toEqual([null, 'c']);
   }),
 );
 
@@ -255,6 +257,8 @@ test('Bun-rendered bound links and symbols keep their attributes through adoptio
         text "site"
       link href=url target="_self" testId="authored"
         text "same tab"
+      link href=url rel="noreferrer" testId="kept"
+        text "kept"
       image \`symbol:\${role}\` testId="sym"
       image \`symbol:\${role}\` alt="A person" testId="named"
       button press=local testId="local"
@@ -283,6 +287,7 @@ test('Bun-rendered bound links and symbols keep their attributes through adoptio
         return {
           link: ['href', 'target', 'rel'].map(k => el('lnk').getAttribute(k)),
           authored: ['target', 'rel'].map(k => el('authored').getAttribute(k)),
+          kept: el('kept').getAttribute('rel'),
           symbols: ['sym', 'named'].map(id => el(id).getAttribute('alt')),
         };
       }),
@@ -299,9 +304,10 @@ test('Bun-rendered bound links and symbols keep their attributes through adoptio
     await page.getByTestId('external').click();
     await page.waitForFunction(() => document.querySelector('[data-testid="lnk"]').getAttribute('href') === 'https://example.com/a');
     const external = await read();
-    const expected = link => ({ attrs: { link, authored: ['_self', null], symbols: ['', 'A person'] }, images: 1 });
-    const out = expected(['https://example.com/a', '_blank', 'external noopener']);
-    expect({ before, adopted, local, external }).toEqual({ before: out, adopted: out, local: expected(['/about', null, null]), external: out });
+    // An authored `rel` keeps its tokens, and the ones a new browsing context needs join it (LLP 1141.002 D1).
+    const expected = (link, kept) => ({ attrs: { link, authored: ['_self', null], kept, symbols: ['', 'A person'] }, images: 1 });
+    const out = expected(['https://example.com/a', '_blank', 'external noopener'], 'noreferrer external noopener');
+    expect({ before, adopted, local, external }).toEqual({ before: out, adopted: out, local: expected(['/about', null, null], 'noreferrer'), external: out });
   } finally {
     await browser?.close(); server?.stop(true); rmSync(dir, { recursive: true, force: true });
   }

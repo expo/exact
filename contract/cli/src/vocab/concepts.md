@@ -142,7 +142,7 @@ component App
 - Each option is one short `text` (or a symbol `image` with an `aria-label`); leave its
   look unsaid. A radio that paints itself (its own `background-color`, `border` or
   `border-radius`, LLP 1104 D2) makes the group your drawn control on every host, keys
-  and all; `appearance="none"` on the `radiogroup` says so whatever the radios write. Six or more options, or long labels: a `select` (`contract vocab select`). A setting on or off: `input
+  and all; `appearance="none"` on the `radiogroup` says so whatever the radios write. Six or more options, or labels that do not fit side by side at the largest text size (verify reads it): a `select` (`contract vocab select`). A setting on or off: `input
   type="checkbox" switch`.
 - An item checked off (a to-do, a shopping list) is a plain `input type="checkbox"`: on iOS
   the checklist's circle, as Reminders draws it, never a switch. Several of a fixed set (a
@@ -188,6 +188,9 @@ test "a course is picked"
 - In a test or a drive, `type` picks an option by its `value`; a tap does not open the menu.
 - An option whose `value` is `""` stands for none chosen ("None", "Choose…"). Two to five
   short options are a `choice` (a segmented control).
+- A `select` is no wider than what holds it (an implied `max-width: 100%`), however long its
+  options. Beside a label in a row it keeps its width until the row is full: let the row
+  wrap (`flex-wrap="wrap"`), or give the select `min-width=0` to shrink with the row.
 
 ## screen: a second screen, a list and its detail, and Back
 names: navigate, navigation, navigationBack, back, detail, route, routes, router, list-detail, master-detail, deep-link, deep link, protocol_handlers, openURL, url-scheme, react-router, back button, back-button, back title, backButtonDisplayMode, headerBackTitle, backButtonTitle, backBarButtonItem, navigationBackTitle, large title, large-title, largeTitle, prefersLargeTitles, navigation bar, navigation-bar, navbar, UINavigationBar, phase, stage, anchor, hashchange, location.hash
@@ -302,7 +305,10 @@ A form you lay out (fields, Save, Cancel) is a route presented as a sheet:
 `navigationBack` names, so the iOS swipe down and the web's Escape press it, and the screen
 under it is inert. A question with buttons only is a `dialog role="alertdialog"`
 (`contract vocab confirm`). A `dialog` you lay out yourself is a smaller thing: the web's and
-macOS's modal `dialog`, and on iOS a sheet as tall as its content, with no bar.
+macOS's modal `dialog`, and on iOS a sheet as tall as its content, with no bar. One whose own
+`background-color` or `background-image` you write is your box, not the platform's: on iOS it is
+HTML's top layer, over any sheet, centred, its own `animation` its entrance and, when an `if`
+removes it, its `-exact-exit-animation` its exit.
 `role="dialog"` on a `column` gets no Escape, focus or sheet anywhere. A `dialog` opens with
 `showModal(id)` or `commandfor=id command="show-modal"` and takes no `open`: in HTML `open` alone
 shows a dialog non-modally, and a dialog that state holds open is not available yet.
@@ -613,10 +619,10 @@ component App
 More: docs/recipes/after-a-write.md
 
 ## resource: a read from the data module
-names: source, sources, fetch, load, useEffect, useQuery, query, transient, no-store, volatile, ephemeral
+names: sources, fetch, load, useEffect, useQuery, query, transient, no-store, volatile, ephemeral
 
-`resource name = source(args) as shape T else empty()` asks the source in `app.ts` and shows its
-answer as `name`; the arguments are state, so a change asks again. Until the first answer it is
+`resource name = source(args) as shape T else empty()` asks the source in `app.ts`
+(or a declared `source`) and shows its answer as `name`; the arguments are state, so a change asks again. Until the first answer it is
 `else empty()`, the shape's zero. `pending(name)`: a request out; `failed(name)`: no answer;
 `current(name)`: it shows its arguments' answer. `when cond` asks nothing while `cond` is
 false. Only the root declares one.
@@ -633,11 +639,44 @@ component App
       text `${hits.length} found` testId="n"
 ```
 
-- The source answers exactly the shape (an extra field fails it), and a failed fetch is data, not
-  an exception. A child takes what it shows as props; `refresh name` in an action asks again.
-- `transient` after the shape: the answer is never kept on the device for the next launch.
+- `app.ts` answers exactly the shape (an extra field fails it); a failed fetch is data, not
+  an exception; `refresh name` in an action asks again. A child takes what it shows as props.
+- `transient` after the shape: the answer is never kept for the next launch.
 
 More: docs/recipes/fetch-loading-error.md
+
+## source: one HTTP request declared in Contract (a GET, a GraphQL query), with no data module
+names: declared, http, get, rest, endpoint, url, api, graphql, json, pointer
+
+`source name(param: type) as shape T`, at the top of `app.contract`, then `fetch()`'s lines:
+`url` (required; `{param}` puts the argument in, encoded), `method` (`GET` unless named),
+`header "Name" "value"` (`{param}`, or `{secret:name}` for a secret the data module keeps),
+`body json` (the parameters as one JSON object) or `graphql "…"` (a `POST` of the operation and
+its variables), and `pointer "/data/items"` (a JSON Pointer to the answer). The runner makes the
+request, so an app whose sources are all declared needs no `app.ts` and its native build links no
+JavaScript engine. The URL's origin is its grant. The answer reads the shape's fields by name
+and ignores the rest; an absent `option` field is `none`.
+
+```contract
+shape Current
+  temperature_2m: number
+
+source weather(latitude: number, longitude: number) as shape Current
+  url "https://api.open-meteo.com/v1/forecast?latitude={latitude}&longitude={longitude}&current=temperature_2m"
+  pointer "/current"
+
+component App
+  resource now = weather(52.52, 13.41) as shape Current
+  view
+    text `${now.temperature_2m}°` testId="temp"
+```
+
+- `failure(now)`: `offline`, `timeout` or `refused` as the network failed, `error` for a status
+  outside 200–299 or a GraphQL `errors` (its `extensions.code` is `reason`), `shape` for an answer
+  outside the shape. Token refresh, pagination, offline queues and overlays stay in `app.ts`.
+- A `send` may use one with `method "POST"` and `body json`; rename a field in a `derive`.
+
+More: docs/recipes/declared-source.md
 
 ## match: take an option apart (some, none)
 names: case, option, optional, null, undefined, nullable
@@ -905,7 +944,7 @@ along the gradient line. `background-attachment` takes `scroll` or `fixed`;
 hatch on separate rows does not establish one pattern across the list.
 
 ## menu: a pull-down menu of actions, and a long-press one
-names: menus, popover, dropdown, pulldown, pull-down, popupmenu, menu at the click, popup at point, contextPopover, UIMenu, context menu, context-menu, contextMenu, UIContextMenuInteraction, menuitemradio, menuitemcheckbox, checkmark, menuOrder, preferredMenuElementOrder, menu order, reversed menu
+names: menus, popover, dropdown, pulldown, pull-down, popupmenu, menu at the click, popup at point, contextPopover, UIMenu, context menu, context-menu, contextMenu, UIContextMenuInteraction, menuitemradio, menuitemcheckbox, checkmark, menuOrder, preferredMenuElementOrder, menu order, reversed menu, menu section, section title, displayInline, sectionHeader
 
 A menu is HTML's: a `column popover="auto" role="menu"` of `button`s, opened by a button's
 `popovertarget` (on iOS a `UIMenu`; in a `header`, the bar item's pull-down). A long-press
@@ -945,6 +984,12 @@ component App
 - A row's second `text`, under the first (a block `button`, or `flex-direction="column"`), is
   its grey subtitle: `text "Name"` then `text "A to Z"`. Side by side they stay one title.
 - An `hr` between rows starts a section; `destructive=true` paints a row red.
+- A titled section is a `column role="group" aria-label="Your presets"` holding its rows, as
+  WAI-ARIA groups a menu's items: iOS shows the title over the section
+  (`UIMenu(title:options: .displayInline)`), the Mac a section header, Android, Linux and
+  Windows a title row. The web draws the group as written, so to show the title there too,
+  write it inside as `text "Your presets" id="mine"` and name it with `aria-labelledby="mine"`
+  in place of `aria-label`: the native menus take that text as the title, not as a row.
 - iOS puts the first row nearest the finger, so a menu opening upward from near the bottom
   of the screen shows its rows last first. `menuOrder="fixed"` on the trigger keeps them as
   written; `"priority"` always puts the first row nearest the finger.
@@ -956,8 +1001,8 @@ component App
 A test opens one with `tap "sort"`, a long-press one with `tap "row-1" contextmenu`, then
 taps the item. A row whose `popovertarget` names another menu is its submenu.
 
-## search: the bar's search field, filtering a list or querying a server
-names: searchable, searchbar, search-bar, UISearchBar, UISearchController, search bar, search field, hidesSearchBarWhenScrolling, hideWhenScrolling, sticky search
+## search: the bar's search field, filtering a list or querying a server, and a search tab
+names: searchable, searchbar, search-bar, UISearchBar, UISearchController, search bar, search field, hidesSearchBarWhenScrolling, hideWhenScrolling, sticky search, search tab, UISearchTab, Tab(role: .search), automaticallyActivatesSearch
 
 An `input type="search"` in a route's `header` is the bar's search field: on iOS UIKit's
 search controller (a magnifier, a clear button, Cancel), on the web a field under the title.
@@ -1042,6 +1087,61 @@ component App
 
 More: docs/recipes/list-rows.md
 
+**A search tab.** The root tab that says `rel="search"` (HTML's link type for "an interface
+for searching") is the app's search tab, a destination of its own: it stays `role="tab"`, and is written last. On iOS 18 and later it is a
+`UISearchTab` with the tab's own symbol and label; its root route's header `input
+type="search"` is its field, which UIKit moves into the bar when the tab is selected. With
+`autofocus` on that field, iOS 26 sets the tab apart at the bar's trailing end and opens the
+field each time the tab is selected; without it, the tab is one among the others. The web,
+the Mac's sidebar and the other hosts keep the tab where it is written.
+
+```contract
+routes nav
+  tab home "/"
+  tab find "/find"
+
+component App
+  state query = ""
+  action pick(name: string)
+    nav = select(nav, name)
+  action follow(url: string)
+    nav = go(nav, url)
+  action edit(v: string)
+    query = v
+  view
+    main navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow width="100%" height="100%"
+      display="flex" flex-direction="column"
+      column flex=1 min-height=0 position="relative"
+        for t in nav.tabs key=t.name
+          column role="tabpanel" id=`panel-${t.name}` position="absolute" inset=0
+            for e in t.stack key=e.id
+              column navigationKey=`${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
+                header
+                  text (e.name == "home" ? "Home" : "Speakers") role="heading" aria-level=1
+                  if e.name == "find"
+                    input type="search" autofocus value=query input=edit placeholder="Search speakers"
+                      testId="speaker-search"
+                scroll flex=1 min-height=0
+                  text query
+      row role="tablist"
+        button role="tab" aria-controls="panel-home" aria-selected=(nav.tab == "home") press=pick("home")
+          testId="tab-home" flex=1
+          image "symbol:home"
+          text "Home"
+        button role="tab" rel="search" aria-controls="panel-find" aria-selected=(nav.tab == "find")
+          press=pick("find") testId="tab-find" flex=1
+          image "symbol:people"
+          text "Speakers"
+```
+
+- A field on a list's own screen filters that list (`contract vocab search`); a search tab
+  searches the app. Never push a route for the bar's search.
+- `role="search"` on a tab (Expo's trigger) is refused: a tablist owns only tabs. A second
+  `rel="search"`, or one not on the last tab, is a warning.
+- A test taps the tab and types its field: `tap "tab-find"`, `type "speaker-search" "Ada"`.
+
+More: docs/recipes/tabs.md
+
 ## menubar: adding commands to the Mac menu bar
 names: -exact-menu, -exact-menu-remove, -exact-menu-keys
 
@@ -1122,16 +1222,19 @@ component App
   a child (a `text`, an `image`).
 
 ## glass: Liquid Glass, a material or a blur behind a box
-names: Liquid Glass, liquid-glass, liquidGlass, material, materials, vibrancy, blur, frosted, UIVisualEffectView, UIGlassEffect, BlurView, GlassView, expo-blur, expo-glass-effect, tintColor, glass tint, tinted glass, isInteractive
+names: Liquid Glass, liquid-glass, liquidGlass, material, materials, vibrancy, blur, frosted, UIVisualEffectView, UIGlassEffect, BlurView, GlassView, expo-blur, expo-glass-effect, tintColor, glass tint, tinted glass, isInteractive, UIBlurEffect, dark blur, blur tint, blur intensity, intensity
 
 Bars, tab bars, sheets and menus are the platform's, glass included: leave them unsaid. A
 surface of your own takes `backgroundMaterial`: `"glass"` or `"glass-clear"` is
 `UIGlassEffect` on iOS 26 and `NSGlassEffectView` on macOS 26; `"ultra-thin"`, `"thin"`,
-`"material"`, `"thick"` and `"chrome"` (each with `-light` and `-dark`) are UIKit's blurs,
-and `"sidebar"`, `"menu"`, `"popover"`, `"hud-window"` the Mac's. The web and Linux draw a
-blur that approximates each. A glass button is `buttonStyle="glass"` or
+`"material"`, `"thick"` and `"chrome"` (each with `-light` and `-dark`) are UIKit's materials,
+`"dark"`, `"light"`, `"extra-light"`, `"regular"` and `"prominent"` its plain blurs (`UIBlurEffect`
+`.dark` and so on: no material's grey wash, as expo-blur's `tint="dark"`), and `"sidebar"`,
+`"menu"`, `"popover"`, `"hud-window"` the Mac's. The web and Linux draw a blur that
+approximates each. A glass button is `buttonStyle="glass"` or
 `"prominent-glass"`, and `glassGroup=<points>` on a box merges the glass inside it as
-SwiftUI's `GlassEffectContainer` does.
+SwiftUI's `GlassEffectContainer` does. On iOS a glass a tap adds to a group grows out of the
+nearest glass within that spacing, and one it removes is drawn back into it.
 
 ```contract
 component App
@@ -1146,6 +1249,15 @@ component App
 - CSS's `backdrop-filter="blur(12px) saturate(1.8)"` blurs what is behind on the web, macOS
   and Linux; iOS draws a fixed light material for it, so a surface meant for iPhone says
   `backgroundMaterial`, which wins when both are written.
+- A material's strength is the platform's: UIKit's blurs take no radius or intensity, so there
+  is no "dark at 40%" (expo-blur's `intensity` holds a paused animation part way). To darken
+  the blurred result, put the content in one child that fills the box and paints the colour,
+  as each host draws a material under the box's children:
+  `column backgroundMaterial="dark" border-radius=16` holding
+  `column flex=1 border-radius=16 padding=12 background-color="rgba(14,16,21,0.5)"`. The
+  box's own `background-color` is no way to do it, as each host differs: iOS paints it under
+  the blur, so it colours what is blurred; the Mac's material covers it; the web and Linux
+  paint it in place of the material's tint.
 - A navigation bar's buttons share one glass capsule on iOS 26; `buttonStyle="glass"` on
   each gives it a capsule of its own (`contract vocab bar-buttons`).
 - `-exact-glass-tint="rgba(10,12,16,0.55)"` tints the glass itself (`UIGlassEffect.tintColor`);
@@ -1213,7 +1325,7 @@ component App
       text `${n}`
 ```
 
-## status-bar: the phone's status bar icons, and hiding them on iOS
+## status-bar: the phone's status bar icons, and hiding the system bars
 names: status bar, statusbar, setStatusBarStyle, UIStatusBarStyle, preferredStatusBarStyle, expo-status-bar, system-bars-hidden, statusBarHidden, prefersStatusBarHidden, prefersHomeIndicatorAutoHidden, autoHideHomeIndicator, immersive
 
 `status-bar-style="light-content"` (light text, for a dark surface), `"dark-content"` or
@@ -1225,10 +1337,11 @@ pages, with no native sheet detent or transition completion; see host/android/RE
 Edge to edge. `status-bar-animation="fade"` fades a change on iOS alone. Other hosts ignore
 both properties.
 
-On iOS, `system-bars-hidden=true` (or `=toyOpen`) hides the status bar and auto-hides the home
-indicator while that node's screen is under them, resolved the same way: a `fullscreen`
-route's wins over the stack, a `medium` sheet's does not, and a descendant's `false` shows
-them again.
+`system-bars-hidden=true` (or `=toyOpen`) hides the status bar and auto-hides the home
+indicator on iOS, and hides the status and navigation bars on Android (a swipe from the edge
+shows them for a moment), while that node's screen is under them, resolved the same way: a
+`fullscreen` route's wins over the stack, a `medium` sheet's does not (iOS), and a
+descendant's `false` shows them again.
 
 More: docs/contract-for-agents.md (`status-bar-style`, `system-bars-hidden`)
 
@@ -1253,9 +1366,20 @@ component App
       button press=save testId="save"
         text "Save"
       if toast != ""
-        text toast position="absolute" bottom=32 left=16 right=16 padding=12 border-radius=12 backgroundMaterial="thin" aria-live="polite" testId="toast"
+        text toast position="absolute" bottom=32 left=16 right=16 padding=12 border-radius=12 text-align="center"
+          backgroundMaterial="thin" box-shadow="0 4px 16px rgba(0, 0, 0, 0.2)" pointer-events="none"
+          aria-live="polite" testId="toast"
 ```
 
+- A material takes the colour of what is behind it, so over a page of its own colour (a thin
+  material on a white page) only its shadow sets it apart; the shadow reads in both schemes.
+
+- In a tab app it stands above the tab bar: `bottom="calc(6rem + env(safe-area-inset-bottom))"`
+  clears the bar on every host at every text size (the web's bar is 3.5rem tall and grows
+  with the text; iOS 26's floating bar ends about 84 points above the screen's bottom).
+- `pointer-events="none"` lets taps through to what it lies over while it shows. verify
+  takes such an announcement (out of flow, `aria-live`, letting taps through) as lying over
+  the page by design, so a test may end while it shows.
 - The action the task runs clears the message whatever it reads: a gated task is armed at
   commits, not by the clock (docs/agent-pitfalls.md, "A gate reads state at commits").
 
@@ -1421,7 +1545,7 @@ component App
 More: apps/svg-gallery/app.contract (each element and attribute, drawn alike on every host but `foreignObject`)
 
 ## safe-area: the notch, the status bar and the home indicator
-names: env, env(), safe-area-inset, safe-area-inset-top, safe-area-inset-bottom, safe-area-inset-left, safe-area-inset-right, SafeAreaView, useSafeAreaInsets, react-native-safe-area-context, safeAreaInsets, notch, home indicator, home-indicator
+names: env, env(), safe-area-inset, safe-area-inset-top, safe-area-inset-bottom, safe-area-inset-left, safe-area-inset-right, SafeAreaView, useSafeAreaInsets, react-native-safe-area-context, safeAreaInsets, notch, home indicator, home-indicator, --exact-safe-area-inset-top, --exact-safe-area-inset-bottom, --exact-safe-area-inset-left, --exact-safe-area-inset-right, bar height, navigation bar height, headerHeight, useHeaderHeight, -exact-safe-area, ignoresSafeArea, contentInsetAdjustmentBehavior
 
 Inside a route, leave it unsaid: the host keeps the route's content clear of the status bar
 and its bars (UIKit's inset on the route's scroller, else the route's padding), and a
@@ -1431,6 +1555,18 @@ under the default `viewport-fit="auto"` it is 0, so `env()` padding inside a rou
 nothing; under the root's `viewport-fit="cover"` it is the device's insets, and a route's
 content goes under the bar unless its column pads `env(safe-area-inset-top)`. On the web it is
 the browser's. `env(-exact-layout-margins-inset-left)` is UIKit's layout margin.
+
+`var(--exact-safe-area-inset-top)` (and `-right`, `-bottom`, `-left`) is the safe area where
+the box is (LLP 1123 D9): inside a route, a tab or a sheet its own, the status bar, the bars
+and a large title included, as UIKit's `safeAreaInsets` and React Navigation's
+`useHeaderHeight` give it; outside every route the screen's, even where `env()` is 0. A
+background under the navigation bar is `margin-top="calc(-1 * var(--exact-safe-area-inset-top))"
+padding-top="var(--exact-safe-area-inset-top)"` on a box at the route's top. A route's
+clearance adds to its own padding unless that padding reads the inset (then the larger
+counts), and `-exact-safe-area="top"` (or `none`, or other edges) on the route turns it off,
+as SwiftUI's `ignoresSafeArea`: a scroller at the route's top then starts under the bar, and
+its first box pads `var(--exact-safe-area-inset-top)` itself. A box may set
+`--exact-safe-area-inset-bottom="0px"` for its subtree.
 
 - A scroller's last row sits its `padding-bottom` above UIKit's inset: subtract the inset
   from the original's gap rather than adding `env(safe-area-inset-bottom)`.

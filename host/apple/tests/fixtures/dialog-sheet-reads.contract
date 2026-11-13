@@ -35,3 +35,12 @@ component App
         column id="tall-tip" popover="manual" width=200 height=40
           text "A tip"
         column height=2000 flex-shrink=0
+      dialog id="painted-tall" width=300 closedby="any" background-color="-exact-secondary-grouped-background"
+        column height=2000 flex-shrink=0
+        button id="painted-tall-close" commandfor="painted-tall" command="close"
+          text "Close"
+      dialog id="painted-deep" width=300 height=200 background-color="-exact-secondary-grouped-background"
+        column height=100
+          column height=2000 flex-shrink=0
+          button id="painted-deep-close" commandfor="painted-deep" command="close"
+            text "Close"

@@ -47,7 +47,8 @@ import AppKit
 
 /// What a sheet shows of a modal route's header.
 struct SheetHeader {
-    let header: NodeView, heading: NodeView
+    /// Its heading: none for a header of buttons alone, whose title row is empty.
+    let header: NodeView, heading: NodeView?
     /// The heading's words: the sheet's title row.
     let title: String
     /// The one that cancels, and the one that confirms.
@@ -56,7 +57,7 @@ struct SheetHeader {
     let whole: Bool
 
     /// The header's nodes the sheet's own rows stand for.
-    var stoodFor: [NodeView] { whole ? [header] : [heading] + [cancel, confirm].compactMap { $0 } }
+    var stoodFor: [NodeView] { whole ? [header] : [heading, cancel, confirm].compactMap { $0 } }
 
     enum Read {
         /// No header the sheet's rows could be made from: the route is its content.
@@ -96,7 +97,7 @@ struct SheetHeader {
                 return !groups || others(in: child)
             }
         }
-        return .shown(SheetHeader(header: rule.header, heading: rule.heading, title: rule.heading.accessibleText,
+        return .shown(SheetHeader(header: rule.header, heading: rule.heading, title: rule.heading?.accessibleText ?? "",
                                   cancel: cancel, confirm: confirm, whole: !others(in: rule.header)))
     }
 }
@@ -395,7 +396,7 @@ extension DialogHost {
         let back = entry.dialog.props["navigationBar"] != "none" && entry.routeBase !== entry.dialog && presenter.navigation.backOffered
         chrome.back.isEnabled = presenter.navigation.back != nil
         // The heading's authored typography on the title's words (LLP 1115 §2).
-        let font = header?.heading.authoredTitleFont(over: RouteChrome.titleFont) ?? RouteChrome.titleFont
+        let font = header?.heading?.authoredTitleFont(over: RouteChrome.titleFont) ?? RouteChrome.titleFont
         let changed = chrome.show(title: header?.title, font: font, back: back, cancel: back ? nil : row(header?.cancel), confirm: row(header?.confirm),
                                   escapes: dismissalOwner(of: entry.dialog).props["closedby"] != "none")
         chrome.cancel.setAccessibilityIdentifier(back ? nil : header?.cancel?.props["testId"])

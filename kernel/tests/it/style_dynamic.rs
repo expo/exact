@@ -556,7 +556,7 @@ fn enum_rows_resolve_names_and_others_do_not() {
         // A keyword row (a bit set named by CSS keywords) lists its words too.
         let keywords = matches!(
             id,
-            StyleId::FontVariantNumeric | StyleId::FontVariantLigatures
+            StyleId::FontVariantNumeric | StyleId::FontVariantLigatures | StyleId::SafeArea
         );
         assert_eq!(
             names.is_empty(),
@@ -941,4 +941,36 @@ fn style_ids_round_trip_through_their_names() {
     for name in ["", "widt", "width ", "Width", "min_widthx"] {
         assert_eq!(StyleId::from_name(name), None, "{name:?}");
     }
+}
+
+#[test]
+fn translate_velocity_takes_a_finite_pair_and_refuses_atomically() {
+    let mut style = StyleProps::default();
+    let row = StyleId::TranslateVelocity;
+    style
+        .set_dynamic(row, &StyleValue::Text("800 -600".into()))
+        .unwrap();
+    assert_eq!(
+        style.translate_velocity,
+        exact_kernel::Vec2 { x: 800., y: -600. }
+    );
+    for text in [
+        "", "1", "1 2 3", "1px 2px", "1,2", "NaN 0", "inf 0", "1e39 0", "0x10 0",
+    ] {
+        let before = style.clone();
+        assert!(
+            style
+                .set_dynamic(row, &StyleValue::Text(text.into()))
+                .is_err(),
+            "{text}"
+        );
+        assert_eq!(style, before, "{text}");
+    }
+    style
+        .set_dynamic(row, &StyleValue::Text("0 0".into()))
+        .unwrap();
+    assert!(style.mask.has(row));
+    assert_eq!(style.translate_velocity, exact_kernel::Vec2::default());
+    style.clear(exact_kernel::StyleMask::of(row));
+    assert!(!style.mask.has(row));
 }

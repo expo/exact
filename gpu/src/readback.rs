@@ -145,6 +145,10 @@ impl Module {
             self.error = format!("readback: {} bytes for {} pixels", out.len(), len / 4);
             return None;
         }
+        // The host composes these untagged RGBA8 bytes as sRGB, even when
+        // this surface normally draws into a Display P3 swapchain.
+        let presentation_space = target::granted(inst.config.as_ref());
+        inst.surface.color_space_granted(ColorSpace::Srgb);
         inst.surface.prepare_assets(&gpu.device, &gpu.queue, format);
         if inst.readback.as_ref().is_none_or(|r| {
             r.texture.width() != width
@@ -164,9 +168,17 @@ impl Module {
             format,
         );
         target.copy(&mut encoder);
-        gpu.queue.submit([encoder.finish()]);
+        let commands = encoder.finish();
+        let (_, submit_ms) =
+            crate::performance::time(inst.performance.enabled(), || gpu.queue.submit([commands]));
+        if let Some(ms) = submit_ms {
+            inst.performance.submitted(ms);
+        }
         inst.surface.submitted();
         let result = target.read(gpu, &mut out[..len]);
+        if presentation_space != ColorSpace::Srgb {
+            inst.surface.color_space_granted(presentation_space);
+        }
         inst.drain();
         if let Some(SurfaceError(e)) = inst.surface.take_error() {
             self.error = e;
@@ -175,6 +187,13 @@ impl Module {
         match result {
             Ok(()) => {
                 inst.dirty = false;
+                // A canvas with no target of its own is shown by its host
+                // composing these pixels (Linux's display baseline): a
+                // complete frame is presented. One with a target is only
+                // being captured.
+                if inst.presentation.is_none() && !inst.has_ring() && inst.surface.frame_ready() {
+                    inst.presented.now();
+                }
                 Some(wants)
             }
             Err(e) => {

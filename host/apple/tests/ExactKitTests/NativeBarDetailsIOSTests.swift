@@ -174,7 +174,6 @@ final class NativeBarDetailsIOSTests: XCTestCase {
         header.tintAdjustmentMode = .dimmed
         let group = try XCTUnwrap(HeaderTitle(header: header, heading: heading, tap: nil, apart: []))
         let view = HeaderTitleView(host: p.navigation)
-        view.title.textColor = .label
         view.update(group, title: "Verified")
         let title = try XCTUnwrap(view.title.attributedText)
         var count = 0
@@ -203,20 +202,24 @@ final class NativeBarDetailsIOSTests: XCTestCase {
         XCTAssertTrue(group.drawn)
         XCTAssertTrue(group.placed.contains { $0 === seal })
         let view = HeaderTitleView(host: p.navigation)
-        view.title.textColor = .label
-        view.update(group, title: "Verified")
-        let title = try XCTUnwrap(view.title.attributedText)
-        var count = 0
-        title.enumerateAttribute(.attachment, in: NSRange(location: 0, length: title.length)) { value, range, _ in
-            if let attachment = value as? NSTextAttachment {
-                count += 1
-                XCTAssertEqual(attachment.image?.renderingMode, .alwaysTemplate)
-                let ink = title.attribute(.foregroundColor, at: range.location, effectiveRange: nil) as? UIColor
-                XCTAssertEqual(ink?.resolvedColor(with: UITraitCollection(userInterfaceStyle: .light)), .red)
-                XCTAssertEqual(ink?.resolvedColor(with: UITraitCollection(userInterfaceStyle: .dark)), .green)
+        // Every navigation sync projects the title again (`richTitle`): the
+        // second projection keeps the seal's own colour.
+        var title = NSAttributedString()
+        for _ in 0..<2 {
+            view.update(group, title: "Verified", ink: .label)
+            title = try XCTUnwrap(view.title.attributedText)
+            var count = 0
+            title.enumerateAttribute(.attachment, in: NSRange(location: 0, length: title.length)) { value, range, _ in
+                if let attachment = value as? NSTextAttachment {
+                    count += 1
+                    XCTAssertEqual(attachment.image?.renderingMode, .alwaysTemplate)
+                    let ink = title.attribute(.foregroundColor, at: range.location, effectiveRange: nil) as? UIColor
+                    XCTAssertEqual(ink?.resolvedColor(with: UITraitCollection(userInterfaceStyle: .light)), .red)
+                    XCTAssertEqual(ink?.resolvedColor(with: UITraitCollection(userInterfaceStyle: .dark)), .green)
+                }
             }
+            XCTAssertEqual(count, 1)
         }
-        XCTAssertEqual(count, 1)
         let headingInk = title.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? UIColor
         XCTAssertEqual(headingInk?.resolvedColor(with: UITraitCollection(userInterfaceStyle: .dark)),
                        UIColor.label.resolvedColor(with: UITraitCollection(userInterfaceStyle: .dark)))
@@ -230,8 +233,7 @@ final class NativeBarDetailsIOSTests: XCTestCase {
             XCTAssertEqual(ink?.resolvedColor(with: UITraitCollection(userInterfaceStyle: .dark)),
                            UIColor.label.resolvedColor(with: UITraitCollection(userInterfaceStyle: .dark)))
         }
-        view.title.textColor = .red
-        view.update(untinted, title: "Verified")
+        view.update(untinted, title: "Verified", ink: .red)
         let changed = try XCTUnwrap(view.title.attributedText)
         XCTAssertEqual(changed.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? UIColor, .red,
                        "an unchanged title still follows a changed heading colour")

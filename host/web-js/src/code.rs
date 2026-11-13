@@ -628,14 +628,21 @@ impl Translator<'_> {
                         .str(exact_plan::StrId(x.args[0] as u32))
                         .to_string();
                     let args = self.popn(x.args[1] as usize)?;
-                    self.uses.commands.insert(name.clone());
                     self.flush();
-                    let c = self.uses.rt("C");
-                    self.out.push_str(&format!(
-                        "{c}({},[{}]);",
-                        serde_json::to_string(&name).unwrap(),
-                        args.join(",")
-                    ));
+                    // The app's chosen language lands with the action's
+                    // writes (chosen.js, imported by a plan that runs it).
+                    if name == "setLocale" {
+                        self.out
+                            .push_str(&format!("$setLocale({});", args.join(",")));
+                    } else {
+                        self.uses.commands.insert(name.clone());
+                        let c = self.uses.rt("C");
+                        self.out.push_str(&format!(
+                            "{c}({},[{}]);",
+                            serde_json::to_string(&name).unwrap(),
+                            args.join(",")
+                        ));
+                    }
                 }
                 Opcode::Refresh => {
                     self.flush();
@@ -811,14 +818,17 @@ mod tests {
     use exact_plan::Stdlib;
 
     /// Every roster entry an `Opcode::Call` can name has its `x_` export in
-    /// rt.js (or roster.js and router.js, which it re-exports, or budget.js,
-    /// the checked string builders); `at`, `formatDate` and `formatNumber` compiled and then failed
+    /// rt.js (or a runtime file it re-exports: clock.js, pieces.js, roster.js
+    /// and router.js; or budget.js, the checked string builders); `at`,
+    /// `formatDate` and `formatNumber` compiled and then failed
     /// the bundle for want of one (an app's diary, 2026-10-04). `map` and
     /// `filter` are opcodes with a callback body, never a call.
     #[test]
     fn every_called_roster_entry_has_a_runtime_export() {
         let rt = [
             include_str!("../rt.js"),
+            include_str!("../clock.js"),
+            include_str!("../pieces.js"),
             include_str!("../roster.js"),
             include_str!("../router.js"),
             include_str!("../format.js"),

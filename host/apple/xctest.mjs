@@ -5,7 +5,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { availableParallelism } from 'node:os';
 import { resolve } from 'node:path';
-import { plistFile } from './assets.mjs';
+import { iosAssets, plistFile } from './assets.mjs';
 import { encodePng } from '../../scripts/png.mjs';
 
 const read = (cmd, args, opts = {}) => spawnSync(cmd, args, { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, ...opts });
@@ -14,11 +14,29 @@ const read = (cmd, args, opts = {}) => spawnSync(cmd, args, { encoding: 'utf8', 
  * Plans embed the current schema digest. App entries need the test app's `appId` to boot. */
 export function compileFixtures(root, run, env, dir, prefix, appId) {
   const contract = args => run(env.EXACT_CONTRACT, ['build', ...args]);
+  if (prefix === 'TEST_RUNNER_EXACT') {
+    // LaunchColorIOSTests reads the build's XML and compiled catalogue as an app bundle.
+    const fixtures = env[`${prefix}_LAUNCH_COLOR_FIXTURES`] = resolve(dir, 'launch-colors');
+    for (const [name, manifest] of [
+      ['white', { background_color: '#ffffff' }],
+      ['opaque', { background_color: '#abc', color_scheme_dark: { background_color: '#123456' } }],
+      ['translucent', { background_color: '#abc', color_scheme_dark: { background_color: '#12345680' } }],
+    ]) {
+      const bundle = resolve(fixtures, `${name}.bundle`);
+      mkdirSync(bundle, { recursive: true });
+      const keys = iosAssets({ dir, name, manifest }, bundle, false);
+      writeFileSync(resolve(bundle, 'Info.plist'), plistFile({ CFBundleIdentifier: `dev.exact.launch.${name}`, CFBundlePackageType: 'BNDL', ...keys }));
+    }
+  }
+  contract([resolve(root, 'host/apple/tests/fixtures/overflowing-tabs.contract'), '-o', env[`${prefix}_OVERFLOWING_TABS_PLAN`] = resolve(dir, 'overflowing-tabs.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/scroll-snap.contract'), '-o', env[`${prefix}_SCROLL_SNAP_PLAN`] = resolve(dir, 'scroll-snap.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/arrangement-sizing.contract'), '-o', env[`${prefix}_ARRANGEMENT_SIZING_PLAN`] = resolve(dir, 'arrangement-sizing.plan')]);
   // A test that writes its own manifest names the app the tests link (`SheetFixture`'s `data`).
   env[`${prefix}_TEST_APP_ID`] = appId;
-  for (const [name, key] of [['frame-health', 'FRAME_HEALTH'], ['store-refresh', 'STORE_REFRESH'], ['headless', 'HEADLESS'], ['headless-markdown', 'HEADLESS_MARKDOWN'], ['headless-hidden-markdown', 'HEADLESS_HIDDEN_MARKDOWN'], ['headless-live', 'HEADLESS_LIVE'], ['headless-back', 'HEADLESS_BACK'], ['native-navigation-scroll', 'NATIVE_SCROLL'], ['intersect', 'INTERSECT'], ['native-buttons', 'BUTTONS'], ['keyboard-form', 'KEYBOARD'], ['tab-edge', 'TAB_EDGE'], ['repaint', 'REPAINT'], ['still-title', 'STILL_TITLE'], ['navigation-bars', 'NAVIGATION_BARS'], ['large-title', 'LARGE_TITLE'], ['transparent-bar', 'TRANSPARENT_BAR'], ['bar-band', 'BAR_BAND'], ['pad-bar', 'PAD_BAR'], ['pushed-title', 'PUSHED_TITLE'], ['inline-frame', 'INLINE_FRAME'], ['fieldless', 'FIELDLESS'], ['web-documents', 'WEB_DOCUMENTS'], ['iframe-post-messages', 'IFRAME_POST_MESSAGES'], ['iframe-partition', 'IFRAME_PARTITION'], ['iframe-windows', 'IFRAME_WINDOWS'], ['iframe-pdf', 'IFRAME_PDF'], ['iframe-resident-popover', 'IFRAME_RESIDENT_POPOVER'], ['tab-owner', 'TAB_OWNER'], ['grouped-list-reveal', 'GROUPED_REVEAL'], ['due-now', 'DUE_NOW'], ['caret-reveal', 'CARET_REVEAL'], ['cover-scroll', 'COVER_SCROLL'], ['page-edges', 'PAGE_EDGES'], ['barless-route', 'BARLESS_ROUTE'], ['page-edges-grouped', 'PAGE_EDGES_GROUPED'], ['control-bars', 'CONTROL_BARS'], ['search-scope', 'SEARCH_SCOPE'], ['barless-tab', 'BARLESS_TAB'], ['pull-refresh', 'PULL_REFRESH'], ['edge-effect', 'EDGE_EFFECT'], ['sticky-bar', 'STICKY_BAR'], ['glass-press', 'GLASS_PRESS'], ['surface-pairs', 'SURFACE_PAIRS'], ['prevent-focus', 'PREVENT_FOCUS'], ['accent-bars', 'ACCENT_BARS'], ['accent-tabs', 'ACCENT_TABS']]) {
+  // A box's length read against the document's environment stops a test (LLP 1123 D9).
+  env[`${prefix}_STRICT_LOCAL_INSETS`] = '1';
+  contract([resolve(root, 'host/apple/tests/fixtures/headless-reply.contract'), '-o', env[`${prefix}_HEADLESS_REPLY_PLAN`] = resolve(dir, 'headless-reply.plan')]);
+  for (const [name, key] of [['frame-health', 'FRAME_HEALTH'], ['store-refresh', 'STORE_REFRESH'], ['headless', 'HEADLESS'], ['headless-markdown', 'HEADLESS_MARKDOWN'], ['headless-hidden-markdown', 'HEADLESS_HIDDEN_MARKDOWN'], ['headless-live', 'HEADLESS_LIVE'], ['headless-back', 'HEADLESS_BACK'], ['native-navigation-scroll', 'NATIVE_SCROLL'], ['intersect', 'INTERSECT'], ['native-buttons', 'BUTTONS'], ['keyboard-form', 'KEYBOARD'], ['tab-edge', 'TAB_EDGE'], ['repaint', 'REPAINT'], ['still-title', 'STILL_TITLE'], ['navigation-bars', 'NAVIGATION_BARS'], ['large-title', 'LARGE_TITLE'], ['transparent-bar', 'TRANSPARENT_BAR'], ['bar-band', 'BAR_BAND'], ['pad-bar', 'PAD_BAR'], ['pushed-title', 'PUSHED_TITLE'], ['inline-frame', 'INLINE_FRAME'], ['fieldless', 'FIELDLESS'], ['web-documents', 'WEB_DOCUMENTS'], ['iframe-post-messages', 'IFRAME_POST_MESSAGES'], ['iframe-partition', 'IFRAME_PARTITION'], ['iframe-windows', 'IFRAME_WINDOWS'], ['iframe-pdf', 'IFRAME_PDF'], ['iframe-resident-popover', 'IFRAME_RESIDENT_POPOVER'], ['tab-owner', 'TAB_OWNER'], ['grouped-list-reveal', 'GROUPED_REVEAL'], ['due-now', 'DUE_NOW'], ['caret-reveal', 'CARET_REVEAL'], ['cover-scroll', 'COVER_SCROLL'], ['page-edges', 'PAGE_EDGES'], ['barless-route', 'BARLESS_ROUTE'], ['page-edges-grouped', 'PAGE_EDGES_GROUPED'], ['control-bars', 'CONTROL_BARS'], ['cover-tabs', 'COVER_TABS'], ['layout-insert', 'LAYOUT_INSERT'], ['search-scope', 'SEARCH_SCOPE'], ['barless-tab', 'BARLESS_TAB'], ['pull-refresh', 'PULL_REFRESH'], ['edge-effect', 'EDGE_EFFECT'], ['sticky-bar', 'STICKY_BAR'], ['glass-press', 'GLASS_PRESS'], ['surface-pairs', 'SURFACE_PAIRS'], ['prevent-focus', 'PREVENT_FOCUS'], ['accent-bars', 'ACCENT_BARS'], ['accent-tabs', 'ACCENT_TABS'], ['search-tabs', 'SEARCH_TABS'], ['beside-routes', 'BESIDE_ROUTES'], ['bar-insets', 'BAR_INSETS'], ['bar-hero', 'BAR_HERO'], ['tips', 'TIPS']]) {
     contract([resolve(root, `scripts/fixtures/${name}.contract`), '-o', env[`${prefix}_${key}_PLAN`] = resolve(dir, `${name}.plan`)]);
   }
   contract([resolve(root, 'host/apple/tests/fixtures/sticky-transition.contract'), '-o', env[`${prefix}_STICKY_TRANSITION_PLAN`] = resolve(dir, 'sticky-transition.plan')]);
@@ -28,16 +46,26 @@ export function compileFixtures(root, run, env, dir, prefix, appId) {
   contract([resolve(root, 'host/apple/tests/fixtures/live-accent.contract'), '-o', env[`${prefix}_LIVE_ACCENT_PLAN`] = resolve(dir, 'live-accent.plan')]);
   // HeldStateTests' own (a card that presses over a flat leaf), beside them.
   contract([resolve(root, 'host/apple/tests/fixtures/held-state.contract'), '-o', env[`${prefix}_HELD_STATE_PLAN`] = resolve(dir, 'held-state.plan')]);
+  // ScrollTimelineTests': a scroll timeline's and a view timeline's consumers (LLP 1057.003 D5).
+  contract([resolve(root, 'host/apple/tests/fixtures/scroll-timelines.contract'), '-o', env[`${prefix}_SCROLL_TIMELINES_PLAN`] = resolve(dir, 'scroll-timelines.plan')]);
   // AgentStickyReveal{Mac,IOS}Tests': rows under a sticky header and dock.
   contract([resolve(root, 'host/apple/tests/fixtures/sticky-tap.contract'), '-o', env[`${prefix}_STICKY_TAP_PLAN`] = resolve(dir, 'sticky-tap.plan')]);
   // RestartListIOSTests': a restart over a route whose bar covers a virtualized list.
   contract([resolve(root, 'host/apple/tests/fixtures/restart-list.contract'), '-o', env[`${prefix}_RESTART_LIST_PLAN`] = resolve(dir, 'restart-list.plan')]);
   // NavigationTabsIOSTests': the selected tab tapped again over a list its press asks a row of.
   contract([resolve(root, 'host/apple/tests/fixtures/tab-top-request.contract'), '-o', env[`${prefix}_TAB_TOP_REQUEST_PLAN`] = resolve(dir, 'tab-top-request.plan')]);
+  // TabStacksIOSTests': a tabpanel inside its root's tablist.
+  contract([resolve(root, 'host/apple/tests/fixtures/nested-panel-tabs.contract'), '-o', env[`${prefix}_NESTED_PANEL_TABS_PLAN`] = resolve(dir, 'nested-panel-tabs.plan')]);
   // NavigationMoreIOSTests': more tabs than an iPhone's tab bar shows, so UIKit lists some under More.
   contract([resolve(root, 'host/apple/tests/fixtures/more-tabs.contract'), '-o', env[`${prefix}_MORE_TABS_PLAN`] = resolve(dir, 'more-tabs.plan')]);
+  // NotificationActionTests': a post's declared actions and the root's handler.
+  contract([resolve(root, 'host/apple/tests/fixtures/notification-actions.contract'), '-o', env[`${prefix}_NOTIFICATION_ACTIONS_PLAN`] = resolve(dir, 'notification-actions.plan')]);
+  const noActions = resolve(dir, 'notification-no-actions.contract');
+  writeFileSync(noActions, readFileSync(resolve(root, 'host/apple/tests/fixtures/notification-actions.contract'), 'utf8').replace(/, actions=\[.*\]/, ''));
+  contract([noActions, '-o', env[`${prefix}_NOTIFICATION_NO_ACTIONS_PLAN`] = resolve(dir, 'notification-no-actions.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/feedback-race.contract'), '-o', env[`${prefix}_FEEDBACK_RACE_PLAN`] = resolve(dir, 'feedback-race.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/async-advance.contract'), '-o', env[`${prefix}_ASYNC_ADVANCE_PLAN`] = resolve(dir, 'async-advance.plan')]);
+  contract([resolve(root, 'host/apple/tests/fixtures/save-text.contract'), '-o', env[`${prefix}_SAVE_TEXT_PLAN`] = resolve(dir, 'save-text.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/timer-admission.contract'), '-o', env[`${prefix}_TIMER_ADMISSION_PLAN`] = resolve(dir, 'timer-admission.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/reset-gate.contract'), '-o', env[`${prefix}_RESET_GATE_PLAN`] = resolve(dir, 'reset-gate.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/reset-gate-admission.contract'), '-o', env[`${prefix}_RESET_GATE_ADMISSION_PLAN`] = resolve(dir, 'reset-gate-admission.plan')]);
@@ -45,9 +73,14 @@ export function compileFixtures(root, run, env, dir, prefix, appId) {
   contract([resolve(root, 'host/apple/tests/fixtures/dimmed-pixels.contract'), '-o', env[`${prefix}_DIMMED_PIXELS_PLAN`] = resolve(dir, 'dimmed-pixels.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/glass-title.contract'), '-o', env[`${prefix}_GLASS_TITLE_PLAN`] = resolve(dir, 'glass-title.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/reset-hold.contract'), '-o', env[`${prefix}_RESET_HOLD_PLAN`] = resolve(dir, 'reset-hold.plan')]);
+  // UntitledBarIOSTests': a header of a button alone, the bar with no title.
+  contract([resolve(root, 'host/apple/tests/fixtures/untitled-bar.contract'), '-o', env[`${prefix}_UNTITLED_BAR_PLAN`] = resolve(dir, 'untitled-bar.plan')]);
   // NavigationBarIOSTests': a header whose controls share and add a control.
   contract([resolve(root, 'host/apple/tests/fixtures/bar-share.contract'), '-o', env[`${prefix}_BAR_SHARE_PLAN`] = resolve(dir, 'bar-share.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/dialog-sheet-reads.contract'), '-o', env[`${prefix}_DIALOG_SHEET_READS_PLAN`] = resolve(dir, 'dialog-sheet-reads.plan')]);
+  contract([resolve(root, 'host/apple/tests/fixtures/intersect-route.contract'), '-o', env[`${prefix}_INTERSECT_ROUTE_PLAN`] = resolve(dir, 'intersect-route.plan')]);
+  // KeyboardSheetIOSTests': a sheet's field, its keyboard toolbar and the keyboard's overlap as a value.
+  contract([resolve(root, 'host/apple/tests/fixtures/keyboard-sheet.contract'), '-o', env[`${prefix}_KEYBOARD_SHEET_PLAN`] = resolve(dir, 'keyboard-sheet.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/progress-contexts.contract'), '-o', env[`${prefix}_PROGRESS_CONTEXTS_PLAN`] = resolve(dir, 'progress-contexts.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/agent-unmounted.contract'), '-o', env[`${prefix}_AGENT_UNMOUNTED_PLAN`] = resolve(dir, 'agent-unmounted.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/fractional-borders.contract'), '-o', env[`${prefix}_FRACTIONAL_BORDERS_PLAN`] = resolve(dir, 'fractional-borders.plan')]);
@@ -69,6 +102,13 @@ export function compileFixtures(root, run, env, dir, prefix, appId) {
   writeFileSync(resolve(barCard, 'app.json'), JSON.stringify({ name: 'Bar card', app: { id: appId, name: 'Bar card' }, widgets: [{ kind: 'bar-card', families: ['systemMedium'], component: 'BarCard', props: 'CardProps', refresh: 'nextTrains', preview: { title: 'Preview' } }] }));
   contract([resolve(barCard, 'app.contract'), '--entry', 'bar-card', '-o', env[`${prefix}_SNAPSHOT_BAR_CARD_PLAN`] = resolve(dir, 'bar-card.plan')]);
   // An activity whose Lock Screen placement has a background and a link (ActivityDriverTests: the tint, the URL).
+  // A configured widget (WidgetGalleryTests): its render reads the chosen rows, its defaults unless chosen.
+  const configured = resolve(dir, 'entries/configured');
+  mkdirSync(configured, { recursive: true });
+  writeFileSync(resolve(configured, 'app.contract'), 'shape Props\n  title: string\nshape Rows\n  rows: enum<"automatic", "one", "three">\ncomponent App\n  view\n    text "App"\ncomponent Card\n  props\n    title: string\n  inject\n    snapshot_configuration: Rows\n  view\n    text `${title} ${snapshot_configuration.rows}`\n');
+  writeFileSync(resolve(configured, 'app.json'), JSON.stringify({ name: 'Configured widget', app: { id: appId, name: 'Configured widget' }, widgets: [{ kind: 'configured', families: ['systemSmall', 'systemMedium'], component: 'Card', props: 'Props', refresh: 'nextTrains', preview: { title: 'Rows' },
+    configuration: { title: 'Card', parameters: [{ name: 'rows', type: 'enum', title: 'Rows', values: [{ value: 'automatic', title: 'Automatic' }, { value: 'one', title: '1' }, { value: 'three', title: '3' }] }] } }] }));
+  contract([resolve(configured, 'app.contract'), '--entry', 'configured', '-o', env[`${prefix}_SNAPSHOT_CONFIGURED_PLAN`] = resolve(dir, 'configured.plan')]);
   const tinted = resolve(dir, 'entries/tinted');
   mkdirSync(tinted, { recursive: true });
   writeFileSync(resolve(tinted, 'app.contract'), 'shape TintedState\n  title: string\ncomponent App\n  view\n    text "App"\ncomponent Tinted\n  props\n    title: string\n  view\n    view slot="lockScreen" background-color="#1e3a5f" padding=8\n      link href="/alerts" display="block"\n        text title color="#ffffff"\n    view slot="compactLeading"\n      text "T"\n    view slot="compactTrailing"\n      text title text-align="center"\n    view slot="minimal"\n      text "T"\n    view slot="expanded"\n      view slot="leading"\n        text title\n      view slot="trailing"\n        text title width=120\n      view slot="center"\n        link href="/alerts" display="block"\n          text title\n      view slot="bottom"\n        text title\n');
@@ -184,16 +224,17 @@ export async function macTests(pkg, scratch, env, canvasGpu, only = null) {
   if (failed.length) throw new Error(`swift tests failed:\n  ${failed.join('\n  ')}`);
 }
 
-/** The iOS tests `build-for-testing` wrote in `products`, run on the simulator `udid` in three
- *  runs that always all run; throws the first that failed. Most run bare in the xctest agent.
+/** The iOS tests `build-for-testing` wrote in `products`, run on the simulator `udid` in separate
+ *  runs that always all run; reports their failures together. Most run bare in the xctest agent.
  *  Those that need what only an app gives (a window scene to present in, UIKit's accessibility
  *  runtime; `hostedTests`) run hosted in an app with one scene (`hostSource`, built here) with the
  *  accessibility runtime on for that run alone. The Canvas 2D GPU module's own run apart with it
  *  loaded (`canvasGpu`): loaded, every canvas draws on the GPU, and the others read the Core
  *  Graphics path a runner without it draws. `runApple` and `run` are build.mjs's: they throw on
  *  failure, and `runApple` refuses a mixed deployment target. `only`, when
- *  given, names the classes to run, and a run with none of them is left out. */
-export function iosTestRuns({ pkg, products, destination, udid, env, canvasGpu, hostSource, triple, runApple, run, only = null }) {
+ *  given, names the classes to run, and a run with none of them is left out. Tests needing
+ *  real touches run without simulator clones, beside the existing XCTest touch runner. */
+export async function iosTestRuns({ pkg, products, destination, udid, env, canvasGpu, hostSource, triple, runApple, run, only = null }) {
   const bare = withoutPerformanceChecker(products), host = resolve(products, 'ExactTestHost.app');
   rmSync(host, { recursive: true, force: true });
   mkdirSync(host, { recursive: true });
@@ -206,34 +247,61 @@ export function iosTestRuns({ pkg, products, destination, udid, env, canvasGpu, 
   const hosted = hostedIn(products, bare, 'ExactTestHost.app');
   run('codesign', ['-s', '-', '--force', '--deep', host], { stdio: 'ignore' });
   const gpuTests = 'ExactKitTests/Canvas2DGpuStressTests', classes = only?.map(c => `ExactKitTests/${c}`);
-  const hostedOnly = hostedTests(resolve(pkg, 'tests/ExactKitTests')).filter(t => !classes || classes.some(c => t.startsWith(`${c}/`)));
-  const testRun = (xctestrun, selection, runEnv) => {
+  const testDir = resolve(pkg, 'tests/ExactKitTests');
+  const selected = t => !classes || classes.some(c => t.startsWith(`${c}/`));
+  const touchOnly = hostedTests(testDir, 'touch').filter(selected);
+  const hostedOnly = hostedTests(testDir).filter(selected).filter(t => !touchOnly.includes(t));
+  const failures = [];
+  const testRun = (xctestrun, selection, runEnv, parallel = true) => {
     try {
       runApple('xcodebuild', ['test-without-building', '-xctestrun', xctestrun, '-destination', destination, '-collect-test-diagnostics', 'never',
-        '-parallel-testing-enabled', 'YES', '-parallel-testing-worker-count', '2', ...selection], { cwd: pkg, stdio: 'inherit', env: runEnv });
-      return null;
-    } catch (e) { return e; }
+        '-parallel-testing-enabled', parallel ? 'YES' : 'NO', ...(parallel ? ['-parallel-testing-worker-count', '2'] : []), ...selection], { cwd: pkg, stdio: 'inherit', env: runEnv });
+    } catch (e) { failures.push(e); }
   };
   const bareClasses = classes?.filter(c => c !== gpuTests);
-  const bareRun = bareClasses?.length === 0 ? null : testRun(bare, [...(bareClasses ?? []).map(c => `-only-testing:${c}`),
-    ...[gpuTests, ...hostedOnly].map(t => `-skip-testing:${t}`)], env);
+  if (bareClasses?.length !== 0) testRun(bare, [...(bareClasses ?? []).map(c => `-only-testing:${c}`),
+    ...[gpuTests, ...hostedOnly, ...touchOnly].map(t => `-skip-testing:${t}`)], env);
   // UIKit loads its accessibility code only for an assistive technology or automation
   // (AgentAccessibility.axRuntimeLoaded): on for the hosted run, then as it was.
-  let hostedRun = null;
   if (hostedOnly.length) {
-    read('xcrun', ['simctl', 'bootstatus', udid, '-b']);
-    const ax = ['com.apple.Accessibility', 'ApplicationAccessibilityEnabled'], before = read('xcrun', ['simctl', 'spawn', udid, 'defaults', 'read', ...ax]);
+    const ax = ['com.apple.Accessibility', 'ApplicationAccessibilityEnabled'];
+    let before;
     try {
+      run('xcrun', ['simctl', 'bootstatus', udid, '-b']);
+      before = read('xcrun', ['simctl', 'spawn', udid, 'defaults', 'read', ...ax]);
       run('xcrun', ['simctl', 'spawn', udid, 'defaults', 'write', ...ax, '-bool', 'true']);
-      hostedRun = testRun(hosted, hostedOnly.map(t => `-only-testing:${t}`), env);
-    } finally {
-      read('xcrun', ['simctl', 'spawn', udid, 'defaults', ...(before.status === 0 ? ['write', ...ax, '-bool', before.stdout.trim() === '1' ? 'true' : 'false'] : ['delete', ...ax])]);
+      testRun(hosted, hostedOnly.map(t => `-only-testing:${t}`), env);
+    } catch (error) { failures.push(error); }
+    finally {
+      if (before) read('xcrun', ['simctl', 'spawn', udid, 'defaults', ...(before.status === 0 ? ['write', ...ax, '-bool', before.stdout.trim() === '1' ? 'true' : 'false'] : ['delete', ...ax])]);
     }
   }
-  const gpuRun = classes && !classes.includes(gpuTests) ? null
-    : testRun(bare, [`-only-testing:${gpuTests}`], { ...env, TEST_RUNNER_EXACT_CANVAS_GPU_DYLIB: canvasGpu });
-  const failed = bareRun ?? hostedRun ?? gpuRun;
-  if (failed) throw failed;
+  if (touchOnly.length) {
+    let touches;
+    try {
+      run('xcrun', ['simctl', 'bootstatus', udid, '-b']);
+      const { openTouches } = await import('./touches.mjs');
+      touches = await openTouches({ udid, appId: 'com.exact.testhost' });
+      const { port, token } = await touches.handoff();
+      testRun(hosted, touchOnly.map(t => `-only-testing:${t}`), {
+        ...env, TEST_RUNNER_EXACT_TOUCH_PORT: String(port), TEST_RUNNER_EXACT_TOUCH_TOKEN: token,
+      }, false);
+    } catch (error) { failures.push(error); }
+    finally {
+      try {
+        if (touches) {
+          if (touches.kept) await touches.close();
+          else {
+            const failed = await touches.end();
+            if (failed) throw failed;
+          }
+        }
+      } catch (error) { failures.push(error); }
+    }
+  }
+  if (!classes || classes.includes(gpuTests)) testRun(bare, [`-only-testing:${gpuTests}`], { ...env, TEST_RUNNER_EXACT_CANVAS_GPU_DYLIB: canvasGpu });
+  if (failures.length === 1) throw failures[0];
+  if (failures.length) throw new AggregateError(failures, `iOS tests failed:\n  ${failures.map(e => e.message).join('\n  ')}`);
 }
 
 /** The newest `.xctestrun` `build-for-testing` wrote in `products`, as
@@ -429,17 +497,19 @@ function declarations(dir, platform) {
 /** The tests in `dir` that need what only an app gives them, `ExactKitTests/<Class>/<test>`:
  *  those that throw `missing("scene", …)` (a presentation completes only in a scene's
  *  window) or `missing("accessibility", …)` (UIKit's accessibility runtime), which run
- *  hosted. Each must say so in the test method itself, so a helper's need is not missed. */
-export function hostedTests(dir) {
+ *  hosted. `missing("touch", …)` selects tests that need the XCTest touch runner too.
+ *  Each must say so in the test method itself, so a helper's need is not missed. */
+export function hostedTests(dir, prerequisite = 'scene|accessibility') {
   const tests = new Set();
+  const requirement = new RegExp(`missing\\("(${prerequisite})"`);
   for (const file of readdirSync(dir).filter(f => f.endsWith('.swift'))) {
     const lines = readFileSync(resolve(dir, file), 'utf8').split('\n');
     let className = null, func = null;
     lines.forEach((line, i) => {
       className = /class (\w+)\s*:\s*(XCTestCase|\w+Fixture)\b/.exec(line)?.[1] ?? className;
       func = /\bfunc (\w+)\s*\(/.exec(line)?.[1] ?? func;
-      if (!/missing\("(scene|accessibility)"/.test(line)) return;
-      if (!className || !func?.startsWith('test')) throw new Error(`${file}:${i + 1}: missing(scene or accessibility) outside a test method (${func ?? 'none'}); say it in the test so the test runs hosted`);
+      if (!requirement.test(line)) return;
+      if (!className || !func?.startsWith('test')) throw new Error(`${file}:${i + 1}: missing(${prerequisite}) outside a test method (${func ?? 'none'}); say it in the test so the test runs hosted`);
       tests.add(`ExactKitTests/${className}/${func}`);
     });
   }

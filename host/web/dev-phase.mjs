@@ -3,7 +3,7 @@
 // client's envelope request with it while the resident starts, as
 // `application/vnd.exact.dev-status+json` (llp/1023.001-serving-stage-1.spec.md);
 // a `phase: failed: ` line before the first plan is the error it answers.
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { closeSync, mkdtempSync, openSync, readSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -68,4 +68,19 @@ export function phased(what, command, args, options, log = console.log, echo = (
   log(`${PHASE}${what}: ${result.status === 0 ? 'built' : 'failed'} in ${((Date.now() - started) / 1000).toFixed(1)} s`);
   if (result.status !== 0) failedPhase(`${what} did not build\n${tail}`, log);
   return result;
+}
+
+/** Build without blocking signal handling; the caller owns the detached child. */
+export async function phasedAsync(what, command, args, options, own, log = console.log, echo = (bytes) => process.stderr.write(bytes)) {
+  log(`${PHASE}building ${what}`);
+  const started = Date.now();
+  const child = spawn(command, args, { ...options, detached: true, stdio: ['ignore', 'inherit', 'pipe'] });
+  own(child);
+  let tail = '';
+  child.stderr.on('data', bytes => { echo(bytes); tail = (tail + bytes.toString('utf8')).slice(-16 * 1024); });
+  const status = await new Promise((ok, fail) => { child.once('error', fail); child.once('close', ok); })
+    .catch(error => { failedPhase(`${what} did not build\n${error.message}`, log); throw error; });
+  log(`${PHASE}${what}: ${status === 0 ? 'built' : 'failed'} in ${((Date.now() - started) / 1000).toFixed(1)} s`);
+  if (status !== 0) failedPhase(`${what} did not build\n${tail}`, log);
+  return { status, child };
 }

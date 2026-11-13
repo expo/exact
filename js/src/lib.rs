@@ -318,6 +318,7 @@ pub struct Module {
     snapshot_deadline: Option<(Instant, std::time::Duration)>,
     app_id: String,
     grants: String,
+    preloads: &'static [exact_runner::request::Preload],
     revision: std::sync::OnceLock<String>, // the bytecode's SHA-256, when first asked
     engine: Option<Watched>,
     /// What an interrupt from another thread reaches; a built worker
@@ -334,6 +335,8 @@ pub struct Module {
     /// none when placed on main (`keeps_plan`), whose engine is this one.
     plan: Option<Plan>,
     keeps_plan: bool,
+    /// True before binding, then whether the entry reaches application code.
+    reached: bool,
     sigs: HashMap<String, Sig>,
     parked: Vec<(Key, Parked)>,
     /// Module work's let-go calls (`module_work.rs`, LLP 1146 D2).
@@ -416,6 +419,7 @@ impl Module {
             snapshot_deadline: None,
             app_id: app_id.into(),
             grants,
+            preloads: &[],
             engine: None,
             watch: Arc::default(),
             storage: None,
@@ -428,6 +432,7 @@ impl Module {
             native_slot: Default::default(),
             plan: None,
             keeps_plan: true,
+            reached: true,
             sigs: HashMap::new(),
             parked: Vec::new(),
             work: Default::default(),
@@ -452,6 +457,12 @@ impl Module {
         module.with_agent_seed(exact_data::crypto::AgentStream::agent_seed())
     }
 
+    /// Attach the binary's checked process-start requests (LLP 1162.000 D2).
+    pub fn with_preloads(mut self, preloads: &'static [exact_runner::request::Preload]) -> Self {
+        self.preloads = preloads;
+        self
+    }
+
     /// This module with `seed` as the agent's launch seed, or `None` for
     /// OS entropy whatever the environment says (LLP 1069.005 D2b): what
     /// [`Module::new`] reads from `EXACT_AGENT` and `EXACT_AGENT_SEED`,
@@ -464,8 +475,9 @@ impl Module {
     }
 
     /// This module's Canvas 2D roster, as the bake recorded it beside the
-    /// bytecode (`module.rs`'s `CANVAS_SURFACES`).
-    pub fn with_canvas_surfaces(mut self, surfaces: &[(&str, usize)]) -> Self {
+    /// bytecode (`module.rs`'s `CANVAS_SURFACES`, which a linked bake reads).
+    pub fn with_canvas_surfaces<'a>(mut self, surfaces: impl AsRef<[(&'a str, usize)]>) -> Self {
+        let surfaces = surfaces.as_ref();
         self.canvas_surfaces = surfaces.iter().map(|(n, a)| (n.to_string(), *a)).collect();
         self
     }
@@ -512,6 +524,7 @@ impl Module {
         let bytecode = template.bytecode.clone();
         let app_id = template.app_id.clone();
         let grants = template.grants.clone();
+        let preloads = template.preloads;
         let directories = template.directories.clone();
         let native_factory = template.native_factory;
         let plan = template.plan.as_ref().map(Plan::encode);
@@ -524,7 +537,9 @@ impl Module {
         let native_slot = template.native_slot.clone();
         let secrets = template.host.secrets.clone();
         Box::new(move || {
-            let mut module = Module::new(bytecode, app_id, grants).with_agent_seed(agent_seed);
+            let mut module = Module::new(bytecode, app_id, grants)
+                .with_agent_seed(agent_seed)
+                .with_preloads(preloads);
             // Before `activate`, which loads: a worker's answers wait for
             // their storage (LLP 1097 D6).
             module.main_thread = false;
@@ -709,8 +724,8 @@ impl Module {
                     .set(later.map(|handler| -> exact_runner::NativeHandler {
                         std::sync::Arc::new(move |body: Vec<u8>, reply| {
                             let reply = NativeReply::new(reply);
-                            match serde_json::from_slice(&body) {
-                                Ok(request) => handler(request, reply),
+                            match exact_js_value::json::parse(&body) {
+                                Ok(request) => handler(request.into(), reply),
                                 Err(e) => reply.send(Err(format!("native.later: {e}"))),
                             }
                         })
@@ -793,7 +808,8 @@ impl Module {
     }
 
     /// The per-turn budget in milliseconds (its own time, `turn.rs`); a turn
-    /// over it is `Unavailable` and the resource keeps its last value.
+    /// over it is `DataError::Overrun`, and a resource keeps its last value
+    /// while the runner asks it again (`runner/src/runner/overrun.rs`).
     pub fn set_budget_ms(&mut self, ms: f64) {
         self.budget_ms = ms;
     }

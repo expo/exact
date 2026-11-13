@@ -147,7 +147,9 @@ package final class Runtime {
         guard !destroyed else { return }
         destroyed = true
         let rt = rt
-        on { exact_destroy(rt) }
+        // From a callback the owner waits on (a native module's `call` that
+        // ends its session), after the owner's current job (LLP 1072 T5, §8.4).
+        Owner.shared.syncOrLater { exact_destroy(rt) }
     }
 
     // @ref LLP 1072 T1/T2 — every runtime lives on the owner thread; each
@@ -224,6 +226,11 @@ package final class Runtime {
     package func useNativeTimers(_ enabled: Bool) {
         on { () -> Void in _ = exact_native_timers(rt, enabled ? 1 : 0) }
     }
+    /// Rebind retiring list rows to new items (LLP 1078): the presenter
+    /// resets what it keeps by view on each `renew`.
+    package func useRowReuse(_ on: Bool) {
+        self.on { () -> Void in _ = exact_row_reuse(rt, on ? 1 : 0) }
+    }
     /// The wake for a request's reply (LLP 1016 D2), on the executor's thread.
     package func setWake(_ wake: ExactWakeFn?, ctx: UnsafeMutableRawPointer?) {
         let ctx = UInt(bitPattern: ctx)
@@ -299,12 +306,12 @@ package final class Runtime {
     }
     /// Boot a snapshot entry's plan by its kind (LLP 1126 D2): the headless
     /// session's boot, which a running host's `bootPlan` refuses.
-    package func bootEntry(_ bytes: Data, kind: String, props: Data? = nil, width: CGFloat, height: CGFloat) -> Batch {
+    package func bootEntry(_ bytes: Data, kind: String, props: Data? = nil, configuration: Data? = nil, width: CGFloat, height: CGFloat) -> Batch {
         let batch = on { () -> Batch in
             let name = Data(kind.utf8)
-            var payload = bytes; payload.append(name); payload.append(props ?? Data())
+            var payload = bytes; payload.append(name); payload.append(props ?? Data()); payload.append(configuration ?? Data())
             _ = write(payload)
-            return read(exact_boot_entry(rt, bytes.count, name.count, props?.count ?? 0, Float(width), Float(height)))
+            return read(exact_boot_entry(rt, bytes.count, name.count, props?.count ?? 0, configuration?.count ?? 0, Float(width), Float(height)))
         }
         return islands(batch)
     }
@@ -390,6 +397,7 @@ package final class Runtime {
     }
     /// The pointer over the view (`true`) or gone from it.
     package func hover(_ view: UInt32, over: Bool, now: Double) -> Batch { on { read(exact_dispatch(rt, view, over ? 2 : 3, 0, now)) } }
+    package func lookMotion(_ view: UInt32, states: UInt8, now: Double) -> Batch { on { read(exact_dispatch(rt, view, 64, write(String(states)), now)) } }
     package func focus(_ view: UInt32, now: Double) -> Batch { on { read(exact_dispatch(rt, view, 4, 0, now)) } }
     package func blur(_ view: UInt32, now: Double) -> Batch { on { read(exact_dispatch(rt, view, 5, 0, now)) } }
     package func focusEvent(_ view: UInt32, entering: Bool, target: String, related: String?, now: Double) -> Batch {
@@ -426,6 +434,12 @@ package final class Runtime {
         }
     }
     package func hasHold(_ token: UInt64) -> Bool { on(busy: false) { !destroyed && exact_has_hold(rt, token) != 0 } }
+    /// A scroller marked `scrollTimeline` (nil: the page) now stands at
+    /// `left`, `top`: the scroll and view timelines it drives, presented, to
+    /// apply in the scroll's own frame (LLP 1057.003 D5).
+    package func timelineScrolled(_ view: UInt32?, left: Double, top: Double) -> Batch {
+        on { read(exact_timeline_scrolled(rt, view == nil ? 1 : 0, view ?? 0, left, top)) }
+    }
     package func holdUpdate(_ token: UInt64, x: Double, y: Double, now: Double) -> Batch {
         return on {
             read(exact_hold_update(rt, token, x, y, now))
@@ -598,6 +612,12 @@ package final class Runtime {
             let n = write(name + (json.map { "\0" + $0 } ?? ""))
             return read(exact_surface_record(rt, n))
         }
+    }
+    package func canvasPerformanceRequested(_ name: String) -> Bool {
+        on(busy: false) { exact_canvas_performance_requested(rt, write(name)) != 0 }
+    }
+    package func canvasPerformanceRecord(_ name: String, _ json: String?) -> Batch {
+        on { read(exact_canvas_performance_record(rt, write(name + (json.map { "\0" + $0 } ?? "")))) }
     }
     package func message(_ view: UInt32, _ value: String, now: Double) -> Batch {
         return on {
@@ -846,9 +866,9 @@ package final class Runtime {
     package func bindExtensions(_ names: [String]) { on { exact_bind_extensions(rt, write(names.joined(separator: "\n"))) } }
     /// A package picture's admission (LLP 1133.019 D11 item 1): nil for a
     /// source of no package's scheme.
-    package func picture(_ source: String) -> [String: Any]? {
+    package func picture(_ source: String, count: Bool = true) -> [String: Any]? {
         on(busy: ["error": "NotAllowedError", "message": "busy"]) {
-            let len = exact_picture(rt, write(source))
+            let len = exact_picture(rt, write(source), count ? 1 : 0)
             guard len > 0 else { return nil }
             let data = Data(bytes: exact_out(rt), count: Int(len))
             return (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? ["error": "NotAllowedError"]
@@ -887,15 +907,17 @@ package final class Runtime {
     /// What changed of the view at once (`exact_view`): each part given is
     /// told, the window's size (`.some(nil)` clears it), the safe-area
     /// insets, the layout regions (`.some(nil)` when every region is the
-    /// safe area), the viewport and the segments' rects on the grid the
-    /// kernel has (a keyboard's), in one batch under one layout.
+    /// safe area), the viewport, the segments' rects on the grid the
+    /// kernel has (a keyboard's) and the software keyboard's overlap
+    /// (`exactViewport().keyboardHeight`), in one batch under one layout.
     package struct ViewChange {
         package var screen: CGSize?? = nil
         package var insets: (top: CGFloat, right: CGFloat, bottom: CGFloat, left: CGFloat)? = nil
         package var regions: [CGFloat]?? = nil
         package var size: CGSize? = nil
         package var segments: [CGRect]? = nil
-        package var isEmpty: Bool { screen == nil && insets == nil && regions == nil && size == nil && segments == nil }
+        package var keyboard: CGFloat? = nil
+        package var isEmpty: Bool { screen == nil && insets == nil && regions == nil && size == nil && segments == nil && keyboard == nil }
         package init(screen: CGSize?? = nil, insets: (top: CGFloat, right: CGFloat, bottom: CGFloat, left: CGFloat)? = nil,
                      regions: [CGFloat]?? = nil, size: CGSize? = nil) {
             self.screen = screen; self.insets = insets; self.regions = regions; self.size = size
@@ -909,11 +931,13 @@ package final class Runtime {
         if change.regions != nil { mask |= 4 }
         if change.size != nil { mask |= 8 }
         if change.segments != nil { mask |= 16 }
+        if change.keyboard != nil { mask |= 32 }
         let screen = (change.screen ?? nil) ?? .zero, insets = change.insets ?? (0, 0, 0, 0), size = change.size ?? .zero
         let floats = [screen.width, screen.height, insets.top, insets.right, insets.bottom, insets.left, size.width, size.height]
         let rects = change.segments.map { rects in [UInt32(rects.count)] + rects.flatMap { [$0.minX, $0.minY, $0.width, $0.height].map { Float($0).bitPattern } } } ?? []
-        var bytes = Data(capacity: (10 + regions.count + rects.count) * 4)
-        for word in [mask] + floats.map({ Float($0).bitPattern }) + [UInt32(regions.count)] + regions.map({ Float($0).bitPattern }) + rects {
+        let keyboard = change.keyboard.map { [Float($0).bitPattern] } ?? []
+        var bytes = Data(capacity: (11 + regions.count + rects.count) * 4)
+        for word in [mask] + floats.map({ Float($0).bitPattern }) + [UInt32(regions.count)] + regions.map({ Float($0).bitPattern }) + rects + keyboard {
             withUnsafeBytes(of: word.littleEndian) { bytes.append(contentsOf: $0) }
         }
         return on { read(exact_view(rt, write(bytes))) }

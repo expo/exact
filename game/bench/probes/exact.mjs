@@ -1,7 +1,7 @@
 // Bench-only observer, injected into the built host by feel.mjs. No agent clock.
 import { inputRecorder } from './input.mjs';
 export function normalize(trace) {
-  if (![14, 32].includes(trace.stride) || trace.frames.length % trace.stride || trace.missing) throw new Error('Invalid exact trace');
+  if (![14, 32, 37].includes(trace.stride) || trace.frames.length % trace.stride || trace.missing) throw new Error('Invalid exact trace');
   const frames = [];
   for (let i = 0; i < trace.frames.length; i += trace.stride) frames.push(...trace.frames.slice(i, i + 8));
   return frames;
@@ -97,7 +97,7 @@ async function installOnce({ entity = 'player', play: selector = '[data-testid="
       const canvas = surface().querySelector('canvas');
       const state = exact.gpu.agent(view, { op: 'state' });
       const frames = normalize(trace), callback = callbacks.end(frames);
-      const camera_projection = trace.stride === 32 ? [] : null;
+      const camera_projection = trace.stride >= 32 ? [] : null;
       if (camera_projection) for (let i = 0; i < trace.frames.length; i += trace.stride) camera_projection.push(...trace.frames.slice(i + 14, i + 32));
       return { schema: 1, stride: 8, frames, raw_callback_ms: callback.raw_callback_ms, callback_generation: callback.callback_generation,
         landmark_xyz: [8, 1, 0], clip_depth: 'zero-to-one',

@@ -585,6 +585,7 @@ macro_rules! module {
                 }
             }
             fn unlock(&mut self) { self.0.unlock(); }
+            fn audio_state(&self) -> Option<&'static str> { self.0.state() }
         }
         $crate::module!($game, audio_hook GameAudio, $assets, $hooks, $shaders);
     };
@@ -605,6 +606,17 @@ macro_rules! module {
             shaders: $shaders,
         };
         $crate::exact_gpu::module!(REGISTRY);
+        /// The surface's named arguments, which the bake that binds this product
+        /// compares with the plan's canvases (`exact_plan::surface_arguments`).
+        #[used]
+        #[no_mangle]
+        pub static EXACT_GPU_SURFACE_ARGUMENTS: [u8; $crate::exact_gpu::surface_arguments::record_len(
+            <$game as $crate::exact_game::Game>::NAME,
+            <<$game as $crate::exact_game::Game>::Args as $crate::exact_game::Args>::FIELDS,
+        )] = $crate::exact_gpu::surface_arguments::record(
+            <$game as $crate::exact_game::Game>::NAME,
+            <<$game as $crate::exact_game::Game>::Args as $crate::exact_game::Args>::FIELDS,
+        );
         #[cfg(target_arch = "wasm32")]
         #[wasm_bindgen::prelude::wasm_bindgen]
         pub fn exact_game_tables(text: &str) -> Result<String, wasm_bindgen::JsValue> {

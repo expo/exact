@@ -207,3 +207,33 @@ fn host_facts_are_the_runners_own_sources_never_a_gated_resources() {
         ["exactPage", "exactViewport"]
     );
 }
+
+#[test]
+fn scripted_state_bounds_and_membership_check_the_runner_observation() {
+    let source = r#"component App
+  state n = -2
+  state word = "ready"
+  view
+    text "Bounds"
+test "bounds"
+  expect state n >= -2
+  expect state n <= 2
+  expect state n in 0 -2 2
+  expect state word in "idle" "ready"
+"#;
+    let s = script::scripted("bounds", source, None).unwrap().remove(0);
+    assert!(s.delivery.stopped.is_none());
+    let plan = compile(&s.case).unwrap();
+    let (lines, _) = observe::run(
+        plan.clone(),
+        Oracle::for_case(&plan, &s.case),
+        &s.case.events,
+    );
+    crate::expectations_on(&s, &lines).unwrap();
+    let wrong = script::scripted("bounds", &source.replace("n >= -2", "n >= -1"), None)
+        .unwrap()
+        .remove(0);
+    assert!(crate::expectations_on(&wrong, &lines)
+        .unwrap_err()
+        .contains("does not hold"));
+}

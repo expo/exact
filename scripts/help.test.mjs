@@ -9,11 +9,11 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { createApp } from '../game/new.mjs';
 import { appVerbs } from './app-cli.mjs';
-import { HELP, helpText, indexText, knownFlags } from './help.mjs';
+import { HELP, appleBuildRefusal, guardFlags, helpText, indexText, knownFlags } from './help.mjs';
 import { scriptFlags } from './help-parity.mjs';
 
 const ROOT = resolve(import.meta.dir, '..');
-const APP_VERBS = ['status', 'web', 'web-build', 'serve', 'test', 'agent', 'verify', 'ios', 'mac', 'share', 'linux', 'windows', 'android', 'update', 'lock', 'add', 'contract', 'tamber', 'hatch', 'snapback', 'backend', 'pattern', 'docs', 'feedback'];
+const APP_VERBS = ['web', 'web-build', 'serve', 'test', 'agent', 'verify', 'ios', 'mac', 'share', 'linux', 'windows', 'android', 'update', 'lock', 'add', 'contract', 'tamber', 'hatch', 'snapback', 'backend', 'pattern', 'docs', 'feedback'];
 const timed = (args, options) => {
   const t = performance.now(), r = spawnSync(process.execPath, args, { encoding: 'utf8', timeout: 15_000, ...options });
   return { ...r, ms: performance.now() - t };
@@ -97,11 +97,36 @@ test('the scripts a verb runs answer --help and refuse a flag they do not take, 
   }
 });
 
+// A script reading `args[i + 1]` took the next flag as the value (`--archive --unsigned` wrote the archive as
+// <cwd>/--unsigned) or, last, nothing and so its default (`--sim` last installed on EXACT_SIM's simulator).
+test('a flag that takes a value is refused by name when the value is missing or another flag', () => {
+  const guarded = (verb, argv) => {
+    const said = [];
+    const code = guardFlags(verb, argv, { fail: (line) => said.push(line), exit: (code) => code });
+    return [code === argv ? 0 : code, said.join('\n')];
+  };
+  for (const [verb, argv, flag] of [
+    ['ios', ['--device', '--archive'], '--archive <out.ipa>'], ['ios', ['--device', '--archive', '--unsigned'], '--archive <out.ipa>'],
+    ['ios', ['--ios', '--sim'], '--sim <udid|name>'], ['ios', ['--device', '--phone', '--run'], '--phone <udid|name>'],
+    ['ios', ['--ios', '--optimize'], '--optimize speed|size'], ['mac', ['hello-apple', '--optimize'], '--optimize speed|size'],
+    ['ios', ['--ios', '--link'], '--link <plan>'], ['web-build', ['--out', '--json'], '--out <dir>'], ['agent', ['web', 'tree', '--url'], '--url <url>'],
+  ]) assert.deepEqual(guarded(verb, argv), [2, `${verb}: ${flag.split(' ')[0]} needs a value (${flag})`], argv.join(' '));
+  // Every failure in one run: a missing value and an unknown flag are both said.
+  assert.match(guarded('ios', ['--sim', '--bogus'])[1], /^ios: --sim needs a value \(--sim <udid\|name>\)\nios: unknown flag --bogus\. /);
+  // A value is taken as before, a negative number among them; a value in brackets is optional.
+  for (const [verb, argv] of [['ios', ['--ios', '--sim', 'iPhone 17', '--optimize', 'size']], ['web', ['--port', '-1']], ['agent', ['macos', '--login']], ['agent', ['macos', '--login', 'hidden', 'tree']]]) {
+    assert.deepEqual(guarded(verb, argv), [0, ''], argv.join(' '));
+  }
+  assert.equal(appleBuildRefusal(['--ios', '--link', 'all']), '--link takes plan, not all');
+  assert.equal(appleBuildRefusal(['--ios', '--link', 'plan']), null);
+});
+
 test('tamber help lists every binding language', () => {
   assert.match(helpText('tamber'), /gen ts\|rust\|swift\|kotlin <app>/);
 });
 
 test('each verb\'s help names exactly the flags its script parses, in a short text', () => {
+  assert.match(helpText('android'), /--write-locks/, 'Android authors need the lock-writing command after a graph change');
   // The verbs' scripts and the flags each parses, read as caps.mjs reads them before a push (help-parity.mjs).
   for (const [verb, flags] of scriptFlags(ROOT)) assert.deepEqual([...knownFlags(verb).keys()].sort(), flags, `${verb}: the help's flags (documented and internal) against its script's`);
   for (const verb of Object.keys(HELP)) {
@@ -113,7 +138,7 @@ test('each verb\'s help names exactly the flags its script parses, in a short te
 test('contract help names the build and verify flags with their arguments and restrictions', () => {
   const text = helpText('contract');
   for (const [command, flags] of [
-    ['build', ['[--stdin]', '[-o <file.plan>]', '[--json]', '[--errors-only]', '[--map (requires -o)]', '[--entry <kind> (requires -o; no --map or --stdin)]']],
+    ['build', ['[--stdin]', '[-o <file.plan>]', '[--json]', '[--errors-only]', '[--map (requires -o)]', '[--entry <kind> (requires -o; no --map or --stdin)]', '[--surface terminal (no --entry)]']],
     ['verify', ['[--runner-only]', '[--js]', '[--walks N]', '[--steps M]', '[--walk-seed N]', '[--confirm N]', '[--types]', '[--prove <Module>]']],
   ]) {
     const line = text.split('\n').find(line => line.startsWith(`  ${command} <file.contract>`));
@@ -148,7 +173,7 @@ test('a first build\'s helps are short, and --help all has every flag', () => {
 // The index is the one read: each verb, then the forms a build uses, in one screen, and every flag a form names is one its
 // verb's script parses (a form never names a flag that does not exist).
 test('help is the one read: the verbs and the forms a build uses, in one screen, naming only flags the verbs parse', () => {
-  assert.doesNotMatch(helpText('status'), /undefined/);
+  for (const verb of Object.keys(HELP)) for (const all of [false, true]) assert.doesNotMatch(helpText(verb, { all }), /undefined/, verb);
   // The index an app's exact.mjs prints, and a game's.
   const [text, gameText] = [false, true].map((game) => indexText({ verbs: Object.keys(appVerbs('app', '.', { game })) }));
   for (const index of [text, gameText]) {
@@ -173,4 +198,30 @@ test('help is the one read: the verbs and the forms a build uses, in one screen,
   }
   // Without a verb's forms (a game's own verbs have none), the index is the verbs.
   assert.doesNotMatch(indexText({ verbs: ['lock'] }), /The forms a build uses/);
+});
+
+test('unsigned device builds and archives refuse incompatible options before building', async () => {
+  const { appleBuildRefusal } = await import('./help.mjs');
+  for (const signed of [false, true]) for (let mask = 0; mask < 32; mask++) {
+    const flags = ['--unsigned', '--archive', '--run', '--device', '--host'];
+    const args = flags.filter((_, bit) => mask & (1 << bit));
+    const [unsigned, archive, run, device, host] = flags.map(flag => args.includes(flag));
+    const env = signed ? { EXACT_PROFILE: 'profile', EXACT_IDENTITY: 'identity' } : {};
+    const refusal = appleBuildRefusal(args, env, 'darwin');
+    assert.equal(refusal == null, !(unsigned && (!device || run) || archive && (!device || run || host || !unsigned && !signed)), JSON.stringify({ args, signed, refusal }));
+  }
+  assert.match(appleBuildRefusal(['--device', '--unsigned', '--run'], {}, 'darwin'), /ad-hoc signed device bundle cannot launch on a stock device/);
+  for (const args of [['--watchos', '--unsigned'], ['--watchos', '--device', '--unsigned']]) assert.match(appleBuildRefusal(args, {}, 'darwin'), /--unsigned takes no --watchos/);
+  for (const args of [['--device', '--development'], ['--device', '--unsigned', '--development'], ['--device', '--archive', 'a.ipa', '--development']]) assert.match(appleBuildRefusal(args, {}, 'darwin'), /--development needs --archive and --unsigned/);
+  const development = ['--device', '--archive', 'a.ipa', '--unsigned', '--development'];
+  assert.equal(appleBuildRefusal(development, {}, 'darwin'), null);
+  for (const [args, env] of [[[...development, '--release'], {}], [development, { EXACT_UPDATE_TRUST: 'production' }]]) assert.match(appleBuildRefusal(args, env, 'darwin'), /takes neither --release/);
+  assert.match(appleBuildRefusal(['--ios', '--run'], {}, 'linux'), /Linux has neither/);
+  assert.match(appleBuildRefusal(['--device', '--unsigned'], {}, 'linux'), /--device on Linux needs --archive/);
+  assert.equal(appleBuildRefusal(['--device', '--archive', 'a.ipa', '--unsigned'], {}, 'linux'), null);
+  assert.equal(appleBuildRefusal(['--ios'], {}, 'linux'), null);
+  const result = spawnSync(process.execPath, ['host/apple/build.mjs', '--device', '--unsigned', '--run', 'no-such-app'], { encoding: 'utf8' });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, process.platform === 'linux' ? /--run needs an iOS simulator/ : /--unsigned takes no --run/);
+  assert.doesNotMatch(result.stderr, /no app at/);
 });

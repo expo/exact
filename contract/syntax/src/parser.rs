@@ -29,6 +29,7 @@ mod properties;
 mod routes;
 mod sequence;
 mod sounds;
+mod source_decl;
 mod states;
 mod steps;
 mod theme;
@@ -559,6 +560,13 @@ impl Parser {
                 TokenKind::Ident(w) if w == "color-profile" => self.color_profile(file)?,
                 TokenKind::Ident(w) if w == "theme" => self.theme(file)?,
                 TokenKind::Ident(w) if w == "fn" => file.fns.push(self.fn_decl()?),
+                TokenKind::Ident(w) if w == "source" => {
+                    let decl = self.source_decl()?;
+                    if let Some(first) = file.sources.iter().find(|s| s.name == decl.name) {
+                        return duplicate("source", &decl.name, decl.span, first.span);
+                    }
+                    file.sources.push(decl);
+                }
                 TokenKind::Ident(w) if w == "test" => file.tests.push(self.test_decl()?),
                 TokenKind::Ident(w) if matches!(w.as_str(), "always" | "after" | "never") => {
                     file.properties.push(self.property_decl()?);
@@ -604,7 +612,7 @@ impl Parser {
                     return self.err(
                         "syntax-expected-declaration",
                         format!(
-                        "expected `routes`, `font`, `sound`, `shape`, `style`, `decoration`, `atom`, `keyframes`, `timeline`, `color-profile`, `theme`, `fn`, `use`, `component`, or `members`, found {}",
+                        "expected `routes`, `font`, `sound`, `shape`, `style`, `decoration`, `atom`, `keyframes`, `timeline`, `color-profile`, `theme`, `fn`, `source`, `use`, `component`, or `members`, found {}",
                         describe(other)
                     ),
                     );
@@ -783,6 +791,7 @@ impl Parser {
                 }
             };
             self.next();
+            self.unquoted_percent(&aname)?;
             let value = match self.expr()? {
                 // `-0.2` is a literal to anyone writing a style: fold it, so
                 // `letter-spacing=-0.2` is a constant like `0.2`.
@@ -1228,6 +1237,7 @@ impl Parser {
                     self.next();
                     (name, aspan)
                 };
+                self.unquoted_percent(&name)?;
                 let value = self.attr_value()?;
                 self.unquoted_unit(&name, &value)?;
                 if attrs.iter().any(|a: &Attr| a.name == name) {
@@ -1317,6 +1327,43 @@ impl Parser {
                 "`{attr}={n}{unit}` needs quotes: a value with a unit is a string, `{attr}=\"{n}{unit}\"` (a bare number is pixels)"
             ),
             span: Span { end_col: next.end_col, ..*at },
+        })
+    }
+
+    /// `width=50%` lexes as `50` and the remainder operator, whose right
+    /// operand would be the next attribute or nothing. Said before the value
+    /// is parsed, at the number and the `%`, since the expression fails past
+    /// them. `width=a % b` has its operand and is a remainder.
+    fn unquoted_percent(&self, attr: &str) -> R<()> {
+        let at = |i: usize| &self.tokens[(self.pos + i).min(self.tokens.len() - 1)];
+        let minus = usize::from(at(0).kind == TokenKind::Punct("-"));
+        let (TokenKind::Number(n), TokenKind::Punct("%")) = (&at(minus).kind, &at(minus + 1).kind)
+        else {
+            return Ok(());
+        };
+        let operand = match (&at(minus + 2).kind, &at(minus + 3).kind) {
+            (TokenKind::Newline | TokenKind::Indent | TokenKind::Dedent | TokenKind::Eof, _) => {
+                false
+            }
+            (TokenKind::Ident(_), TokenKind::Punct("=")) => false,
+            (TokenKind::Ident(k), TokenKind::Punct(".")) => {
+                !names::PLATFORM_KEYS.contains(&k.as_str())
+            }
+            _ => true,
+        };
+        if operand {
+            return Ok(());
+        }
+        let written = format!("{}{n}%", if minus == 1 { "-" } else { "" });
+        Err(SyntaxError {
+            id: "syntax-unquoted-length",
+            message: format!(
+                "`{attr}={written}` needs quotes: a value with a unit is a string, `{attr}=\"{written}\"` (a bare number is pixels)"
+            ),
+            span: Span {
+                end_col: at(minus + 1).span.end_col,
+                ..at(0).span
+            },
         })
     }
 

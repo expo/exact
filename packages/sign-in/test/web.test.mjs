@@ -11,9 +11,21 @@ import { join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { answered, authorizationURL, implementation, roster } from '../web/index.js';
 import { respond } from './idp.mjs';
+import declaration from '../exact.json';
 
 const APPLE = 'https://appleid.apple.com', GOOGLE = 'https://accounts.google.com/gsi/fedcm.json';
 const back = 'https://api.example/sign-in/return';
+
+test('Apple agent defaults offer only built identity requests', () => {
+  const substitute = declaration.names.find(row => row.source === 'getIdentityCapabilities').substitute;
+  for (const target of ['ios', 'macos']) {
+    const providers = substitute.targets[target].providers;
+    const apple = { ...substitute.default.providers.apple, ...providers.apple };
+    const google = { ...substitute.default.providers.google, ...providers.google };
+    expect(google).toEqual({ active: false, passive: false, withPublicKey: false });
+    expect(apple).toEqual({ active: target === 'ios', passive: target === 'ios', withPublicKey: false });
+  }
+});
 
 test("Apple's URL: the Services ID, the return route, form_post, the scope from fields, state and nonce", () => {
   const u = new URL(authorizationURL({ configURL: APPLE, clientId: 'com.example.web', params: { nonce: 'n1' }, web: { redirectURI: back } }, 's1'));

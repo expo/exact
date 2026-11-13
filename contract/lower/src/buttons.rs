@@ -150,6 +150,8 @@ impl Lowerer<'_> {
     fn styled_button_face(&self, nodes: &[Node]) -> Result<bool, LowerError> {
         for node in nodes {
             let styled = match node {
+                // A tab's badge is the author's own box, drawn as written.
+                node if crate::controls::is_badge(node) => false,
                 Node::Element { attrs, .. } => {
                     let class = self
                         .class_rows(attrs)?
@@ -228,14 +230,11 @@ impl Lowerer<'_> {
                         .chain(attrs)
                         .any(|a| rows(a).into_iter().any(crate::fields::disables))
                 }
-                Node::When {
-                    then, otherwise, ..
-                } => self.paints_a_radio(then)? || self.paints_a_radio(otherwise)?,
-                Node::Each { body, .. } => self.paints_a_radio(body)?,
-                Node::Match { some, none, .. } => {
-                    self.paints_a_radio(&some.1)? || self.paints_a_radio(none)?
+                Node::Element { .. } | Node::Use { .. } | Node::Children { .. } => false,
+                node => {
+                    let [first, second] = node.child_lists();
+                    self.paints_a_radio(first)? || self.paints_a_radio(second)?
                 }
-                _ => false,
             };
             if paints {
                 return Ok(true);

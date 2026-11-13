@@ -127,7 +127,7 @@ extension Presenter {
             var e: [String: Any] = ["kind": "view", "depth": d, "class": String(describing: Swift.type(of: v)), "frame": AgreementReport.rect(box(v)),
                                     "hidden": v.isHidden, "alpha": Agent.r2(v.alphaValue)]
             if let layer = v.layer {
-                var l: [String: Any] = ["masksToBounds": layer.masksToBounds, "zPosition": Agent.r2(layer.zPosition)]
+                var l: [String: Any] = ["masksToBounds": layer.masksToBounds, "zPosition": Double(layer.zPosition)]
                 let t = layer.transform
                 if !CATransform3DIsIdentity(t) {
                     if CATransform3DIsAffine(t) {

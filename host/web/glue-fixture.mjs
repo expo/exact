@@ -76,7 +76,7 @@ export function fixture(agentMode = true) {
   context.gpuInPlay = () => Boolean(context.gpuLoading || context.exact?.gpu || context.exact?.pendingSurfaces?.length);
   context.gpuLoading = null;
   context.frameSampler = null;
-  vm.runInContext(`let toldOffset = null; const folded = () => false; /* no folded text here (LLP 1007.001) */ const backButton = ${backButton}; const viewBox = ${viewBox}; const layoutBoxes = ${layoutBoxes}; const scrollRange = ${scrollRange}; Object.assign(host, { backButton, viewBox, layoutBoxes, scrollRange });\n` + glueDeclarations(source, ['POST_BOUND', 'followOffset', 'shownValue', 'heldNamed']) + '\n' + ['nodeDetail', 'agentInputReady', 'agent', 'agentNow', 'agentReply', 'settleGpu', 'gpuPendingReply', 'agentSettled', 'tagged', 'clock', 'startClock', 'mutate', 'boot', 'bootNow'].map(declaration).join('\n') + '\n' + publicObject, context);
+  vm.runInContext(`let toldOffset = null; const folded = () => false; /* no folded text here (LLP 1007.001) */ const backButton = ${backButton}; const viewBox = ${viewBox}; const layoutBoxes = ${layoutBoxes}; const scrollRange = ${scrollRange}; Object.assign(host, { backButton, viewBox, layoutBoxes, scrollRange });\n` + glueDeclarations(source, ['POST_BOUND', 'followOffset', 'shownValue', 'heldNamed']) + '\n' + ['nodeDetail', 'agentInputReady', 'agent', 'agentNow', 'agentReply', 'settleGpu', 'gpuPendingReply', 'agentSettled', 'tagged', 'clock', 'startClock', 'mutate', 'boot', 'bootNow', 'reportColors'].map(declaration).join('\n') + '\n' + publicObject, context);
   context.reportPlace = placeReporter(new URLSearchParams(agentMode ? 'agent=1' : ''), context);
   context.reportTime = timeReporter(new URLSearchParams(agentMode ? 'agent=1' : ''), context);
   return context;

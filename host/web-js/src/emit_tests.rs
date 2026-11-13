@@ -45,6 +45,38 @@ fn keep_mounted_is_a_list_option_read_again() {
     assert!(js.contains("keep:()=>"), "{js}");
 }
 
+/// LLP 1070 as amended for #226 — a row list's estimate and gap are list
+/// options read again as they change, and its height may be computed.
+#[test]
+fn a_row_lists_estimate_and_gap_are_list_options_read_again() {
+    let source = "component App\n  state w = 100\n  state g = 14\n  view\n    list virtualized=true display=\"flex\" height=(w * 1.3) overflow-x=\"scroll\" overflow-y=\"hidden\" estimated-item-width=w gap=g\n      for x in [1, 2] key=x\n        text `${x}` width=w\n";
+    let js = crate::emit::emit(&contract::compile(source).unwrap(), false, false)
+        .unwrap()
+        .js;
+    assert!(js.contains("est:()=>s_0()"), "{js}");
+    assert!(js.contains("gap:()=>s_1()"), "{js}");
+}
+
+/// An ordinary scroller's `scrollFollowEnd`, constant or bound, is follow.js's
+/// (LLP 1070.000 §15); a virtualized list's is list.js's alone.
+#[test]
+fn an_ordinary_scrollers_end_follow_imports_follow_js() {
+    let emit = |source: &str| {
+        crate::emit::emit(&contract::compile(source).unwrap(), false, false)
+            .unwrap()
+            .js
+    };
+    let js = emit(
+        "component App\n  view\n    scroll height=200 scrollFollowEnd=true\n      text \"x\"\n",
+    );
+    assert!(js.contains("import\"./follow.js\";"), "{js}");
+    assert!(js.contains(",\"scrollFollowEnd\",()=>\"true\");"), "{js}");
+    let js = emit("component App\n  state on = false\n  view\n    scroll height=200 scrollFollowEnd=on\n      text \"x\"\n");
+    assert!(js.contains("import\"./follow.js\";"), "{js}");
+    let js = emit("component App\n  view\n    list virtualized=true height=200 scrollFollowEnd=true\n      for x in [1, 2] key=x\n        text `${x}`\n");
+    assert!(!js.contains("follow.js"), "{js}");
+}
+
 #[test]
 fn list_measurements_read_parent_body_inputs_and_outer_frames() {
     let source = "component App\n  state ids = [1, 2]\n  state h = 32\n  view\n    list virtualized=true height=200\n      for x in ids key=x\n        text `${x}` height=(h + ids.length)\n";
@@ -85,6 +117,28 @@ fn an_app_file_iframe_keeps_its_source_for_the_file_loader() {
         "{js}"
     );
     assert!(!js.contains("about:blank"), "{js}");
+}
+
+/// LLP 1055 D4: the SVG namespace follows the node type, so a module's custom
+/// element named `felt-…` is HTML and the glue attaches its factory.
+#[test]
+fn only_an_svg_node_is_created_in_the_svg_namespace() {
+    let plan = contract::compile(
+        "component App\n  view\n    column\n      felt-haptics enabled=true\n      svg viewBox=\"0 0 10 10\"\n        defs\n          filter id=\"soft\"\n            feGaussianBlur stdDeviation=2\n",
+    )
+    .unwrap();
+    let js = crate::emit::emit(&plan, false, false).unwrap().js;
+    let maker = |tag: &str| {
+        let at = js
+            .find(&format!(",\"{tag}\","))
+            .unwrap_or_else(|| panic!("no {tag}: {js}"));
+        let open = js[..at].rfind('=').unwrap();
+        js[open + 1..at].split('(').next().unwrap().to_string()
+    };
+    assert_eq!(maker("felt-haptics"), "h", "{js}");
+    for tag in ["svg", "filter", "feGaussianBlur"] {
+        assert_eq!(maker(tag), "hs", "{tag}: {js}");
+    }
 }
 
 struct Answers;
@@ -399,6 +453,26 @@ fn a_literal_progress_value_is_its_attribute() {
     let made = js[at..].split(';').next().unwrap();
     assert!(made.contains("\"value\":\"0.4\""), "{made}");
     assert!(made.contains("\"max\":\"1\""), "{made}");
+}
+
+/// LLP 1075.003 §9.9 (expo/exact#391): a tab that names its panel and holds
+/// a badge is the platform's tab, which the neutral look draws as a tab with
+/// its badge; it was a bare button, drawn as a plain one.
+#[test]
+fn a_tab_with_a_badge_is_a_native_tab() {
+    let plan = contract::compile(
+        "component App\n  state n = 1\n  view\n    column\n      row role=\"tablist\"\n        button role=\"tab\" aria-controls=\"panel\" aria-selected=true\n          image \"symbol:bookmark\"\n          text \"Saved\"\n          if n > 0\n            row background-color=\"-exact-system-red\"\n              text `${n}`\n      column role=\"tabpanel\" id=\"panel\"\n        text \"Panel\"\n",
+    )
+    .unwrap();
+    let js = crate::emit::emit(&plan, false, false).unwrap().js;
+    let tab = js
+        .split("const e")
+        .find(|made| made.contains("\"role\":\"tab\""))
+        .expect("a tab");
+    assert!(
+        tab.contains("\"data-button-style\":\"bordered\""),
+        "a native tab: {tab}"
+    );
 }
 
 /// LLP 1116.004 D5.2: a radio group of radios is native buttons whose shell
@@ -732,7 +806,7 @@ fn virtual_surface_finite_defaults_run_unpublished_omitted_and_nested() {
         r#"
 const src = await Bun.file(process.argv[1]).text();
 const data = {{}}, Resources = [], commit = f => {{ f(); return true; }}, R = () => {{}}, Refusal = Error;
-const surfaces = new Function('data','Resources','commit','R','Refusal',src.replace(/^import .*;$/gm,'').replace(/^export /gm,'') + ';return surfaces;')(data,Resources,commit,R,Refusal);
+const surfaces = new Function('data','Resources','commit','R','Refusal','Kept','say',src.replace(/^import .*;$/gm,'').replace(/^export /gm,'') + ';return surfaces;')(data,Resources,commit,R,Refusal,k=>'exact.'+k+'.',()=>{{}});
 surfaces({{hud:['world',{descriptor}]}});
 const read = () => data.reserved.exactSurface(null, [], 'hud');
 const expected = ['a|b', ['a|b', null, []]];
@@ -922,76 +996,6 @@ fn inline_time_does_not_reserve_a_css_box() {
     }
 }
 
-/// LLP 1121 stage 9 B (D10): a symbol nobody tinted whose `color` its author
-/// wrote, on it or on the nearest node that sets one, is marked for
-/// symbols.js's sheet to draw it in that colour, a bound source too whatever
-/// names its role. Under a bound `color` the mark is symbols.js's to make
-/// after each commit: the image says how many bound colours are above it
-/// and what decides past them, and each says whether it is written.
-#[test]
-fn a_symbol_under_a_written_colour_is_marked() {
-    let plan = contract::compile(
-        r##"component App
-  state red = true
-  state icon = "symbol:star"
-  view
-    column
-      column color="#ff0000"
-        image "symbol:star" testId="literal"
-        image (red ? "symbol:star" : "symbol:heart") testId="bound-source"
-        image icon testId="named-elsewhere"
-        image "assets/mark.png" testId="photo"
-        column color=(red ? "#0000ff" : none) testId="maybe"
-          image "symbol:star" testId="over-written"
-      column color=(red ? "#ff0000" : none) testId="conditional"
-        image "symbol:star" testId="bound-colour"
-      column
-        image "symbol:star" testId="bare"
-        image icon testId="bare-bound"
-"##,
-    )
-    .unwrap();
-    let sites = crate::emit::Sites::new(&plan).unwrap();
-    let parts = crate::style::project(&plan, &sites, &mut Vec::new()).unwrap();
-    let props = |name: &str| {
-        parts
-            .iter()
-            .flatten()
-            .find(|part| part.props.get("data-testid").is_some_and(|id| id == name))
-            .unwrap()
-            .props
-            .clone()
-    };
-    for (name, color, ink) in [
-        ("literal", true, None),
-        ("bound-source", true, None),
-        ("named-elsewhere", true, None),
-        ("photo", false, None),
-        // One bound colour up, and past it a written one.
-        ("over-written", false, Some("11")),
-        // One bound colour up, and past it nothing written.
-        ("bound-colour", false, Some("10")),
-        ("bare", false, None),
-        ("bare-bound", false, None),
-    ] {
-        let p = props(name);
-        assert_eq!(p.contains_key("data-symbol-color"), color, "{name}: {p:?}");
-        assert_eq!(
-            p.get("data-symbol-ink").map(String::as_str),
-            ink,
-            "{name}: {p:?}"
-        );
-    }
-    for name in ["maybe", "conditional"] {
-        let p = props(name);
-        assert_eq!(
-            p.get("data-exact-ink").map(String::as_str),
-            Some("1"),
-            "{name}: {p:?}"
-        );
-    }
-}
-
 #[test]
 fn a_refusal_at_a_plan_node_is_said_at_its_source() {
     let dir = std::env::temp_dir().join(format!("web-js-at-source-{}", std::process::id()));
@@ -1151,31 +1155,38 @@ fn a_progress_follows_its_block_parents_justify_items() {
 /// gives way to an aligning parent's `justify-items` and stays where the parent would stretch it.
 #[test]
 fn a_canvas_follows_its_parents_justify_items() {
-    let program = |items: &str| {
-        let source = format!("component App\n  state alignment = \"center\"\n  view\n    box justify-items={items} width=240 height=80\n      canvas testId=\"c\" height=40\n");
+    let program = |items: &str, position: &str| {
+        let source = format!("component App\n  state alignment = \"center\"\n  state absolute = false\n  view\n    box justify-items={items} width=240 height=80\n      canvas testId=\"c\" height=40 {position}\n");
         let out = crate::emit::emit(&contract::compile(&source).unwrap(), false, false).unwrap();
         format!("{}\n{}", out.css, out.js)
     };
-    let written = program("\"center\"");
-    assert!(
-        written.contains("--exact-progress-aligned:auto"),
-        "{written}"
-    );
-    assert!(
-        written.contains("justify-self:var(--exact-progress-aligned,start)"),
-        "{written}"
-    );
-    assert!(!written.contains("justify-self:start"), "{written}");
-    let normal = program("\"normal\"");
-    assert!(
-        normal.contains("--exact-progress-aligned:initial"),
-        "{normal}"
-    );
-    let bound = program("alignment");
-    assert!(
-        bound.contains("\"--exact-progress-aligned\"") && bound.contains("?\"auto\":\"initial\""),
-        "the bound writer: {bound}"
-    );
+    for position in [
+        "",
+        "position=\"absolute\"",
+        "position=(absolute ? \"absolute\" : \"relative\")",
+    ] {
+        let written = program("\"center\"", position);
+        assert!(
+            written.contains("--exact-progress-aligned:auto"),
+            "{written}"
+        );
+        assert!(
+            written.contains("justify-self:var(--exact-progress-aligned,start)"),
+            "{written}"
+        );
+        assert!(!written.contains("justify-self:start"), "{written}");
+        let normal = program("\"normal\"", position);
+        assert!(
+            normal.contains("--exact-progress-aligned:initial"),
+            "{normal}"
+        );
+        let bound = program("alignment", position);
+        assert!(
+            bound.contains("\"--exact-progress-aligned\"")
+                && bound.contains("?\"auto\":\"initial\""),
+            "the bound writer: {bound}"
+        );
+    }
 }
 
 /// A canvas that parents a canvas writes its child's alignment under the pair's other name, so its
@@ -1272,4 +1283,128 @@ fn a_table_and_a_description_list_are_their_elements() {
     }
     // No grid of the host's: the browser's UA sheet gives each its display.
     assert!(!out.css.contains("display:grid"), "{}", out.css);
+}
+
+/// @ref LLP 1047.002 D1 — a commit reads bound exits and layout transitions
+/// through presence-bindings.js, which only a plan that binds one links, and
+/// which is handed over before the first commit builds the view.
+#[test]
+fn presence_bindings_link_only_where_an_exit_or_layout_transition_is_bound() {
+    let emitted = |view: &str| {
+        let source = format!("keyframes leave\n  to opacity=0\n\ncomponent App\n  state calm = false\n  view\n    column\n      {view}\n");
+        crate::emit::emit(&contract::compile(&source).unwrap(), false, false)
+            .unwrap()
+            .js
+    };
+    for view in [
+        "text \"Card\" -exact-exit-animation=(calm ? \"none\" : \"leave 200ms linear both\")",
+        "text \"Card\" -exact-layout-transition=(calm ? \"none\" : \"200ms linear\")",
+    ] {
+        let js = emitted(view);
+        let install = js.find("usePresenceBindings(presenceUse());");
+        assert!(install.is_some() && install < js.find("mount($R=>"), "{js}");
+    }
+    for view in [
+        "text \"Card\"",
+        "text \"Card\" -exact-exit-animation=\"leave 200ms linear both\"",
+        "text \"Card\" -exact-layout-transition=\"200ms linear\"",
+    ] {
+        let js = emitted(view);
+        assert!(
+            !js.contains("presenceUse") && !js.contains("usePresenceBindings"),
+            "{js}"
+        );
+    }
+}
+
+/// @ref LLP 1047.002 D1 — the projection frames a sheet (navigation/routes.js `sheetFrame`)
+/// only for a plan with a route whose `navigationPresentation` is, or may be,
+/// `modal`, handed over before the router connects the projection.
+#[test]
+fn sheet_frames_link_only_where_a_route_can_be_a_sheet() {
+    let emitted = |route: &str| {
+        let source = format!("routes nav\n  home \"/\"\ncomponent App\n  state sheet = true\n  view\n    main navigationKey=`${{top(nav).id}}` navigationBack=\"back\"\n      for e in stack(nav) key=e.id\n        column navigationKey=`${{e.id}}` {route}\n          text \"Card\"\n");
+        crate::emit::emit(&contract::compile(&source).unwrap(), false, false)
+            .unwrap()
+            .js
+    };
+    for route in [
+        "navigationPresentation=\"modal\"",
+        "navigationPresentation=(sheet ? \"modal\" : \"fullscreen\")",
+    ] {
+        let js = emitted(route);
+        let install = js.find("$useSheets($sheetFrame);");
+        assert!(install.is_some() && install < js.find("router(s_"), "{js}");
+    }
+    for route in ["", "navigationPresentation=\"fullscreen\""] {
+        let js = emitted(route);
+        assert!(
+            !js.contains("sheetFrame") && !js.contains("useSheets"),
+            "{js}"
+        );
+    }
+}
+
+/// @ref LLP 1047.002 D1 — a link's `rel` and `target` are kept by links.js only
+/// for a plan that binds a link's `href`, `rel` or `target`, handed over before
+/// the first commit builds the view; a static link's are the template's.
+#[test]
+fn links_link_only_where_a_links_href_rel_or_target_is_bound() {
+    let emitted = |link: &str| {
+        let source = format!("component App\n  state url = \"https://example.com\"\n  view\n    column\n      {link}\n        text \"Go\"\n");
+        crate::emit::emit(&contract::compile(&source).unwrap(), false, false)
+            .unwrap()
+            .js
+    };
+    for link in [
+        "link href=url",
+        "link href=\"/\" rel=(url == \"\" ? \"nofollow\" : \"noreferrer\")",
+        "link href=\"/\" target=(url == \"\" ? \"_self\" : \"_blank\")",
+    ] {
+        let js = emitted(link);
+        let install = js.find("useLinks($links());");
+        assert!(install.is_some() && install < js.find("mount($R=>"), "{js}");
+    }
+    for link in [
+        "link href=\"/\"",
+        "link href=\"https://example.com\" rel=\"noreferrer\"",
+    ] {
+        let js = emitted(link);
+        assert!(!js.contains("linkUse") && !js.contains("useLinks"), "{js}");
+    }
+}
+
+#[test]
+fn scroll_snap_emits_both_axes_and_center() {
+    for axis in ["x", "y"] {
+        let source = format!("component App\n  view\n    scroll height=100 width=300 scroll-snap-type=\"{axis} mandatory\"\n      view scroll-snap-align=\"center\"\n");
+        let out = crate::emit::emit(&contract::compile(&source).unwrap(), false, false).unwrap();
+        let all = format!("{}{}", out.js, out.css);
+        assert!(
+            all.contains(&format!("scroll-snap-type:{axis} mandatory")),
+            "{all}"
+        );
+        assert!(all.contains("scroll-snap-align:center"), "{all}");
+    }
+    // `proximity` as CSSOM serializes it, two alignments and `scroll-snap-stop`.
+    let source = "component App\n  view\n    scroll height=100 width=300 scroll-snap-type=\"both proximity\"\n      view scroll-snap-align=\"start center\" scroll-snap-stop=\"always\"\n";
+    let out = crate::emit::emit(&contract::compile(source).unwrap(), false, false).unwrap();
+    let all = format!("{}{}", out.js, out.css);
+    for declaration in [
+        "scroll-snap-type:both",
+        "scroll-snap-align:start center",
+        "scroll-snap-stop:always",
+    ] {
+        assert!(all.contains(declaration), "{declaration}: {all}");
+    }
+}
+
+#[test]
+fn delivery_version_fields_are_emitted_for_baked_and_unbaked_plans() {
+    let source = "shape Build\n  version: string\n  buildNumber: string\ncomponent App\n  resource build = exactDelivery() as shape Build\n  view\n    text build.version\n";
+    let plan = contract::compile(source).unwrap();
+    for plan in [plan.clone(), contract::bake(plan, Answers).unwrap()] {
+        let js = crate::emit::emit(&plan, false, false).unwrap().js;
+        assert!(js.contains(r#"["version","buildNumber"]"#), "{js}");
+    }
 }

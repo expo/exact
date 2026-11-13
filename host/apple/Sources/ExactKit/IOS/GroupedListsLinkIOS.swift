@@ -56,6 +56,10 @@ package protocol GroupedLists: AnyObject {
     func press(_ node: NodeView, down: Bool) -> Bool
     /// The agent's `tap` on a row UIKit draws.
     func activate(_ node: NodeView, before: (CGPoint?) -> Bool) -> [String: Any]?
+    /// The custom choice row whose carried radio is `node`.
+    func radioRow(for node: NodeView) -> NodeView?
+    /// Select a carried radio row from its non-control content, keeping a nested press's target.
+    func selectRadioRow(from node: NodeView, pressing target: NodeView?) -> UInt32?
     /// `layout <id>`'s native fields for a list or a row it draws.
     func observation(_ node: NodeView) -> [String: Any]?
     // LLP 1080.001 D3: what the inspection walk accounts for.

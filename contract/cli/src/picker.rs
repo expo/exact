@@ -30,19 +30,11 @@ fn accepts(file: &File) -> Vec<(String, Span)> {
                     }
                     walk(children, out);
                 }
-                Node::Use { children, .. } => walk(children, out),
-                Node::When {
-                    then, otherwise, ..
-                } => {
-                    walk(then, out);
-                    walk(otherwise, out);
+                node => {
+                    for list in node.child_lists() {
+                        walk(list, out);
+                    }
                 }
-                Node::Each { body, .. } => walk(body, out),
-                Node::Match { some, none, .. } => {
-                    walk(&some.1, out);
-                    walk(none, out);
-                }
-                Node::Children { .. } => {}
             }
         }
     }
@@ -194,19 +186,11 @@ fn missing_targets(file: &File) -> Vec<CompileError> {
                     }
                     ids(children, found, dynamic);
                 }
-                Node::Use { children, .. } => ids(children, found, dynamic),
-                Node::When {
-                    then, otherwise, ..
-                } => {
-                    ids(then, found, dynamic);
-                    ids(otherwise, found, dynamic);
+                node => {
+                    for list in node.child_lists() {
+                        ids(list, found, dynamic);
+                    }
                 }
-                Node::Each { body, .. } => ids(body, found, dynamic),
-                Node::Match { some, none, .. } => {
-                    ids(&some.1, found, dynamic);
-                    ids(none, found, dynamic);
-                }
-                Node::Children { .. } => {}
             }
         }
     }

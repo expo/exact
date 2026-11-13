@@ -1,0 +1,485 @@
+{
+  "mode": "loop-probe",
+  "hostNativeTiming": "platform",
+  "events": [
+    {
+      "name": "opened",
+      "wallMs": 1045.0135420000001,
+      "boot": 59.277000138536096,
+      "udid": "0430DA24-F984-466E-B567-46EEC01FD156"
+    },
+    {
+      "name": "settled-before",
+      "wallMs": 1091.807667,
+      "state": {
+        "navigation": {
+          "nativeBack": null,
+          "popover": null,
+          "presentation": null,
+          "owners": [],
+          "stack": [
+            "0"
+          ],
+          "contentScroller": 7,
+          "source": null,
+          "transition": {
+            "interactive": false,
+            "phase": "idle"
+          },
+          "barHeight": 106,
+          "url": "/",
+          "route": "0",
+          "arrangedScrollers": [],
+          "collapseScroller": 7,
+          "closedby": null
+        },
+        "clock": 201.44525007344782,
+        "epoch": 2,
+        "incarnation": 1
+      }
+    },
+    {
+      "name": "recorder-process",
+      "wallMs": 2963.628542,
+      "pid": 63555
+    },
+    {
+      "name": "recording-ready",
+      "wallMs": 3160.423917
+    },
+    {
+      "name": "tap-start",
+      "wallMs": 3160.4265
+    },
+    {
+      "name": "tap-end",
+      "wallMs": 3280.374209,
+      "reply": {
+        "tapped": 5,
+        "native": "bar-button-item",
+        "pressed": 5,
+        "delivery": "host-activation",
+        "target": "open-picker",
+        "carrier": "ios",
+        "mode": "agent",
+        "epoch": 3,
+        "incarnation": 1,
+        "clock": 201.44525007344782
+      }
+    },
+    {
+      "name": "film-start",
+      "wallMs": 3280.376709
+    },
+    {
+      "name": "film-end",
+      "wallMs": 5289.39325,
+      "reply": {
+        "safeArea": {
+          "top": 62,
+          "bottom": 34
+        },
+        "incarnation": 1,
+        "scale": 0.5,
+        "window": true,
+        "epoch": 3,
+        "clock": 801.4452500734478,
+        "w": 402,
+        "front": true,
+        "h": 874,
+        "screenshot": "film.png",
+        "frames": 13,
+        "every": 50,
+        "over": 600,
+        "at": [
+          201.44525007344782,
+          251.44525007344782,
+          301.4452500734478,
+          351.4452500734478,
+          401.4452500734478,
+          451.4452500734478,
+          501.4452500734478,
+          551.4452500734478,
+          601.4452500734478,
+          651.4452500734478,
+          701.4452500734478,
+          751.4452500734478,
+          801.4452500734478
+        ],
+        "dir": "film.png.frames",
+        "form": "sheet"
+      }
+    },
+    {
+      "name": "settle-start",
+      "wallMs": 5289.394875
+    },
+    {
+      "name": "settle-end",
+      "wallMs": 5335.103917,
+      "state": {
+        "navigation": {
+          "closedby": null,
+          "arrangedScrollers": [],
+          "url": "/picker",
+          "nativeBack": null,
+          "collapseScroller": 15,
+          "owners": [
+            {
+              "presentation": "modal",
+              "route": "1"
+            }
+          ],
+          "popover": null,
+          "route": "1",
+          "presentation": "modal",
+          "source": null,
+          "contentScroller": 15,
+          "stack": [
+            "1"
+          ],
+          "barHeight": 106,
+          "transition": {
+            "interactive": false,
+            "phase": "idle"
+          }
+        },
+        "clock": 801.4452500734478,
+        "epoch": 3,
+        "incarnation": 1
+      }
+    },
+    {
+      "name": "recording-stop",
+      "wallMs": 8154.7179590000005
+    },
+    {
+      "name": "recording-end",
+      "wallMs": 8162.112792000001,
+      "result": {
+        "code": 0,
+        "signal": null
+      }
+    }
+  ],
+  "samples": [
+    {
+      "file": "before.png",
+      "film": false,
+      "wallStartMs": 1092.354209,
+      "wallEndMs": 2866.4665840000002,
+      "result": {
+        "clock": 201.44525007344782,
+        "epoch": 2,
+        "incarnation": 1,
+        "scale": 3,
+        "h": 874,
+        "w": 402,
+        "safeArea": {
+          "top": 62,
+          "bottom": 34
+        },
+        "front": true,
+        "screenshot": "before.png",
+        "window": true,
+        "pixels": "display"
+      }
+    },
+    {
+      "file": "000-201.44525007344782ms.png",
+      "film": true,
+      "wallStartMs": 3281.01,
+      "wallEndMs": 3333.57325,
+      "result": {
+        "h": 874,
+        "scale": 3,
+        "window": true,
+        "epoch": 3,
+        "safeArea": {
+          "top": 62,
+          "bottom": 34
+        },
+        "incarnation": 1,
+        "screenshot": "000-201.44525007344782ms.png",
+        "w": 402,
+        "clock": 201.44525007344782,
+        "front": true
+      }
+    },
+    {
+      "file": "001-251.44525007344782ms.png",
+      "film": true,
+      "wallStartMs": 3454.4134590000003,
+      "wallEndMs": 3498.865042,
+      "result": {
+        "window": true,
+        "incarnation": 1,
+        "h": 874,
+        "screenshot": "001-251.44525007344782ms.png",
+        "safeArea": {
+          "top": 62,
+          "bottom": 34
+        },
+        "front": true,
+        "w": 402,
+        "epoch": 3,
+        "scale": 3,
+        "clock": 251.44525007344782
+      }
+    },
+    {
+      "file": "002-301.4452500734478ms.png",
+      "film": true,
+      "wallStartMs": 3625.412709,
+      "wallEndMs": 3673.268417,
+      "result": {
+        "clock": 301.4452500734478,
+        "scale": 3,
+        "w": 402,
+        "front": true,
+        "window": true,
+        "safeArea": {
+          "top": 62,
+          "bottom": 34
+        },
+        "h": 874,
+        "screenshot": "002-301.4452500734478ms.png",
+        "incarnation": 1,
+        "epoch": 3
+      }
+    },
+    {
+      "file": "003-351.4452500734478ms.png",
+      "film": true,
+      "wallStartMs": 3795.721834,
+      "wallEndMs": 3844.5987920000002,
+      "result": {
+        "window": true,
+        "safeArea": {
+          "top": 62,
+          "bottom": 34
+        },
+        "h": 874,
+        "w": 402,
+        "front": true,
+        "scale": 3,
+        "clock": 351.4452500734478,
+        "epoch": 3,
+        "incarnation": 1,
+        "screenshot": "003-351.4452500734478ms.png"
+      }
+    },
+    {
+      "file": "004-401.4452500734478ms.png",
+      "film": true,
+      "wallStartMs": 3990.948334,
+      "wallEndMs": 4035.768167,
+      "result": {
+        "window": true,
+        "safeArea": {
+          "top": 62,
+          "bottom": 34
+        },
+        "w": 402,
+        "h": 874,
+        "front": true,
+        "scale": 3,
+        "clock": 401.4452500734478,
+        "epoch": 3,
+        "incarnation": 1,
+        "screenshot": "004-401.4452500734478ms.png"
+      }
+    },
+    {
+      "file": "005-451.4452500734478ms.png",
+      "film": true,
+      "wallStartMs": 4133.027417,
+      "wallEndMs": 4179.5148340000005,
+      "result": {
+        "front": true,
+        "w": 402,
+        "scale": 3,
+        "screenshot": "005-451.4452500734478ms.png",
+        "clock": 451.4452500734478,
+        "incarnation": 1,
+        "safeArea": {
+          "top": 62,
+          "bottom": 34
+        },
+        "epoch": 3,
+        "h": 874,
+        "window": true
+      }
+    },
+    {
+      "file": "006-501.4452500734478ms.png",
+      "film": true,
+      "wallStartMs": 4280.181625,
+      "wallEndMs": 4324.3252090000005,
+      "result": {
+        "front": true,
+        "w": 402,
+        "scale": 3,
+        "screenshot": "006-501.4452500734478ms.png",
+        "clock": 501.4452500734478,
+        "incarnation": 1,
+        "safeArea": {
+          "top": 62,
+          "bottom": 34
+        },
+        "epoch": 3,
+        "h": 874,
+        "window": true
+      }
+    },
+    {
+      "file": "007-551.4452500734478ms.png",
+      "film": true,
+      "wallStartMs": 4426.079167,
+      "wallEndMs": 4473.030875,
+      "result": {
+        "clock": 551.4452500734478,
+        "scale": 3,
+        "w": 402,
+        "front": true,
+        "window": true,
+        "safeArea": {
+          "bottom": 34,
+          "top": 62
+        },
+        "screenshot": "007-551.4452500734478ms.png",
+        "h": 874,
+        "epoch": 3,
+        "incarnation": 1
+      }
+    },
+    {
+      "file": "008-601.4452500734478ms.png",
+      "film": true,
+      "wallStartMs": 4576.355625,
+      "wallEndMs": 4621.657709,
+      "result": {
+        "clock": 601.4452500734478,
+        "scale": 3,
+        "w": 402,
+        "front": true,
+        "window": true,
+        "safeArea": {
+          "top": 62,
+          "bottom": 34
+        },
+        "screenshot": "008-601.4452500734478ms.png",
+        "h": 874,
+        "epoch": 3,
+        "incarnation": 1
+      }
+    },
+    {
+      "file": "009-651.4452500734478ms.png",
+      "film": true,
+      "wallStartMs": 4720.359417,
+      "wallEndMs": 4765.237,
+      "result": {
+        "scale": 3,
+        "h": 874,
+        "window": true,
+        "incarnation": 1,
+        "safeArea": {
+          "top": 62,
+          "bottom": 34
+        },
+        "epoch": 3,
+        "screenshot": "009-651.4452500734478ms.png",
+        "w": 402,
+        "clock": 651.4452500734478,
+        "front": true
+      }
+    },
+    {
+      "file": "010-701.4452500734478ms.png",
+      "film": true,
+      "wallStartMs": 4873.038875,
+      "wallEndMs": 4917.260834,
+      "result": {
+        "scale": 3,
+        "h": 874,
+        "window": true,
+        "incarnation": 1,
+        "safeArea": {
+          "bottom": 34,
+          "top": 62
+        },
+        "epoch": 3,
+        "screenshot": "010-701.4452500734478ms.png",
+        "w": 402,
+        "clock": 701.4452500734478,
+        "front": true
+      }
+    },
+    {
+      "file": "011-751.4452500734478ms.png",
+      "film": true,
+      "wallStartMs": 5003.637375,
+      "wallEndMs": 5050.370667,
+      "result": {
+        "safeArea": {
+          "top": 62,
+          "bottom": 34
+        },
+        "incarnation": 1,
+        "scale": 3,
+        "window": true,
+        "epoch": 3,
+        "clock": 751.4452500734478,
+        "screenshot": "011-751.4452500734478ms.png",
+        "w": 402,
+        "front": true,
+        "h": 874
+      }
+    },
+    {
+      "file": "012-801.4452500734478ms.png",
+      "film": true,
+      "wallStartMs": 5136.349417,
+      "wallEndMs": 5183.486834,
+      "result": {
+        "safeArea": {
+          "top": 62,
+          "bottom": 34
+        },
+        "incarnation": 1,
+        "scale": 3,
+        "window": true,
+        "epoch": 3,
+        "clock": 801.4452500734478,
+        "screenshot": "012-801.4452500734478ms.png",
+        "w": 402,
+        "front": true,
+        "h": 874
+      }
+    },
+    {
+      "file": "after.png",
+      "film": false,
+      "wallStartMs": 5335.131292,
+      "wallEndMs": 8077.6446670000005,
+      "result": {
+        "scale": 3,
+        "h": 874,
+        "clock": 801.4452500734478,
+        "incarnation": 1,
+        "window": true,
+        "screenshot": "after.png",
+        "epoch": 3,
+        "front": true,
+        "safeArea": {
+          "top": 62,
+          "bottom": 34
+        },
+        "w": 402,
+        "presented": "sheet",
+        "pixels": "display"
+      }
+    }
+  ]
+}

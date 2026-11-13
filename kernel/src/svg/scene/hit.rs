@@ -74,24 +74,35 @@ fn hit_items(items: &[Item], point: (f32, f32), owner: Option<ViewId>) -> Option
     None
 }
 
+impl Shape {
+    /// Whether its fill and its stroke take hits, by `pointer-events`: a
+    /// paint is set when it is not `none`, whatever it draws (an empty
+    /// gradient draws nothing). `None` for `bounding-box`, which hits the
+    /// path's bounds instead.
+    pub fn hit_paints(&self) -> Option<(bool, bool)> {
+        use PointerEvents::*;
+        let (fill_set, stroke_set) = self.painted;
+        let visible = self.visible;
+        Some(match self.pointer_events {
+            None => (false, false),
+            Auto | VisiblePainted => (visible && fill_set, visible && stroke_set),
+            VisibleFill => (visible, false),
+            VisibleStroke => (false, visible),
+            Visible => (visible, visible),
+            Painted => (fill_set, stroke_set),
+            Fill => (true, false),
+            Stroke => (false, true),
+            All => (true, true),
+            BoundingBox => return Option::None,
+        })
+    }
+}
+
 fn shape_hit(shape: &Shape, local: (f32, f32), ctm: tf::Affine, point: (f32, f32)) -> bool {
-    use PointerEvents::*;
-    let (fill_set, stroke_set) = shape.painted;
-    let (fill, stroke) = match shape.pointer_events {
-        None => return false,
-        Auto | VisiblePainted => (shape.visible && fill_set, shape.visible && stroke_set),
-        VisibleFill => (shape.visible, false),
-        VisibleStroke => (false, shape.visible),
-        Visible => (shape.visible, shape.visible),
-        Painted => (fill_set, stroke_set),
-        Fill => (true, false),
-        Stroke => (false, true),
-        All => (true, true),
-        BoundingBox => {
-            return shape.path.bounds().is_some_and(|(x, y, w, h)| {
-                local.0 >= x && local.1 >= y && local.0 <= x + w && local.1 <= y + h
-            })
-        }
+    let Some((fill, stroke)) = shape.hit_paints() else {
+        return shape.path.bounds().is_some_and(|(x, y, w, h)| {
+            local.0 >= x && local.1 >= y && local.0 <= x + w && local.1 <= y + h
+        });
     };
     if fill && contains(&shape.path, local, shape.fill_rule == FillRule::Evenodd) {
         return true;

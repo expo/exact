@@ -289,36 +289,16 @@ fn share_pictures(view: &[Node], args: &[Expr]) -> Result<(), LowerError> {
 
 pub(crate) fn canvas_targets(nodes: &[Node]) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
-    for node in nodes {
-        match node {
-            Node::Element {
-                tag,
-                attrs,
-                children,
-                ..
-            } => {
-                if tag == "canvas" {
-                    for a in attrs.iter().filter(|a| a.name == "surface") {
-                        if let Expr::Ident(name, _) | Expr::Call(name, _, _) = &a.value {
-                            out.insert(name.clone());
-                        }
-                    }
+    for node in Node::walk(nodes) {
+        let Node::Element { tag, attrs, .. } = node else {
+            continue;
+        };
+        if tag == "canvas" {
+            for a in attrs.iter().filter(|a| a.name == "surface") {
+                if let Expr::Ident(name, _) | Expr::Call(name, _, _) = &a.value {
+                    out.insert(name.clone());
                 }
-                out.extend(canvas_targets(children));
             }
-            Node::Use { children, .. } => out.extend(canvas_targets(children)),
-            Node::When {
-                then, otherwise, ..
-            } => {
-                out.extend(canvas_targets(then));
-                out.extend(canvas_targets(otherwise));
-            }
-            Node::Each { body, .. } => out.extend(canvas_targets(body)),
-            Node::Match { some, none, .. } => {
-                out.extend(canvas_targets(&some.1));
-                out.extend(canvas_targets(none));
-            }
-            Node::Children { .. } => {}
         }
     }
     out

@@ -6,7 +6,9 @@ use crate::{ButtonFaceStyle, ButtonImagePlacement, ControlKind, PressFace};
 pub(crate) struct ButtonInputs {
     env: crate::Env,
     neutral_tab_root: Option<f32>,
+    neutral_bar_symbol: Option<(f32, f32)>,
     neutral_role_floor: bool,
+    neutral_menu_row: bool,
     segment: Option<crate::SegmentPlace>,
     /// A list row's inset (LLP 1138), which the face's padding takes.
     row_inset: Option<[f32; 2]>,
@@ -28,9 +30,11 @@ struct ButtonNode {
 
 impl ButtonInputs {
     pub(crate) fn matches(&self, arena: &NodeArena, slot: u32) -> bool {
-        if self.env != *arena.env()
+        if self.env != *arena.env_of(slot)
             || self.neutral_tab_root != arena.neutral_tab_root(slot)
+            || self.neutral_bar_symbol != arena.neutral_bar_symbol(slot)
             || self.neutral_role_floor != arena.neutral_role_floor(slot)
+            || self.neutral_menu_row != arena.neutral_menu_row(slot)
             || self.segment != arena.segment_place(slot)
             || self.row_inset != crate::rows::row_inset(arena, slot)
         {
@@ -75,8 +79,22 @@ fn mask(rows: &[StyleId]) -> StyleMask {
 }
 
 impl NodeArena {
+    /// Whether a slot is a `<button>` element on the web: a Pressable,
+    /// whatever its ARIA role, unless an `href` makes it an `<a>`.
+    pub(crate) fn is_button(&self, slot: u32) -> bool {
+        self.node_type(slot) == NodeType::Pressable
+            && self.props(slot).str(crate::PropId::Href).is_none()
+    }
+
     pub(crate) fn is_native_button(&self, slot: u32) -> bool {
         ControlKind::of(self.node_type(slot), self.props(slot)) == Some(ControlKind::Button)
+    }
+
+    fn neutral_bar_symbol(&self, slot: u32) -> Option<(f32, f32)> {
+        self.children(slot)
+            .iter()
+            .find_map(|&child| self.bar_symbol_size(child))
+            .map(|size| (self.root_font_size(), size))
     }
 
     pub(crate) fn neutral_tab_root(&self, slot: u32) -> Option<f32> {
@@ -114,12 +132,96 @@ impl NodeArena {
         ) {
             return true;
         }
+        self.neutral_menu_row(slot)
+    }
+
+    fn neutral_menu_row(&self, slot: u32) -> bool {
         let mut parent = self.parent(slot);
         while let Some(at) = parent {
-            if self.props(at).str(PropId::AccessibilityRole) == Some("menu") {
+            if self.props(at).str(PropId::AccessibilityRole) == Some("menu")
+                || self.alert_state.choosers.contains(at)
+            {
                 return true;
             }
             parent = self.parent(at);
+        }
+        false
+    }
+
+    /// Whether a popover a shown source opens is a chooser, as the web's
+    /// `beforetoggle` handler marks `data-exact-chooser`
+    /// (navigation/popover.js): an `alertdialog` with no text of its own and
+    /// no input anywhere in it.
+    pub(crate) fn chooser_shape(&self, slot: u32) -> bool {
+        let props = self.props(slot);
+        props.str(PropId::AccessibilityRole) == Some("alertdialog")
+            && props.get(PropId::Popover).is_some()
+            && !self
+                .children(slot)
+                .iter()
+                .any(|&c| self.node_type(c) == NodeType::Text)
+            && !self
+                .subtree(slot)
+                .iter()
+                .any(|&c| match self.props(c).str(PropId::SemanticTag) {
+                    Some(tag) => tag == "input",
+                    None => {
+                        self.node_type(c) == NodeType::TextInput
+                            || (self.node_type(c) == NodeType::Control
+                                && !matches!(
+                                    self.props(c).str(PropId::Type),
+                                    Some("button" | "select" | "progress")
+                                ))
+                    }
+                })
+    }
+
+    pub(crate) fn neutral_sheet_word(&self, slot: u32) -> bool {
+        if crate::style::metrics::column() != crate::style::metrics::Column::Neutral {
+            return false;
+        }
+        let Some(face) = self.press_face(slot) else {
+            return false;
+        };
+        if face.label.is_none()
+            || face.title.is_some()
+            || face.subtitle.is_some()
+            || face.symbol.is_none()
+        {
+            return false;
+        }
+        if face.symbol.as_deref() == Some("close")
+            && self.parent(slot).is_some_and(|parent| {
+                self.children(parent)
+                    .iter()
+                    .take_while(|&&c| c != slot)
+                    .any(|&c| self.props(c).str(PropId::AccessibilityRole) == Some("heading"))
+            })
+        {
+            return false;
+        }
+        let modal = |s| self.props(s).str(PropId::NavigationPresentation) == Some("modal");
+        let mut parent = self.parent(slot);
+        while let Some(header) = parent {
+            parent = self.parent(header);
+            if self.props(header).str(PropId::SemanticTag) != Some("header") {
+                continue;
+            }
+            let Some(container) = parent else { continue };
+            let in_sheet = modal(container)
+                || self.parent(container).is_some_and(|sheet| {
+                    modal(sheet)
+                        && self.children(sheet).first() == Some(&container)
+                        && self.children(container).first() == Some(&header)
+                });
+            // Only a written `appearance: none` takes the header out of the
+            // sheet's rule (`data-exact-said~="appearance"`, element.rs).
+            let style = self.style(header);
+            let unsaid = !(style.written.has(StyleId::Appearance)
+                && style.appearance == crate::Appearance::None);
+            if in_sheet && unsaid && !crate::bars::site_header(&FaceTree(self), header) {
+                return true;
+            }
         }
         false
     }
@@ -136,7 +238,7 @@ impl NodeArena {
             fits: true,
             ..PressFace::default()
         };
-        let (mut texts, mut images) = (0, 0);
+        let (mut texts, mut images, mut badges) = (0, 0, Vec::new());
         for &child in self.children(slot) {
             match self.node_type(child) {
                 NodeType::Text => {
@@ -179,10 +281,19 @@ impl NodeArena {
                         face.leading = face.title.is_none() && face.subtitle.is_none();
                     }
                 }
+                _ if self.is_tab_badge(slot, child) => {
+                    if let Some(text) = self.badge_text(child) {
+                        badges.push(text);
+                    }
+                }
                 _ => face.fits = false,
             }
         }
         face.fits &= texts <= 1 && images <= 1;
+        // One badge box, or none: two are not a badge.
+        if let [only] = badges.as_mut_slice() {
+            face.badge = Some(std::mem::take(only));
+        }
         face.placement = match (self.style(slot).flex_direction, face.leading) {
             (crate::FlexDirection::Column | crate::FlexDirection::ColumnReverse, true) => {
                 ButtonImagePlacement::Top
@@ -196,11 +307,49 @@ impl NodeArena {
         Some(face)
     }
 
+    /// Whether `child` is the badge of tab `slot` (LLP 1075.003 §9.9), which
+    /// lowering admits beside a tab's face when the tab names its panel: a
+    /// box whose only child is a text. It is no part of the face.
+    pub(crate) fn is_tab_badge(&self, slot: u32, child: u32) -> bool {
+        self.props(slot).str(PropId::AccessibilityRole) == Some("tab")
+            && self
+                .props(slot)
+                .get(PropId::AccessibilityControls)
+                .is_some()
+            && self.node_type(child) == NodeType::View
+            && matches!(self.children(child), [only] if self.node_type(*only) == NodeType::Text)
+    }
+
+    /// A tab's badge box's text, when the box shows: neither it nor its text
+    /// is `display: none` or fully transparent, its fill is visible, and its
+    /// text is not empty, as the Apple hosts' scan of the views had it.
+    fn badge_text(&self, badge: u32) -> Option<String> {
+        let text = *self.children(badge).first()?;
+        let shown = |s: u32| {
+            let style = self.style(s);
+            style.display != crate::Display::None && style.opacity > 0.0
+        };
+        let fill = self.style(badge).background_color?;
+        if !shown(badge)
+            || !shown(text)
+            || (fill.resolve(false).a() == 0 && fill.resolve(true).a() == 0)
+        {
+            return None;
+        }
+        let mut runs = Vec::new();
+        self.text_runs(text, &mut runs);
+        let words: String = runs.iter().map(|r| &*r.text).collect();
+        let words = words.trim();
+        (!words.is_empty()).then(|| words.to_owned())
+    }
+
     pub(crate) fn button_inputs(&self, slot: u32) -> ButtonInputs {
         ButtonInputs {
-            env: self.env.clone(),
+            env: self.env_of(slot).into_owned(),
             neutral_tab_root: self.neutral_tab_root(slot),
+            neutral_bar_symbol: self.neutral_bar_symbol(slot),
             neutral_role_floor: self.neutral_role_floor(slot),
+            neutral_menu_row: self.neutral_menu_row(slot),
             segment: self.segment_place(slot),
             row_inset: crate::rows::row_inset(self, slot),
             nodes: self
@@ -224,7 +373,7 @@ impl NodeArena {
     pub(crate) fn button_face_style(&self, slot: u32) -> Option<ButtonFaceStyle> {
         let mut face = self.button_face_style_unresolved(slot)?;
         face.resolve_geometry(
-            self.env(),
+            &self.env_of(slot),
             self.button_bases.get(&slot).copied().flatten(),
             self.frame(slot),
         );
@@ -349,8 +498,11 @@ impl NodeArena {
             (StyleId::ColumnGap, own.column_gap)
         };
         Some(ButtonFaceStyle {
+            root_font_size: self.root_font_size(),
+            neutral_bar_symbol: self.neutral_bar_symbol(slot),
             neutral_tab_root,
             neutral_role_floor: self.neutral_role_floor(slot),
+            neutral_menu_row: self.neutral_menu_row(slot),
             title,
             subtitle: texts.get(1).map(|&c| text_style(Some(c))),
             symbol,
@@ -367,5 +519,32 @@ impl crate::style::wide::Colors for ButtonInputs {
             node.style.colors(m);
             node.inherited.colors(m);
         }
+    }
+}
+
+/// The arena as the shared header rules read it (`bars::site_header`).
+struct FaceTree<'a>(&'a NodeArena);
+
+impl crate::bars::Tree for FaceTree<'_> {
+    type Node = u32;
+
+    fn facts(&self, slot: u32) -> u32 {
+        let arena = self.0;
+        let node = crate::NodeFacts {
+            id: arena.local_id(slot),
+            node_type: arena.node_type(slot),
+            style: arena.style(slot),
+            props: arena.props(slot),
+            has_looks: false,
+            is_root: arena.parent(slot).is_none(),
+            inline_run: false,
+            symbol_color: false,
+        };
+        let press = arena.is_native_button(slot) || node.node_type == NodeType::Pressable;
+        crate::bars::fact::of(&node, press, false, None)
+    }
+
+    fn children(&self, slot: u32) -> Vec<u32> {
+        self.0.children(slot).to_vec()
     }
 }

@@ -86,7 +86,7 @@ theorem Same.fieldIndex {e₁ e₂ : Env} (h : Same e₁ e₂) (s f : String) :
 
 theorem Same.stdlib_eq {e₁ e₂ : Env} (h : Same e₁ e₂) (f : String) (vs : List Value) :
     Contract.stdlib e₁ f vs = Contract.stdlib e₂ f vs := by
-  unfold Contract.stdlib
+  unfold Contract.stdlib Contract.routing
   rw [h.now, h.routes, h.strings]
 
 mutual

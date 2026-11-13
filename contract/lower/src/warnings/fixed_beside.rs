@@ -91,11 +91,11 @@ fn walk(level: Vec<&Node>, out: &mut Vec<LowerError>) {
         Node::Element { .. } | Node::Use { .. } | Node::Children { .. } => {}
         // Of an `if` or a `match`, each branch with a scroller (an empty
         // state's own is one): the others are shown instead.
-        Node::When {
-            then, otherwise, ..
-        } => branches([then, otherwise], out),
-        Node::Each { body, .. } => walk(body.iter().collect(), out),
-        Node::Match { some, none, .. } => branches([&some.1, none], out),
+        node => {
+            for list in node.child_lists() {
+                walk(list.iter().collect(), out);
+            }
+        }
     }
 }
 
@@ -143,12 +143,6 @@ fn beside(node: &Node, sometimes: bool) -> bool {
     }
 }
 
-fn branches(arms: [&Vec<Node>; 2], out: &mut Vec<LowerError>) {
-    for arm in arms {
-        walk(arm.iter().collect(), out);
-    }
-}
-
 /// A vertical scroller that takes the room it is given (a `list`, or a
 /// `scroll` not held sideways, with a `flex`), or a box or branch holding one.
 fn holds_scroller(node: &Node) -> bool {
@@ -164,12 +158,8 @@ fn holds_scroller(node: &Node) -> bool {
             }
             BOXES.contains(&tag.as_str()) && children.iter().any(holds_scroller)
         }
-        Node::When {
-            then, otherwise, ..
-        } => then.iter().chain(otherwise).any(holds_scroller),
-        Node::Each { body, .. } => body.iter().any(holds_scroller),
-        Node::Match { some, none, .. } => some.1.iter().chain(none).any(holds_scroller),
         Node::Use { .. } | Node::Children { .. } => false,
+        node => node.children().any(holds_scroller),
     }
 }
 

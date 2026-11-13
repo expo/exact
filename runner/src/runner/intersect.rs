@@ -118,4 +118,10 @@ impl<D: DataSource> Runner<D> {
     pub fn scrolled(&mut self, view: Option<ViewId>, left: f64, top: f64) {
         self.scrolled.note(&self.kernel, view, left, top);
     }
+
+    /// Where the host last showed a scroll container, or the page (`None`),
+    /// in CSS px; zero for one it has noted no offset for.
+    pub fn scroll_offset(&self, view: Option<ViewId>) -> (f64, f64) {
+        self.scrolled.shown(&self.kernel, view)
+    }
 }

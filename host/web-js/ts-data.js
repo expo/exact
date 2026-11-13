@@ -7,7 +7,7 @@
 // use); `openAuthSession` is auth.js.
 // The runtime's bindings load before the app's module and what it imports, so ts-fetch.js takes the page's own
 // functions before any app code runs.
-import { activeCall, answering, dropTimers, files as bodyFiles, SOCKET_AND_FETCH, useFetch } from './ts-fetch.js';
+import { activeCall, answering, dropTimers, files as bodyFiles, Promise as AnswerPromise, SOCKET_AND_FETCH, useFetch } from './ts-fetch.js';
 // The sources' `fetch`: ts-fetch.js's, or ts-fetch-refused.js's where no source holds a network grant (the build names it).
 import { fetch as sourceFetch } from '__FETCH_MODULE__';
 import * as source from '__APP_TS__';
@@ -16,13 +16,15 @@ import { tsGrantSet } from './admission-data.js';
 import { sourceTypes } from './names.js';
 import { checkpoint, clock, commit, drive, inflight, journal, Origin, painted, R, Resources, time } from './rt.js';
 import { failureCode, failureReason, Shaped } from './shape.js';
+// What uploads a resource asks (uploads.js); with ts-fetch-refused.js no source can upload, and the build links none.
 import { ledger, requestKey } from './uploads.js';
 useFetch(sourceFetch);
 // The app's id is app.json's, which the build writes here; app.ts need not export one.
 const appId = source.appId;
 // Work an answer awaits that is no held fetch, counted on its answer (ts-fetch.js `answering.ordinary`, LLP 1016.000 D9).
 const ordinary = start => (answering.ordinary ?? (f => f()))(start);
-// What an answer's timers run on (ts-fetch.js `arm`).
+// What an answer's timers run on (ts-fetch.js `arm`). Set once the app's module has run: a draw from then on
+// outside an answer is refused as outside one, not as during initialization (ts-fetch.js `answerOnly`).
 answering.page = { clock, journal, drive, time };
 __AUTH_IMPORT__
 // Values cross by the plan's types (`named` into the module's objects,
@@ -216,9 +218,9 @@ const conv = (v, t, target) => { const a = arrays(v, t, answered.get(target)); a
 // The app's page module as a source sees it (`native`, LLP 1067 D5), where
 // the app has one: `later` goes to the module artifact's `later` (native.js,
 // loaded after first paint); the web has no synchronous `call`; `watch`
-// re-asks the resources of the answer's source when the module announces
-// the topic (LLP 1016.002).
-const watched = new Map(); // topic -> sources
+// re-asks the resources whose current answers watch the topic when the
+// module announces it (LLP 1016.002): an answer's topics are its call's
+// `watches`, which rt.js keeps on the resource it asked for.
 let watching = null, page = null, load = null;
 // A resource with a request in flight is not asked now: that request's
 // reply lands, then it is asked again (`t.again`, rt.js), once however many
@@ -230,8 +232,8 @@ const changed = (r, topic) => {
   if (!t.again) journal.push(`t=${clock.now} changed ${topic}: ticket ${t.id} (${r.name}) lands first, then it is asked again`);
   t.again = true;
 };
-const announce = (topic, why) => commit(() => { const s = watched.get(topic), m = moduleWatched.get(topic); for (const r of Resources) if (s?.has(r.source) || m?.has(r.source)) changed(r, topic); }, `${why} ${topic}`);
-const watch = topic => (watched.get(topic) ?? watched.set(topic, new Set()).get(topic)).add(watching);
+const announce = (topic, why) => commit(() => { const m = moduleWatched.get(topic); for (const r of Resources) if (r.watches?.has(topic) || m?.has(r.source)) changed(r, topic); }, `${why} ${topic}`);
+const watch = topic => answering.call.watches.add(topic);
 // A native module's name called from data code (LLP 1133.002 D14): admitted by
 // the page runtime's modules.js as a Contract read is; a source's reader is
 // asked again when its answer changes, as a topic's is.
@@ -251,8 +253,9 @@ globalThis.__exact_module = body => {
 };
 (globalThis.exact ??= {}).announceModule = topic => announce(topic, 'module');
 globalThis.exact.moduleReaders = key => Resources.filter(r => moduleWatched.get(key)?.has(r.source)).map(r => r.name);
-// The documents the answers watch, for the agent's `state.watches`, as the runner lists them.
-(globalThis.exact ??= {}).watchState = () => [...watched.keys()].sort().flatMap(t => {
+// The documents the answers watch, for the agent's `state.watches`, as the runner lists them: a development page
+// names it (build.mjs), since the agent drives only that, and a production page does not link it.
+export const watchState = () => [...new Set(Resources.flatMap(r => r.gone ? [] : [...r.watches ?? []]))].sort().flatMap(t => {
   const m = /^doc-watch(-recursive)?:(.*)$/.exec(t);
   return m ? [{ path: m[2], recursive: !!m[1] }] : [];
 });
@@ -275,7 +278,7 @@ const native = Object.freeze({
 // person chose (`documents-glue.js`, the handles its pickers keep). Without
 // storage grants the same interface refuses, without fetching any adapters.
 // A refusal is `{kind: 'Unavailable', code, message}`, with Hermes's codes
-// (js/src/prelude.js `storageCode`; kanban F28): 'agent' for a drive with no
+// (js/src/storage.js `storageCode`; kanban F28): 'agent' for a drive with no
 // scratch store, 'denied' past the grants, the filesystem's POSIX name, else
 // 'failed'.
 const codedError = e => {
@@ -309,7 +312,7 @@ function landed(op, ok, value) {
   op.reject(error);
 }
 // A stream's mapper has no storage in any turn of its call (LLP 1016.000 D7), refused in Hermes's words
-// (js/src/prelude.js `storageCall`); null elsewhere.
+// (js/src/storage.js `storageCall`); null elsewhere.
 function inMapper(method) {
   if (!answering.mapperCall) return null;
   const error = codedError(new Error(`storage.${method}() called in a stream's mapper: it was never run. Start storage inside an answer`));
@@ -358,7 +361,7 @@ const DIRECTORIES = Object.freeze({ data: 'app:/data', cache: 'app:/cache', temp
 // it again once it adopts the page (render.mjs). The lowered bundles restore the
 // answer across `await`. Each answer has its own facade; its `owner` names
 // refusals when no answer is current, as in a plain `.then`.
-// `compressImage` and `transformImage` options, checked as the native prelude checks them (binary.js
+// `compressImage` and `transformImage` options, checked as the native prelude checks them (storage.js
 // `imageOptions`) before anything is asked of storage: the options to run with, or the TypeError a call rejects with.
 function imageOptions(method, from, to, options, limits) {
   const api = `storage.fs.${method}()`, out = { ...limits }, o = options ?? {};
@@ -433,6 +436,7 @@ function renderStorage(owner) {
   return Object.freeze({ fs: Object.freeze({ directories: DIRECTORIES, ...fs, watch }), sqlite: Object.freeze({ open: refuse('storage.sqlite.open()') }), work: promise => Promise.resolve(promise) });
 }
 function storageOf(grants) {
+  const ordinary = start => answering.ordinary(start, true);
   const admitted = ['fs-read', 'fs-write', 'sqlite-open'].some(kind => hasGrant(grants, kind));
   let fs, sqlite;
   const key = () => import('./storage-environment.js').then(({ storageKey, agentStorageRefusal }) => {
@@ -464,44 +468,8 @@ function storageOf(grants) {
   const denied = (op, document = false) => inMapper(op.split(/[. ]/)[1]) ?? (document ? Promise.resolve() : key()).then(() => {
     throw Object.assign(new Error(`denied: ${op}`), { kind: 'Unavailable', code: 'denied' });
   });
-  const databases = () => sqlite ??= key().then(k => import(new URL('./storage-sqlite.js', import.meta.url).href).then(m => m.createSqlite(k, grants)));
-  // A database's and a statement's methods refuse as storage's do, in the queue.
-  const wrap = (o, convert, path) => Object.freeze(Object.fromEntries(Object.entries(convert).map(([m, then]) =>
-    [m, (...args) => queued(`${m} ${path}`, () => o[m](...args)).then(then ? v => then(v, path) : undefined)])));
-  const statement = (s, path) => wrap(s, { execute: null, query: null, close: null }, path);
-  // Each entry's sql and params read once; options as a record with no
-  // prototype, so `__proto__` stays a key the validation refuses.
-  const batchNow = c => Array.isArray(c) ? c.map(e => {
-    if (!e || typeof e !== 'object') return e;
-    const { sql, params } = e;
-    return { sql, params: Array.isArray(params) ? params.map(v => v instanceof Uint8Array ? new Uint8Array(v) : v) : params };
-  }) : c;
-  const optionsNow = o => {
-    if (o === null || typeof o !== 'object') return o;
-    const f = o.foreignKeys, r = Object.create(null);
-    for (const k of Object.keys(o)) if (k !== 'foreignKeys') Object.defineProperty(r, k, { value: true, enumerable: true });
-    if (f !== undefined) r.foreignKeys = f;
-    return r;
-  };
-  const database = (d, path, call) => {
-    const handle = { path, call, told: false };
-    openDatabases.add(handle);
-    const wrapped = wrap(d, { execute: null, query: null, prepare: statement, transaction: null, close: null }, path);
-    // A transaction's batch and options as they are at the call, not when the
-    // queue reaches it (js/src/prelude.js `batchNow`, `optionsNow`).
-    const db = { ...wrapped, transaction: (commands, options) => {
-      let args;
-      try { args = [batchNow(commands), optionsNow(options)]; }
-      catch (e) { return Promise.reject(Object.assign(new Error(String(e?.message ?? e)), { kind: 'Unavailable', code: 'failed' })); }
-      return wrapped.transaction(...args);
-    } };
-    // A close counts once issued; one refused or failed leaves the database open, and tracked.
-    return Object.freeze({ ...db, close: (...args) => {
-      openDatabases.delete(handle);
-      // A failed close still rejects for the caller, so one left unhandled is still reported.
-      return db.close(...args).catch((e) => { openDatabases.add(handle); throw e; });
-    } });
-  };
+  // The page's SQLite worker, and the module's handles over it (ts-sqlite.js), loaded at the first open.
+  const databases = () => sqlite ??= key().then(k => Promise.all([import(new URL('./storage-sqlite.js', import.meta.url).href).then(m => m.createSqlite(k, grants)), import('./ts-sqlite.js')]));
   // `compressImage` (LLP 1069.002 A1) and `transformImage` (LLP 1133.019 D14): their options are checked before either
   // is queued (`imageOptions`); app files only.
   const image = (method, from, to, options, limits) => {
@@ -540,7 +508,7 @@ function storageOf(grants) {
           : isDocument(captured) ? documents().then(f => f[m](...captured)) : files().then(f => f[m](...captured), orEmpty(m, captured[0]));
         return (admitted ? queued(`${m}${typeof args[0] === 'string' ? ` ${args[0]}` : ''}`, run) : denied(`fs.${m}`, isDocument(captured) && !copiesIn(m, captured))).catch(refused);
       })])) }),
-    sqlite: Object.freeze({ open: path => ordinary(() => { const call = answering.call; return (admitted ? queued(`open ${path}`, () => databases().then(d => d.open(path))).then(d => database(d, path, call)) : denied(`sqlite.open ${path}: no grant covers it; grant \`sqlite.open ${path}\`, or \`sqlite.open ${String(path).slice(0, String(path).lastIndexOf('/'))}\` for every file there (a grant covers its path and what is below it, by whole names)`)).catch(refused); }) }),
+    sqlite: Object.freeze({ open: path => ordinary(() => { const call = answering.call; return (admitted ? queued(`open ${path}`, () => databases().then(([d]) => d.open(path))).then(d => sqlite.then(([, m]) => m.database(d, path, call, queued, openDatabases))) : denied(`sqlite.open ${path}: no grant covers it; grant \`sqlite.open ${path}\`, or \`sqlite.open ${String(path).slice(0, String(path).lastIndexOf('/'))}\` for every file there (a grant covers its path and what is below it, by whole names)`)).catch(refused); }) }),
     work: promise => Promise.resolve(promise),
   });
 }
@@ -570,7 +538,7 @@ export function install(data, mixed = false, modules = null) {
   // paint (rt.js `painted`), whether or not anything asks `later`.
   load = modules && (() => painted().then(modules));
   if (modules && typeof requestAnimationFrame === 'function') pageModule().catch(e => journal.push(`t=${clock.now} native: ${e.message}`));
-  let keys = null, asking = '', thrown = null, threwRead = false;
+  let keys = null, asking = '', thrown = null, threwRead = false, threwWatches = null;
   // The answer an async function was called under, put back around each of
   // its steps by the bundle's async helper (js/bake/src/typescript.mjs
   // `asyncContextHelper`, LLP 1133.002 D14), as Hermes's prelude does with
@@ -578,10 +546,11 @@ export function install(data, mixed = false, modules = null) {
   // that answer's, and one in a stream's mapper call is still refused. The
   // synchronous turn alone stays `call.turn`.
   globalThis.__exact_async_context = Object.freeze({
-    current: () => ({ call: answering.call, watching, asking, mapperCall: answering.mapperCall }),
+    Promise: AnswerPromise,
+    current: () => [answering.call, watching, asking, answering.mapperCall, answering.promiseCall],
     swap(to) {
-      const before = { call: answering.call, watching, asking, mapperCall: answering.mapperCall };
-      answering.call = to?.call ?? null; watching = to?.watching ?? null; asking = to?.asking ?? ''; answering.mapperCall = to?.mapperCall ?? null;
+      const before = this.current();
+      [answering.call, watching, asking, answering.mapperCall, answering.promiseCall] = to;
       return before;
     },
   });
@@ -594,11 +563,14 @@ export function install(data, mixed = false, modules = null) {
   let seeded = !source.kept;
   const seed = () => {
     seeded = true;
-    const page = checkpoint().kept;
-    for (const r of page ? Resources : []) {
-      if (r.member) continue; // The checkpoint holds the list's aggregate; the source answers one member.
-      const k = page.get(r.name), types = sourceTypes[r.source];
-      if (k && types) try { source.kept(r.source, k[0].map((a, i) => named(a, types[0][i])), named(k[1], types[1])); } catch {}
+    for (const { source: sourceName, answers } of checkpoint().kept?.values() ?? []) {
+      const types = Object.hasOwn(sourceTypes, sourceName) ? sourceTypes[sourceName] : undefined;
+      if (!types) {
+        continue;
+      }
+      for (const [args, value] of answers) {
+        try { source.kept(sourceName, args.map((a, i) => named(a, types[0][i])), named(value, types[1])); } catch {}
+      }
     }
   };
   const ts = (name, args, store, target, mutation = false, forced) => {
@@ -607,7 +579,7 @@ export function install(data, mixed = false, modules = null) {
     // The store as the module sees it (LLP 1018): a read marks the answer.
     const seen = createSecretFacade(store, tsGrantSet, kept);
     // A call that read the store and then threw read it too: its resource is a store reader (LLP 1146 §2.3).
-    threwRead = false;
+    threwRead = false; threwWatches = null;
     try { return answerWith(name, args, target, mutation, types, params, result, seen, forced); } catch (e) { threwRead = !!seen.read; throw e; }
   };
   const answerWith = (name, args, target, mutation, types, params, result, seen, forced) => {
@@ -616,7 +588,7 @@ export function install(data, mixed = false, modules = null) {
     asking = target ?? name; watching = name;
     for (const sources of moduleWatched.values()) sources.delete(name);
     // The origin of the commit that asked it (LLP 1133.002 D12), which a fetch it makes carries (LLP 1133.036 D6).
-    const call = answering.call = { stream: null, mutation, forced, name: target ?? name, turn: true, origin: Origin.now() }, target_ = target ?? name;
+    const call = answering.call = { stream: null, mutation, forced, name: target ?? name, turn: true, origin: Origin.now(), watches: new Set() }, target_ = target ?? name;
     if (call.origin !== 'app') answering.untraced.add(call);
     // What the source sent goes once the commit that asked it stands: an answer in flight's (a resource's, or a mutation's that
     // answers with a promise) whatever it then answers, a refused commit saying so (LLP 1016.000 D7, amended 2026-10-18).
@@ -626,7 +598,7 @@ export function install(data, mixed = false, modules = null) {
     };
     let r;
     thrown = null;
-    try { r = source.answer(name, args.map((a, i) => named(a, params[i])), seen, globalThis.__exactRender ? renderStorage(call) : storage, modules ? native : null); } catch (e) { call.settled = true; if (!mutation) thrown = effectsOf(true); throw e; } finally { call.turn = false; asking = ''; watching = null; answering.call = null; }
+    try { r = source.answer(name, args.map((a, i) => named(a, params[i])), seen, globalThis.__exactRender ? renderStorage(call) : storage, modules ? native : null); } catch (e) { call.settled = true; threwWatches = call.watches; if (!mutation) thrown = effectsOf(true); throw e; } finally { call.turn = false; asking = ''; watching = null; answering.call = null; }
     const shaped = types ? v => checked(name, v, result) : v => v;
     // A stream's answer has replied once it returns (LLP 1016.000): what runs on is background work.
     // Socket operations go out only with a value given now: not with a
@@ -637,22 +609,33 @@ export function install(data, mixed = false, modules = null) {
     }
     const effects = effectsOf(!mutation || !!(r && typeof r.then === 'function'));
     // An upload's request identity: the same request for newer arguments keeps it (rt.js, LLP 1016.000 D10).
-    if (call.stream) { call.settled = true; return { stream: opener(call.stream, v => conv(shaped(v), result, target_), target_), upload: requestKey(call.stream), store: seen.read, effects }; }
+    if (call.stream) { call.settled = true; return { stream: opener(call.stream, v => conv(shaped(v), result, target_), target_), upload: requestKey(call.stream), store: seen.read, effects, watches: call.watches }; }
     if (r && typeof r.then === 'function') {
       pendingAnswers++;
       call.seen = seen; // a read after an `await` makes a store reader too: rt.js looks when the answer lands (LLP 1146 §2.3)
       // Once: an answer let go while its timers were armed never settles, and ends here (ts-fetch.js `dropTimers`).
       const settle = () => { if (call.settled) return; call.settled = true; dropTimers(call); answering.untraced.delete(call); pendingAnswers--; if (!pendingAnswers && owed) { owed = false; leftOpen(); } };
       call.abandon = settle;
+      // A stream opened in a later turn (ts-fetch.js `stream`) is the answer, as one opened by its source is: its ticket
+      // opens it (request-send.js `late`), and what the async function goes on to return is not the answer. An upload's
+      // identity is read first: what it refuses (a `ReadableStream` body) rejects the `fetch` and leaves the answer as it
+      // was. An upload is marked as asked before it opens (uploads.js `ends`).
+      call.late = () => {
+        const upload = requestKey(call.stream), t = call.ticket;
+        settle();
+        t.stream = opener(call.stream, v => conv(shaped(v), result, target_), target_);
+        if (upload) { t.upload = upload; t.uploading?.(); }
+        t.late?.();
+      };
       // In flight: its later turns may send (ts-stream.js `later`), behind what this source sent, once the commit
       // that asked it stands; a refused commit takes those batches back.
       call.flight = true;
       const stood = Object.assign(() => { call.stood = true; for (const go of call.waiting ?? []) go(); call.waiting = null; },
         { refused: why => { call.stood = false; for (const go of call.waiting ?? []) go.refused(why); call.waiting = null; call.unsent = []; } });
-      return { promise: r.then(v => (settle(), conv(shaped(v), result, target_)), e => { settle(); leftOpen(); throw e; }), store: seen.read, effects: [...(effects ?? []), stood], call };
+      return { promise: r.then(v => (settle(), conv(shaped(v), result, target_)), e => { settle(); leftOpen(); throw e; }), store: seen.read, effects: [...(effects ?? []), stood], call, watches: call.watches };
     }
     call.settled = true; dropTimers(call); answering.untraced.delete(call);
-    return { v: conv(shaped(r), result, target_), store: seen.read, effects };
+    return { v: conv(shaped(r), result, target_), store: seen.read, effects, watches: call.watches };
   };
   // Beside a Rust source (LLP 1027.002): a source this module does not
   // answer is the Rust module's, not ready until it loads; rust-data.js
@@ -692,5 +675,7 @@ export function install(data, mixed = false, modules = null) {
   // A resource's source that sent and then threw: what it sent, which rt.js `ask` queues with the commit.
   data.thrown = () => { const t = thrown ?? []; thrown = null; return t; };
   data.threwRead = () => { const read = threwRead; threwRead = false; return read; };
+  // What a call that threw watched: its resource watches it too, as the runner's failed ask does.
+  data.threwWatches = () => { const w = threwWatches; threwWatches = null; return w; };
   for (const f of data.q.splice(0)) f();
 }

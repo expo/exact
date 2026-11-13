@@ -4,7 +4,7 @@
 
 use std::ffi::{c_char, c_int, c_uchar, c_void, CStr, CString};
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex};
 
 // @ref LLP 0068.000#3-ownership-callbacks-and-cancellation — contain all Rust callbacks across native FFI
 const NATIVE_HEADER_BYTES: usize = 1 << 20;
@@ -39,6 +39,7 @@ extern "C" {
         body_length: usize,
         body_ctx: *mut c_void,
         timeout_seconds: f64,
+        speculative: c_int,
         refusal: *const c_char,
         ctx: *mut c_void,
     ) -> *mut c_void;
@@ -49,10 +50,10 @@ extern "C" {
 
 /// A lane's session, created at its first exchange (the first
 /// `NSURLSession` costs tens of milliseconds) and invalidated, cancelling
-/// every task, when dropped.
+/// every task, when retired or dropped.
 pub struct DarwinLane {
     /// The native lane, as a `usize` so the struct stays `Send + Sync`.
-    lane: OnceLock<usize>,
+    lane: Mutex<(Option<usize>, bool)>,
     max_per_host: usize,
 }
 
@@ -61,20 +62,20 @@ impl DarwinLane {
     /// zero keeps URLSession's default (6).
     pub fn new(max_per_host: usize) -> Self {
         Self {
-            lane: OnceLock::new(),
+            lane: Mutex::new((None, false)),
             max_per_host,
         }
     }
 
     /// Whether the session exists yet.
     pub fn created(&self) -> bool {
-        self.lane.get().is_some()
+        self.lane.lock().unwrap().0.is_some()
     }
 
-    fn lane(&self) -> *mut c_void {
-        *self.lane.get_or_init(|| {
+    fn lane(&self, state: &mut (Option<usize>, bool)) -> *mut c_void {
+        *state.0.get_or_insert_with(|| {
             let max = c_int::try_from(self.max_per_host).unwrap_or(c_int::MAX);
-            // SAFETY: returns a retained lane, released once in `drop`.
+            // SAFETY: returns a retained lane, released once by retirement.
             unsafe { ibex2_darwin_lane_create(max) as usize }
         }) as *mut c_void
     }
@@ -82,10 +83,7 @@ impl DarwinLane {
 
 impl Drop for DarwinLane {
     fn drop(&mut self) {
-        if let Some(lane) = self.lane.get() {
-            // SAFETY: came from `ibex2_darwin_lane_create`, released once.
-            unsafe { ibex2_darwin_lane_destroy(*lane as *mut c_void) };
-        }
+        self.retire();
     }
 }
 
@@ -99,7 +97,19 @@ impl Drop for Task {
 }
 
 impl AsyncTransport for DarwinLane {
+    fn retire(&self) {
+        let mut state = self.lane.lock().unwrap();
+        state.1 = true;
+        if let Some(lane) = state.0.take() {
+            // SAFETY: start holds this lock while borrowing the retained lane.
+            unsafe { ibex2_darwin_lane_destroy(lane as *mut c_void) };
+        }
+    }
     fn start(&self, request: HopRequest, sink: Box<dyn Sink>) -> Result<Exchange, HostError> {
+        let mut state = self.lane.lock().unwrap();
+        if state.1 {
+            return Err(HostError::Failed("HTTP lane retired".into()));
+        }
         let ctx = Box::into_raw(Box::new(CallbackState {
             sink,
             panicked: false,
@@ -148,7 +158,7 @@ impl AsyncTransport for DarwinLane {
         // which frees it once its end (and metrics) have been delivered.
         let start = unsafe {
             ibex2_darwin_task_start(
-                self.lane(),
+                self.lane(&mut state),
                 method.as_ptr(),
                 url.as_ptr(),
                 block.as_ptr(),
@@ -156,6 +166,7 @@ impl AsyncTransport for DarwinLane {
                 body_length,
                 body_ctx,
                 timeout,
+                c_int::from(request.speculative),
                 refusal.map_or(std::ptr::null(), |r| r.as_ptr()),
                 ctx,
             )

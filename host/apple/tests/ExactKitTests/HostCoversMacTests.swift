@@ -29,6 +29,29 @@ final class HostCoversMacTests: XCTestCase {
         }
     }
 
+    /// A cover reported while one is delivered is delivered after it, and a
+    /// report that never settles stops.
+    func testCoversReportedDuringADeliveryFollowItWithoutNesting() {
+        _ = NSApplication.shared
+        let p = Presenter()
+        p.apply(wireBatch([["op": "create", "id": 1, "kind": "view"], ["op": "roots", "ids": [1]]]))
+        for limit in [4, 64] {
+            var count = 0, depth = 0, deepest = 0
+            p.onCovers = { _ in
+                count += 1
+                depth += 1
+                deepest = max(deepest, depth)
+                if count < limit { p.covers.report("test", [1: .gutter(right: count % 2 == 1 ? 0 : 15, bottom: 0)]) }
+                depth -= 1
+            }
+            p.covers.report("test", [1: .gutter(right: 15, bottom: 0)])
+            XCTAssertEqual(deepest, 1, "a delivery returns before the next one starts")
+            XCTAssertEqual(count, min(limit, 8), limit < 8 ? "a settling report is delivered in full" : "an oscillation stops")
+            p.onCovers = nil
+            p.covers.reset()
+        }
+    }
+
     /// A real session over the kernel: a column of a 50-point bar and a box
     /// that takes the rest of a 300 by 400 page.
     func testABoxCoveredWholeLeavesLayoutAndComesBackWhenTheCoverIsWithdrawn() throws {

@@ -1,6 +1,37 @@
 import { expect, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
 import { open } from '../../scripts/agent.mjs';
-import { checkOp } from '../../scripts/agent-check.mjs';
+import { checkOp, ratio } from '../../scripts/agent-check.mjs';
+import schema from '../../kernel/tables/schema.json';
+
+test('signal fills have readable Apple text and marks in both schemes', () => {
+  const source = readFileSync(new URL('./app.contract', import.meta.url), 'utf8');
+  const parts = readFileSync(new URL('./parts.contract', import.meta.url), 'utf8');
+  const inks = [
+    parts.match(/text badge.toString\(\).*?color="([^"]+)"/)?.[1],
+    source.match(/text "Add an OpenRouter key".*?color="([^"]+)"/)?.[1],
+    source.match(/path d="M12 19V6M6 12l6-6 6 6".*?stroke="([^"]+)"/)?.[1],
+    source.match(/text "Save".*?color=\(keyDraft.trim\(\) == "" \? "disabledInk" : "([^"]+)"/)?.[1],
+  ];
+  const accent = source.match(/accent-color="([^"]+)"/)?.[1], failures = [];
+  for (const [scheme, column] of [['light', 4], ['dark', 5]]) {
+    const colour = value => {
+      expect(value).toBeDefined();
+      if (value === 'AccentColor') return colour(accent);
+      const pair = value.match(/^light-dark\(([^,]+),\s*([^)]+)\)$/);
+      if (pair) return colour(pair[scheme === 'light' ? 1 : 2].trim());
+      if (!value.startsWith('#')) return colour(source.match(new RegExp(`^  ${value}="([^"]+)"`, 'm'))?.[1]
+        ?? schema.colors.find(row => row[0] === value)?.[column]);
+      expect(value).toMatch(/^#[0-9a-f]{6}(?:ff)?$/i);
+      return [1, 3, 5].map(offset => parseInt(value.slice(offset, offset + 2), 16));
+    };
+    for (const [i, ink] of inks.entries()) {
+      const contrast = ratio(colour(ink), colour('signal'));
+      if (contrast < 4.5) failures.push({ control: ['badge', 'add key', 'send', 'save'][i], scheme, contrast });
+    }
+  }
+  expect(failures).toEqual([]);
+});
 
 // Build first with `bun host/web/build.mjs expose`.
 for (const appearance of ['system', 'light', 'dark']) {
@@ -35,7 +66,14 @@ for (const appearance of ['system', 'light', 'dark']) {
       await check('thread-screen');
       await session.tap('thread-back');
       await session.tap('thread-expose');
+      await session.type('composer', 'A draft');
       await check('thread-screen');
+      await session.tap('thread-add-key');
+      expect((await session.find('save-key')).props.disabled).toBe(true);
+      await check('page-intelligence');
+      await session.type('key', 'contrast-fixture');
+      expect((await session.find('save-key')).props.disabled).not.toBe(true);
+      await check('page-intelligence');
       await session.tap('home-bar');
       await session.tap('app-reader');
       await check('reader-screen');

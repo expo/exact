@@ -61,6 +61,60 @@ final class AddressedTapIOSTests: XCTestCase {
         return (session, Agent(session: session), { defer { pressed = [] }; return pressed })
     }
 
+    func testAContextMenuBackdropUnderTheKeyboardRefusesARealTouch() throws {
+        let session = ExactApp.shared.makeSession(label: "context-backdrop")
+        self.session = session
+        let p = session.presenter, agent = Agent(session: session)
+        guard let scene = hostedWindowScene() else {
+            throw missing("scene", "a context-menu backdrop needs UIKit's window scene")
+        }
+        let window = UIWindow(windowScene: scene)
+        self.window = window
+        window.frame = CGRect(x: 0, y: 0, width: 400, height: 800)
+        window.rootViewController = UIViewController()
+        let view = ExactView(session: session)
+        let path = try XCTUnwrap(ProcessInfo.processInfo.environment["EXACT_FIELDLESS_PLAN"])
+        XCTAssertNil(session.boot(plan: try Data(contentsOf: URL(fileURLWithPath: path)), size: window.bounds.size).error)
+        view.frame = window.bounds
+        window.rootViewController?.view.addSubview(view)
+        window.makeKeyAndVisible()
+        view.layoutIfNeeded()
+        p.apply(wireBatch([
+            ["op": "create", "id": 100, "kind": "view", "props": ["interactiveWidget": "overlays-content"]],
+            ["op": "create", "id": 101, "kind": "button", "props": ["contextPopover": "actions"]],
+            ["op": "create", "id": 102, "kind": "view", "props": ["id": "actions", "popover": "auto"]],
+            ["op": "create", "id": 103, "kind": "button", "handlers": ["press"]],
+            ["op": "children", "id": 102, "ids": [103]],
+            ["op": "children", "id": 100, "ids": [101, 102]], ["op": "roots", "ids": [100]],
+            ["op": "frame", "id": 100, "x": 0, "y": 0, "w": 400, "h": 800],
+            ["op": "frame", "id": 101, "x": 20, "y": 80, "w": 200, "h": 44],
+        ]))
+        let source = try XCTUnwrap(p.views[101])
+        let interaction = try XCTUnwrap(source.interactions.compactMap { $0 as? UIContextMenuInteraction }.first)
+        let configuration = try XCTUnwrap(p.menus.context.contextMenuInteraction(interaction, configurationForMenuAtLocation: .zero))
+        p.menus.context.contextMenuInteraction(interaction, willDisplayMenuFor: configuration, animator: nil)
+        defer { p.menus.context.contextMenuInteraction(interaction, willEndFor: configuration, animator: nil) }
+        // Aim against UIKit's backdrop class with controlled keyboard geometry;
+        // an app-window hit test cannot see the keyboard's separate window.
+        let backdropType = try XCTUnwrap(NSClassFromString("_UIContextMenuPlatterTransitionView") as? UIView.Type)
+        let backdrop = backdropType.init(frame: window.bounds)
+        window.addSubview(backdrop)
+        setKeyboard(p, top: 460)
+        XCTAssertEqual(p.keyboardPolicy, "overlays-content")
+        XCTAssertEqual(p.viewport.contentInset.bottom, 0)
+        let covered = agent.aim(["id": 100, "aim": ["at": [200.0, 600.0]]])
+        XCTAssertNil(covered["aim"], "a backdrop behind the keyboard cannot receive a real touch")
+        XCTAssertTrue((covered["error"] as? String ?? "").contains("software keyboard"), "\(covered)")
+        let clear = agent.aim(["id": 100, "aim": ["at": [200.0, 300.0]]])
+        XCTAssertNil(clear["error"], "\(clear)")
+        XCTAssertEqual((clear["aim"] as? [String: Any])?["native"] as? [String: String],
+                       ["kind": "contextMenuDismissal", "label": "Dismiss context menu"])
+        setKeyboard(p, top: nil)
+        let uncovered = agent.aim(["id": 100, "aim": ["at": [200.0, 600.0]]])
+        XCTAssertNil(uncovered["error"], "\(uncovered)")
+        XCTAssertNotNil(uncovered["aim"])
+    }
+
     func testANamedDateTapAimsAtItsCompactControlInsideAWiderBox() throws {
         let (session, agent, _) = rows(), p = session.presenter
         p.apply(wireBatch([
@@ -742,6 +796,106 @@ final class AddressedTapIOSTests: XCTestCase {
         // A row the node no longer is (a reused view): not in the presented menu.
         p.menus.given[2] = [GivenRow(node(3), title: "Rename", subtitle: nil)]
         XCTAssertTrue(why(agent.shownRow(node(5), of: node(2), in: window)).contains("not the menu UIKit shows"))
+    }
+
+    /// A titled section's title is a labelled element UIKit shows between
+    /// rows (LLP 1021 D3, amended 2026-11-12): the menu records it as it
+    /// builds the sections, and a row is still its place among the rows,
+    /// the titles passed over, read either way and in a scrolled slice.
+    func testARowInATitledSectionIsItsPlacePastTheTitles() throws {
+        let (session, agent, _) = rows()
+        let window = try XCTUnwrap(self.window)
+        let p = session.presenter
+        p.menus.recordsGiven = true
+        func row(_ id: Int, _ label: String) -> [[String: Any]] {
+            [["op": "create", "id": 100 + id, "kind": "text", "props": ["text": label]],
+             ["op": "frame", "id": 100 + id, "x": 0.0, "y": 0.0, "w": 180.0, "h": 20.0],
+             ["op": "create", "id": id, "kind": "button", "handlers": ["press"]],
+             ["op": "frame", "id": id, "x": 0.0, "y": 0.0, "w": 200.0, "h": 30.0], ["op": "children", "id": id, "ids": [100 + id]]]
+        }
+        // Presets (50): Pair (51), then "Your presets" (52: Fireball 53, Comet 54).
+        var ops: [[String: Any]] = [
+            ["op": "create", "id": 50, "kind": "view", "props": ["popover": "auto", "id": "presets", "accessibilityRole": "menu", "accessibilityLabel": "Presets"]],
+            ["op": "create", "id": 52, "kind": "view", "props": ["accessibilityRole": "group", "accessibilityLabel": "Your presets"]],
+        ]
+        ops += row(51, "Pair") + row(53, "Fireball") + row(54, "Comet")
+        ops += [["op": "children", "id": 52, "ids": [53, 54]], ["op": "children", "id": 50, "ids": [51, 52]],
+                ["op": "children", "id": 1, "ids": [2, 4, 6, 8, 50]],
+                ["op": "frame", "id": 50, "x": 0.0, "y": 0.0, "w": 220.0, "h": 200.0],
+                ["op": "frame", "id": 52, "x": 0.0, "y": 0.0, "w": 200.0, "h": 60.0]]
+        p.apply(wireBatch(ops))
+        let node = { (id: UInt32) in p.views[id]! }
+        // What UIKit shows for these elements, top to bottom: each inline
+        // section's title over its rows.
+        let elements = p.menus.items(of: node(50))
+        var labels: [String] = []
+        for element in elements {
+            if let section = element as? UIMenu, section.options.contains(.displayInline) {
+                if !section.title.isEmpty { labels.append(section.title) }
+                labels += section.children.map(\.title)
+            } else {
+                labels.append(element.title)
+            }
+        }
+        XCTAssertEqual(labels, ["Pair", "Your presets", "Fireball", "Comet"])
+        XCTAssertEqual(p.menus.given[50]?.map(\.label), ["Pair", "Fireball", "Comet"])
+        XCTAssertEqual(p.menus.givenHeaders[50], ["Your presets"])
+        // The pull-down's heading, as `rows(of:)` records it.
+        p.menus.givenHeaders[50]?.insert("Presets")
+        func menu(_ labels: [String], scrolls: Bool = false, rowHeight h: CGFloat = 40) -> UIScrollView {
+            let list = UIScrollView(frame: CGRect(x: 20, y: 100, width: 200, height: CGFloat(labels.count) * h))
+            for (i, label) in labels.enumerated() {
+                let cell = UIView(frame: CGRect(x: 0, y: CGFloat(i) * h, width: 200, height: h))
+                cell.isAccessibilityElement = true
+                cell.accessibilityLabel = label
+                list.addSubview(cell)
+            }
+            list.contentSize = CGSize(width: 200, height: CGFloat(labels.count + (scrolls ? 4 : 0)) * h)
+            window.addSubview(list)
+            return list
+        }
+        let why = { (r: Result<CGRect, AimRefusal>) -> String in if case .failure(let f) = r { return f.why }; return "" }
+        let shown = menu(["Presets"] + labels)
+        XCTAssertTrue(agent.menuShown(in: window))
+        XCTAssertEqual(try agent.shownRow(node(51), of: node(50), in: window).get().minY, 140, "Pair, under the heading")
+        XCTAssertEqual(try agent.shownRow(node(53), of: node(50), in: window).get().minY, 220, "Fireball, past its section's title")
+        XCTAssertEqual(try agent.shownRow(node(54), of: node(50), in: window).get().minY, 260)
+        // Without the titles, the rows read as no run of what is shown.
+        let headers = p.menus.givenHeaders[50]
+        p.menus.givenHeaders[50] = nil
+        XCTAssertTrue(why(agent.shownRow(node(53), of: node(50), in: window)).contains("does not show its rows"))
+        p.menus.givenHeaders[50] = headers
+        shown.removeFromSuperview()
+        // Opened upward, the rows last first and each title over its section.
+        let upward = menu(["Your presets", "Comet", "Fireball", "Presets", "Pair"])
+        XCTAssertEqual(try agent.shownRow(node(53), of: node(50), in: window).get().minY, 180)
+        XCTAssertEqual(try agent.shownRow(node(51), of: node(50), in: window).get().minY, 260)
+        upward.removeFromSuperview()
+        // A scrolled slice that opens with a title.
+        let slice = menu(["Your presets", "Fireball"], scrolls: true)
+        XCTAssertEqual(try agent.shownRow(node(53), of: node(50), in: window).get().minY, 140)
+        XCTAssertTrue(why(agent.shownRow(node(54), of: node(50), in: window)).contains("scrolled out"))
+        slice.removeFromSuperview()
+        // Thirty rows and a title that all read "A", then B: such a menu
+        // reads in exponentially many ways, and is matched without listing
+        // them. B is the one place every reading agrees on; an A is not.
+        var many = Array(repeating: GivenRow(node(51), title: "A", subtitle: nil), count: 30) + [GivenRow(node(53), title: "B", subtitle: nil)]
+        many[20] = GivenRow(node(54), title: "A", subtitle: nil)
+        p.menus.given[50] = many
+        p.menus.givenHeaders[50] = ["A"]
+        let started = Date()
+        let scrolled = menu(Array(repeating: "A", count: 25) + ["B"], scrolls: true, rowHeight: 20)
+        XCTAssertTrue(agent.menuShown(in: window))
+        XCTAssertEqual(try agent.shownRow(node(53), of: node(50), in: window).get().minY, 600, "B, the last row of the slice")
+        XCTAssertTrue(why(agent.shownRow(node(54), of: node(50), in: window)).contains("places"), "the 21st A, at any of several")
+        XCTAssertTrue(why(agent.shownRow(node(51), of: node(50), in: window)).contains("scrolled out"), "the first A: 25 shown hold no 30 rows before B")
+        scrolled.removeFromSuperview()
+        let whole = menu(Array(repeating: "A", count: 31) + ["B"], rowHeight: 20)
+        XCTAssertTrue(agent.menuShown(in: window))
+        XCTAssertEqual(try agent.shownRow(node(53), of: node(50), in: window).get().minY, 720, "B, past the title")
+        XCTAssertTrue(why(agent.shownRow(node(51), of: node(50), in: window)).contains("places"), "the first A, or the title before it")
+        whole.removeFromSuperview()
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1, "matched in polynomial time")
     }
 }
 #endif

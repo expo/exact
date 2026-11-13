@@ -138,6 +138,14 @@ pub fn decode(plan: &Plan, ty: TypesId, text: &[u8]) -> Option<Value> {
     (r.at == r.b.len()).then_some(v)
 }
 
+/// `text` as a JSON string, its escapes decoded: `None` when it is not one.
+pub(crate) fn decode_string(text: &[u8]) -> Option<String> {
+    let mut r = Reader { b: text, at: 0 };
+    let s = r.string()?;
+    r.space();
+    (r.at == r.b.len()).then_some(s)
+}
+
 /// A type as the journal names it.
 fn type_name(plan: &Plan, ty: TypesId) -> String {
     let t = plan.type_(ty);

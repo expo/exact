@@ -1,7 +1,7 @@
 // An app's Rust data source as a standalone logic module (LLP 1029.000,
-// ABI 7) for the JS runtime, when the app declares none of its own: a
+// ABI 8) for the JS runtime, when the app declares none of its own: a
 // generated crate exporting the same DataSource the web build bakes with
-// (`apps/<app>/web/build.rs`'s `contract::bake(plan, <expr>)`).
+// (`contract::bake` or `exact_js_bake::build_mixed_with` in web/build.rs).
 // usage: bun host/web-js/module.mjs <app> [--out <dir>] → <dir>/app.module.wasm
 //        bun host/web-js/module.mjs --prebuild: what every app's web build
 //        shares (the compiler, the leaf modules), compiled and kept for the
@@ -13,7 +13,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 // Also for its PATH: the pinned binaryen (and Cargo) as every web build has
 // them, so a prebuild optimizes and keeps what an app's build would.
-import { WEB_STD, WEB_SIZE, WEB_TOOLCHAIN, wasmRemapFlags } from '../../scripts/app.mjs';
+import { WEB_STD, WEB_SIZE, WEB_TOOLCHAIN, wasmRemapFlags, webToolchainEnv } from '../../scripts/app.mjs';
 import { withHostDeployment } from '../../scripts/filesystem.mjs';
 import { replaceBuild } from '../web/serve.mjs';
 import { proofInputs } from '../../game/inputs.mjs';
@@ -29,6 +29,10 @@ const root = resolve(here, '../..');
 const WEB = WEB_TOOLCHAIN;
 let wasmFlags;
 const WASM_FLAGS = () => (wasmFlags ??= [...WEB_STD, ...wasmRemapFlags(null, WEB)]);
+// A wasm link's flags: the toolchain is checked once first, so a machine that
+// cannot link is refused with its install command (scripts/cargo-check.mjs).
+let linkChecked = false;
+const LINK_FLAGS = () => { if (!linkChecked) { webToolchainEnv(process.env, { linksWasm: true }); linkChecked = true; } return WASM_FLAGS(); };
 // What those flags say apart from this checkout's path, for a kept module's group.
 const WASM_FLAGS_KEY = () => WASM_FLAGS().map(f => f.replaceAll(root, '.'));
 // Under this checkout's own target/ (AGENTS.md: never another checkout's):
@@ -92,7 +96,7 @@ function replace(path, write) {
   try { written = write(temp); } catch (error) { clean(); throw error; }
   return written instanceof Promise ? written.then(land, (error) => { clean(); throw error; }) : land(written);
 }
-const cargoWasmArgs = (manifest) => [`+${WEB}`, 'build', '--release', '--target', 'wasm32-unknown-unknown', '--manifest-path', manifest, ...WASM_FLAGS()];
+const cargoWasmArgs = (manifest) => [`+${WEB}`, 'build', '--release', '--target', 'wasm32-unknown-unknown', '--manifest-path', manifest, ...LINK_FLAGS()];
 function cargoWasm(manifest) {
   return spawnSync('cargo', cargoWasmArgs(manifest), { stdio: ['ignore', 'inherit', 'inherit'], env: { ...process.env, CARGO_TARGET_DIR: TARGET } });
 }
@@ -145,15 +149,41 @@ function module(manifest, name, out, label) {
   return done;
 }
 
+/** The Rust source selected by a web bake, before generating its ABI crate. */
+export function bakedRustSource(dir) {
+  const path = resolve(dir, 'web/build.rs');
+  if (!existsSync(path)) return null;
+  const build = readFileSync(path, 'utf8').replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*|"(?:\\.|[^"\\])*"/g, m => m.startsWith('"') ? m : ' ');
+  const code = build.replace(/"(?:\\.|[^"\\])*"/g, m => ' '.repeat(m.length));
+  const mixed = /exact_js_bake::build_mixed_with\s*\(/.exec(code);
+  if (!mixed) return code.includes('contract::bake(')
+    ? { call: 'contract::bake', expr: /contract::bake\(\s*plan,\s*([\w:]+(?:::(?:default|new)\(\))?)\s*\)/.exec(build)?.[1] }
+    : null;
+  // Split only top-level arguments: the app path and source constructor may contain calls and strings.
+  const start = mixed.index + mixed[0].length;
+  let depth = 0, argument = 0, from = start, source;
+  for (const token of build.slice(start).matchAll(/"(?:\\.|[^"\\])*"|[()[\]{},]/g)) {
+    const c = token[0], at = start + token.index;
+    if (c.startsWith('"')) continue;
+    if ((c === ',' || c === ')') && depth === 0) {
+      if (argument++ === 2) { source = build.slice(from, at).trim(); break; }
+      from = at + 1;
+      if (c === ')') break;
+    } else if ('([{'.includes(c)) depth++;
+    else if (')]}'.includes(c)) depth--;
+  }
+  return { call: 'exact_js_bake::build_mixed_with', expr: /^&\s*([\w:]+(?:::(?:default|new)\(\))?)$/.exec(source ?? '')?.[1] };
+}
+
 export function buildModule(app, out = resolve(MODULES, app), draw = false, dir = resolve(root, 'apps', app)) {
-  const build = readFileSync(resolve(dir, 'web/build.rs'), 'utf8');
-  const expr = /contract::bake\(\s*plan,\s*([\w:]+(?:::(?:default|new)\(\))?)\s*\)/.exec(build)?.[1];
+  if (JSON.parse(readFileSync(resolve(dir, 'app.json'), 'utf8')).rust?.module?.package) return ownModule(app, out, dir);
+  const source = bakedRustSource(dir), expr = source?.expr;
   // The source is copied as written into a generated crate whose one dependency is the data crate, where build.rs's
   // `use`s and locals are not. A call it cannot copy, outside comments and strings, is named rather than taken for none.
-  const code = build.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*|"(?:\\.|[^"\\])*"/g, (m) => m.startsWith('"') ? '""' : ' ');
-  if (!expr && code.includes('contract::bake(') && !JSON.parse(readFileSync(resolve(dir, 'app.json'), 'utf8')).rust?.module?.package) {
+  if (!expr && source?.call === 'contract::bake') {
     throw new Error(`${app}: ${resolve(dir, 'web/build.rs')} passes contract::bake a source the web build does not copy into the module it generates. It copies \`contract::bake(plan, <data crate>::<Type>)\`, \`<data crate>::<Type>::default()\` or \`<data crate>::<Type>::new()\` with no arguments, written with no comma after the source (rustfmt adds one when it breaks the call across lines). For anything else, write a crate that exports the source (\`exact_logic_abi::export!(<Type>, <constructor>)\`, as apps/update-lab/logic does) and name it in app.json's rust.module.package`);
   }
+  if (!expr && source) throw new Error(`${app}: ${resolve(dir, 'web/build.rs')} passes ${source.call} a Rust source the web build cannot copy. Use a data-crate type's value, ::default() or ::new() with no arguments, or export it in app.json's rust.module.package`);
   if (!expr) return ownModule(app, out, dir);
   const ty = expr.replace(/::(default|new)\(\)$/, '');
   const dataToml = readFileSync(resolve(dir, 'data/Cargo.toml'), 'utf8');
@@ -188,10 +218,8 @@ ${patch}
   return module(resolve(crate, 'Cargo.toml'), `exact_js_module_${app.replaceAll('-', '_')}`, out, `${app}: the module`);
 }
 
-/** The app's own logic module (`rust.module.package` in app.json, LLP
- * 1029.000), for an app whose web build bakes with no single Rust source (a
- * TypeScript and a Rust source composed, LLP 1027.002): its crate already
- * exports the ABI, built as the generated one is. */
+/** The app's explicit logic module (`rust.module.package`, LLP 1029.000):
+ * its crate already exports the ABI, built as the generated one is. */
 function ownModule(app, out, dir) {
   const pkg = JSON.parse(readFileSync(resolve(dir, 'app.json'), 'utf8')).rust?.module?.package;
   if (!pkg) throw new Error(`${app}: its web build bakes with no Rust data source, and app.json names no rust.module.package`);
@@ -205,8 +233,10 @@ function ownModule(app, out, dir) {
  * adapters. */
 export async function moduleGrants(path) {
   const { instance } = await WebAssembly.instantiate(readFileSync(path), {}), e = instance.exports;
+  const abi = e.exact_logic_abi();
+  if (abi !== 8) throw new Error(`${path}: Rust module ABI ${abi} is not 8; rebuild it with this checkout`);
   const session = e.exact_logic_create(), request = new Uint8Array(5), p = e.exact_logic_alloc(request.length);
-  new DataView(request.buffer).setUint32(0, e.exact_logic_abi(), true);
+  new DataView(request.buffer).setUint32(0, abi, true);
   new Uint8Array(e.memory.buffer, p, request.length).set(request);
   if (e.exact_logic_call(session, p, request.length) !== 0) return '';
   const out = new Uint8Array(e.memory.buffer, e.exact_logic_output(session), e.exact_logic_output_len(session)).slice(), d = new DataView(out.buffer);
@@ -280,7 +310,7 @@ export async function buildFlow({ out = resolve(MODULES, 'flow'), keepFresh = fa
   const leaf = at(), taken = leaf.find();
   if (taken) { replace(wasm, (temp) => cpSync(taken, temp)); held.set(wasm.split('/').at(-1), true); return wasm; }
   const started = Date.now();
-  const r = await run('cargo', [`+${WEB}`, 'build', '--profile', 'web', '--target', 'wasm32-unknown-unknown', '-p', 'exact-textflow', '--bin', 'textflow-web', ...WASM_FLAGS()],
+  const r = await run('cargo', [`+${WEB}`, 'build', '--profile', 'web', '--target', 'wasm32-unknown-unknown', '-p', 'exact-textflow', '--bin', 'textflow-web', ...LINK_FLAGS()],
     { cwd: root, env: { ...process.env, CARGO_TARGET_DIR: target } });
   if (r.status !== 0) throw new Error('textflow.wasm did not build');
   const optimizedFlow = await replace(wasm, async (temp) => !unoptimized.has(await optimizeAsync(product, temp, 'textflow.wasm')));
@@ -342,23 +372,23 @@ ${patch}`;
 /** `text` without its `// dev-only {` … `// dev-only }` regions: what a
  * build that is not the dev loop's copies of a runtime file (modes.js's
  * live table, LLP 1121 stage 4), so no release page carries it. */
-/** A development build's copy of rt.js with inspect mode's two hooks
- * (LLP 1122 T2b; inspect-dev.js), so rt.js itself, and every other build's
- * copy, has none: an element's view id (`$exactViewId`), and every `each`
- * region with its rows and key function (`$exactEaches`), which a
- * development build's emitter names (regions.rs passes the region id) and
- * which leaves with its scope. Throws when rt.js no longer has the lines
- * they hang on. */
-export function withInspectHooks(text) {
-  const hooks = [
-    [/^export function viewId\(e\) \{.*\n/m, (line) => `${line}globalThis.$exactViewId = viewId;\n`],
-    [/^  let rows = new Map\(\), single = false, order = null;\n/m, (line) => `${line}  if (arguments[5] !== undefined) { const e = { region: arguments[5], rows: () => order ?? [], key, live: () => a.isConnected }; (globalThis.$exactEaches ??= new Set()).add(e); onEnd(() => globalThis.$exactEaches.delete(e)); }\n`],
-  ];
-  for (const [at, hook] of hooks) {
-    if (!at.test(text)) throw new Error(`rt.js: inspect mode's hook has no line to hang on (${at})`);
-    text = text.replace(at, hook);
-  }
-  return text;
+/** The runtime files a development build copies with inspect mode's hooks
+ * (LLP 1122 T2b; inspect-dev.js), so the files themselves, and every other
+ * build's copy, have none: an element's view id (`$exactViewId`, tree.js),
+ * and every `each` region with its rows and key function (`$exactEaches`,
+ * mount.js), which a development build's emitter names (regions.rs passes
+ * the region id) and which leaves with its scope. */
+const INSPECT_HOOKS = {
+  'tree.js': [/^export function viewId\(e\) \{\n[\s\S]*?^\}\n/m, (fn) => `${fn}globalThis.$exactViewId = viewId;\n`],
+  'mount.js': [/^  let rows = new Map\(\),\n    single = false,\n    order = null;\n/m, (line) => `${line}  if (arguments[5] !== undefined) { const e = { region: arguments[5], rows: () => order ?? [], key, live: () => a.isConnected }; (globalThis.$exactEaches ??= new Set()).add(e); onEnd(() => globalThis.$exactEaches.delete(e)); }\n`],
+};
+export const inspectHooked = Object.keys(INSPECT_HOOKS);
+/** `text`, runtime file `file`'s source, with its inspect hook. Throws when
+ * the file no longer has the lines the hook hangs on. */
+export function withInspectHooks(file, text) {
+  const [at, hook] = INSPECT_HOOKS[file];
+  if (!at.test(text)) throw new Error(`${file}: inspect mode's hook has no line to hang on (${at})`);
+  return text.replace(at, hook);
 }
 /** B5 (lower.js `RUNTIME`): the arms sheet's host stamp, a digest of the runtime files the build copies first (`files`:
  * `{ path, text }`, lower.js's unstamped source among them), so a runtime whose helpers or rule builder changed under a

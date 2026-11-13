@@ -56,15 +56,38 @@ audience.macos = audience.ios;
 
 await fetch(`${ISSUER}/fixture/reset`);
 let s;
-try { s = await open({ host, app: 'auth-fixture', storage: `sign-in-${Date.now().toString(36)}` }); }
+try { s = await open({ host, app: 'auth-fixture', size: host === 'web' ? [402, 778] : undefined,
+  storage: `sign-in-${Date.now().toString(36)}` }); }
 catch (e) { server.kill(); rmSync(dir, { recursive: true, force: true }); throw e; }
 const run = (n) => !only || only.includes(n);
 const appleHere = host !== 'macos';
 try {
   await s.clock('settle');
+  if (host !== 'web') {
+    const caps = (await s.state()).resources?.identities;
+    check(3, 'default capabilities hide unbuilt Google and combined Apple/passkey requests',
+      caps?.providers?.google?.active === false && caps?.providers?.apple?.withPublicKey === false,
+      JSON.stringify(caps));
+    check(3, 'the default app shows no Google button', !(await shown(s, 'google-sign-in')));
+    // The remaining drives exercise ticket handling with explicitly simulated cells.
+    await s.prefer({ extension: `sign-in.getIdentityCapabilities=${JSON.stringify({ providers: {
+      google: { active: true }, ...(host === 'ios' ? { apple: { withPublicKey: true } } : {}),
+    } })}` });
+    await s.clock('settle');
+  }
   if (run(1) && appleHere) {
     // A passive offer may be held first where the target has one (drive 4); the press supersedes it.
     await until(s, () => shown(s, 'apple-sign-in'));
+    const layout = await s.layout();
+    const box = (l, id) => l.nodes.find((n) => n.testId === id);
+    for (const id of ['apple-sign-in', 'google-sign-in']) {
+      check(1, `${id} keeps its authored 44-point height`, box(layout, id)?.h === 44, JSON.stringify(box(layout, id)));
+    }
+    await s.tap('auth', { wheel: [0, 10000] });
+    await s.clock('settle');
+    const scrolled = await s.layout(), lower = box(scrolled, 'attestation-status');
+    check(1, 'the demos scroll to the lower controls', box(scrolled, 'auth')?.sy > 0
+      && lower?.y >= 0 && lower.y + lower.h <= scrolled.viewport.h, JSON.stringify({ auth: box(scrolled, 'auth'), lower }));
     await s.tap('apple-sign-in');
     const t = await identityTicket(s, (a) => a.identity.mode === 'active');
     const p = t?.device.args.identity.providers[0] ?? {};

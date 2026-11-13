@@ -249,20 +249,27 @@ extension NodeView {
     /// (a `progress`'s indicator) says its role and value itself.
     static let rangeRoles: Set<String> = ["progressbar", "slider", "meter", "scrollbar", "spinbutton"]
     var rangeRole: String? { kind == "control" ? nil : props["accessibilityRole"].flatMap { Self.rangeRoles.contains($0) ? $0 : nil } }
-    /// A range role's numbers, ARIA's 0 and 100 where a bound is unsaid;
-    /// nil with no readable `aria-valuenow` or another role.
-    var rangeNumbers: (now: Double, min: Double, max: Double)? {
+    /// A range role's numbers, ARIA's 0 and 100 where a bound is unsaid,
+    /// except a `spinbutton`'s, which ARIA leaves unbounded (WAI-ARIA 1.2,
+    /// `spinbutton`); nil with no readable `aria-valuenow` or another role.
+    var rangeNumbers: (now: Double, min: Double?, max: Double?)? {
         let number = { (key: String) in self.props[key].flatMap { Double($0.trimmingCharacters(in: .whitespaces)) }.flatMap { $0.isFinite ? $0 : nil } }
-        guard rangeRole != nil, let now = number("accessibilityValueNow") else { return nil }
-        return (now, number("accessibilityValueMin") ?? 0, number("accessibilityValueMax") ?? 100)
+        guard let role = rangeRole, let now = number("accessibilityValueNow") else { return nil }
+        let unbounded = role == "spinbutton"
+        return (now, number("accessibilityValueMin") ?? (unbounded ? nil : 0), number("accessibilityValueMax") ?? (unbounded ? nil : 100))
     }
     /// What the platform speaks for a range role: `aria-valuetext`, else
     /// its value as a percentage of its bounds, as UIKit's progress view and
-    /// slider speak theirs ("30%"); nil with neither.
+    /// slider speak theirs ("30%"), or a `spinbutton`'s number itself, as
+    /// WebKit on iOS speaks one ("3"); nil with neither.
     var rangeValueText: String? {
-        if rangeRole != nil, let text = props["accessibilityValueText"], !text.isEmpty { return text }
+        guard let role = rangeRole else { return nil }
+        if let text = props["accessibilityValueText"], !text.isEmpty { return text }
         guard let n = rangeNumbers else { return nil }
-        let fraction = n.max > n.min ? (Swift.min(Swift.max(n.now, n.min), n.max) - n.min) / (n.max - n.min) : 0
+        guard role != "spinbutton", let low = n.min, let high = n.max else {
+            return NumberFormatter.localizedString(from: NSNumber(value: n.now), number: .decimal)
+        }
+        let fraction = high > low ? (Swift.min(Swift.max(n.now, low), high) - low) / (high - low) : 0
         return NumberFormatter.localizedString(from: NSNumber(value: fraction), number: .percent)
     }
     var accessibilityVisible: Bool {
@@ -422,7 +429,8 @@ extension NodeView {
     /// come from `syncAccessibility`.
     func updateRoleAccessibility() {
         let role = props["accessibilityRole"]
-        if actsAsButton {
+        // A role over a paragraph writes over its text's (`updateTextAccessibility`).
+        if actsAsButton { lastAccessibilityWrite.text = nil
             setAccessibilityElement(true)
             if let checked = checkedRole { setAccessibilityChecked(checked.role, checked.checked) }
             else { setAccessibilityToggle(pressedState, else: buttonRole) }
@@ -431,15 +439,15 @@ extension NodeView {
             if accessibilityURL() != url { setAccessibilityURL(url) }
             setAccessibilitySelected(props["accessibilitySelected"] == "true")
             if let expanded = props["accessibilityExpanded"] { setAccessibilityExpanded(expanded == "true") }
-        } else if kind == "image" || role == "img" {
+        } else if kind == "image" || role == "img" { lastAccessibilityWrite.text = nil
             let labelled = authoredLabel != nil
             setAccessibilityElement(labelled)
             setAccessibilityRole(labelled ? .image : nil)
-        } else if let container = role.flatMap({ Self.containerRoles[$0] }) {
+        } else if let container = role.flatMap({ Self.containerRoles[$0] }) { lastAccessibilityWrite.text = nil
             setAccessibilityElement(true)
             if accessibilityRole() != container { setAccessibilityRole(container) }
             if accessibilitySubrole() != nil { setAccessibilitySubrole(nil) }
-        } else if let subrole = groupSubrole.map(NSAccessibility.Subrole.init(rawValue:)) {
+        } else if let subrole = groupSubrole.map(NSAccessibility.Subrole.init(rawValue:)) { lastAccessibilityWrite.text = nil
             // A live-region, dialog or region role as WebKit serves it (Core-AAM): a
             // group whose subrole is the role, named only by its author, a
             // paragraph's words its children (`textAccessibilityChildren`).
@@ -447,7 +455,7 @@ extension NodeView {
             if accessibilityRole() != .group { setAccessibilityRole(.group) }
             if accessibilitySubrole() != subrole { setAccessibilitySubrole(subrole) }
             if isParagraph, accessibilityValue() != nil { setAccessibilityValue(nil); setAccessibilityLabel(props["accessibilityLabel"]) }
-        } else if let range = rangeRole {
+        } else if let range = rangeRole { lastAccessibilityWrite.text = nil
             // A range role is one element, its value between its bounds and
             // its `aria-valuetext` the description, as WebKit serves a drawn
             // one (LLP 1116 D8). Only a change is written: each posts.
@@ -455,13 +463,13 @@ extension NodeView {
             setAccessibilityElement(true)
             if accessibilityRole() != axRole { setAccessibilityRole(axRole) }
             let n = rangeNumbers
-            let now = n.map { NSNumber(value: $0.now) }, low = n.map { NSNumber(value: $0.min) }, high = n.map { NSNumber(value: $0.max) }
+            let now = n.map { NSNumber(value: $0.now) }, low = n?.min.map { NSNumber(value: $0) }, high = n?.max.map { NSNumber(value: $0) }
             if (accessibilityValue() as? NSNumber) != now { setAccessibilityValue(now) }
             if (accessibilityMinValue() as? NSNumber) != low { setAccessibilityMinValue(low) }
             if (accessibilityMaxValue() as? NSNumber) != high { setAccessibilityMaxValue(high) }
             let text = props["accessibilityValueText"].flatMap { $0.isEmpty ? nil : $0 }
             if accessibilityValueDescription() != text { setAccessibilityValueDescription(text) }
-        } else if let table = tableRole {
+        } else if let table = tableRole { lastAccessibilityWrite.text = nil
             // A table's or a description list's element (`TableAccessibility`).
             setAccessibilityElement(true)
             if accessibilityRole() != table.role { setAccessibilityRole(table.role) }

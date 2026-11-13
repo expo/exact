@@ -81,6 +81,7 @@ leaves!(
     u32,
     usize,
     BinOp,
+    StateComparison,
     UnOp,
     TaskKind,
     MutationMode,
@@ -106,7 +107,7 @@ macro_rules! structs {
 }
 structs! {
     NameSpans { names, sources }
-    File { names, routes, uses, fonts, sounds, shapes, styles, decorations, decoration_scopes, atoms, atom_scopes, keyframes, timelines, color_profiles, theme, design, package_designs, library, library_packages, fns, modules, tests, properties, launch, components, members, deferred }
+    File { names, routes, uses, fonts, sounds, shapes, styles, decorations, decoration_scopes, atoms, atom_scopes, keyframes, timelines, color_profiles, theme, design, package_designs, library, library_packages, fns, sources, modules, tests, properties, launch, components, members, deferred }
     KeyframesDecl { name, frames, span }
     TimelineDecl { name, span }
     ColorProfileDecl { name, attrs, span }
@@ -122,7 +123,9 @@ structs! {
     PropertyDecl { span, kind, name, lines }
     PropertyLine { span, form }
     FnDecl { name, params, ret, body, span }
-    ModuleDecl { name, declared, package, extension, kind, options, words, answers, args, raised, hold, budget, handler, live, request, sync, data_only, imported, substitute, span }
+    SourceDecl { name, params, shape, lines, span }
+    SourceLine { key, words, span }
+    ModuleDecl { name, declared, package, extension, kind, options, words, answers, args, raised, hold, budget, handler, live, request, sync, data_only, imported, view_only, substitute, span }
     PlatformWords { platform, package, words }
     UseDecl { names, path, span }
     UseName { name, alias, span }
@@ -146,7 +149,7 @@ structs! {
     Sequence { name, gate, key, tracks, options, ended, span }
     Persist { name, span }
     Binding { name, expr, span }
-    ResourceDecl { name, source, args, identity, shape, placeholder, each, transient, gate, span }
+    ResourceDecl { name, source, args, identity, shape, placeholder, each, transient, keep, gate, span }
     ResourceEach { item, list, key, span }
     Placeholder { source, args, span }
     MutationDecl { name, shape, mode, refreshes, then, span }
@@ -174,7 +177,7 @@ record_variants! {
         Locale { tag, span }, Prefer { name, value, span }, Seed { seed, span }, Fresh { seed, span }, BeforeData { span }, FailFetch { prefix, times, span }, PassFetch { prefix, span }, Request { method, path, body, persona, status, span }, Type { target, text, append, span }, Key { target, key, phase, duration, span },
         Pick { target, paths, span }, Authorize { cancel, span }, Clipboard { target, edit, text, span },
         Clock { arg, span }, Reload { span }, Close { span }, Back { span }, Resize { width, height, span }, Screenshot { path, span }, ExpectRefusal { target, span }, ExpectTree { target, present, span }, ExpectDisabled { target, disabled, span },
-        ExpectText { target, value, span }, ExpectState { name, value, span },
+        ExpectText { target, value, span }, ExpectState { name, comparison, value, span },
         ExpectSound { src, present, at, gain, ends, playback_rate, pan, by, span },
         ExpectMediaSession { field, value, span }, ExpectMediaSessionAction { action, present, span },
         Midi { step, span }, ExpectWakelock { held, span },
@@ -232,8 +235,12 @@ impl VisitSpans for Expr {
                 parts.visit_spans(visit);
                 visit(span);
             }
+            Self::Typed(inner, ty, span) => {
+                inner.visit_spans(visit);
+                ty.visit_spans(visit);
+                visit(span);
+            }
             Self::NamedArg(_, inner, span)
-            | Self::Typed(inner, _, span)
             | Self::Some(inner, span)
             | Self::Member(inner, _, span)
             | Self::Unary(_, inner, span) => {

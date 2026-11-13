@@ -441,7 +441,6 @@ final class NativeViews {
     fileprivate var observers: [NSObjectProtocol] = []
     deinit {
         for o in observers { NotificationCenter.default.removeObserver(o) }
-        if let crumbSlot { HatchBreadcrumb.shared?.free(crumbSlot) }
     }
     #endif
     private static let kinds = ["press", "change", "hover", "focus", "blur", "key", "submit", "load", "message"]
@@ -584,11 +583,7 @@ final class NativeViews {
         if let instance { return .success(instance) }
         if let instanceFailure { return .failure(instanceFailure) }
         guard let session else { return .failure(NativeFailure(state: "unavailable", message: "the session ended")) }
-        let roots = NativeViews.roots(session: session)
-        // Who posts what an activation is for (LLP 1133.004 D7), as the host's delegate matches it.
-        let context: [String: Any] = ["agent": ExactEnv.agentMode, "data": roots.data, "cache": roots.cache, "temporary": roots.temporary,
-                                      "session": session.label, "owner": session.notificationOwnerID, "process": session.app.notificationProcessID]
-        let json = (try? JSONSerialization.data(withJSONObject: context)) ?? Data()
+        let json = (try? JSONSerialization.data(withJSONObject: Self.moduleContext(session))) ?? Data()
         var error = [UInt8](repeating: 0, count: 512)
         let host = UnsafeMutableRawPointer(bitPattern: UInt(session.runtime.rt))
         let made = json.withUnsafeBytes { j in
@@ -658,6 +653,16 @@ final class NativeViews {
         let home = NSHomeDirectory()
         let cache = home + "/Library/Caches/exact/" + id
         return (home + "/Library/Application Support/exact/" + id + "/data", cache + "/cache", cache + "/temporary")
+    }
+
+    /// What the session's module is made with (`ExactModuleContext`), which
+    /// each package's context reads: the roots, the session's label, and who
+    /// posts what an activation is for (LLP 1133.004 D7), as the host's
+    /// delegate matches it.
+    static func moduleContext(_ session: ExactSession) -> [String: Any] {
+        let roots = roots(session: session)
+        return ["agent": ExactEnv.agentMode, "data": roots.data, "cache": roots.cache, "temporary": roots.temporary,
+                "session": session.label, "owner": session.notificationOwnerID, "process": session.app.notificationProcessID]
     }
 
     /// Tell the runtime this session has an app module, when the app ships
@@ -792,6 +797,8 @@ final class NativeViews {
         endScopes()
         hatchClock.reset()
         pendingHatches = nil
+        // The session's end gives its breadcrumb slot back (LLP 1075.003.000.001 §4.4).
+        if let crumbSlot { HatchBreadcrumb.shared?.free(crumbSlot); self.crumbSlot = nil }
         guard let instance, case .success(let table)? = NativeProcess.table else { return }
         self.instance = nil
         hatchesConnected = false

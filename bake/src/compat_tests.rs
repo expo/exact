@@ -151,6 +151,29 @@ fn widget_gallery_labels_require_a_new_binary_cohort() {
         build(&watch).id,
         "watch families are generated Swift"
     );
+    let mut configured = manifest.clone();
+    configured.json["widgets"][0]["configuration"] = serde_json::json!({"title":"Card",
+        "parameters":[{"name":"rows","type":"enum","title":"Rows","values":[{"value":"one","title":"1"}]}]});
+    assert_ne!(
+        original.id,
+        build(&configured).id,
+        "a configuration is a generated intent"
+    );
+    let implicit = build(&configured).id;
+    configured.json["widgets"][0]["configuration"]["parameters"][0]["default"] =
+        serde_json::json!("one");
+    assert_eq!(
+        implicit,
+        build(&configured).id,
+        "an omitted default is normalized"
+    );
+    configured.json["widgets"][0]["configuration"]["parameters"][0]["values"][0]["title"] =
+        serde_json::json!("One row");
+    assert_ne!(
+        implicit,
+        build(&configured).id,
+        "the option's label is generated metadata"
+    );
     manifest.json["widgets"][0]["preview"] = serde_json::json!({"title":"new preview"});
     assert_eq!(
         original.id,
@@ -203,6 +226,7 @@ fn list_scroll_offset_requires_a_new_binary_cohort() {
             let shape = match *name {
                 "share" => "3",
                 "stopSounds" => "1",
+                "setSounds" => "5",
                 "playSounds" => "1:4|5|6",
                 "playSound" => "6",
                 "sendMIDI" => "3",
@@ -479,6 +503,19 @@ fn the_id_is_stable_and_moves_only_with_identity() {
     std::fs::write(dir.join("data/src/lib.rs"), "pub struct App; // moved\n").unwrap();
     let moved = id(&dir, "ios");
     assert_ne!(with_icon, moved, "a data crate edit moves it");
+    // A target branch is accepted, and an edit to an arm this target never
+    // compiles moves its id all the same (LLP 1030 D3a, amended 2026-11-12).
+    let branch = |n: u32| {
+        format!("pub struct App;\n#[cfg(target_os = \"macos\")]\npub const N: u32 = {n};\n#[cfg(not(target_os = \"macos\"))]\npub const N: u32 = 0;\n")
+    };
+    std::fs::write(dir.join("data/src/lib.rs"), branch(7)).unwrap();
+    let mac_arm = id(&dir, "ios");
+    std::fs::write(dir.join("data/src/lib.rs"), branch(8)).unwrap();
+    assert_ne!(
+        mac_arm,
+        id(&dir, "ios"),
+        "an edit to the macOS arm moves the iOS id"
+    );
     // A `data/` of TypeScript modules is no crate: its edits are not identity.
     std::fs::remove_file(dir.join("data/Cargo.toml")).unwrap();
     let typescript = id(&dir, "ios");
@@ -716,14 +753,35 @@ fn an_executor_is_linked_only_for_a_named_module() {
 
 #[test]
 fn rust_capability_receipts_bind_executor_abi_target_and_module() {
-    assert_eq!(super::RUST_ABI, 7);
+    assert_eq!(super::RUST_ABI, 8);
     let dir = app("rust-capabilities");
     let mut manifest = Manifest::read(&dir).unwrap();
     let mut ids = Vec::new();
-    for (mode, target, executor) in [
-        ("native", Some("aarch64-apple-darwin"), Some("native-dylib")),
-        ("wasm", Some("wasm32-unknown-unknown"), Some("wasmi")),
-        ("off", None, None),
+    for (mode, target, executors, kinds) in [
+        (
+            "native",
+            Some("aarch64-apple-darwin"),
+            serde_json::json!(["native", "native-dylib"]),
+            serde_json::json!(["plan", "assets"]),
+        ),
+        (
+            "wasm",
+            Some("wasm32-unknown-unknown"),
+            serde_json::json!(["native", "wasmi"]),
+            serde_json::json!(["plan", "assets", "wasm"]),
+        ),
+        (
+            "tiered",
+            Some("aarch64-apple-darwin"),
+            serde_json::json!(["native", "native-dylib", "wasmi"]),
+            serde_json::json!(["plan", "assets", "wasm"]),
+        ),
+        (
+            "off",
+            None,
+            serde_json::json!(["native"]),
+            serde_json::json!(["plan", "assets"]),
+        ),
     ] {
         manifest.json["rust"] = serde_json::json!({"mode":mode,"module":{"package":"app-logic"}});
         let receipt = compatibility_with_trust(
@@ -745,11 +803,13 @@ fn rust_capability_receipts_bind_executor_abi_target_and_module() {
                 serde_json::json!(super::RUST_ABI)
             }
         );
-        let expected = executor.map_or_else(
-            || serde_json::json!(["native"]),
-            |e| serde_json::json!(["native", e]),
-        );
-        assert_eq!(receipt.inputs["executors"], expected);
+        assert_eq!(receipt.inputs["executors"], executors, "{mode}");
+        assert_eq!(receipt.inputs["store"]["acceptedKinds"], kinds, "{mode}");
+        if matches!(mode, "wasm" | "tiered") {
+            let mut old = receipt.inputs.clone();
+            old["store"]["acceptedKinds"] = serde_json::json!(["plan", "assets"]);
+            assert_ne!(receipt.id, super::compatibility_digest(&old), "{mode}");
+        }
         assert!(
             !ids.contains(&receipt.id),
             "executor capability changes cohort identity"
@@ -757,6 +817,69 @@ fn rust_capability_receipts_bind_executor_abi_target_and_module() {
         ids.push(receipt.id);
     }
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn swappable_receipts_name_wasmi_and_move_the_compatibility_id() {
+    use serde_json::json;
+    let dir = app("swappable-executor");
+    std::fs::create_dir_all(dir.join("apple/src")).unwrap();
+    std::fs::write(dir.join("apple/src/lib.rs"), "Swappable<App>\n").unwrap();
+    let mut manifest = Manifest::read(&dir).unwrap();
+    for (platform, target) in [
+        ("ios", "aarch64-apple-ios"),
+        ("macos", "aarch64-apple-darwin"),
+        ("linux", "x86_64-unknown-linux-gnu"),
+    ] {
+        let receipt =
+            compatibility_with_trust(&dir, platform, target, &manifest, Some(""), "development")
+                .unwrap();
+        let serialized: serde_json::Value = serde_json::from_str(&receipt.to_json()).unwrap();
+        assert_eq!(
+            serialized["inputs"]["executors"],
+            json!(["native", "wasmi"])
+        );
+        assert_eq!(
+            serialized["inputs"]["store"]["acceptedKinds"],
+            json!(["plan", "assets", "wasm"])
+        );
+        let mut old = receipt.inputs.clone();
+        old["executors"] = json!(["native", "wasmtime"]);
+        assert_ne!(receipt.id, super::compatibility_digest(&old), "{platform}");
+    }
+    std::fs::write(dir.join("app.ts"), "").unwrap();
+    let receipt = |manifest: &Manifest| {
+        compatibility_with_trust(
+            &dir,
+            "linux",
+            "x86_64-unknown-linux-gnu",
+            manifest,
+            Some(""),
+            "development",
+        )
+        .unwrap()
+    };
+    let mixed = receipt(&manifest);
+    assert_eq!(
+        mixed.inputs["executors"],
+        json!(["hermes", "native", "wasmi"])
+    );
+    assert_eq!(
+        mixed.inputs["store"]["acceptedKinds"],
+        json!(["plan", "assets", "bytecode", "wasm"])
+    );
+    manifest.json["deploy"]["store"] = json!({"linux":"0"});
+    assert_eq!(
+        receipt(&manifest).inputs["store"]["acceptedKinds"],
+        json!([])
+    );
+    std::fs::create_dir_all(dir.join("linux/src")).unwrap();
+    std::fs::write(dir.join("linux/src/lib.rs"), "pub struct App;\n").unwrap();
+    assert_eq!(
+        receipt(&manifest).inputs["executors"],
+        json!(["hermes", "native"])
+    );
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
@@ -936,6 +1059,10 @@ fn a_bundle_needs_the_runtime_of_the_newest_option_it_names() {
     assert_eq!(
         needs(b"fetch(u, {exactStream: m, exactIdleTimeout: 6e4})"),
         9
+    );
+    assert_eq!(
+        needs(b"fetch(u, {exactStream: m, exactProtocols: names})"),
+        12
     );
     // A transaction's options are data: what decides 10 is the grant.
     assert_eq!(needs(b"await db.transaction(m.commands, m.options)"), 0);

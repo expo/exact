@@ -1,5 +1,5 @@
 ```prompt Add a chat thread
-Add a chat thread to the Exact app in this folder: a transcript that opens at its newest message, over a composer like Messages'. Use https://github.com/expo/exact/blob/main/docs/recipes/chat-thread.md as the source for each step. The exact2 checkout has the same page at docs/recipes/chat-thread.md.
+Add a chat thread to the Exact app in this folder: a transcript that opens at its newest message, over a composer like Messages'. Use https://github.com/expo/exact/blob/main/docs/recipes/chat-thread.md as the source for each step. The Exact checkout has the same page at docs/recipes/chat-thread.md.
 
 1. If this folder is not an Exact app (it has no exact.mjs and app.contract), stop and tell me.
 2. If I did not say where the messages come from and who is in the thread, propose it from the app and ask me before you write code. Use the recipe's local `loadThread` and `sendMessage` sources in app.ts until I give you a server.

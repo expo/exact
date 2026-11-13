@@ -100,14 +100,18 @@ final class SplitHost {
     init(_ presenter: Presenter) { self.presenter = presenter }
 
     /// Whose the window is where two headers are in view (LLP 1115.002 §5
-    /// Q10, ruled as a trial on 2026-10-12): the list's. Its heading is the
-    /// window's title and the detail's stays the first line of its pane,
-    /// which is what SwiftUI's three columns and AppKit's show. False is
-    /// the other reading, SwiftUI's two columns: the detail's heading is
-    /// the title and the list's stays over its rows. Either way each
-    /// header's buttons are over its own column (`splitHeaderRoutes`,
-    /// HeaderMac.swift; `WindowToolbarHost.present`).
-    var listOwnsWindow = true { didSet { if listOwnsWindow != oldValue { sync() } } }
+    /// Q10, settled 2026-11-12), as SwiftUI's split measured: in two
+    /// columns the detail's, as System Settings titles the window with the
+    /// pane shown, its heading and subtitle the window's and the list's the
+    /// first lines of its column; beside a sidebar, in three, the list's, as
+    /// Mail's and SwiftUI's three columns are, the detail's heading the
+    /// first line of its pane. With no detail shown the list owns it. Nil is
+    /// that rule; true or false fixes one reading, for a comparison. Either
+    /// way each header's buttons are over its own column
+    /// (`splitHeaderRoutes`, HeaderMac.swift; `WindowToolbarHost.present`).
+    var listOwnsWindow: Bool? = nil { didSet { if listOwnsWindow != oldValue { sync() } } }
+    /// Whether the list owns the window now, by `listOwnsWindow`'s rule.
+    var listOwns: Bool { listOwnsWindow ?? (controller?.hasSidebar == true) }
     /// A stack that pushes, not a split: the driver's own chrome (`--chrome
     /// agent`), as it paints the header, the tablist and a list's rows. A
     /// test of the pushed stack says so.

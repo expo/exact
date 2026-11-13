@@ -98,3 +98,25 @@ test('a page rendered ahead marks a site\'s header, and the bar only where it is
   }));
   expect(marks).toEqual(Object.fromEntries(Object.entries(WANT).map(([id, { site, bar }]) => [id, { site, bar }])));
 });
+
+// Issue #364 (kernel/src/bars.rs): a header with no heading is the bar when the bar places all of it.
+test('a header of buttons alone is marked a bar, and one that also holds a text is not', () => {
+  const doc = createDocument(), saved = globalThis.document;
+  const el = (tag, attrs = {}, ...kids) => { const e = doc.createElement(tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); e.append(...kids); return e; };
+  const plus = () => el('button', { type: 'button', 'data-exact-on': 'press', 'aria-label': 'Add' });
+  const kids = {
+    alone: () => [el('div', {}, plus()), el('div'), el('p', { role: 'status' }, 'Live')],
+    text: () => [el('div', { 'data-exact-text': '' }, 'Inbox'), plus()],
+    empty: () => [el('div')],
+    // The bar has one place for a search field: a second keeps the header in the page.
+    search: () => [plus(), el('input', { type: 'search' })],
+    searches: () => [plus(), el('input', { type: 'search' }), el('input', { type: 'search' })],
+  };
+  for (const [id, made] of Object.entries(kids)) {
+    doc.root.append(el('main', { navigationKey: '1' }, el('div', { navigationKey: '1', id }, el('header', {}, ...made()))));
+  }
+  globalThis.document = doc;
+  try { markBars(doc.root); } finally { globalThis.document = saved; }
+  const bars = Object.fromEntries(Object.keys(kids).map((id) => [id, doc.getElementById(id).children[0].hasAttribute('data-exact-bar')]));
+  expect(bars).toEqual({ alone: true, text: false, empty: false, search: true, searches: false });
+});

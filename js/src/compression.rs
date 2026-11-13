@@ -228,6 +228,14 @@ fn gzip_header(bytes: &[u8]) -> Result<Option<usize>, String> {
         }
     }
     if flags & 2 != 0 {
+        // FHCRC: the low 16 bits of the CRC32 of every header byte before it
+        // (RFC 1952 §2.3.1).
+        let Some(crc) = bytes.get(at..at + 2) else {
+            return Ok(None);
+        };
+        if u16::from_le_bytes([crc[0], crc[1]]) != crc32fast::hash(&bytes[..at]) as u16 {
+            return bad();
+        }
         at += 2;
     }
     Ok((bytes.len() >= at).then_some(at))
@@ -497,7 +505,11 @@ mod tests {
             b'b',
             b'c',
         ];
-        gz.extend_from_slice(b"name\0comment\0\xaa\xbb");
+        gz.extend_from_slice(b"name\0comment\0");
+        // FHCRC: the low 16 bits of the CRC32 of the header before it.
+        let fhcrc = crc32fast::hash(&gz) as u16;
+        assert_eq!(fhcrc, 0x7179);
+        gz.extend_from_slice(&fhcrc.to_le_bytes());
         gz.extend_from_slice(&raw);
         let mut crc = crc32fast::Hasher::new();
         crc.update(&text);
@@ -505,6 +517,16 @@ mod tests {
         gz.extend_from_slice(&(text.len() as u32).to_le_bytes());
         let bytes: Vec<&[u8]> = gz.chunks(1).collect();
         assert_eq!(inflate_all(Format::Gzip, &bytes).unwrap(), text);
+        // A wrong header checksum is refused, whole or split.
+        let at = gz.len() - raw.len() - 10;
+        gz[at] ^= 1;
+        let bytes: Vec<&[u8]> = gz.chunks(1).collect();
+        for chunks in [&bytes[..], &[&gz[..]]] {
+            assert_eq!(
+                inflate_all(Format::Gzip, chunks).unwrap_err(),
+                "the gzip header is not valid"
+            );
+        }
     }
 
     /// Discord's `zlib-stream`: one zlib stream across many messages, each

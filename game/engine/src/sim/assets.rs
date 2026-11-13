@@ -102,6 +102,7 @@ impl<G: Game> Sim<G> {
         if *names != self.held {
             self.held = names.clone();
             self.asset_mesh_revision = u64::MAX;
+            self.presented_at = None;
         }
     }
     /// Drain names whose last cosmetic mesh reference disappeared.
@@ -162,13 +163,86 @@ impl<G: Game> Sim<G> {
     }
     /// Every retained model and dependency prepared for the current device.
     pub fn device_assets_ready(&self) -> bool {
-        self.world.assets.states.iter().all(|(n, s)| {
-            *s != crate::asset::AssetState::Loaded
-                || n == crate::asset::TABLE_ASSET
-                || n.ends_with(".level.json")
-                || n.ends_with(".sound")
-                || self.world.assets.prepared.contains(n)
+        (self.world.assets.states.keys()).all(|n| self.device_ready(n))
+    }
+    /// `name` needs nothing more of the device: not loaded, never on the
+    /// device, or prepared.
+    fn device_ready(&self, name: &str) -> bool {
+        let assets = &self.world.assets;
+        assets.states.get(name) != Some(&crate::asset::AssetState::Loaded)
+            || name == crate::asset::TABLE_ASSET
+            || name.ends_with(".level.json")
+            || name.ends_with(".sound")
+            || assets.prepared.contains(name)
+    }
+    fn presented_key(&self) -> (crate::WorldId, [u64; 3]) {
+        let w = &self.world;
+        let revisions = [
+            w.revision::<crate::Mesh>(),
+            w.revision::<crate::Sprite>(),
+            w.revision::<crate::MaterialOverrides>(),
+        ];
+        (w.id(), revisions)
+    }
+    /// Read again what the world presents ([`Self::presents`]) if its meshes,
+    /// sprites or material overrides changed since the last read.
+    pub fn refresh_presented(&mut self) {
+        let key = self.presented_key();
+        if self.presented_at.as_ref() == Some(&key) {
+            return;
+        }
+        let w = &self.world;
+        let mut presented: std::collections::BTreeSet<String> = (w.query::<&crate::Mesh>())
+            .iter()
+            .filter_map(|(_, mesh)| match mesh {
+                crate::Mesh::Asset(name) => Some(name.clone()),
+                _ => None,
+            })
+            .collect();
+        presented.extend(
+            w.query::<&crate::Sprite>()
+                .iter()
+                .map(|(_, s)| s.texture.clone()),
+        );
+        presented.extend(override_textures(w));
+        presented.extend(self.held.iter().cloned());
+        self.presented = presented;
+        self.presented_at = Some(key);
+    }
+    /// Whether the world presents `name` now: a model an entity's `Mesh`
+    /// names or the renderer still draws, a texture a sprite or a material
+    /// override names, or a texture of such a model. Every name counts until
+    /// [`Self::refresh_presented`] has read the world as it is. What it does
+    /// not present (looks registered for later) a live renderer prepares
+    /// after its first frame.
+    pub fn presents(&self, name: &str) -> bool {
+        let assets = &self.world.assets;
+        self.presented_at.as_ref() != Some(&self.presented_key())
+            || self.presented.contains(name)
+            || (assets.dependents.get(name))
+                .is_some_and(|models| models.iter().any(|m| self.presented.contains(m)))
+    }
+    /// `device_assets_ready` for what the world presents ([`Self::presents`]):
+    /// what a live frame waits for.
+    pub fn presented_assets_ready(&self) -> bool {
+        if self.presented_at.as_ref() != Some(&self.presented_key()) {
+            return self.device_assets_ready();
+        }
+        let assets = &self.world.assets;
+        self.presented.iter().all(|n| {
+            self.device_ready(n)
+                && (assets.dependencies.get(n))
+                    .is_none_or(|deps| deps.iter().all(|t| self.device_ready(t)))
         })
+    }
+    /// Whether `name` is prepared for the current device.
+    pub fn is_prepared(&self, name: &str) -> bool {
+        self.world.assets.prepared.contains(name)
+    }
+    /// Whether `name` is delivered and not retired: what a texture finished
+    /// off the presenting thread may be installed as.
+    pub fn is_loaded(&self, name: &str) -> bool {
+        self.world.assets.states.get(name) == Some(&crate::asset::AssetState::Loaded)
     }
     /// Move texture payloads to the renderer; no CPU mip copy survives upload.
     pub fn take_textures(
@@ -236,6 +310,8 @@ impl<G: Game> Sim<G> {
             self.world.set_seen.set(self.edits_admitted);
             self.setup_pending = false;
             self.asset_mesh_revision = u64::MAX;
+            self.unframed = true;
+            self.frame_first();
         }
     }
     /// `Assets::ready` resumed from the last required name found not ready:

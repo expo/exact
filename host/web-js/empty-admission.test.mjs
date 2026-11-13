@@ -10,9 +10,10 @@ import { webCompiler } from './module.mjs';
 import { suiteBrowser } from '../../scripts/agent-launch.mjs';
 
 const root = resolve(import.meta.dir, '../..');
-// The parser's Rust whitespace class, the driver's fault table, a fetch option's refusal and the asset path's pattern:
-// text only admission, faults.js, ts-fetch.js's request paths and admission.js's asset check carry.
-const PARSER = 'u1680', FAULTS = '__exactFaults', REQUESTS = 'exactLongPoll asks again', ASSETS = '\\/assets\\/';
+// The parser's Rust whitespace class, the driver's fault table, a fetch option's refusal, the asset path's pattern and
+// an upload's refusal: text only admission, faults.js, ts-fetch.js's request paths, admission.js's asset check and
+// uploads.js carry.
+const PARSER = 'u1680', FAULTS = '__exactFaults', REQUESTS = 'exactLongPoll asks again', ASSETS = '\\/assets\\/', UPLOADS = 'already sent: the upload';
 
 test.each([false, true])('a production page with no grants, module or page module admits nothing without the parser (fetch: %s)', async usesFetch => {
   if (webCompiler().cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
@@ -28,7 +29,8 @@ test.each([false, true])('a production page with no grants, module or page modul
       writeFileSync(resolve(dir, 'app.ts'), `import type { Answer } from './app.contract.d.ts';
 export const grants = ${JSON.stringify(grants)};
 export const answer: Answer = ${usesFetch ? `async () => {
-  const asset = await (await fetch('/assets/a.txt')).text();
+  // An asset's body is read in the answer's turn, which may draw randomness (LLP 1069.005 D3).
+  const asset = await (await fetch('/assets/a.txt')).text().then(text => text + ' ' + crypto.randomUUID().length);
   try { await fetch('http://127.0.0.1:1/ungranted'); return { text: 'unexpected access' }; }
   catch (error) { return { text: asset + ': ' + String(error) }; }
 }` : "() => ({ text: 'hi' })"};
@@ -47,11 +49,14 @@ export const answer: Answer = ${usesFetch ? `async () => {
     // Its sources' `fetch` is the asset path and the refusal (ts-fetch-refused.js), so the request paths are not linked.
     expect(existsSync(resolve(dir, 'production/.gen/ts-fetch-refused.js'))).toBe(true);
     expect(production.entry).not.toContain(REQUESTS);
+    // Nor uploads: only a granted fetch's stream uploads.
+    expect(production.entry).not.toContain(UPLOADS);
     expect(production.entry).toContain(ASSETS);
     // Development links everything (LLP 1047 D7).
     expect(development.admission).toContain('function validateGrantSet');
     expect(development.entry).toContain(PARSER);
     expect(development.entry).toContain(REQUESTS);
+    expect(development.entry).toContain(UPLOADS);
     // Parity for the empty set: the stub and the parser answer the same calls the same way.
     const stub = await production.module(), parser = await development.module();
     expect(Object.keys(stub).sort()).toEqual(Object.keys(parser).sort());
@@ -69,6 +74,7 @@ export const answer: Answer = ${usesFetch ? `async () => {
     expect(granted.admission).toContain('function validateGrantSet');
     expect(granted.entry).toContain(PARSER);
     expect(granted.entry).toContain(REQUESTS);
+    expect(granted.entry).toContain(UPLOADS);
     expect(existsSync(resolve(dir, 'granted/.gen/ts-fetch-refused.js'))).toBe(false);
     if (!usesFetch) return;
     let ungranted = 0;
@@ -81,7 +87,7 @@ export const answer: Answer = ${usesFetch ? `async () => {
     await page.route('**/ungranted', route => { ungranted++; return route.abort(); });
     await page.goto(server.url.href);
     await page.waitForFunction(() => document.querySelector('[data-testid=greeting]')?.textContent.includes('asset loaded'));
-    expect(await page.getByTestId('greeting').textContent()).toBe("asset loaded: FetchError: outside the app's grants (net.fetch)");
+    expect(await page.getByTestId('greeting').textContent()).toBe("asset loaded 36: FetchError: outside the app's grants (net.fetch)");
     expect(ungranted).toBe(0);
   } finally {
     await browser?.close();

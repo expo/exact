@@ -92,21 +92,14 @@ impl Walk<'_> {
                     }
                     self.walk(children, bound, section || tag == "section", passed);
                 }
-                Node::When {
-                    then, otherwise, ..
-                } => {
-                    for arm in [then, otherwise] {
-                        self.walk(arm, bound, section, &mut passed.clone());
-                    }
-                }
-                Node::Each { body, .. } => self.walk(body, true, section, &mut passed.clone()),
-                Node::Match { some, none, .. } => {
-                    for arm in [&some.1, none] {
-                        self.walk(arm, true, section, &mut passed.clone());
-                    }
-                }
                 Node::Use { children, .. } => self.walk(children, bound, section, passed),
-                Node::Children { .. } => {}
+                node => {
+                    let lists = node.scoped_child_lists();
+                    let bound = bound || lists.iter().any(|(_, binds)| !binds.is_empty());
+                    for (list, _) in lists {
+                        self.walk(list, bound, section, &mut passed.clone());
+                    }
+                }
             }
         }
     }

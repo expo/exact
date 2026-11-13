@@ -24,12 +24,15 @@ component App
   state noted = 0
   mutation made as shape LanguageModelInfo
   mutation said as shape LanguageModelResult
+  mutation dataSaid as shape string
   derive session = match made { case some(m) => m.id, case none => "" }
   resource reply = languageModelResponse(response=response, interval=50) as shape LanguageModelResponse else empty()
   action create
     send made = createLanguageModel(tools=[LanguageModelTool(name="findNotes", description="Finds notes", inputSchema="NoteQuery")])
   action ask
     send said = prompt(session=session, input="hi")
+  action askData(input: string)
+    send dataSaid = askModel(session, input)
   action read(id: string)
     response = id
   tool note writes closed "Count a note." = note
@@ -77,12 +80,21 @@ impl Drop for App {
 /// The data module's `tools`, as the bake's TypeScript source runs them:
 /// `findNotes` answers its notes, or, asked for `"create"`, awaits a
 /// `createLanguageModel` of its own and answers what it was told.
+/// `askModel` forwards a prompt through the Rust binding's request builder.
 struct Tools;
 impl exact_runner::DataSource for Tools {
     fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
         Err(DataError::UnknownSource(source.into()))
     }
     fn answer(&mut self, _: &mut Store, source: &str, args: &[Value]) -> Result<Answer, DataError> {
+        if source == "askModel" {
+            return Ok(Answer::Later(exact_data::modules::request(
+                "language-model",
+                "send",
+                "prompt",
+                json!({ "session": args[0].as_str().unwrap(), "input": args[1].as_str().unwrap() }),
+            )));
+        }
         let args: Json = serde_json::from_str(args[0].as_str().unwrap()).unwrap();
         match (source, args["query"].as_str()) {
             // A prompt of its own, which the host holds.
@@ -349,6 +361,58 @@ fn a_send_let_go_is_cancelled_at_its_implementation() {
     pump(&mut r, &mut waiting);
     let after = calls_with_cancel(&r);
     assert_eq!(after, 1, "{}", logs(&r));
+}
+
+/// D15 item 2: a data-code send uses the forwarded request's number,
+/// and only a request still awaiting its reply is cancelled.
+#[test]
+fn a_data_code_prompt_is_cancelled_with_its_owning_request() {
+    let (_app, mut r, calls, held) = boot("data-cancel");
+    let mut waiting = Vec::new();
+    r.act("create", Vec::new()).unwrap();
+    pump(&mut r, &mut waiting);
+    for input in ["first", "replacement"] {
+        r.act("askData", vec![Value::from(input)]).unwrap();
+        pump(&mut r, &mut waiting);
+    }
+    let seen = calls.lock().unwrap().clone();
+    let prompts = sent(&seen, "prompt");
+    assert_eq!(prompts.len(), 2, "{seen:?}");
+    for (prompt, input) in prompts.iter().zip(["first", "replacement"]) {
+        assert_eq!(prompt["args"], json!({ "session": "s1", "input": input }));
+    }
+    let first = prompts[0]["request"]
+        .as_u64()
+        .expect("a data send's number");
+    let replacement = prompts[1]["request"]
+        .as_u64()
+        .expect("a replacement's number");
+    assert_ne!(first, replacement);
+    let cancels = || {
+        (calls.lock().unwrap().iter())
+            .filter(|c| c.get("cancel").is_some())
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let expected = vec![json!({ "extension": "language-model", "cancel": first })];
+    assert_eq!(cancels(), expected, "{}", logs(&r));
+
+    assert_eq!(held.lock().unwrap().len(), 2);
+    let answer = json!({ "text": "Hi.", "overflowed": false });
+    let reply = held.lock().unwrap().pop().unwrap();
+    reply.send(response(&answer));
+    pump(&mut r, &mut waiting);
+    assert_eq!(
+        r.slot("dataSaid"),
+        Some(&Value::some(Value::from(answer.to_string()))),
+        "{}",
+        logs(&r)
+    );
+    r.act("askData", vec![Value::from("after completion")])
+        .unwrap();
+    pump(&mut r, &mut waiting);
+    assert_eq!(sent(&calls.lock().unwrap(), "prompt").len(), 3);
+    assert_eq!(cancels(), expected, "{}", logs(&r));
 }
 
 /// LLP 1133.023 D7: a model's handler runs as `tool` but under no

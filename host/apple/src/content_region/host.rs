@@ -48,7 +48,12 @@ impl<D: DataSource> Host<D> {
         self.content_region
             .as_ref()
             .ok_or("no content region")?
-            .request_json(self.runner.kernel(), id, known)
+            .request_json(
+                self.runner.kernel(),
+                id,
+                known,
+                self.runner.resolved_locale(),
+            )
     }
     /// Selected immutable publication identity, including retained old content.
     pub fn region_publication_id(&self) -> Option<u64> {
@@ -406,7 +411,7 @@ impl<D: DataSource> Host<D> {
                 .node_by_key(arena.key(slot))
                 .ok_or("native removed node")?;
             let props = props_for(&node);
-            let (style, _) = style::style_json_for(&node, &self.runner.kernel().env());
+            let (style, _) = style::style_json_for(&node, &self.runner.kernel().env_of(node.id));
             let children = arena
                 .children(slot)
                 .iter()
@@ -667,7 +672,7 @@ impl<D: DataSource> Host<D> {
             }
             if self.layout_withheld || old.is_none_or(|m| m.content != node.mirror.content) {
                 if let Some((w, h)) = node.mirror.content {
-                    staged.content(node.header.id, w, h);
+                    staged.content(node.header.id, w, h, None);
                 }
             }
         }

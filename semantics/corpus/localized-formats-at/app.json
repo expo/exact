@@ -1,0 +1,4 @@
+{
+  "app": { "id": "com.exact.corpus.localized-formats-at", "name": "Localized formats, Austria" },
+  "strings": { "base": "de-AT-u-nu-latn" }
+}

@@ -463,8 +463,9 @@ impl<D: DataSource> Runner<D> {
     }
 
     /// A send that answers another source's value under the agent, raising
-    /// it while that value matches `raise.when` (LLP 1133.018 D5: write-only
-    /// raised to full): held under the raise's ticket, else that value now.
+    /// it while that value matches `raise.when` and the app declares the
+    /// optional `raise.grant` (LLP 1133.002 D7; LLP 1133.018 D5): held under
+    /// the raise's ticket, else that value now.
     /// `None` for a send that declares no raise.
     pub(super) fn decide_raise(&self, row: &ModulesRow, send: bool) -> Option<Decision> {
         let sub = self.substitute(row);
@@ -476,7 +477,11 @@ impl<D: DataSource> Runner<D> {
             return Some(Decision::Now(json!({ "error": "NotSupportedError" })));
         };
         let when = sub["raise"]["when"].as_object();
-        let matches = when.is_some_and(|w| w.iter().all(|(k, v)| value.get(k) == Some(v)));
+        let granted = sub["raise"]["grant"]
+            .as_str()
+            .is_none_or(|line| self.declares(line));
+        let matches =
+            granted && when.is_some_and(|w| w.iter().all(|(k, v)| value.get(k) == Some(v)));
         Some(match matches {
             true => Decision::Hold(Waits::Raise),
             false => Decision::Now(value),

@@ -9,9 +9,16 @@
 // `no-cache`, `Vary: *`, or a request with `Authorization` the response did
 // not mark shareable, RFC 9111 §3.5). A request whose fetch `cache` mode or
 // `Cache-Control` asks past the cache goes past it, as a browser's would.
-// A stale answer within `stale-while-revalidate` (RFC 5861) is given while one
-// refetch replaces it. A redirected answer is not kept: the runtime checks the
-// URL a redirect led to against the app's grants (admission.js).
+// A request's `max-age`, `min-fresh` and `max-stale` bound the age of what
+// it is given (RFC 9111 §5.2.1); one the kept answer does not meet goes to
+// the origin. A stale answer within `stale-while-revalidate` (RFC 5861), or
+// the request's `max-stale`, is given while one refetch replaces it, unless
+// the response said `must-revalidate` or `proxy-revalidate` (RFC 9111
+// §5.2.2.2, §5.2.2.8). `s-maxage` implies `proxy-revalidate` (§5.2.2.10),
+// but this cache still honours a `stale-while-revalidate` beside it: the
+// common `s-maxage=1, stale-while-revalidate=59` asks for exactly that. A
+// redirected answer is not kept: the runtime checks the URL a redirect led to
+// against the app's grants (admission.js).
 
 const SHAREABLE = new Set([200, 203, 204, 404, 405, 410, 414, 501]);
 /** On each response the cached fetch gives: how many ms it stays fresh for any reader (0: not shareable, or stale). */
@@ -29,7 +36,7 @@ const seconds = v => { const n = Number(v); return Number.isFinite(n) && n >= 0 
 
 /** A fetch with a shared cache before `outbound`. `now()` is ms since the epoch. */
 export function cachingFetch(outbound, { entries = 256, bytes = 64 << 20, entryBytes = 8 << 20, now = Date.now } = {}) {
-  // URL → { status, statusText, headers, body, stored, initialAge, lifetime, stale, vary }; insertion order is recency.
+  // URL → { status, statusText, headers, body, stored, initialAge, lifetime, stale, revalidate, vary }; insertion order is recency.
   const cache = new Map(), refreshing = new Map(), storing = new Set();
   let held = 0, pending = 0;
   const drop = url => { const e = cache.get(url); if (e) { held -= e.body.byteLength; cache.delete(url); } };
@@ -90,7 +97,7 @@ export function cachingFetch(outbound, { entries = 256, bytes = 64 << 20, entryB
         chunks.length = 0;
         pending -= reserved; reserved = 0;
         drop(url);
-        cache.set(url, { status: response.status, statusText: response.statusText, headers: [...response.headers], body, stored: received, initialAge, lifetime, stale: seconds(cc.get('stale-while-revalidate')) ?? 0, vary });
+        cache.set(url, { status: response.status, statusText: response.statusText, headers: [...response.headers], body, stored: received, initialAge, lifetime, stale: seconds(cc.get('stale-while-revalidate')) ?? 0, revalidate: cc.has('must-revalidate') || cc.has('proxy-revalidate'), vary });
         held += body.byteLength;
         for (const [old] of cache) { if (cache.size <= entries && held + pending <= bytes) break; drop(old); }
       } catch { /* a failed response is never cached */ }
@@ -118,8 +125,9 @@ export function cachingFetch(outbound, { entries = 256, bytes = 64 << 20, entryB
     const url = request.url, e = cache.get(url);
     const past = request.cache === 'reload' || request.cache === 'no-cache' || asked.has('no-cache') || asked.get('max-age') === '0';
     if (e && !past && e.vary.every(([name, value]) => request.headers.get(name) === value)) {
-      const a = age(e);
-      if (a < e.lifetime + e.stale) {
+      const a = age(e), grace = e.revalidate ? 0 : e.stale, bound = name => seconds(asked.get(name));
+      const stale = e.revalidate ? 0 : Math.max(grace, asked.get('max-stale') === true ? Infinity : bound('max-stale') ?? 0);
+      if (a < e.lifetime + stale && a <= (bound('max-age') ?? Infinity) && e.lifetime - a >= (bound('min-fresh') ?? -Infinity)) {
         if (request.signal.aborted) return Promise.reject(request.signal.reason);
         cache.delete(url); cache.set(url, e);
         if (a >= e.lifetime && !refreshing.has(url)) {
@@ -128,7 +136,8 @@ export function cachingFetch(outbound, { entries = 256, bytes = 64 << 20, entryB
         }
         return Promise.resolve(answer(url, e));
       }
-      drop(url);
+      // Kept while a request without bounds of its own could still be given it.
+      if (a >= e.lifetime + grace) drop(url);
     }
     return go(url, request, input, init);
   }

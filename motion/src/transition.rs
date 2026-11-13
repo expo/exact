@@ -12,7 +12,7 @@
 
 use crate::easing::{Easing, EasingError};
 use crate::property::{Property, Value};
-use crate::spring::{SpringConfig, SpringError, MAX_DURATION};
+use crate::spring::{SpringConfig, SpringError};
 
 /// Most transitions one node may declare.
 pub const MAX_TRANSITIONS: usize = 8;
@@ -260,10 +260,13 @@ pub(crate) struct Running {
 pub(crate) enum Curve {
     /// Eased over `duration` seconds (after any shortening).
     Easing { easing: Easing, duration: f64 },
-    /// A spring released at `from` with `velocity`.
+    /// A spring released at `from` with `velocity`, which ends `settle`
+    /// seconds after it starts: an underdamped spring passes through rest
+    /// before then, so a sample at rest does not end it (LLP 1003 §4, §7).
     Spring {
         config: SpringConfig,
         velocity: Value,
+        settle: f64,
     },
 }
 
@@ -303,6 +306,7 @@ impl Running {
                 Curve::Spring {
                     config: *config,
                     velocity,
+                    settle: 0.0,
                 },
                 declaration.delay,
             ),
@@ -313,6 +317,7 @@ impl Running {
                 Curve::Spring { config, .. } => Curve::Spring {
                     config,
                     velocity: Value::oklab(0.0, 0.0, 0.0, 0.0),
+                    settle: 0.0,
                 },
                 easing => easing,
             };
@@ -324,6 +329,16 @@ impl Running {
             )
         } else {
             (from, to, reversing_adjusted_start, curve)
+        };
+        let curve = match curve {
+            Curve::Spring {
+                config, velocity, ..
+            } => Curve::Spring {
+                config,
+                velocity,
+                settle: settle_time(&config, from - to, velocity),
+            },
+            easing => easing,
         };
         Running {
             from,
@@ -389,7 +404,11 @@ impl Running {
                     done: false,
                 }
             }
-            Curve::Spring { config, velocity } => {
+            Curve::Spring {
+                config,
+                velocity,
+                settle,
+            } => {
                 if now < self.start {
                     return RunningSample {
                         value: self.from,
@@ -399,9 +418,8 @@ impl Running {
                 }
                 let elapsed = now - self.start;
                 let displacement = self.from - self.to;
-                let (moved, speed, rest) = spring(config, displacement, *velocity, elapsed);
-                let at_rest = rest || elapsed >= MAX_DURATION;
-                if at_rest {
+                let (moved, speed) = spring(config, displacement, *velocity, elapsed);
+                if elapsed >= *settle {
                     return RunningSample {
                         value: self.to,
                         velocity: Value::ZERO,
@@ -425,7 +443,10 @@ impl Running {
     ///
     /// [`SAMPLE_RATE`]: crate::spring::SAMPLE_RATE
     pub fn spring_frames(&self) -> Option<(f64, Vec<Value>)> {
-        let Curve::Spring { config, velocity } = &self.curve else {
+        let Curve::Spring {
+            config, velocity, ..
+        } = &self.curve
+        else {
             return None;
         };
         let duration = self.end_time() - self.start;
@@ -463,38 +484,33 @@ impl Running {
     pub fn end_time(&self) -> f64 {
         match &self.curve {
             Curve::Easing { duration, .. } => self.start + duration.max(0.0),
-            Curve::Spring { config, velocity } => {
-                let d = (self.from - self.to).components();
-                let v = velocity.components();
-                self.start
-                    + (0..4)
-                        .filter(|&i| d[i] != 0.0 || v[i] != 0.0)
-                        .map(|i| config.settle_time(d[i], v[i]))
-                        .fold(0.0, f64::max)
-            }
+            Curve::Spring { settle, .. } => self.start + settle,
         }
     }
 }
 
-/// A spring's displacement and velocity per component at `t`, and whether
-/// every component is at rest. A component neither displaced nor moving
-/// stays exactly zero, and costs nothing.
-fn spring(
-    config: &SpringConfig,
-    displacement: Value,
-    velocity: Value,
-    t: f64,
-) -> (Value, Value, bool) {
+/// Seconds until a spring released at `displacement` with `velocity`
+/// settles: the latest of its components' settle times on the sample grid.
+fn settle_time(config: &SpringConfig, displacement: Value, velocity: Value) -> f64 {
     let (d, v) = (displacement.components(), velocity.components());
-    let (mut moved, mut speed, mut rest) = ([0.0; 4], [0.0; 4], true);
+    (0..4)
+        .filter(|&i| d[i] != 0.0 || v[i] != 0.0)
+        .map(|i| config.settle_time(d[i], v[i]))
+        .fold(0.0, f64::max)
+}
+
+/// A spring's displacement and velocity per component at `t`. A component
+/// neither displaced nor moving stays exactly zero, and costs nothing.
+fn spring(config: &SpringConfig, displacement: Value, velocity: Value, t: f64) -> (Value, Value) {
+    let (d, v) = (displacement.components(), velocity.components());
+    let (mut moved, mut speed) = ([0.0; 4], [0.0; 4]);
     for i in 0..4 {
         if d[i] == 0.0 && v[i] == 0.0 {
             continue;
         }
         let s = config.sample(d[i], v[i], t);
         (moved[i], speed[i]) = (s.displacement, s.velocity);
-        rest &= s.at_rest();
     }
     let value = |c: [f64; 4]| Value::four(c[0], c[1], c[2], c[3]);
-    (value(moved), value(speed), rest)
+    (value(moved), value(speed))
 }

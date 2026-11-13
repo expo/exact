@@ -90,6 +90,7 @@ type UpdateList = fn(
     bool,
     bool,
     Option<&Value>,
+    [Option<&Value>; 2],
 ) -> Result<(), InstanceError>;
 type ListTypography = fn(&mut [Child], &mut Update<'_>, &[Frame]) -> Result<(), InstanceError>;
 
@@ -1248,6 +1249,14 @@ impl NodeInst {
             && self
                 .bound_style(plan, u.sites, exact_kernel::StyleId::ScrollBehavior)
                 .is_some_and(|value| value.as_str() == Some("smooth"));
+        // Its estimate and its gap, read again as they change (`sizing.rs`).
+        use exact_kernel::PropId::{EstimatedItemHeight, EstimatedItemWidth};
+        let estimate = (self
+            .collection()
+            .map(|_| self.bound_prop(plan, u.sites, EstimatedItemWidth)))
+        .and_then(|w| w.or_else(|| self.bound_prop(plan, u.sites, EstimatedItemHeight)));
+        let gap = (self.collection())
+            .and_then(|_| self.bound_style(plan, u.sites, exact_kernel::StyleId::ColumnGap));
         if let Some(collection) = self.collection_mut() {
             collection.around = theme::Around {
                 retheme: false,
@@ -1260,6 +1269,7 @@ impl NodeInst {
                 follow,
                 smooth,
                 keep.as_ref(),
+                [estimate.as_ref(), gap.as_ref()],
             )?;
         } else if update_all(u, &mut self.children, frames)? {
             self.emit_children(u);

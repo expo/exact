@@ -6,6 +6,20 @@ style Item
 // A guide split into sections is a parent, open only while the reader has opened it with its chevron.
 fn isOpen(route: string, opened: string[]): bool = opened.includes(route)
 
+component Tabs
+  props
+    nav: Nav
+    tab: string
+    prefix: string
+  view
+    nav aria-label="Sections" flex=1 min-width=0
+      column gap=2 padding="0 12px 10px"
+        for t in nav.tabs key=t.id
+          link href=t.href id=`${prefix}tab-${t.id}` testId=`${prefix}tab-${t.id}` aria-current=(t.id == tab ? "true" : "false") padding="8px 12px" border-radius="var(--radius-lg)" background-color=(t.id == tab ? "var(--color-background-selected)" : "transparent")
+            row align-items="center" gap=8
+              image t.icon aria-hidden=true width="1rem" height="1rem" color="var(--color-icon-default)"
+              text t.title font-size="var(--text-sm)" font-weight=500 line-height=1.4 color="var(--color-text-default)"
+
 component NavLink
   props
     item: NavItem
@@ -25,6 +39,7 @@ component Sidebar
   props
     nav: Nav
     current: string
+    tab: string
     toggled: string[]
     toggle: action
     prefix: string
@@ -32,9 +47,10 @@ component Sidebar
     column padding="16px 12px" gap=20 testId=`${prefix}sidebar`
       nav aria-label="Docs"
         column gap=20
-          for g in nav.groups key=g.id
+          for g in nav.groups.filter(x => x.tab == tab) key=g.id
             column gap=2 -exact-layout-transition="250ms ease"
-              text g.title text-transform="uppercase" font-family="var(--font-mono)" font-size="var(--text-xs)" color="var(--color-text-secondary)" padding="4px 12px"
+              if nav.groups.filter(x => x.tab == g.tab).length > 1
+                text g.title text-transform="uppercase" font-family="var(--font-mono)" font-size="var(--text-xs)" color="var(--color-text-secondary)" padding="4px 12px"
               for i in g.items.filter(x => x.depth == 0) key=i.id
                 if i.children > 0
                   column -exact-layout-transition="250ms ease"

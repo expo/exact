@@ -127,9 +127,14 @@ fn index_value(
         .filter_map(|e| e.search(&query).map(|hits| (e, hits)))
         .collect();
     if newest {
-        // Reversed whole, so a sub-document still follows its parent: the
-        // nesting is the point of the order, not the direction.
-        shown.reverse();
+        // The documents of each top-level number reverse as a group, so a
+        // sub-document still follows its parent: the nesting is the point
+        // of the order, not the direction.
+        let mut groups: Vec<_> = shown
+            .chunk_by(|a, b| a.0.number.split('.').next() == b.0.number.split('.').next())
+            .collect();
+        groups.reverse();
+        shown = groups.concat();
     }
     Value::record(vec![
         Value::str(root),
@@ -219,6 +224,9 @@ fn document_value(
     message: &str,
 ) -> Value {
     let shown = section(whole, showing);
+    let Value::List(blocks) = markdown_parse::value::into_blocks_with_tables(shown) else {
+        unreachable!("document blocks")
+    };
     Value::record(vec![
         Value::str(&path.to_string_lossy()),
         Value::str(
@@ -234,14 +242,58 @@ fn document_value(
         Value::str(message),
         Value::Bool(!message.is_empty()),
         Value::Number(showing as f64),
-        Value::Number(shown.blocks.len() as f64),
-        markdown_parse::value::blocks(&shown),
+        Value::Number(blocks.len() as f64),
+        Value::List(blocks),
         outline_value(whole, showing),
     ])
 }
 
 fn nothing_open(message: &str) -> Value {
     document_value(Path::new(""), &Document::default(), None, -1, message)
+}
+
+#[test]
+fn document_tables_share_columns_without_changing_outline_offsets() {
+    fn fields(value: &Value) -> &[Value] {
+        match value {
+            Value::Record(fields) | Value::List(fields) => fields,
+            _ => panic!("record or list"),
+        }
+    }
+    fn run(cell: &Value) -> &[Value] {
+        fields(&fields(&fields(cell)[1])[0])
+    }
+    let doc = parse(
+        "# Report\n\n| LongUnbreakableHeader | B |\n| --- | --- |\n| **bold** | [link](other.md) |\n| short | `code` |\n\n## After\n\nBody.\n",
+        &str::to_owned,
+    );
+    let Value::Record(value) = document_value(Path::new("report.md"), &doc, None, -1, "") else {
+        panic!("document record")
+    };
+    let Value::List(blocks) = &value[10] else {
+        panic!("blocks")
+    };
+    assert_eq!(value[9], Value::Number(4.));
+    let Value::Record(table) = &blocks[1] else {
+        panic!("table block")
+    };
+    assert_eq!(table[1], Value::str("table"));
+    assert_eq!(table[2], Value::Number(2.));
+    let Value::List(cells) = &table[8] else {
+        panic!("table cells")
+    };
+    assert_eq!(cells.len(), 6);
+    assert_eq!(run(&cells[2])[2], Value::Number(700.));
+    assert_eq!(run(&cells[3])[5], Value::str("other.md"));
+    assert_eq!(run(&cells[5])[4], Value::Bool(true));
+    let at = doc.outline()[1].2;
+    let Value::Record(section) = document_value(Path::new("report.md"), &doc, None, at as i64, "")
+    else {
+        panic!("section record")
+    };
+    assert_eq!(section[9], Value::Number(2.));
+    assert!(format!("{:?}", section[10]).contains("After"));
+    assert!(!format!("{:?}", section[10]).contains("LongUnbreakableHeader"));
 }
 
 impl DataSource for Llp {

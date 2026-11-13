@@ -78,7 +78,9 @@ extension NodeView {
     }
     /// Dates and selects have the same single native focus owner as a field.
     /// An appearance:none control falls back to its authored node.
-    var isDateOrSelect: Bool { kind == "control" && (props["type"] == "select" || ControlKinds.dates.contains(props["type"] ?? "")) }
+    var isDateOrSelect: Bool { isDate || isSelect }
+    var isDate: Bool { kind == "control" && ControlKinds.dates.contains(props["type"] ?? "") }
+    var isSelect: Bool { kind == "control" && props["type"] == "select" }
     var nativeValueControl: NSControl? {
         guard isDateOrSelect, let control = presenter?.controls.controls[id], control.superview != nil else { return nil }
         return control

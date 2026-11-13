@@ -83,7 +83,7 @@ import { fileURLToPath } from 'node:url';
 // server-sent events and no WebSocket, so stage 3 streams a POST's response.
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import { existsSync, readFileSync, realpathSync, statSync, watch } from 'node:fs';
+import { readFileSync, realpathSync, statSync, watch } from 'node:fs';
 import { messageScrubber, namedPaths, pathName, scrubbedMessages } from './tamber-paths.mjs';
 import { createServer } from 'node:http';
 import { basename, dirname, relative, resolve, sep } from 'node:path';
@@ -1443,7 +1443,7 @@ export async function forward(req, res, url, access, target) {
     // A body within the server's own limit, read here (its bytes) before it is sent on; over it, answered 413 first.
     const limit = req.method === 'POST' && url.pathname === '/__tamber' && req.headers['x-exact-tamber-token'] ? LOCAL_BODY_LIMIT : BODY_LIMIT;
     const bytes = await readBody(req, limit, res, true); // a GET's or a HEAD's too (none is sent on), whatever its content-length
-    if (bytes == null) { if (bytes === null && !res.destroyed) json(res, 413, { error: { message: 'a request is at most 1 MiB' } }); return true; } // (undefined: the client left)
+    if (bytes == null) { if (bytes === null && !res.destroyed) json(res, 413, { error: { message: `a request is at most ${limit === LOCAL_BODY_LIMIT ? 16 : 1} MiB` } }); return true; } // (undefined: the client left)
     if (bytes.length > BODY_LIMIT && (url.pathname !== '/__tamber' || parse(bytes.toString('utf8'))?.method !== 'import')) { res.setHeader('connection', 'close'); json(res, 413, { error: { message: 'a request is at most 1 MiB' } }); return true; }
     const answer = await upstream(`${target}${url.pathname}${url.search}`, { method: req.method, headers, redirect: 'error', signal: gone.signal, ...(req.method === 'GET' || req.method === 'HEAD' ? {} : { body: bytes }) });
     res.writeHead(answer.status, { 'content-type': answer.headers.get('content-type') ?? 'application/json', 'cache-control': 'no-store' });

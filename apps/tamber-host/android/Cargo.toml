@@ -2,7 +2,7 @@
 # the runner, the kernel, the data crate, the baked plan (written by build.rs,
 # never committed) and the host's JNI, which the reader (host/android) loads as
 # libexactcanvas.so. Off Android the library is empty: the Canvas host is
-# Android's (`exact_linux::canvas`).
+# Android's (`exact_painted::canvas`).
 [package]
 name = "tamber-host-android"
 version.workspace = true
@@ -19,7 +19,7 @@ bench = false
 
 [target.'cfg(target_os = "android")'.dependencies]
 tamber-host-data = { path = "../data" }
-exact-linux = { path = "../../../host/linux" }
+exact-painted = { path = "../../../host/painted" }
 
 [build-dependencies]
 tamber-host-data = { path = "../data" }

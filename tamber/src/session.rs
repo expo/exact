@@ -73,8 +73,9 @@ pub struct Synthetic<'a> {
     /// must fold (the build refuses it otherwise), where another that does
     /// not is dropped.
     pub exprs: &'a [(String, bool)],
-    /// Which of its tokens the app's plan keeps (D7), as the compiler last
-    /// found; none: every token, as an app with bindings keeps.
+    /// The compiler's view retention and native-param roots (D7), closed
+    /// over each design by `plan`; none: every token, as an app with
+    /// bindings keeps.
     pub retention: Option<&'a Retention>,
     /// The app's components' params (D15), which fold with the design file:
     /// each a token, its `params` line in place of its default.
@@ -107,8 +108,12 @@ pub struct Retention {
     /// A length or number row's value is computed and may be a string
     /// somewhere: any length or number token may be named.
     pub computed_measure: bool,
-    /// Every word the views' literals write, any of which may name a token.
+    /// Every word the views' literals write, plus native-param references
+    /// after [`Self::retain_native_params`], any of which may name a token.
     pub words: std::collections::BTreeSet<String>,
+    /// Params declared by designs: roots read outside Contract views. Their
+    /// closure is added to `words` by [`Self::retain_native_params`].
+    pub native_params: std::collections::BTreeSet<String>,
     /// Every word a colour keyframe writes: a token (or a role's override)
     /// one names is folded into the plan's `@keyframes`, so its value is
     /// structure, and an edit of it rebuilds.
@@ -116,8 +121,54 @@ pub struct Retention {
 }
 
 impl Retention {
-    /// Whether the plan keeps `design`'s token `name` of `kind`, which
-    /// overrides `role` if it does: every role override; what the views may
+    /// Add the native params' closure over `design` to `words`, returning
+    /// its names for icon retention. Cache the roots and view analysis;
+    /// close a fresh copy against each design being built or proposed.
+    pub fn retain_native_params(
+        &mut self,
+        design: &crate::Design,
+    ) -> std::collections::BTreeSet<String> {
+        let mut roots = std::collections::BTreeSet::new();
+        if self.native_params.is_empty() {
+            return roots;
+        }
+        let mut kept: Vec<String> = self.native_params.iter().cloned().collect();
+        // Index once and expand each folded spelling once, even when many
+        // spellings reach the same role (LLP 1121 stage 12 B1).
+        let mut by_lower: std::collections::HashMap<String, Vec<&crate::Token>> =
+            std::collections::HashMap::new();
+        for t in design.tokens.iter().chain(&design.icons) {
+            by_lower
+                .entry(t.name.value.to_ascii_lowercase())
+                .or_default()
+                .push(t);
+        }
+        let mut expanded = std::collections::HashSet::new();
+        while let Some(name) = kept.pop() {
+            if !roots.insert(name.clone()) {
+                continue;
+            }
+            self.words.insert(name.clone());
+            let lower = name.to_ascii_lowercase();
+            if !expanded.insert(lower.clone()) {
+                continue;
+            }
+            for t in by_lower.get(&lower).into_iter().flatten() {
+                let read =
+                    std::iter::once(&t.value.value).chain(t.whens.iter().map(|w| &w.value.value));
+                kept.extend(read.flat_map(|v| {
+                    v.split(|c: char| !(c.is_ascii_alphanumeric() || "-_.".contains(c)))
+                        .filter(|w| !w.is_empty())
+                        .map(str::to_string)
+                }));
+            }
+        }
+        roots
+    }
+
+    /// After [`Self::retain_native_params`], whether the plan keeps
+    /// `design`'s token `name` of `kind`, overriding `role` if it does:
+    /// every role override; what the views may
     /// name (any of a kind a computed row of theirs reads); and in an app
     /// that can name a token outside its views, every token, or those
     /// `exports` lists.
@@ -411,6 +462,12 @@ fn changed_tokens(before: Option<&Folding>, after: Option<&Folding>) -> Vec<Stri
 /// the web draws in the accent, and any value the structure carries whole
 /// (one naming a custom property); not another value.
 fn shape(f: &Folding, retention: Option<&Retention>, vocab: &Vocab) -> String {
+    let retention = retention.map(|r| {
+        let mut current = r.clone();
+        current.retain_native_params(&f.design);
+        current
+    });
+    let retention = retention.as_ref();
     let mut s = String::new();
     // An icon's sources are the plan's table and the asset set (D10).
     for i in &f.icons {

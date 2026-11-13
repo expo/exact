@@ -34,7 +34,7 @@ fn boot() -> Host<NoData> {
 /// border box after.
 fn drag(host: &mut Host<NoData>, id: &str, size: [Option<f32>; 2]) -> (f32, f32) {
     let view = view(host, id);
-    let batch = host.set_claims(&[], &[], &[], &[], &[], &[(view, Restyle::Size(size))]);
+    let batch = host.set_claims(&[], &[], &[], &[], &[], &[(view, Restyle::Size(size))], &[]);
     let batch: serde_json::Value = serde_json::from_str(&batch).unwrap();
     assert!(batch["error"].is_null(), "{id}: {batch}");
     let frame = host.runner().kernel().node(view).unwrap().frame;

@@ -3,6 +3,7 @@
   "name": "@exact/maps",
   "version": "1.0.0",
   "substitute": "implementation",
+  "agent": { "tiles": "string" },
   "shapes": {
     "MapMarker": {
       "id": "string",

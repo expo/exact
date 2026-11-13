@@ -227,7 +227,11 @@ impl DataSource for Module {
     }
 
     fn activate(&mut self) -> Result<(), DataError> {
-        self.load().map_err(DataError::Unavailable)
+        if self.reached {
+            self.load().map_err(DataError::Unavailable)
+        } else {
+            Ok(())
+        }
     }
 
     fn activate_for_validation(&mut self) -> Result<(), DataError> {
@@ -247,6 +251,7 @@ impl DataSource for Module {
                 module.directories = self.directories.clone();
                 module.host.secrets = self.host.secrets.replacement();
                 module.document_owner = self.document_owner;
+                module.preloads = self.preloads;
                 module.native_factory = self.native_factory;
                 // It keeps the placement (`Placed::replacement`), not `placed`'s word.
                 module.keeps_plan = self.keeps_plan;
@@ -257,6 +262,10 @@ impl DataSource for Module {
 
     fn app_id(&self) -> &str {
         &self.app_id
+    }
+
+    fn preloads(&self) -> &[exact_runner::request::Preload] {
+        self.preloads
     }
 
     fn grants(&self) -> &str {
@@ -316,10 +325,10 @@ impl DataSource for Module {
         Some(self.native_slot.clone())
     }
 
-    /// Not before the host loads it (LLP 1027 D4): the runner boots
-    /// store-reading resources from their kept answers meanwhile.
+    /// An entry reaching this module waits for its load (LLP 1027 D4),
+    /// using kept answers for store-reading resources meanwhile.
     fn ready(&self) -> bool {
-        self.is_loaded()
+        !self.reached || self.is_loaded()
     }
 
     fn canvas_surfaces(&self) -> Vec<(String, usize)> {
@@ -357,6 +366,16 @@ impl DataSource for Module {
 
     /// The seam's signatures, from the plan's `sources` table (LLP 1027 D2).
     fn bind(&mut self, plan: &Plan) {
+        self.reached = plan.sources.iter().any(|row| {
+            let name = plan.str(row.name);
+            !exact_plan::runner_owned_source(name)
+                && plan.module_named(name).is_none()
+                && plan.fetch_named(name).is_none()
+        }) || plan.surfaces.iter().any(|row| {
+            self.canvas_surfaces
+                .iter()
+                .any(|(name, _)| name == plan.str(row.name))
+        });
         if self.keeps_plan {
             self.plan = Some(plan.clone());
         }
@@ -464,9 +483,9 @@ impl DataSource for Module {
         source: &str,
         args: &[Value],
     ) -> Result<Answer, DataError> {
-        // A resource whose answer the bake's storage refusal ended (an
-        // uncaught `code: 'bake'`) is the device's to answer: that is
-        // `DeferredAtBake` (aab190948), and the runner shows its placeholder.
+        // An uncaught storage or stream-option refusal marked `code: 'bake'`
+        // is the device's to answer: that is `DeferredAtBake` (aab190948),
+        // and the runner shows its placeholder.
         // At bake, an error the source raises itself stays fatal, even after a
         // refusal it caught (kanban2 #5).
         let answer = self.begin(Some(store), Some(target), source, args);

@@ -162,6 +162,40 @@ pub enum Mode {
     Inline,
 }
 
+/// How a command line starts the host (LLP 1101.003 D3, D6).
+pub(crate) struct Start {
+    /// The person's place and wall clock (interactive and print mode), not
+    /// the agent's fixed ones (a headless drive).
+    pub person: bool,
+    /// The directory a relative `image` source is read beneath.
+    pub assets: Option<std::path::PathBuf>,
+    /// The launch location.
+    pub location: String,
+    /// The `update` media feature: `none` in print mode.
+    pub update: exact_runner::Update,
+}
+
+impl Default for Start {
+    fn default() -> Start {
+        Start {
+            person: false,
+            assets: None,
+            location: "/".into(),
+            update: exact_runner::Update::Fast,
+        }
+    }
+}
+
+/// What one step of the loop did: whether it committed, and the runner's
+/// refusal if one stopped it (LLP 1101.003 D2, D8).
+#[derive(Debug, Default)]
+pub struct Pass {
+    /// Something committed, so the frame changed.
+    pub committed: bool,
+    /// The runner refused an announcement, a timer or an action.
+    pub error: Option<RunnerError>,
+}
+
 /// One runner, one grid.
 pub struct Host<D: DataSource> {
     idle_timer_retry: bool,
@@ -229,7 +263,7 @@ impl<D: DataSource> Host<D> {
         cols: usize,
         rows: usize,
     ) -> Result<Host<D>, String> {
-        Self::boot_with_clock(plan, data, mode, cols, rows, false)
+        Self::boot_with_clock(plan, data, mode, cols, rows, Start::default())
     }
 
     pub(crate) fn boot_with_clock(
@@ -238,7 +272,7 @@ impl<D: DataSource> Host<D> {
         mode: Mode,
         cols: usize,
         rows: usize,
-        interactive: bool,
+        start: Start,
     ) -> Result<Host<D>, String> {
         exact_kernel::style::link_segments();
         exact_kernel::timeline::link();
@@ -266,10 +300,12 @@ impl<D: DataSource> Host<D> {
             ..kernel.env().clone()
         };
         kernel.set_env(env).map_err(|e| format!("{e:?}"))?;
-        let viewport = Viewport::sized(cols as f64 * COLUMN as f64, rows as f64 * ROW as f64);
-        let (launch, notes) = crate::zone::launch(interactive, |key| std::env::var(key).ok())?;
+        let mut viewport = Viewport::sized(cols as f64 * COLUMN as f64, rows as f64 * ROW as f64);
+        viewport.preferences.update = start.update;
+        let (launch, notes) = crate::zone::launch(start.person, |key| std::env::var(key).ok())?;
+        let location = start.location.as_str();
         let mut runner = exact_runner::time::launching_with(launch, ||
-            Runner::boot(plan, data, kernel, viewport, "/")).map_err(|e| match e {
+            Runner::boot(plan, data, kernel, viewport, location)).map_err(|e| match e {
                 // The data module answered another declaration than the
                 // screen's: most often a binary older than the shapes.
                 RunnerError::Shape { resource, why } => format!(
@@ -302,7 +338,7 @@ impl<D: DataSource> Host<D> {
             generation: 0,
             quit: false,
             prevented: false,
-            images: crate::image::Images::default(),
+            images: crate::image::Images::new(start.assets),
             presented: crate::pointer::Presented::default(),
             requests: crate::requests::Requests::default(),
             outbound: Vec::new(),
@@ -336,19 +372,26 @@ impl<D: DataSource> Host<D> {
     /// thread (LLP 1016.002): the loop then calls [`Host::announced`].
     pub fn listen(&mut self, waker: Arc<dyn Fn() + Send + Sync>) {
         self.requests.listen(waker.clone());
+        self.images.listen(waker.clone());
         self.runner.listen(waker);
     }
 
     /// Apply what the data module announced: the watching resources are
     /// asked again.
-    pub fn announced(&mut self) {
+    pub fn announced(&mut self) -> Pass {
+        let pictures = self.land_images();
         let landed = self.land_requests();
-        let (receipts, _) = self.runner.apply_announced();
-        if landed || !receipts.is_empty() {
+        let (receipts, error) = self.runner.apply_announced();
+        let committed = landed || !receipts.is_empty();
+        if committed {
             self.after_commit();
         } else {
             // (what a landing asked with no commit, a background round's next request, still goes out)
             self.run_requests();
+        }
+        Pass {
+            committed: committed || pictures,
+            error,
         }
     }
 
@@ -387,6 +430,7 @@ impl<D: DataSource> Host<D> {
         self.after_commit_inner();
         self.collections.settling = settling;
         self.settle_collections();
+        self.deliver_image_events();
         if !settling {
             let live = self.runner.kernel().live_count().max(64);
             if live <= self.trim_at / 2 {
@@ -551,7 +595,6 @@ impl<D: DataSource> Host<D> {
             layers: self.layers.iter().map(|(id, ..)| *id).collect(),
             images: &self.images,
             center: self.mode == Mode::Fullscreen,
-            env: self.runner.kernel().env(),
             // A disabled or inert box is still hit, and swallows the press
             // (`handler`), so nothing beneath it takes it either.
             presses: Box::new(|id| self.runner.handlers_of(id).contains(&EventKind::Press)),
@@ -688,18 +731,24 @@ impl<D: DataSource> Host<D> {
         self.tick(now);
     }
 
-    /// Advance the app's clock: timers fire.
-    pub fn tick(&mut self, now_ms: f64) {
+    /// Advance the app's clock: timers fire. A refusal stops it.
+    pub fn tick(&mut self, now_ms: f64) -> Pass {
         let kinds = exact_runner::WaitKinds::FRAME
             .union(exact_runner::WaitKinds::UPDATE)
             .union(exact_runner::WaitKinds::SCROLLEND);
+        let mut pass = Pass::default();
         loop {
             let batch = self.runner.release_waits(kinds, now_ms);
             if !batch.advanced.receipts.is_empty() {
                 self.after_commit();
+                pass.committed = true;
+            }
+            if let Some(error) = batch.advanced.error {
+                pass.error = Some(error);
+                return pass;
             }
             if !batch.continuing {
-                break;
+                return pass;
             }
         }
     }
@@ -949,7 +998,6 @@ impl<D: DataSource> Host<D> {
     /// least move that shows it (`nearest`).
     pub(crate) fn reveal_to(&mut self, id: ViewId, block: &str) {
         let kernel = self.runner.kernel();
-        let env = kernel.env();
         let Some(target) = kernel.node(id).map(|n| n.frame) else {
             return;
         };
@@ -964,7 +1012,7 @@ impl<D: DataSource> Host<D> {
         while let Some(p) = at {
             let Some(n) = kernel.node(p) else { break };
             if Self::is_scroller(&n) {
-                let [bt, _, bb, _] = n.style.border_widths_in(&env);
+                let [bt, _, bb, _] = n.style.border_widths_in(&kernel.env_of(n.id));
                 let top = n.frame.y + bt;
                 let height = n.frame.height - bt - bb;
                 let reach = (n.content.1 - height).max(0.0);
@@ -995,7 +1043,6 @@ impl<D: DataSource> Host<D> {
     /// Keep a `scrollFollowEnd` scroller at its end while it was there.
     fn follow_ends(&mut self) {
         let kernel = self.runner.kernel();
-        let env = kernel.env();
         let mut stack: Vec<ViewId> = self.runner.roots();
         let mut ends = Vec::new();
         while let Some(id) = stack.pop() {
@@ -1004,7 +1051,7 @@ impl<D: DataSource> Host<D> {
                 && n.props.bool(PropId::ScrollFollowEnd) == Some(true)
                 && n.props.bool(PropId::Virtualized) != Some(true)
             {
-                let [bt, _, bb, _] = n.style.border_widths_in(&env);
+                let [bt, _, bb, _] = n.style.border_widths_in(&kernel.env_of(n.id));
                 let reach = (n.content.1 - (n.frame.height - bt - bb)).max(0.0);
                 ends.push((id, reach));
             }
@@ -1027,7 +1074,7 @@ impl<D: DataSource> Host<D> {
         self.press_with(id, true);
     }
 
-    /// Follow a link as Exact's hosts do (LLP 1038 §7, `host/linux`'s
+    /// Follow a link as Exact's hosts do (LLP 1038 §7, `host/painted`'s
     /// `presenter/links.rs`): a path naming one of the app's routes is a
     /// `navigate` on its navigation root; an `http`, `https`, `mailto` or
     /// `tel` URL leaves the app; anything else goes nowhere.

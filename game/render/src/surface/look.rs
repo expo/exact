@@ -34,7 +34,8 @@ pub(super) struct Look<const ASSETS: bool> {
     /// Tell lines the next `logs` reply carries. They stay out of the world's
     /// journal, which a save carries: presentation never enters a save.
     unread: Vec<String>,
-    /// The canvas's size in points: its last frame's, or the last request that said it.
+    /// The canvas's size in points: its last frame's, the host's `size`, or
+    /// the last request that said it.
     pub(super) points: (f32, f32),
     /// The last live frame: a look frame draws it held.
     pub(super) held: Option<Frame>,

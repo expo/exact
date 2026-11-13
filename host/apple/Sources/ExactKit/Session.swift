@@ -176,7 +176,11 @@ public final class ExactApp {
     /// Creates platform views: on iOS call from the application/scene/controller
     /// lifecycle, not top-level code before UIApplicationMain (LLP 1012's timing reduction).
     public func makeSession(delegate: ExactSessionDelegate? = nil, label: String = "") -> ExactSession {
-        let s = ExactSession(app: self, label: label.isEmpty ? "session-\(sessionRefs.count + 1)" : label)
+        // An unnamed session takes the first `session-N` no live session has: the same at each launch that makes
+        // its sessions in the same order, which a package keys what it keeps by (`ExactPackageContext.label`).
+        let live = Set(sessionRefs.compactMap { $0.session?.label })
+        let named = label.isEmpty ? (1...).lazy.map { "session-\($0)" }.first { !live.contains($0) }! : label
+        let s = ExactSession(app: self, label: named)
         s.delegate = delegate; PushRegistration.listen() // before its packages can register
         sessionRefs.append(WeakSession(s))
         sessionRefs.removeAll { $0.session == nil }
@@ -303,7 +307,7 @@ public final class ExactApp {
 
 }
 
-private struct WeakSession {
+struct WeakSession {
     weak var session: ExactSession?
     init(_ s: ExactSession) { session = s }
 }
@@ -400,7 +404,7 @@ public final class ExactSession {
     /// The view presenting this session, while one is mounted (D1).
     weak package var view: ExactView? { didSet { if view !== oldValue { natives.sessionViewChanged() } } }
     #if os(iOS) || os(tvOS)
-    private var systemDark = false
+    var systemDark = false
     var launchViewport: (plan: Data?, cover: Bool)?
     #endif
     /// This session's agent, once a carrier asked for it (`Agent.swift`).
@@ -410,6 +414,7 @@ public final class ExactSession {
     public internal(set) var firstLayoutMs: Double?
     /// The first batch and its numbers, once booted (the smoke prints them).
     public private(set) var booted = false
+    var atomIconRemeasurePending = false
     public private(set) var bootError: String?
     public private(set) var bootMs = 0.0
     public private(set) var rustMs = 0.0
@@ -418,6 +423,8 @@ public final class ExactSession {
     public private(set) var applyParts: [String: Double] = [:]
     /// Commands from the batch being applied, delivered after it (D2).
     private var pendingCommands: [(String, [Any], UInt32?)] = []
+    /// The ids the batch being applied asks `scrollIntoView` of (LLP 1070.000 §15: they win over the end-follow).
+    var pendingElementScrolls: [String] { pendingCommands.compactMap { $0.0 == "scrollIntoView" ? $0.1.first as? String : nil } }
     private(set) var applying = false
     // @ref LLP 1072 §3 — a collection slice built on the owner thread. While
     // one is in flight, work that would wait behind it on the owner (a
@@ -461,7 +468,7 @@ public final class ExactSession {
     var ownerInFlight: Bool { fillInFlight || tickInFlight || advanceInFlight || canvasInFlight || noticesInFlight > 0 || repliesInFlight > 0 }
     /// Whether this generation's plan reads `onLine`, learned by a synchronous `tellPage`.
     var readsOnLineKnown: (generation: Int, value: Bool)?
-    private var canvasOwed = false
+    private(set) var canvasOwed = false
     private var canvasAsked = false
     private(set) var landing = false
     /// Landing slices ahead of a batch already made: their appearance
@@ -484,7 +491,7 @@ public final class ExactSession {
     weak package var transformInputHold: DragInput?
     func trackInputHold(_ hold: SwipeHold) { inputHolds.add(hold) }
     func retireInputHold(_ hold: SwipeHold) { inputHolds.remove(hold) }
-    private var pendingSurfaceRecords: [(String, String?)] = []
+    var pendingSurfaceRecords: [(String, String?, Bool)] = []
     private var pendingSurfaceWork: [([String: Any], Int)] = []
     /// Authentication sessions this session opened (`Auth.swift`, LLP 1069.006).
     let authSessions = AuthSessions()
@@ -515,7 +522,7 @@ public final class ExactSession {
         canvases = SurfacesLink.installed?.canvases() ?? NoCanvases()
         webviews = WebViews()
         frames = Frames()
-        presenter.session = self
+        presenter.session = self; RowReuse.adopt(self)
         canvases.session = self
         webviews.session = self
         natives.session = self
@@ -653,8 +660,9 @@ public final class ExactSession {
         guard !landing else { return }
         landing = true
         // A reply the slices released (`afterFill`) may have left a deadline
-        // due: it advances once they have landed, unless a batch waits on them
-        defer { landing = false; workEnded(); if !holdingReports { advanceIfDue() } }
+        // due: it advances once they have landed, unless a batch waits on them.
+        // Sizes measured as they applied are reported as it ends, whether its last batch applied or was skipped (`reportMeasured`).
+        defer { landing = false; if !applying { reportMeasured() }; workEnded(); if !holdingReports { advanceIfDue() } }
         while true {
             published.lock()
             let next = publishedQueue.isEmpty ? nil : publishedQueue.removeFirst()
@@ -676,14 +684,18 @@ public final class ExactSession {
                 if case .fill(let view) = next.kind { landedFill(view, stale: true) }
                 continue
             }
+            frameHealth.expireCapture(at: began)
             var batch = next.batch
             if batch.frameWorkTiming != nil { batch.frameWorkTiming?.landed = began }
             if case .advance = next.kind { applyUnlessEmpty(batch) } else if !(changesNothing(batch) && clockUnchanged(batch)) {
                 apply(batch)
             }
+            #if DEBUG
+            onLandForTests?(next.kind, batch)
+            #endif
             // A frame's owner work finishes when it lands, applied or skipped (LLP 1079.000 §4.6), and the card's charts show it
             if case .tick = next.kind { frameHealth.landed(FrameHealth.tick) } else if case .advance = next.kind { frameHealth.landed(FrameHealth.advance) }
-            frameHealth.chart?.present()
+            frameHealth.chart?.present(); frameHealth.maintain()
             if case .reply = next.kind {
                 sampler?.replyPump(main: submitted + (CACurrentMediaTime() - began) * 1000)
                 retryActivation(generation: next.generation)
@@ -808,7 +820,10 @@ public final class ExactSession {
         presenter.onScroll = { [unowned self] id, metrics in applyUnlessEmpty(runtime.scroll(id, metrics: metrics, now: now()), scrolled: true) }
         presenter.onScrollend = { [unowned self] id in applyUnlessEmpty(runtime.scrollend(id, now: now())) }
         presenter.onScrollDrag = { [unowned self] id, end in applyUnlessEmpty(end.map { runtime.scrolldragend(id, velocity: $0.velocity, target: $0.target, now: now()) } ?? runtime.scrolldragstart(id, now: now())) }
-        presenter.onScrolled = { [unowned self] id, left, top in runtime.scrolled(id, left: left, top: top) }
+        presenter.onScrolled = { [unowned self] id, left, top in
+            runtime.scrolled(id, left: left, top: top)
+            timelineScrolled(id, left: left, top: top)
+        }
         #if canImport(AppKit)
         presenter.onListIndex = { [unowned self] id, key in runtime.listIndex(id, key: key) }
         presenter.onListText = { [unowned self] id, first, last in runtime.listText(id, first: first, last: last) }
@@ -885,7 +900,7 @@ public final class ExactSession {
             sampler?.reset(); frameHealth.reset() // a new runner numbers its transactions afresh (LLP 1079 D3)
             // A fresh boot over a running app (the dev menu's reload from the baked plan) starts the views over; the library already replaced its host.
             routerOp = nil
-            generation += 1
+            generation += 1; replaceBackgroundActions()
             if booted { awaitingTree = true; resetHeld(); viewsEpoch += 1; forgetAppearances(); presenter.launchAutofocusReleased = false } // a fresh boot's autofocus waits again
             booted = true; app.liveBooted(self)
             text.commitFonts()
@@ -983,7 +998,7 @@ public final class ExactSession {
         text = candidate.text
         text.commitFonts()
         updateToken = candidate.token
-        generation += 1
+        generation += 1; replaceBackgroundActions()
         return batch
     }
 
@@ -1026,22 +1041,6 @@ public final class ExactSession {
     /// @ref LLP 1038 D7/D11 — observation only; Swift never interprets slots.
     private(set) var routerOp: [String: Any]?
 
-    package func surfaceRecord(_ name: String, _ json: String?) {
-        guard state != .destroyed else { return }
-        if applying { pendingSurfaceRecords.append((name, json)); return }
-        apply(runtime.surfaceRecord(name, json))
-    }
-
-    /// A batch that changes nothing: it shows nothing new (`showsNothing`), has no error to log and moves no hold, the
-    /// wake lock (LLP 1125 D11) or word on work the app must finish (`Holds.swift`). Its timer deadline is the caller's to compare.
-    func changesNothing(_ batch: Batch) -> Bool { showsNothing(batch) && batch.error == nil && batch.wakelock == nil && batch.mustFinish == nil }
-    /// A batch that changes nothing the presenter shows: it leaves the screen as it is (no ops, control's
-    /// viewless contents, LLP 1069.011 §9, page facts or orientation lock), asks for no canvas image, and
-    /// leaves the motion, spatial, frame-task, canvas and owed-draw state as they stand.
-    func showsNothing(_ batch: Batch) -> Bool {
-        !batch.changesScreen && batch.canvasImages.isEmpty && batch.motion == frames.motion && batch.spatial == frames.spatial
-            && batch.canvasOwed == canvasOwed && batch.canvas == frames.canvas2d && batch.frames == frames.tasks
-    }
 
     /// A batch from a timer, a scroll event or a host's measurement: one that
     /// changes nothing only moves the clock. An app's timer that writes nothing
@@ -1075,9 +1074,17 @@ public final class ExactSession {
         advanceIfDue()
     }
 
-    /// The appearance reports a landing held back (`holdingReports`), asked
-    /// once the batch the owner made before them has applied or skipped.
+    /// The controls' measured sizes (#134), laid out before the frame shows, and after every batch made before that layout: a size is reported once.
+    /// The layout follows the owner's work already posted, which publishes each batch as it makes it. Outside an apply and a landing, its batch lands
+    /// those first (T4); inside either, or with a slice in flight (`whenIdle` would run it in that landing), it waits for them, and the landing reports.
+    func reportMeasured() {
+        guard !holdingReports, !(applying || landing || fillInFlight) || !(ownerInFlight || hasPublished()) else { return }
+        presenter.controls.reportMeasured()
+    }
+
+    /// The reports a landing holds back (`holdingReports`) until the batches made before them apply: the measured sizes, then the appearance's.
     private func drainReports() {
+        reportMeasured()
         if colorsOwed, !holdingReports, !awaitingTree { colorsOwed = false; apply(runtime.reportColors(tint: SystemColor.appTint.flatMap { SystemColor.tintPair($0) })) }
         while !holdingReports, !pendingViewDark.isEmpty {
             let (id, dark) = pendingViewDark.removeFirst()
@@ -1091,6 +1098,8 @@ public final class ExactSession {
     }
 
     #if DEBUG
+    var onLandForTests: ((Published, Batch) -> Void)?
+    var onApplyForTests: ((Batch) -> Void)?
     /// Tests: a tick's slice the owner published, not yet landed.
     func publishTickForTests(_ batch: Batch) { tickInFlight = true; publish(.tick, batch, generation) }
     func holdFillForTests() { fillInFlight = true }
@@ -1111,6 +1120,9 @@ public final class ExactSession {
             holdingReports = true; landFill(); holdingReports = false
             guard state != .destroyed else { return }
         }
+        #if DEBUG
+        onApplyForTests?(batch)
+        #endif
         let outermost = !applying
         // After the batch's own accounting below, which a later defer runs first
         defer { if outermost { advanceIfDue(); rasters.readmitPictures() } }
@@ -1118,7 +1130,7 @@ public final class ExactSession {
         // What applying it cost, with its transactions, for the next sampled frame (LLP 1079 D3), told to the sampler there was when it began while the session keeps it: a recording the batch starts makes a new one, and one it stops lets a production bake's go.
         let timed = sampler, began = CACurrentMediaTime()
         defer { if let timed, timed === sampler { timed.batch(batch.seq, ms: outermost ? (CACurrentMediaTime() - began) * 1000 : 0) }; if let q = batch.seq { natives.hatchClock.seq = q.1 }; logAlerts(batch.alerts); logJournal(batch.journal) }
-        defer { if outermost, frameHealth.enabled { frameHealth.applied(batch, began: began, flags: frameHealth.frameFlags(frames, session: self)) } }
+        defer { if outermost { recordFrameHealthApply(batch, began: began) } }
         if batch.facts { app.scheduleStatus() } // the app's own `setMode` or `setRootFontSize` (LLP 1122 D4)
         if let must = batch.mustFinish { finishHold.moved(must) }
         // Each batch says what its turn left owed; batches apply in the owner's order, so the last one applied is the runner's now.
@@ -1164,8 +1176,8 @@ public final class ExactSession {
         scheduleClock(due: batch.timerDueMs)
         if outermost {
             while !pendingSurfaceRecords.isEmpty {
-                let (name, json) = pendingSurfaceRecords.removeFirst()
-                apply(runtime.surfaceRecord(name, json))
+                let (name, json, performance) = pendingSurfaceRecords.removeFirst()
+                apply(performance ? runtime.canvasPerformanceRecord(name, json) : runtime.surfaceRecord(name, json))
             }
             drainReports()
             presenter.collections.flush()
@@ -1255,7 +1267,7 @@ public final class ExactSession {
                     app.deliver { [weak self] in self?.presenter.formatElement(args) }
                     continue
                 }
-                if ["playSound", "playSounds", "stopSounds", "sendMIDI", "requestMIDIAccess", "setRootFontSize"].contains(name) { continue } // the runner's own: its voice table's `sound` op plays them (LLP 1096 D8), its MIDI queue's `midi` op sends (LLP 1125 D7); the root font size is laid out already (LLP 1069.000 D3)
+                if ["playSound", "playSounds", "stopSounds", "setSounds", "sendMIDI", "requestMIDIAccess", "setRootFontSize"].contains(name) { continue } // the runner's own: its voice table's `sound` op plays them (LLP 1096 D8), its MIDI queue's `midi` op sends (LLP 1125 D7); the root font size is laid out already (LLP 1069.000 D3)
                 if app.handleCommand(name) { continue }
                 app.deliver { [weak self] in guard let self else { return }; delegate?.exactSession(self, command: name, args: args) }
             }
@@ -1305,19 +1317,6 @@ public final class ExactSession {
         _ = runtime.setPreferences(preferenceBits())
     }
     var displayModeOverride: UInt32?
-    func preferenceBits() -> UInt32 {
-        #if os(iOS) || os(tvOS)
-        // The scene owns system appearance; a window's app override does not.
-        if let scene = view?.window?.windowScene {
-            systemDark = scene.traitCollection.userInterfaceStyle == .dark
-        }
-        let dark = systemDark
-        #else
-        let dark = DisplayPreferences.systemDark
-        #endif
-        let bits = DisplayPreferences.bits(systemDark: dark, view: view)
-        return displayModeOverride.map { (bits & ~(7 << 11)) | ($0 << 11) } ?? bits
-    }
     public func resize(_ size: CGSize) { guard booted, state != .destroyed else { return }; apply(runtime.resize(width: size.width, height: size.height)) }
     public func insets(top: CGFloat, right: CGFloat, bottom: CGFloat, left: CGFloat) { guard booted, state != .destroyed else { return }; apply(runtime.insets(top: top, right: right, bottom: bottom, left: left)) }
     /// What changed of the view (`Runtime.ViewChange`); the window's size is what every viewport unit resolves against everywhere (LLP 1075.003 §9.11).
@@ -1384,7 +1383,7 @@ public final class ExactSession {
     }
     /// The appearance last reported for the session, and each node view found painting motion in another (a sheet's override, say), by id.
     private(set) var schemeDark: Bool?
-    private(set) var viewDark: [UInt32: Bool] = [:]
+    var viewDark: [UInt32: Bool] = [:]
     private var pendingViewDark: [(UInt32, Bool)] = []
     var colorsOwed = false
     fileprivate(set) var awaitingTree = false // committed to a new runner whose tree is not in: a report would reach the old views
@@ -1474,6 +1473,8 @@ public final class ExactSession {
         cancelAuthSessions()
         taskTimers.cancel(); clockTimer?.invalidate(); timerAdmissions.takeover()
         clockTimer = nil
+        // A live hatch frame ticket would keep the link on through `run(false)`.
+        natives.hatchClock.reset()
         frames.run(false)
         sampler?.stop(); releaseSampler()
         frameHealth.destroy()

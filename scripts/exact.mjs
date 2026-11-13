@@ -44,31 +44,31 @@ if (import.meta.main && process.argv[2] === 'status' && !process.argv.includes('
 }
 const { BINARYEN } = await import('../host/web/stages.mjs');
 const { freeSpace, ROOM_GB } = await import('./filesystem.mjs');
-/** The iOS SDK the iOS host compiles against (`UIArrangementViewController`, ArrangementIOS.swift). */
-const IOS_SDK = '27.1';
 import { basename, delimiter, dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { grantAdvice } from './grant-advice.mjs';
+import { installIn } from './package-manager.mjs';
 export { grantAdvice, grantLines } from './grant-advice.mjs';
 const { cargoEnvironment, appleExecutableName, HERMES_INSTALLER, hermesBundle, hermesTarget, pathFrom, resolveApp, WEB_TOOLCHAIN, webToolchainEnv } = await import('./app.mjs');
 const { applyPattern, createApp, createGame, patternList, wireSnapback } = await import('../game/new.mjs');
 const { gameDefaults, sdkFetch } = await import('../game/app/shells.mjs');
+const { HOST_SDKS, appleSdkName, developerDir, xcodeRefusal } = await import('../host/apple/devices.mjs');
 const { appleArtifacts, assertAppleIdentity } = await import('../host/apple/build.mjs');
 const { closeFilesystemReader } = await import('./filesystem.mjs');
 const { builtAppMatches, jsTargetBuild } = await import('../host/web/serve.mjs');
 const { signRelease } = await import('../host/apple/assets.mjs');
+const { appleCrossReport, CROSS_IOS_ROWS, hasCrossSdk, iosSimulatorTarget } = await import('../host/apple/sdk.mjs');
 const { chromium } = await import('./agent-launch.mjs');
-const { androidLockCommand, androidSdk, androidSdkPackages, androidSdkFix } = await import('./agent-android.mjs');
+const { androidLockCommand, androidSdk, androidSdkPackages, androidSdkFix, androidJavaEnv, androidJavaFix, androidToolchainEnv } = await import('./agent-android.mjs');
 const { hermesAndroidBundle } = await import('./hermes-android.mjs');
 const { guardFlags, helpText } = await import('./help.mjs');
-const { backendOrigin } = await import('../js/bake/src/typescript.mjs');
+const { backendOrigin, literalBackendOrigin } = await import('../js/bake/src/typescript.mjs');
 // Snapback's client (snapback4/) is optional: a checkout without it builds every app that does not mount it.
 const snapbackDevice = existsSync(new URL('../snapback4/web/device-build.mjs', import.meta.url)) ? await import('../snapback4/web/device-build.mjs') : null;
 const { generate: gameVocabulary } = await import('../game/vocab.mjs');
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const APPLICATIONS = resolve(homedir(), 'Applications');
-
 /** The app's assembled bundle in this repo — `host/apple/build.mjs --bundle`'s one stable output. */
 export const bundleOf = (app) => appleArtifacts(app).bundle;
 /** The executable inside a bundle: what a terminal launches to keep stdio. */
@@ -78,27 +78,25 @@ export const commandOf = (app) => app.manifest.app?.command ?? app.name;
 /** Where `install` puts the app. */
 export const installedAt = (app) => resolve(APPLICATIONS, `${appleExecutableName(app)}.app`);
 
-/** The targets a Mac cross-compiles its Apple destinations for, each needing the pinned toolchain's Rust std and, for
- * TypeScript, a Hermes bundle; each is needed only for its destination (and only with Xcode). */
+/** The targets this host cross-compiles its Apple destinations for, each needing the pinned toolchain's Rust std and, for
+ * TypeScript, a Hermes bundle, and only for its destination: on a Mac with Xcode; on Linux with the cross SDK (an ARM simulator). */
 export function appleCrossTargets(os = process.platform, cpu = process.arch) {
-  if (os !== 'darwin') return [];
+  if (!['darwin', 'linux'].includes(os)) return [];
   return [
-    { target: cpu === 'x64' ? 'x86_64-apple-ios' : 'aarch64-apple-ios-sim', destination: 'iOS Simulator' },
+    { target: os === 'linux' ? iosSimulatorTarget(process.env.EXACT_IOS_SIM_ARCH ?? 'arm64').target : cpu === 'x64' ? 'x86_64-apple-ios' : 'aarch64-apple-ios-sim', destination: 'iOS Simulator' },
     { target: 'aarch64-apple-ios', destination: 'iOS device' },
-    { target: 'aarch64-apple-tvos-sim', destination: 'tvOS Simulator' },
+    ...(os === 'darwin' ? [{ target: 'aarch64-apple-tvos-sim', destination: 'tvOS Simulator' }] : []),
   ];
 }
-
 /** The cross targets `setup` installs: the simulators', and the iOS device's wherever a device build can run (Xcode
  * with the iphoneos SDK), so a first device build finds them without a second command. */
 export const appleSetupTargets = (os = process.platform, cpu = process.arch, device = iphoneosSdk(os)) =>
   appleCrossTargets(os, cpu).map(entry => entry.target).filter(target => device || target !== 'aarch64-apple-ios');
-
 /** Whether Xcode's iphoneos SDK is here: an iOS device build can run. The
  * Xcode the Apple build selects (host/apple/devices.mjs `useXcode`: Xcode.app
  * when xcode-select names the Command Line Tools) is the one asked. */
 function iphoneosSdk(os = process.platform) {
-  if (os !== 'darwin') return false;
+  if (os !== 'darwin') return os === 'linux' && hasCrossSdk('iphoneos');
   const selected = spawnSync('xcode-select', ['-p'], {encoding: 'utf8'}).stdout?.trim() ?? '';
   const xcode = '/Applications/Xcode.app/Contents/Developer';
   const env = !process.env.DEVELOPER_DIR && selected.includes('CommandLineTools') && existsSync(xcode) ? {...process.env, DEVELOPER_DIR: xcode} : process.env;
@@ -112,7 +110,6 @@ const hermesInstallerArguments = (check, targets = []) => [
   'run', '--locked', ...(check ? ['--offline'] : []), '--manifest-path', HERMES_INSTALLER, '--',
   ...(check ? ['--check'] : []), ...targets.flatMap(target => ['--target', target]),
 ];
-
 /** Ask the vendored resolver itself whether the host bundle (and `targets`, each
  * validated against the host compiler) is installed and valid. */
 export function checkHermesBundles(env = process.env, execute = spawnSync, os = process.platform, cpu = process.arch, targets = []) {
@@ -125,7 +122,6 @@ export function checkHermesBundles(env = process.env, execute = spawnSync, os = 
   const install = ['cargo', ...hermesInstallerArguments(false, targets)].join(' ');
   return { ok: result.status === 0, message: message || `cargo exited ${result.status ?? 'without a status'}`, fix: install };
 }
-
 /** Probe replacements: `rustup which cargo` names the toolchain's cargo, which also refuses +toolchain. */
 export function cargoProxyFault(pin, env = process.env, execute = spawnSync, os = process.platform) {
   const args = [`+${pin}`, '--version'], options = { env, encoding: 'utf8' };
@@ -147,7 +143,6 @@ export function cargoProxyFault(pin, env = process.env, execute = spawnSync, os 
   }
   return `${fault}: no working rustup cargo proxy found (checked ${[...dirs].join(', ')}). Repair or install rustup's proxies, then put their directory first on PATH`;
 }
-
 /** The Android Hermes bundle a TypeScript app's library links: one `scripts/hermes-android.mjs` installed, which the
  * Android build prefers, else the pinned release's, as the vendored resolver validates it. */
 export function androidHermes(env = process.env, execute = spawnSync, local = hermesAndroidBundle()) {
@@ -155,7 +150,6 @@ export function androidHermes(env = process.env, execute = spawnSync, local = he
   const pinned = checkHermesBundles(env, execute, process.platform, process.arch, ['aarch64-linux-android']);
   return { ok: pinned.ok, have: pinned.ok ? 'verified by hermes-lean-sys' : 'not installed or invalid', fix: pinned.fix };
 }
-
 /** Where a shim goes: `EXACT_BIN_DIR`, else the first of these already on PATH, else `~/.local/bin` (made, and named in the advice). */
 export function binDirectory() {
   if (process.env.EXACT_BIN_DIR) return resolve(process.env.EXACT_BIN_DIR);
@@ -166,12 +160,10 @@ export function binDirectory() {
 
 const writable = (dir) => { try { accessSync(dir, constants.W_OK); return true; } catch { return false; } };
 const onPath = (dir) => (process.env.PATH ?? '').split(':').some((p) => p && resolve(p) === dir);
-
 /** Cheap assertion on the executable's baked identity, shared with the driver. */
 function refuseForeignBundle(app, bundle) {
   assertAppleIdentity(app, executableIn(bundle, app));
 }
-
 /** Build the app's macOS bundle. Cargo and SwiftPM decide what is stale; this always asks them. */
 function build(app, { quiet = false, distribution = false, identity = null } = {}) {
   const r = spawnSync(process.execPath, [resolve(ROOT, 'host/apple/build.mjs'), app.crate('apple'), '--bundle', ...(distribution ? ['--distribution'] : [])], {
@@ -186,7 +178,6 @@ function build(app, { quiet = false, distribution = false, identity = null } = {
   refuseForeignBundle(app, bundle);
   return bundle;
 }
-
 /** The dev loop's plan, when the one on disk is *this* app's.
  *
  * `host/web/dev.mjs` writes every rebuild to one shared `host/web/dist`, so
@@ -205,7 +196,6 @@ async function devPlan(app) {
   if (jsTargetBuild(dist)) return { path: null, why: `the dev server runs ${app.name} on the JS target; a native window live-reloads from the wasm loop (bun host/web/dev.mjs --app ${app.name} --wasm)` };
   return { path: plan, why: null };
 }
-
 /** `exact run` — the foreground app: its log is this terminal's, and ^C ends it. */
 async function run(app, files) {
   const bundle = build(app);
@@ -223,7 +213,6 @@ async function run(app, files) {
   for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => child.kill(signal));
   child.on('exit', (code, signal) => process.exit(signal ? 1 : code ?? 0));
 }
-
 /** `exact install` — the app where the OS looks for apps, and its name where a shell looks for names. */
 function install(app) {
   const bundle = build(app);
@@ -259,7 +248,6 @@ exec /usr/bin/open -a ${JSON.stringify(target)} ${'"$@"'}
   if (!onPath(dir)) console.log(`\n  ${dir} is not on your PATH. Add it:\n    echo 'export PATH="${dir}:$PATH"' >> ~/.zshrc && exec zsh`);
   else console.log(`\n  ${command} <file> opens it — in the copy already running, if there is one.`);
 }
-
 /** A tool this verb depends on, run to completion. A failure here is the
  *  end of the verb: half a signed bundle is worse than none. */
 function sh(cmd, args) {
@@ -267,7 +255,6 @@ function sh(cmd, args) {
   if (r.status !== 0) throw new Error(`${cmd} ${args[0]} failed (exit ${r.status ?? 'signal'})`);
   return r;
 }
-
 /** The identity a distributed build must be signed with.
  *
  * Not the same certificate a local build uses. "Apple Development" signs
@@ -279,7 +266,6 @@ function developerID() {
   const found = spawnSync('security', ['find-identity', '-v', '-p', 'codesigning'], { encoding: 'utf8' }).stdout ?? '';
   return /\b([0-9A-F]{40})\s+"Developer ID Application: /.exec(found)?.[1] ?? null;
 }
-
 /** `exact release` — the build a teammate can actually open.
  *
  * Three things separate this from `install`, and all three are required by
@@ -374,7 +360,6 @@ function release(app) {
   console.log(`  ${zip}`);
   if (assess.status !== 0) throw new Error('the artifacts were built but Gatekeeper refuses them; do not send these');
 }
-
 /** `exact uninstall` — both halves, and nothing else. */
 function uninstall(app) {
   const target = installedAt(app), shim = resolve(binDirectory(), commandOf(app));
@@ -384,7 +369,6 @@ function uninstall(app) {
     console.log(`removed ${path}`);
   }
 }
-
 /** `exact list` — every app in this repo, its command, and whether it is installed. */
 function list() {
   const apps = readdirSync(resolve(ROOT, 'apps')).filter((name) => existsSync(resolve(ROOT, 'apps', name, 'app.contract')));
@@ -394,7 +378,6 @@ function list() {
   console.log(line(['app', 'command', 'installed']));
   for (const row of rows) console.log(line(row));
 }
-
 /** Binaryen release archives append their tag; package-manager builds may omit it. */
 export function binaryenVersion(output) {
   return /^wasm-opt (version \d+)(?: \([^)]*\))?$/.exec(output.trim())?.[1] ?? output.trim();
@@ -407,9 +390,8 @@ export function binaryenArchive(version, os = process.platform, cpu = process.ar
   if (!platform || !arch) throw new Error(`no Binaryen setup for ${os}/${cpu}`);
   return `binaryen-${version}-${arch}-${platform}.tar.gz`;
 }
-
 /** Install the versions declared by the SDK, once per machine. */
-export function setup({check = false} = {}) {
+export async function setup({check = false, platform = null, device = false} = {}) {
   // Steps only a game needs (its SDK lock, the engine's rustdoc for `game vocab`): a failure is named, not fatal.
   const gameFailures = [];
   if (!check) { const room = freeSpace(homedir()); if (room && room.gb < ROOM_GB) console.warn(`exact setup: ${room.text}`); }
@@ -434,7 +416,7 @@ export function setup({check = false} = {}) {
     if (proxy) throw new Error(`${proxy}, then rerun exact setup`);
     // The nightly builds the web's wasm: with -Zbuild-std from rust-src for size, and without it (a --wasm dev build) from its own wasm32 std.
     // A game's web bake lints its logic on the same nightly, so it takes clippy too.
-    run('rustup', ['toolchain', 'install', WEB_TOOLCHAIN, '--profile', 'minimal', '--component', 'rust-src', '--component', 'clippy', '--target', 'wasm32-unknown-unknown']);
+    run('rustup', ['toolchain', 'install', WEB_TOOLCHAIN, '--profile', 'minimal', '--component', 'rust-src', '--component', 'llvm-tools', '--component', 'clippy', '--target', 'wasm32-unknown-unknown']);
     webToolchainEnv(process.env); // Fetch the nightly standard library's locked sources too.
     if (output('wasm-bindgen', ['--version']) !== `wasm-bindgen ${bindgen}`)
       run('cargo', [`+${pin.channel}`, 'install', 'wasm-bindgen-cli', '--version', bindgen, '--locked', '--force']);
@@ -494,7 +476,8 @@ export function setup({check = false} = {}) {
       catch (error) { gameFailures.push(`the engine rustdoc for game vocab did not build:\n${error.message.trim().split('\n').slice(-3).join('\n')}`); }
     }
   }
-  const report = sdkReport();
+  const rows = sdkReport(process.env, { only: platform, device });
+  const report = [...(platform ? (await platformReport(platform, rows, { device })).map(row => ({ ...row, required: true })) : rows), cratesRow()];
   printReport(report);
   const missing = report.filter(row => row.required && !row.ok);
   if (missing.length) throw new Error(`${missing.map(row => row.name).join(', ')} ${missing.length === 1 ? 'is' : 'are'} missing or differ; run exact setup (it installs what it can and names the rest)`);
@@ -505,7 +488,16 @@ export function setup({check = false} = {}) {
     ? `SDK tools ready, except for ${needed.join('; ')}. Build scripts select the pinned stable/nightly without changing rustup default.`
     : 'SDK tools ready. Build scripts select the pinned stable/nightly without changing rustup default.');
 }
-
+/** Whether Cargo's cache holds every source exact2's lock names. Its tools build `--locked --offline`, and offline
+ * Cargo resolves the whole lock, so a single missing crate stops the first of them (a clean CI worker's, with
+ * "no matching package named `wat` found"). Setup's own row, not `sdkReport`'s: a build fetches what is missing
+ * once, and a platform's first build must not be refused for it. `manifest` is the workspace's (a test's own). */
+export function cratesRow(env = process.env, manifest = resolve(ROOT, 'Cargo.toml')) {
+  const fetched = spawnSync('cargo', ['fetch', '--locked', '--offline', '--manifest-path', manifest], { cwd: ROOT, encoding: 'utf8', env: cargoEnvironment(env) });
+  const said = (fetched.stderr ?? '').split('\n').find(line => line.startsWith('error: '))?.slice(7);
+  return { name: 'Cargo crates', have: fetched.status === 0 ? 'in Cargo cache' : said ?? fetched.error?.message ?? 'not all fetched',
+    want: "exact2's Cargo.lock", ok: fetched.status === 0, fix: `cargo fetch --locked --manifest-path ${manifest} (exact setup does)`, required: true, need: null };
+}
 /** Every prerequisite at once (LLP 1086 D6): what is installed, what the SDK
  * pins, and, for what only some apps need, which ones. A row is `required`
  * when no app here builds without it. */
@@ -514,13 +506,13 @@ export function setup({check = false} = {}) {
  * iOS its target's Rust std. */
 export function platformRowNames(platform, { os = process.platform, cpu = process.arch, device = false } = {}) {
   const host = `Hermes bundle (${hermesTarget(os, cpu)})`, ios = device ? 'aarch64-apple-ios' : appleCrossTargets(os, cpu)[0]?.target;
-  const rows = platform === 'android' ? androidSdkPackages().map(p => p.name) : ({
+  const rows = platform === 'android' ? [...androidSdkPackages().map(p => p.name), 'Android NDK', 'Android JDK'] : ({
     web: ['Bun', 'node_modules', 'Chrome'],
-    ios: ['Xcode', 'iOS SDK', `Hermes bundle (${ios})`, `Rust ${ios}`],
+    ios: [...(os === 'linux' ? CROSS_IOS_ROWS : ['Xcode', 'iOS SDK']), `Hermes bundle (${ios})`, `Rust ${ios}`],
     macos: ['Xcode', host],
     linux: [host],
   }[platform] ?? []);
-  return ['rustup', 'Rust', ...rows];
+  return [...new Set(['rustup', 'Rust', 'Bun', 'node_modules', ...rows])];
 }
 /** The rows of `rows` a platform's build reads (`device`: an iOS build for a phone, whose Hermes bundle is the device's),
  * and for Android its Rust target, NDK and Hermes bundle (scripts/agent-android.mjs finds them, or says
@@ -538,15 +530,14 @@ export async function platformReport(platform, rows, { device = false } = {}) {
   if (platform !== 'android') return own;
   const android = /^aarch64-linux-android$/m.test(targets());
   own.push(row('Rust target aarch64-linux-android', android, android ? 'installed' : 'missing', 'aarch64-linux-android', `rustup target add aarch64-linux-android --toolchain ${pin}`));
-  try { (await import('./agent-android.mjs')).androidToolchainEnv(); own.push(row('Android NDK', true, 'found', 'an NDK', '')); }
-  catch (error) { own.push(row('Android NDK', false, 'missing', 'an NDK with the aarch64-linux-android toolchain', String(error.message ?? error))); }
   const bundle = androidHermes();
   own.push(row('Hermes bundle (aarch64-linux-android)', bundle.ok, bundle.have, 'the Android Hermes bundle a TypeScript app links', bundle.fix));
   return own;
 }
-
-/** Every row, or with `only` a platform's rows alone (`platformRowNames`), the others' checks skipped. */
-export function sdkReport(env = process.env, { only = null, device = false } = {}) {
+/** Every row, or with `only` a platform's rows alone (`platformRowNames`), the others' checks skipped. `device` and
+ * `tv` name the build's destination (a phone's or a simulator's SDK, an Apple TV's); `swift` false, a build that
+ * compiles no Swift host. */
+export function sdkReport(env = process.env, { only = null, device = false, tv = false, swift = true } = {}) {
   const wanted = only ? new Set(platformRowNames(only, { device })) : null;
   const want = (...names) => !wanted || names.some(name => wanted.has(name));
   const pin = Bun.TOML.parse(readFileSync(resolve(ROOT, 'rust-toolchain.toml'), 'utf8')).toolchain;
@@ -579,8 +570,8 @@ export function sdkReport(env = process.env, { only = null, device = false } = {
     const crates = sdkFetch({offline: true, env});
     rows.push(row('game SDK crates', crates.ok ? 'in Cargo cache' : (/no matching package named `[^`]+`/.exec(crates.message)?.[0] ?? 'not all fetched'), 'game/app/shells.lock', crates.ok, 'exact setup', 'games'));
   }
-  const bun = JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8')).packageManager.slice(4);
-  if (want('Bun')) rows.push(row('Bun', process.versions.bun, bun, process.versions.bun === bun, `use Bun ${bun} (README, Quick start)`));
+  const bun = JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8')).engines.bun;
+  if (want('Bun')) rows.push(row('Bun', process.versions.bun, bun, Bun.semver.satisfies(process.versions.bun, bun), `use Bun ${bun} (README, Quick start)`));
   if (want('wasm-bindgen')) {
     const bindgenHave = output('wasm-bindgen', ['--version']);
     rows.push(row('wasm-bindgen', bindgenHave, `wasm-bindgen ${bindgen}`, bindgenHave === `wasm-bindgen ${bindgen}`, 'exact setup'));
@@ -602,15 +593,24 @@ export function sdkReport(env = process.env, { only = null, device = false } = {
       `exact setup, or set CHROME to a browser (docs/testing.md, Browsers): ${missing.join('; ')}`));
   }
   if (process.platform === 'darwin' && want('Xcode')) {
-    const developer = output('xcode-select', ['-p']);
-    const xcode = /\.app\/Contents\/Developer$/.test(developer);
-    rows.push(row('Xcode', developer, 'Xcode.app', xcode, 'install Xcode, then sudo xcode-select -s /Applications/Xcode.app', 'macOS and iOS'));
+    // A whole report's Xcode row is the Mac's; iOS has its own row (LLP 1086 D6).
+    const platform = !only || only === 'macos' ? 'macos' : tv ? 'tvos' : 'ios';
+    const developer = developerDir(env), sdkName = appleSdkName(platform, device);
+    const inXcode = (cmd, args) => spawnSync(cmd, args, { cwd: ROOT, encoding: 'utf8', env: { ...env, DEVELOPER_DIR: developer } });
+    const built = inXcode('xcodebuild', ['-version']), version = built.status === 0 ? built.stdout.trim().split('\n')[0] : '';
+    const need = HOST_SDKS[platform], refused = !version
+      ? (built.stderr?.trim() || built.stdout?.trim() || built.error?.message || null)
+      : swift ? xcodeRefusal(sdkName, inXcode, developer) : null;
+    rows.push(row('Xcode', version ? `${version} (${developer})` : developer, swift ? `Xcode ${need} or later` : 'Xcode.app', !!version && !refused,
+      refused ?? `install Xcode${swift ? ` ${need} or later` : ''}, then sudo xcode-select -s /path/to/Xcode.app (or set DEVELOPER_DIR to its Contents/Developer)`, 'macOS and iOS'));
   }
-  // The iOS host compiles against the 27.1 SDK (UIArrangementViewController): an older one fails in Swift, naming a type.
   if (process.platform === 'darwin' && want('iOS SDK')) {
-    const sdk = output('xcrun', ['--sdk', 'iphonesimulator', '--show-sdk-version']);
-    rows.push(row('iOS SDK', sdk, `${IOS_SDK} or later`, !!sdk && Bun.semver.order(`${sdk}.0`.split('.').slice(0, 3).join('.'), `${IOS_SDK}.0`) >= 0,
-      `install Xcode ${IOS_SDK} or later and select it (sudo xcode-select -s /Applications/Xcode.app)`, 'iOS'));
+    const developer = developerDir(env), sdkName = appleSdkName(tv ? 'tvos' : 'ios', device);
+    const run = (cmd, args) => spawnSync(cmd, args, { encoding: 'utf8', env: { ...env, DEVELOPER_DIR: developer } });
+    const sdk = run('xcrun', ['--sdk', sdkName, '--show-sdk-version']).stdout?.trim();
+    const refused = swift ? xcodeRefusal(sdkName, run, developer) : null;
+    rows.push(row('iOS SDK', sdk, swift ? `${HOST_SDKS[tv ? 'tvos' : 'ios']} or later (${sdkName})` : sdkName,
+      !!sdk && !refused, refused ?? 'install Xcode and select it with DEVELOPER_DIR', tv ? 'tvOS' : 'iOS'));
   }
   // Rust build scripts compile C with PATH's clang while the Swift host goes through xcrun: another toolchain first on
   // PATH (Swiftly, a Homebrew LLVM) breaks an iOS build with errors that never name it. A warning: it may be meant.
@@ -619,7 +619,7 @@ export function sdkReport(env = process.env, { only = null, device = false } = {
       .filter(([, onPath, xcode]) => onPath && xcode && !['/usr/bin', dirname(xcode)].includes(dirname(realpathSync(onPath))));
     rows.push(row('clang and swift on PATH', other.length ? other.map(([tool, onPath]) => `${tool}: ${onPath}`).join(', ') : "Xcode's", "Xcode's (/usr/bin or xcrun --find)", !other.length,
       `put /usr/bin before ${[...new Set(other.map(([, onPath]) => dirname(onPath)))].join(' and ')} on PATH, or unset the toolchain manager's override`, 'iOS and macOS builds'));
-  }
+  } else if (process.platform === 'linux' && want(...CROSS_IOS_ROWS)) rows.push(...appleCrossReport(env));
   // Native builds and captures take tens of gigabytes; a full disk fails them midway (LLP 1156.000 D3).
   if (!only) { const room = freeSpace(homedir()); if (room) rows.push(row('Free disk', `${room.gb} GB`, `${ROOM_GB} GB for a cold native build`, room.gb >= ROOM_GB, room.text, 'native builds')); }
   const hostName = `Hermes bundle (${hermesTarget() ?? 'no host bundle'})`;
@@ -654,9 +654,14 @@ export function sdkReport(env = process.env, { only = null, device = false } = {
   }
   // Android, where its SDK is (LLP 1107), in the whole report: what `bun exact.mjs android` needs besides it
   // (`platformReport` checks the same for a first Android build).
+  if (only === 'android' || !only && existsSync(androidSdk(env))) {
+    const java = androidJavaEnv(env);
+    rows.push(row('Android JDK', java ? java.JAVA_HOME ?? 'java and javac on PATH' : '', 'JDK 17 or newer', !!java, java ? '' : androidJavaFix(env), 'Android'));
+    let ndk = '', fault = '';
+    try { ndk = androidToolchainEnv(env).ANDROID_NDK_HOME; } catch (error) { fault = error.message; }
+    rows.push(row('Android NDK', ndk, 'NDK with the aarch64 toolchain', !!ndk, fault, 'Android'));
+  }
   if (!only && existsSync(androidSdk(env))) {
-    const ndks = resolve(androidSdk(env), 'ndk'), ndk = env.ANDROID_NDK_HOME ?? (existsSync(ndks) ? readdirSync(ndks).filter(v => /^\d/.test(v)).sort((a, b) => a.localeCompare(b, undefined, {numeric: true})).at(-1) : '');
-    rows.push(row('Android NDK', ndk && basename(ndk), 'any (27.1 is tried)', !!ndk, 'the SDK manager: sdkmanager "ndk;27.1.12297006" (or set ANDROID_NDK_HOME)', 'Android'));
     const target = output('rustup', ['target', 'list', '--installed', '--toolchain', pin.channel]).split('\n').includes('aarch64-linux-android');
     rows.push(row('Rust aarch64-linux-android', target ? 'installed' : '', pin.channel, target, 'exact setup', 'Android'));
     const bundle = androidHermes(env);
@@ -664,7 +669,6 @@ export function sdkReport(env = process.env, { only = null, device = false } = {
   }
   return rows;
 }
-
 /** The install-once, digest-addressed Ibex bundle selected by hermes-lean-sys. */
 export function hermesSources(env = process.env) {
   const bundle = hermesBundle(hermesTarget(), env);
@@ -674,7 +678,6 @@ export function hermesSources(env = process.env) {
     fix: bundle.fix,
   };
 }
-
 /** The table, then one line per thing to do. */
 export function printReport(rows, {onlyMissing = false} = {}) {
   const shown = onlyMissing ? rows.filter(row => !row.ok) : rows;
@@ -683,7 +686,6 @@ export function printReport(rows, {onlyMissing = false} = {}) {
     console.log(`${mark} ${row.name}: ${row.have} (SDK ${row.want})${row.need ? ` — for ${row.need}` : ''}${row.ok ? '' : `\n          ${row.fix}`}`);
   }
 }
-
 /** `exact contract …` — this checkout's compiler, from anywhere (LLP 1086 D4).
  * Debug, as the guides use it; the pinned toolchain whatever rustup would pick
  * from the caller's directory; exact2's own target/, never an inherited one
@@ -697,7 +699,6 @@ function compilerCargo(verb, env = process.env) {
   return { pin, args: [`+${pin}`, verb, '-q', '--manifest-path', resolve(ROOT, 'Cargo.toml'), '-p', 'contract'], env: clean };
 }
 const COMPILER = resolve(ROOT, 'target/debug', process.platform === 'win32' ? 'contract.exe' : 'contract');
-
 /** `exact new` starts the compiler's build apart from this shell, so the builder's first `contract vocab` or
  * `contract build` does not wait the minute a cold one takes (a port's first lookup, 67 s). A fresh one is a no-op. */
 function prebuildCompiler() {
@@ -738,7 +739,6 @@ export function contract(args, env = process.env) {
   if (json) process.stdout.write(result.stdout ?? '');
   return result.status ?? 1;
 }
-
 /** `app.ts` against the plan just built, by the type check every host's build runs (the web JS
  * target's `--check`), so a TypeScript error surfaces at the build an author runs most, not at an
  * iOS build. Its report goes to stderr, or is returned as `report` when `capture` (`--json`). Supervised
@@ -753,13 +753,14 @@ export function checkTypes(dir, {capture = false, builder = resolve(ROOT, 'host/
     return {status: r.status ?? 1, report: `${r.stdout ?? ''}${r.stderr ?? ''}`};
   } finally { rmSync(out, { recursive: true, force: true }); }
 }
-
 /** The type check's report as `build --json` diagnostics: one per tsc `file(line,col): error TSn: message`
  * line, with the indented lines and notes after it; a report with none is one diagnostic on app.ts. */
 export function typeDiagnostics(report, dir) {
   const found = [], at = (file) => relative(process.cwd(), resolve(dir, file));
   for (const line of report.split(/\r?\n/)) {
     if (line.startsWith('warning: ') || /^.+:\d+:\d+ warning \[[\w-]+\] /.test(line)) continue;
+    const backend = /^error \[backend-selection\]: (.*)$/.exec(line);
+    if (backend) { found.push({id: 'backend-selection', severity: 'error', message: backend[1], file: at('app.ts'), line: 0, col: 0, end_col: 0, related: []}); continue; }
     const m = /^(.+?)\((\d+),(\d+)\): error (TS\d+): (.*)$/.exec(line);
     if (m) found.push({id: `typescript-${m[4]}`, severity: 'error', message: m[5], file: at(m[1]), line: Number(m[2]), col: Number(m[3]), end_col: Number(m[3]), related: []});
     else if (line.trim() && !/^error: .*: app\.ts failed the type check/.test(line)) {
@@ -769,7 +770,6 @@ export function typeDiagnostics(report, dir) {
   }
   return found.length ? found : [{id: 'typescript-check', severity: 'error', message: 'app.ts failed the type check every host\'s build runs', file: at('app.ts'), line: 0, col: 0, end_col: 0, related: []}];
 }
-
 /** The check's warnings as `build --json` diagnostics of severity `"warning"`: a diagnostic in the compiler's form,
  * `file:line:col warning [id] text` (a use of `Function` or `eval`, #128), at its place, and a `warning: …` line (the
  * backend's origin) on app.ts. */
@@ -781,7 +781,6 @@ export function checkWarnings(report, dir) {
     return line.startsWith('warning: ') ? [{id: 'typescript-warning', severity: 'warning', message: line.slice('warning: '.length), file: at('app.ts'), line: 0, col: 0, end_col: 0, related: []}] : [];
   });
 }
-
 /** The types `app.ts` imports, `contract types app.contract -o app.contract.d.ts`, rewritten
  * only when they changed: when a source's signature did (LLP 1116.001 D4.5). The web build and
  * the native development bake write the same file the same way, so a builder never runs the
@@ -799,7 +798,6 @@ export function refreshTypes(dir, binary = resolve(ROOT, 'target/debug', process
   if (!quiet) console.error(`app.contract.d.ts: ${before === null ? 'written' : 'regenerated, since a source\'s signature changed'} (the types app.ts imports)`);
   return true;
 }
-
 /** `exact new`: check the machine first, since a missing Cargo fails the
  * scaffold itself; then write the app and say what its builds will still need. */
 function newApp(path, {update = false, without = null, with: platforms = [], game = false, assets = false, snapback = null, title, id} = {}) {
@@ -841,7 +839,8 @@ const USAGE = `exact — run an Exact app from the command line (macOS)
   exact install <app>          put it in ~/Applications and its name on PATH
   exact release <app>          sign with a Developer ID, notarise, staple, package
   exact uninstall <app>        take both away
-  exact setup [--check]       install pinned Rust, wasm-bindgen, Binaryen and
+  exact setup [--check [--platform <host> [--device]]]
+                              install pinned Rust, wasm-bindgen, Binaryen and
                                this machine's host/iOS/tvOS Hermes bundles;
                                fetch the crates every bake reads offline;
                                build the engine rustdoc that game vocab reads
@@ -894,28 +893,26 @@ credentials in the keychain; it says how to get each if one is missing.
 EXACT_DEVELOPER_ID and EXACT_NOTARY_PROFILE name them explicitly.`;
 
 export const packageSpecifier = (dir, short, root = ROOT) => `file:${pathFrom(dir, resolve(root, 'packages', short))}`;
-
 /** `exact add <module> [<app>]` (LLP 1133.001 D8): the app depends on one of exact2's standard modules by a path into
  *  this checkout, as an app consumes exact2 by path, so the module never differs from the SDK it compiles against. */
 export function add(args, say = console.log) {
-  const [module, name] = args, short = String(module ?? '').replace(/^@exact\//, '');
+  const [module, name] = args.filter(a => !a.startsWith('--')), short = String(module ?? '').replace(/^@exact\//, '');
   const read = (path) => { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; } };
   // A standard module (an interface), or a TypeScript library of exact2's own (`@exact/oauth`, LLP 1146 D5).
   const standard = readdirSync(resolve(ROOT, 'packages')).filter((p) => read(resolve(ROOT, 'packages', p, 'exact.json'))?.kind === 'interface'
     || read(resolve(ROOT, 'packages', p, 'package.json'))?.exports?.['.']?.types !== undefined);
-  if (!standard.includes(short)) throw new Error(`add: ${module ? `no standard module ${module}` : 'name a module'}; exact2's are ${standard.join(', ')} (exact add geolocation)`);
-  if (!name && !process.env.EXACT_APP_DIR) throw new Error('add: name the app (exact add geolocation <app>), or run bun exact.mjs add in it');
+  if (!standard.includes(short)) throw new Error(`add: ${module ? `no standard module ${module}` : 'name a module'}; exact2's are ${standard.join(', ')} (bun exact.mjs add geolocation)`);
+  if (!name && !process.env.EXACT_APP_DIR) throw new Error('add: name the app (bun scripts/exact.mjs add geolocation <app>), or run bun exact.mjs add in it');
   const app = resolveApp(name), at = resolve(app.dir, 'package.json'), manifest = read(at);
   if (!manifest) throw new Error(`add: ${app.dir} has no package.json; an app exact new made has one`);
   const key = `@exact/${short}`, spec = packageSpecifier(app.dir, short);
   if (manifest.dependencies?.[key] !== spec) writeFileSync(at, JSON.stringify({ ...manifest, dependencies: { ...manifest.dependencies, [key]: spec } }, null, 2) + '\n');
-  if (spawnSync(process.execPath, ['install'], { cwd: app.dir, stdio: 'inherit' }).status !== 0) throw new Error(`add: bun install failed in ${app.dir}`);
+  const { manager, installed } = installIn(app.dir, `add: ${key} is in its package.json`, !args.includes('--no-install'));
   const grants = read(resolve(ROOT, 'packages', short, 'exact.json'))?.grants ?? [];
-  say(`add: ${key} is ${spec}. Name what you use: use … from "${key}" in app.contract, or import from it in app.ts${grants.length ? `; and in app.ts grant ${grantAdvice(grants)} (exact docs a capability that asks permission)` : ''}.`);
+  say(`add: ${key} is ${spec}${installed ? '' : `, not installed: run ${manager} install`}. Name what you use: use … from "${key}" in app.contract, or import from it in app.ts${grants.length ? `; and in app.ts grant ${grantAdvice(grants)} (bun exact.mjs docs a capability that asks permission)` : ''}.`);
   const maven = read(resolve(ROOT, 'packages', short, 'android/exact.json'))?.maven ?? [];
   if (maven.length) say(`For Android, after importing the package, run: ${androidLockCommand(app)}`);
 }
-
 /** `exact hatch <word> [<app>]`, `exact hatch --app [<app>]`, `exact hatch --window [<app>]` (LLP 1075.003.000.001 §5):
  *  an access hatch's stub for each target the app builds. A word is added to app.json `hatches` with the platforms
  *  stubs were written for; each stub has the hatch's moments, an end that undoes what built added, a region and one
@@ -1052,7 +1049,6 @@ export function elementEnded(e) { hatches[e.hatch]?.elementEnded?.(e); }
     if (scope === 'element') {
       write(resolve(mod, file), `// The \`${word}\` hatch on the web: a node marked hatch="${word}" hands this code its element. Yours to edit.
 // What it gives up: nothing beyond the call. Leave the node's own box, position and children to Exact.
-
 /** Built (\`e.isNew\`) and changed (a \`data-*\` word moved, in \`e.data\`). */
 export function element(e) {
   if (e.isNew) {
@@ -1061,7 +1057,6 @@ export function element(e) {
     e.diagnostics.log(\`built on <\${e.element.localName}>\`);
   }
 }
-
 /** The node is leaving: take back everything built added. */
 export function elementEnded(e) {
 }
@@ -1070,11 +1065,9 @@ export function elementEnded(e) {
     } else {
       write(resolve(mod, file), `// The ${scope} hatch on the web (LLP 1075.003.000.001 §2.1). Yours to edit.
 // ${scope === 'app' ? 'The page is the app\'s own: its facts (`a.prefersColorScheme`, `a.visibilityState`, …) are the ones Contract sees;\n// `a.data` holds the root node\'s data-* words, each declared in app.json `data`.' :'The page\'s window; `w.frame` is its inner size. Reach the global as `globalThis` in a file that exports `window`.'}
-
 /** When the page module connects (\`isNew\`), and when ${scope === 'app' ? 'a fact changes' : 'its size changes'}. */
 export function built(${scope[0]}) {
 }
-
 /** The page is going: undo what the hatch set. */
 export function ended(${scope[0]}) {
 }
@@ -1082,18 +1075,16 @@ export function ended(${scope[0]}) {
       mark(main, '// exact:hatches', `import * as ${scope}Hatch from './${file}';\nexport function ${scope}(x) { ${scope}Hatch.built(x); }\nexport function ${scope}Ended(x) { ${scope}Hatch.ended(x); }`, `import it and export ${scope} and ${scope}Ended from yours`);
     }
   }
-  // The generated Linux crate does not run Rust hatches yet; only an authored one includes them (its build.rs).
-  if (!existsSync(resolve(dir, 'linux')) && manifest.host?.linux) todo.push('Linux: the generated Linux crate runs no Rust hatches, so none is written for it; the app runs there without this one');
-  if (existsSync(resolve(dir, 'linux'))) {
-    // Linux, and Windows and Android over the same presenter: one file the app's Linux crate includes (its
-    // build.rs, as apps/native-fixture/linux/build.rs: contract::native::rust_hatch_entry).
-    platforms.push('linux');
+  if (has('linux', 'linux', 'windows')) {
+    // Linux, and Windows and Android over the same presenter: one file the app's Linux crate includes (a generated
+    // crate's bake writes it in; an authored one's build.rs, as apps/native-fixture/linux/build.rs: rust_hatch_entry).
+    platforms.push(...(has('linux', 'linux') ? ['linux'] : []), ...(manifest.host?.windows ? ['windows'] : []));
     const main = resolve(dir, 'modules/linux/hatches.rs'), snake = (word ?? scope).replaceAll('-', '_');
     if (write(main, `// ${title}'s hatches on a painting host (Linux, and Windows over the same presenter). Written by
 // \`exact hatch\`; yours from here. There is no platform object here: a hatch draws into its node's overlay
 // (a whole recording that replaces the last), observes the input that lands in its box, and changes Contract
 // state only by acting on authored nodes: click(), focus(), blur(), input(text).
-use exact_linux::hatches::{App, Context, Element, Hatches, Window};
+use exact_painted::hatches::{App, Context, Element, Hatches, Window};
 
 #[derive(Default)]
 pub struct AppHatches;
@@ -1140,9 +1131,12 @@ pub type ExactHatches = AppHatches;
 
 // exact:functions (exact hatch adds a word's functions above this line)
 `)) {
-      // The crate's build script includes the file. One that asks for its hatches only has to run again (a new mtime).
+      // The crate's build script includes the file. One that asks for its hatches only has to run again (a new mtime),
+      // as a generated crate's does (.exact/shells, scripts/app-shells.mjs).
       const build = resolve(dir, 'linux/build.rs'), text = existsSync(build) ? readFileSync(build, 'utf8') : '';
-      if (/\brust_hatch(es|_entry)\b/.test(text)) writeFileSync(build, text);
+      const shells = ['linux', 'windows'].map(kind => resolve(dir, '.exact/shells', kind, 'build.rs')).filter(existsSync);
+      if (!existsSync(resolve(dir, 'linux'))) for (const file of shells) writeFileSync(file, readFileSync(file));
+      else if (/\brust_hatch(es|_entry)\b/.test(text)) writeFileSync(build, text);
       else todo.push(`${build}: include the hatches in the app's Linux crate, as apps/native-fixture/linux/build.rs does\n    contract::native::rust_hatch_entry(&app_dir, &manifest, &target) gives the entry's text and the run call its main makes`);
     }
     if (scope === 'element') {
@@ -1172,7 +1166,6 @@ fn ${snake}_hatch_ended<H: Hatches>(_element: &Element, _context: &mut Context<'
 import dev.exact.canvas.ExactApp
 import dev.exact.canvas.ExactElement
 import dev.exact.canvas.ExactHatches
-
 /**
  * ${title}'s hatches on Android. Written by \`exact hatch\`; yours from here. Called on the main thread. A node is
  * painted by exact2: a hatch has its box and words, acts on it as a person would (click, focus, blur, input), hears
@@ -1236,7 +1229,6 @@ class Hatches : ExactHatches() {
   for (const line of todo) say(`  to do, in ${line}`);
   return { wrote, todo, platforms };
 }
-
 /** `exact.mjs pattern [<name>] [--force]` (LLP 1116.001 D3): the starter patterns, or one written
  * into the app (`EXACT_APP_DIR`, else this directory) with the types its app.ts imports. */
 export function pattern(args, say = console.log) {
@@ -1248,14 +1240,11 @@ export function pattern(args, say = console.log) {
   refreshTypes(dir);
   say(next);
 }
-
 /** The guides `docs` reads, in the order a tie is settled: what a builder looks a section up in. */
 const GUIDES = ['docs/start-here.md', 'docs/start-here-site.md', 'docs/contract-for-agents.md', 'docs/contract-grammar.md', 'docs/agent-pitfalls.md', 'docs/game-pitfalls.md', 'docs/reference.md'];
 const SECTION_LINES = 120;
-
 /** Whether a line opens or closes a code fence (CommonMark: an opening fence's info string has no backtick). */
 const fenced = (line, open) => open ? /^\s*```+\s*$/.test(line) : /^\s*```+[^`]*$/.test(line);
-
 /** A Markdown file's lines, each line's kind (`head`, `code` in a fence, `text`), and its headings with the line each
  *  one's section ends on (`to`, the next heading of its level or above) and its own text ends on (`own`, the next heading). */
 function sections(text) {
@@ -1274,7 +1263,6 @@ function sections(text) {
   }
   return { lines, kinds, heads };
 }
-
 /** A query (its words singular, by one space) whose section ranking alone misses, because it is said in passing more
  *  densely elsewhere or its section says it in other words ("dark mode": light and dark), and its section's heading. */
 const TOPICS = {
@@ -1292,12 +1280,10 @@ const TOPICS = {
 const STOP = new Set(['a', 'an', 'and', 'by', 'for', 'in', 'it', 'its', 'of', 'on', 'or', 'the', 'to', 'you']);
 /** Type keywords (contract-grammar.md, "Expressions and types"): `strings` is app.json's key, never stemmed onto `: string`. */
 const TYPES = new Set(['number', 'string', 'bool', 'unit', 'action', 'option']);
-
 /** Words as whole words, one after another by spaces or hyphens, singular or plural (`sheets` finds `sheet`): `logs` is
  *  not in "catalogs". */
 const singular = w => w.length > 3 && /[^s]s$/i.test(w) && !TYPES.has(w.slice(0, -1).toLowerCase()) ? w.slice(0, -1) : w;
 const wholeWords = (...words) => new RegExp(`(?<![a-z0-9_])${words.map(w => singular(w).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('[\\s-]+')}s?(?![a-z0-9_])`, 'gi');
-
 /** A line's weighted mentions of a word: code (in a fence or backticks) defines it, prose mentions it, and a piece of a
  *  longer hyphenated name (`font-variant-numeric` for `font`, `syntax-call-cycle` for `call`) is not the word. */
 function mentions(line, kind, re) {
@@ -1308,14 +1294,12 @@ function mentions(line, kind, re) {
   }
   return n;
 }
-
 /** Whether a section is a table of contents: in-page links alone, which name every section's words and are about none
  *  (`docs sound midi and media` printed the guide's Contents, not its section). */
 const contents = (f, h) => {
   const body = f.lines.slice(h.from + 1, h.own).filter(line => line.trim());
   return body.length > 0 && body.every(line => /^\s*([-*]|\d+\.)\s+\[[^\]]*\]\(#[^)]*\)\s*$/.test(line));
 };
-
 /** `exact.mjs docs <words>`: the section of the guides and recipes that holds every word, as a whole word, most densely
  * (mentions in headings and code weigh more; a recipe, a section on its topic, more again), with its path and line, so a
  * lookup is one call. A section whose heading holds the words prints from its heading, its subsections too; any other
@@ -1390,8 +1374,13 @@ async function main(argv) {
   }
   if (verb === 'setup') {
     const flags = argv.slice(1);
-    if (flags.some(flag => !['--check'].includes(flag))) throw new Error('Usage: exact setup [--check]');
-    return setup({check:flags.includes('--check')});
+    const at = flags.indexOf('--platform'), platform = at < 0 ? null : flags[at + 1];
+    const rest = flags.filter((_, i) => i !== at && i !== at + 1 || at < 0);
+    if (rest.some(flag => !['--check', '--device'].includes(flag)) || at >= 0 && (!flags.includes('--check') || !['ios', 'macos', 'android', 'web', 'linux', 'windows'].includes(platform)) || flags.includes('--device') && platform !== 'ios')
+      throw new Error('Usage: exact setup [--check [--platform ios|macos|android|web|linux|windows [--device]]]');
+    // iOS also builds on Linux with the cross SDK, whose rows the check reports (app-shells.mjs bringPlatform agrees).
+    if (platform === 'macos' && process.platform !== 'darwin' || platform === 'ios' && !['darwin', 'linux'].includes(process.platform)) throw new Error(`${platform} needs a Mac with Xcode${platform === 'ios' ? ', or Linux with the Apple cross SDK' : ''}`);
+    return setup({check:flags.includes('--check'), platform, device:flags.includes('--device')});
   }
   if (verb === 'list') return list();
   // The compiler parses its own flags; its help is printed here, so asking compiles nothing (LLP 1116 D4).
@@ -1438,7 +1427,7 @@ async function main(argv) {
   if (verb === 'backend') {
     const dir = resolve(name), parent = resolve(dir, '..');
     const source = readFileSync(resolve(dir, 'app.ts'), 'utf8');
-    const origin = backendOrigin(dir) ?? /const origin\s*=\s*['"`](https?:\/\/[^'"`]+)['"`]/.exec(source)?.[1];
+    const origin = backendOrigin(dir) ?? literalBackendOrigin(source, (await import('rolldown/utils')).parseSync);
     if (!origin) throw new Error('exact backend: app.ts needs a literal const origin (bun exact.mjs snapback --port N writes it)');
     const url = new URL(origin);
     if (!['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)) throw new Error('exact backend: the origin must be loopback to launch a local server');
@@ -1459,7 +1448,7 @@ async function main(argv) {
     console.log(wireSnapback(dir, { port: port < 0 ? null : args[port + 1] ?? '', online: args.includes('--online') ? true : null, artifactOnly: args.includes('--artifact-only'), rebuild: args.includes('--rebuild') }));
     app.manifest = JSON.parse(readFileSync(resolve(dir, 'app.json'), 'utf8'));
     const updated = readFileSync(resolve(dir, 'app.ts'), 'utf8');
-    const nextOrigin = backendOrigin(dir) ?? /const origin\s*=\s*['"`](https?:\/\/[^'"`]+)['"`]/.exec(updated)?.[1];
+    const nextOrigin = backendOrigin(dir) ?? literalBackendOrigin(updated, (await import('rolldown/utils')).parseSync);
     await snapbackDevice.devicePreflight(app, nextOrigin ? [nextOrigin] : []);
     return;
   }

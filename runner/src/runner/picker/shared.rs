@@ -226,10 +226,12 @@ pub struct Incoming {
     pub members: Vec<String>,
 }
 
-/// The location a share is delivered as (D2): `action`, then each member
-/// shared under its parameter name, a member not shared left out. A link
-/// with no `url` member mapped goes to `text`, as Android carries one. Each
-/// files member that carried anything gets `tokens(member)`.
+/// The location a share is delivered as (D2), as a browser composes a `GET`
+/// share's (Web Share Target, "Handling incoming shares"): `action` with its
+/// query set to each member shared under its parameter name, form-encoded, a
+/// member not shared left out, and its fragment kept. A link with no `url`
+/// member mapped goes to `text`, as Android carries one. Each files member
+/// that carried anything gets `tokens(member)`.
 pub fn location(
     target: &ShareTarget,
     share: &Incoming,
@@ -259,19 +261,39 @@ pub fn location(
     }
     let query: Vec<String> = pairs
         .iter()
-        .map(|(k, v)| {
-            format!(
-                "{}={}",
-                exact_route::encode_uri_component(k),
-                exact_route::encode_uri_component(v)
-            )
-        })
+        .map(|(k, v)| format!("{}={}", form_encode(k), form_encode(v)))
         .collect();
-    if query.is_empty() {
-        target.action.clone()
-    } else {
-        format!("{}?{}", target.action, query.join("&"))
+    let (base, fragment) = match target.action.split_once('#') {
+        Some((base, fragment)) => (base, Some(fragment)),
+        None => (target.action.as_str(), None),
+    };
+    let mut at = base.split('?').next().unwrap_or(base).to_owned();
+    if !query.is_empty() {
+        at.push('?');
+        at.push_str(&query.join("&"));
     }
+    if let Some(fragment) = fragment {
+        at.push('#');
+        at.push_str(fragment);
+    }
+    at
+}
+
+/// The URL Standard's `application/x-www-form-urlencoded` byte serializer,
+/// as `URLSearchParams` writes a value: a space is `+`, and every byte but an
+/// ASCII alphanumeric and `*-._` is `%XX`.
+fn form_encode(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for b in value.bytes() {
+        match b {
+            b' ' => out.push('+'),
+            b if b.is_ascii_alphanumeric() || matches!(b, b'*' | b'-' | b'.' | b'_') => {
+                out.push(b as char)
+            }
+            b => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
 }
 
 /// The journal's line for a share as it arrives (D9): the members present
@@ -673,7 +695,10 @@ mod tests {
             members: vec!["files".into()],
         };
         let at = location(&target, &share, |_| "TOKEN0000000".into());
-        assert_eq!(at, "/share?t=A%20%26%20B&body=hi%20there%0Ahttps%3A%2F%2Fx.test%2Fa%3Fb%3Dc&files=TOKEN0000000");
+        assert_eq!(
+            at,
+            "/share?t=A+%26+B&body=hi+there%0Ahttps%3A%2F%2Fx.test%2Fa%3Fb%3Dc&files=TOKEN0000000"
+        );
         // Nothing shared under a member leaves it out.
         let bare = location(&target, &Incoming::default(), |_| unreachable!());
         assert_eq!(bare, "/share");
@@ -681,6 +706,36 @@ mod tests {
             shared_path(3.0, 2, "../../etc/notes.TXT"),
             "app:/tmp/shared/3-2.txt"
         );
+    }
+
+    #[test]
+    fn a_shares_members_replace_the_actions_query_and_precede_its_fragment() {
+        // The Web Share Target spec ("Handling incoming shares") sets a GET
+        // share's query on the action URL, keeping its fragment.
+        let at = |action: &str, text: Option<&str>| {
+            let target = ShareTarget {
+                action: action.into(),
+                title: None,
+                text: Some("text".into()),
+                url: None,
+                files: vec![],
+            };
+            let share = Incoming {
+                text: text.map(Into::into),
+                ..Incoming::default()
+            };
+            location(&target, &share, |_| unreachable!())
+        };
+        assert_eq!(at("/share?from=sheet", Some("hello")), "/share?text=hello");
+        assert_eq!(
+            at("/share#preview", Some("hello")),
+            "/share?text=hello#preview"
+        );
+        assert_eq!(
+            at("/share?from=sheet#preview", Some("hello")),
+            "/share?text=hello#preview"
+        );
+        assert_eq!(at("/share?from=sheet#preview", None), "/share#preview");
     }
 
     #[test]
