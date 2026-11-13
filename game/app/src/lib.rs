@@ -208,6 +208,12 @@ mod tests {
             });
             let entry = runtime_entry("()", "Default::default()", &inputs).unwrap();
             assert!(entry.contains("fn app_id(&self) -> &str { \"dev.exact.kept-game\" }"));
+            if platform == "web" {
+                assert!(
+                    !entry.contains("exact_logic::"),
+                    "web shells do not link exact-logic"
+                );
+            }
             assert!(
                 entry.contains("AppData, ExactEmptyData,")
                     || entry.contains("type AppData = ExactEmptyData;")
@@ -243,7 +249,7 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
     #[test]
-    fn empty_v5_call_binds_every_surface_default() {
+    fn empty_named_call_binds_every_surface_default() {
         #[derive(Default)]
         struct Defaults;
         impl exact_gpu::Surface for Defaults {
@@ -283,7 +289,7 @@ mod tests {
         let plan =
             contract::compile("component App\n  view\n    canvas surface=arena()\n").unwrap();
         let bytes = plan.encode();
-        assert_eq!(&bytes[4..8], &5u32.to_le_bytes());
+        assert_eq!(&bytes[4..8], &exact_plan::FORMAT_VERSION.to_le_bytes());
         let plan = exact_plan::Plan::decode(&bytes).unwrap();
         assert_eq!(plan.surfaces[0].mode, exact_plan::SurfaceArgsMode::Named);
         let mut runner = exact_runner::Runner::boot(
