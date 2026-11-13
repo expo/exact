@@ -274,6 +274,15 @@ it regenerated it), and `bun exact.mjs contract build app.contract --stdin`
 neither refreshes the types `app.ts` imports nor type-checks `app.ts`.
 `--stdin` takes no `--entry`.
 
+`build --stdin-as <used.contract>` reads stdin as the text of a file the named
+one uses, for the unsaved buffer of a file that is built with its app:
+
+```sh
+contract build app.contract --json --errors-only --stdin-as lib/row.contract < buffer
+```
+
+It is `--stdin` in every other way, and the two are not given together.
+
 `build --map -o <file.plan>` also writes `<file.plan>.map.json`, keyed by
 SHA-256 of the plan bytes. Each plan node has its original file and range,
 component call-site chain, and one binding per style row: its base value's

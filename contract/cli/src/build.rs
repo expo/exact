@@ -2,7 +2,7 @@
 
 use std::{io::Write, path::Path, process::ExitCode};
 
-pub(crate) const USAGE: &str = "usage: contract build <file.contract> [--stdin] [-o <file.plan>] [--json] [--errors-only] [--map (requires -o)] [--entry <kind> (requires -o; no --map or --stdin)] [--surface terminal (no --entry)]";
+pub(crate) const USAGE: &str = "usage: contract build <file.contract> [--stdin | --stdin-as <used.contract>] [-o <file.plan>] [--json] [--errors-only] [--map (requires -o)] [--entry <kind> (requires -o; no --map or --stdin)] [--surface terminal (no --entry)]";
 
 struct Options<'a> {
     input: &'a str,
@@ -13,6 +13,9 @@ struct Options<'a> {
     /// The file's text is stdin's, read as if saved at `input` (an editor's
     /// unsaved buffer): its `use` lines and diagnostics name that path.
     stdin: bool,
+    /// `--stdin-as`: stdin's text is instead read as if saved at this file,
+    /// one the input uses (the unsaved buffer of a file built with its app).
+    stdin_as: Option<&'a str>,
     /// A widget entry's kind (LLP 1126 D2): its plan instead of the app's,
     /// compiled as the bake compiles it from `app.json` beside the input.
     entry: Option<&'a str>,
@@ -25,6 +28,7 @@ struct Options<'a> {
 fn options(args: &[String]) -> Option<Options<'_>> {
     let (mut input, mut output, mut json, mut map, mut entry) = (None, None, false, false, None);
     let (mut errors_only, mut stdin, mut profile) = (false, false, None);
+    let mut stdin_as = None;
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -32,6 +36,13 @@ fn options(args: &[String]) -> Option<Options<'_>> {
             "--errors-only" if !errors_only => errors_only = true,
             "--map" if !map => map = true,
             "--stdin" if !stdin => stdin = true,
+            "--stdin-as" if !stdin => {
+                stdin = true;
+                stdin_as = Some(args.next()?.as_str());
+                if stdin_as?.starts_with('-') {
+                    return None;
+                }
+            }
             "-o" if output.is_none() => {
                 output = Some(args.next()?.as_str());
                 if output?.starts_with('-') {
@@ -68,6 +79,7 @@ fn options(args: &[String]) -> Option<Options<'_>> {
         errors_only,
         map,
         stdin,
+        stdin_as,
         entry,
         profile: profile.unwrap_or_default(),
     })
@@ -194,7 +206,8 @@ pub(super) fn run(args: &[String]) -> ExitCode {
             1,
         );
     }
-    contract::with_contract_texts(vec![(options.input.into(), text)], || build(&options))
+    let held = options.stdin_as.unwrap_or(options.input);
+    contract::with_contract_texts(vec![(held.into(), text)], || build(&options))
 }
 
 fn build(options: &Options) -> ExitCode {
