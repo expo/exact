@@ -1039,10 +1039,11 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   session is `ambient`. An app whose purpose includes media playback should
   set `"audio_session": "playback"` in `app.json`, as Recorder does. For sound
   over another app's audio, `"playback-mix"` also ignores the switch on iOS and
-  tvOS while mixing without ducking. On the web only sound output applies the
-  setting, mapping it to `ambient`, which obeys the switch in WebKit; media or
-  GPU audio alone leaves the browser's `auto`. Raising the media volume alone
-  does not override Silent mode. (LLP 1096 D8.)
+  tvOS while mixing without ducking. On the web, page initialization applies
+  `ambient` and `playback` as given and maps `playback-mix` to `ambient`, which
+  obeys the switch in WebKit. This also applies to pages with only `video`,
+  `audio` or GPU audio, where the Audio Session API exists. Raising the media
+  volume alone does not override Silent mode. (LLP 1096 D8.)
 
 - **A scheduled sound plays after Stop.** A sequencer that schedules each step
   ahead (`playSounds(…)` with a future `at=`) keeps sounding the hits already

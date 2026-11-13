@@ -144,7 +144,10 @@ A font face's weight is a whole number in 1–1000. Keyframe percentages are in
 0–100; `from` and `to` are 0% and 100%. Lowering checks whether keyframe properties
 are animatable and constant-call values can be evaluated at compilation.
 Styles accept literal style attributes and explicitly styleable props (currently
-`buttonStyle`), not arbitrary expressions or event props.
+`backgroundMaterial`, `glassGroup` and `buttonStyle`), not arbitrary expressions
+or event props. In a conditional class, each prop must be set in both styles or
+neither, unless the node supplies its own value. Each arm's literal is checked
+as a direct attribute would be.
 
 A part is CSS's pseudo-element as a block: `::placeholder`, then its
 declarations indented beneath it, in a `style` (literal) or under an `input` or

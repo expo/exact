@@ -33,16 +33,20 @@ export const WEB_STD = ['-Zbuild-std=std,panic_abort', '-Zbuild-std-features=opt
 export const WEB_RUSTFLAGS = ['-Zunstable-options', '-Cpanic=immediate-abort', '-Zlocation-detail=none', '-Adeprecated'];
 export const WEB_SIZE = [...WEB_STD, ...WEB_RUSTFLAGS].join(' ');
 /** The environment for a web build, refusing a machine without the toolchain
- * or its std sources (Cargo builds offline, so std's dependencies too). */
-export function webToolchainEnv(env) {
-  const sysroot = spawnSync('rustc', ['--print', 'sysroot'], { env: { ...env, RUSTUP_TOOLCHAIN: WEB_TOOLCHAIN }, encoding: 'utf8' });
-  if (sysroot.status !== 0 || !existsSync(resolve(sysroot.stdout.trim(), 'lib/rustlib/src/rust/library/Cargo.lock'))) throw new Error(
-    `the web artifact builds with ${WEB_TOOLCHAIN} and its std sources (LLP 1047):\n` +
+ * or its std sources (Cargo builds offline, so std's dependencies too). A
+ * build that links wasm on a Mac also needs llvm-tools: this nightly's
+ * `rust-lld` loads `libLLVM.dylib` from `rustlib/<host>/lib/`. */
+export function webToolchainEnv(env, { linksWasm = false } = {}) {
+  const printed = spawnSync('rustc', ['--print', 'sysroot', '--print', 'host-tuple'], { env: { ...env, RUSTUP_TOOLCHAIN: WEB_TOOLCHAIN }, encoding: 'utf8' });
+  const [sysroot, host = ''] = printed.status === 0 ? printed.stdout.trim().split('\n') : [];
+  const needs = ['lib/rustlib/src/rust/library/Cargo.lock', ...(linksWasm && host.endsWith('-apple-darwin') ? [`lib/rustlib/${host}/lib/libLLVM.dylib`] : [])];
+  if (!sysroot || !needs.every(path => existsSync(resolve(sysroot, path)))) throw new Error(
+    `the web artifact builds with ${WEB_TOOLCHAIN}, its std sources and llvm-tools (LLP 1047):\n` +
     `  rustup toolchain install ${WEB_TOOLCHAIN} --profile minimal --component rust-src --component llvm-tools\n` +
     `  cargo +${WEB_TOOLCHAIN} fetch --manifest-path "$(rustc +${WEB_TOOLCHAIN} --print sysroot)/lib/rustlib/src/rust/library/Cargo.toml"`);
   // `-Zbuild-std` builds std offline, so std's own locked sources must be in
   // Cargo's cache. A successful preparation belongs to that cache and sysroot.
-  const library = resolve(sysroot.stdout.trim(), 'lib/rustlib/src/rust/library');
+  const library = resolve(sysroot, 'lib/rustlib/src/rust/library');
   const home = (process.platform === 'win32' ? env.USERPROFILE : env.HOME) || homedir();
   const cargoHome = resolve(env.CARGO_HOME || resolve(home, '.cargo'));
   const marker = resolve(cargoHome, '.exact', 'web-std', createHash('sha256').update(library).digest('hex'));

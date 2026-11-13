@@ -29,7 +29,7 @@ export const missingValue = (arg) => arg === undefined || /^-[^\d.]/.test(arg);
 // which the repository's smokes and pixel fixtures are written against.
 const DRIVE = [
   ['--port <n>', 'web: the page’s port (or EXACT_PORT); backend origins remain those app.ts grants'],
-  ['--backend <url>', 'web: select the backend origin for this build'],
+  ['--backend <url>', "select the backend for this build: app.ts needs one top-level const origin, a literal or import.meta.env.NAME ?? '<literal>', used in net.fetch ${origin}"],
   ['--storage <name>', 'a scratch store, kept on native hosts; Chrome\'s starts empty'],
   ['--keep-storage · --reset-storage', 'reopen a named store (Chrome, or a compare) · empty a named store first, on any host'],
   ['--size <w>x<h>', 'the viewport (default 420x900; a simulator\'s own)'],
@@ -202,6 +202,7 @@ Ports    web: --port/EXACT_PORT, else a named store’s port (20000-47999), else
     usage: 'bun exact.mjs verify [web|ios|windows|android] [--sim <udid|name>] [--shots <dir>] [--rescroll] [--strict] [--json]',
     common: ['verify [ios] [--shots <dir>] [--sim <name>]    done when it says "verify: clean"'],
     flags: [
+      DRIVE.find(([flag]) => flag === '--backend <url>'),
       ['--sim <udid|name>', 'iOS: which simulator (else EXACT_SIM, a booted iPhone, or the newest Pro)'],
       ['--shots <dir>', 'also copy every screenshot it captured there, named as in .exact/verify/ (a test\'s own `screenshot` steps too)'],
       ['--rescroll · --strict', 'ios: measure scrolling again though nothing it depends on changed · exit 1 on any counted problem (for CI)'],
@@ -212,9 +213,8 @@ Ports    web: --port/EXACT_PORT, else a named store’s port (20000-47999), else
 app.contract or app.ts runs its new plan, no native rebuild), each on a fresh scratch store, and runs check
 light and dark on the screen it opens to. The tests are app.test.contract's, then each other *.test.contract's
 beside it, as test runs them. Each test's last screen is checked the same way in the test's own session (web: at
-both widths; ios runs the tests with UIKit's bars). Then the app relaunches once, on real time, on the store a
-passing test left, and says whether its first screen shows what that test stored. One short report: the build if
-it built, the compiler's warnings (as contract build says them, built or not), the tests, check's findings (each
+both widths; ios runs them with UIKit's bars). A real-time relaunch checks what a passing test stored.
+One report: the build if it built, compiler warnings (as contract build prints them), the tests, check's findings (each
 once, naming the screens it was on), the relaunch, then "verify: clean" or "verify: N problems". A clean verify
 is done. One screenshot of each screen goes to .exact/verify/ (the first screen's per width and scheme, each
 test's named by the test, the relaunch's): look at them when the features work.

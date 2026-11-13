@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { types as utilTypes } from 'node:util';
 import { filesystemLock } from './filesystem.mjs';
 import { boundSettings, settingChanges, settingInputs, settingLines } from '../js/bake/src/__exact_env.mjs';
-import { backendOriginSelection, literalBackendOrigin } from '../js/bake/src/typescript.mjs';
+import { backendOriginSelection, literalBackendOrigin, selectBackendOrigin } from '../js/bake/src/typescript.mjs';
 import { besidePattern } from '../host/web/beside.mjs';
 import { chooseSimulator, phone } from '../host/apple/devices.mjs';
 import { androidDevice } from './agent-android.mjs';
@@ -561,7 +561,7 @@ export function parseFlags(argv) {
     if (argv[i] === '--json') flags.json = true;
     else if (argv[i] === '--world') flags.world = resolve(value());
     else if (argv[i] === '--plan') flags.plan = resolve(value());
-    else if (argv[i] === '--backend') { const value = argv[++i]; if (!value || value.startsWith('--')) throw new Error('--backend <url>: name the backend origin'); process.env.EXACT_BACKEND_ORIGIN = value; }
+    else if (argv[i] === '--backend') selectBackendOrigin(argv[++i]);
     else if (argv[i] === '--app') flags.app = value();
     else if (argv[i] === '--browser') flags.browser = value();
     else if (argv[i] === '--size') {
@@ -576,11 +576,10 @@ export function parseFlags(argv) {
     else if (argv[i] === '--open') (flags.open ??= []).push(resolve(value()));
     else if (argv[i] === '--url') flags.url = value();
     else if (argv[i] === '--device') flags.device = true;
-    // Android: the app on the Canvas reader (its APK), not the Linux host headless. Said as the variable
-    // `agent-android.mjs` reads, as `--sim` is said as EXACT_SIM: the driver's own file is at its line cap.
-    else if (argv[i] === '--reader') { flags.reader = true; process.env.EXACT_ANDROID_READER = '1'; }
+    // Android: the app on the Canvas reader (its APK), not the Linux host headless (`open`'s `reader`).
+    else if (argv[i] === '--reader') flags.reader = true;
     // `--headless`: the Linux host under adb shell, which an `exact new` app's `agent android` asks for with it (app-cli.mjs).
-    else if (argv[i] === '--headless') { flags.reader = false; delete process.env.EXACT_ANDROID_READER; }
+    else if (argv[i] === '--headless') flags.reader = false;
     else if (argv[i] === '--seed') flags.seed = Number(value());
     else if (argv[i] === '--locale') flags.locale = value();
     else if (argv[i] === '--format-locale') flags.formatLocale = value();
@@ -794,8 +793,10 @@ export function depInfoInputs(bin, info = `${bin}.d`, base = process.cwd()) {
 // build reruns that script with other variables (the web build does, for its
 // render pass) without its sources changing; those sources are in the dep-info
 // themselves, so they, not the output, decide. A bake made before Cargo for a
-// linked plan (`….baked/`, scripts/linked-plan.mjs) names its own in its record.
-const GENERATED = /\/build\/[^/]+\/out\/|\.baked\//;
+// linked plan (`….baked/`, scripts/linked-plan.mjs) names its own in its record,
+// and so decides for the copy of it Cargo compiles (`bake-compiled/<digest>/`,
+// `compiledBakeDir`), which the first build of those bytes writes after its start.
+const GENERATED = /\/build\/[^/]+\/out\/|\.baked\/|\/bake-compiled\/[0-9a-f]+\//;
 // Bare dep-info records optional directories even while absent and carries no
 // entry types. A receipt's inventory distinguishes a deleted extensionless file.
 const DIRECTORY_WATCH = /\/[^./]+$/;

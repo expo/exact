@@ -98,6 +98,36 @@ fn a_scroller_tells_the_offsets_its_areas_rest_at_on_each_axis_it_snaps() {
     );
 }
 
+/// LLP 1123 D9: a scroll padding and a scroll margin that read the safe area
+/// where the box is take its owner's inset, not the document's 0: the same
+/// rests as `scroll-padding-top=20` and a 10-point margin.
+#[test]
+fn a_snap_padding_and_margin_read_the_boxes_own_inset() {
+    let source = SNAPPERS
+        .replace(
+            "scroll-padding-top=20",
+            r#"scroll-padding-top="var(--exact-safe-area-inset-top)""#,
+        )
+        .replace(
+            "scroll-margin-top=(i == 1 ? 10 : 0)",
+            r#"scroll-margin-top=(i == 1 ? "calc(var(--exact-safe-area-inset-top) - 10px)" : "0px")"#,
+        );
+    let mut p = boot(&source);
+    let pager = id(&p, "pager");
+    let kernel = p.host.runner_mut().kernel_mut();
+    let root = kernel.roots()[0];
+    let local = Some([20.0, 0.0, 0.0, 0.0]);
+    kernel.set_local_insets(root, local).unwrap();
+    let y = p.snap(pager, true).unwrap();
+    let want = vec![
+        (0., 0., false),
+        (150., 160., false),
+        (340., 340., false),
+        (520., 840., false),
+    ];
+    assert_eq!(rests(&y), want);
+}
+
 #[test]
 fn the_reader_is_told_each_scrollers_snap_in_its_pixels() {
     let mut p = boot(SNAPPERS);
@@ -316,5 +346,40 @@ fn a_release_far_past_the_told_rows_reads_the_rows_around_its_projection() {
     assert_eq!(
         flicked(&snaps, 30_000., 900., (900., 1.), true, 300.),
         Some(15_000.)
+    );
+}
+
+/// LLP 1123 D9: `scrollIntoView` keeps the scroll margin that reads the
+/// safe area where the target is: its owner's 30 below it, not the
+/// document's 0.
+#[test]
+fn a_reveal_keeps_a_margin_that_reads_the_targets_inset() {
+    let mut p = boot(
+        r#"component App
+  view
+    column width=400 height=600
+      scroll testId="list" width=400 height=200
+        column
+          view width=400 height=500 flex-shrink=0
+          view id="target" testId="target" width=400 height=40 flex-shrink=0 scroll-margin-bottom="var(--exact-safe-area-inset-bottom)"
+          view width=400 height=500 flex-shrink=0
+"#,
+    );
+    let kernel = p.host.runner_mut().kernel_mut();
+    let root = kernel.roots()[0];
+    let local = Some([0.0, 0.0, 30.0, 0.0]);
+    kernel.set_local_insets(root, local).unwrap();
+    let (list, target) = (id(&p, "list"), id(&p, "target"));
+    let (name, end) = (
+        exact_plan::Value::str("target"),
+        exact_plan::Value::str("end"),
+    );
+    p.scroll_element_into_view(&[name, end]);
+    let port = p.box_of(list).unwrap().rect;
+    let shown = p.box_of(target).unwrap().rect;
+    assert_eq!(
+        shown.1 + shown.3,
+        port.1 + port.3 - 30.0,
+        "{shown:?} in {port:?}"
     );
 }

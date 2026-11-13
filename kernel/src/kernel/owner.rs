@@ -56,16 +56,23 @@ pub(crate) fn env_for<'a>(arena: &'a NodeArena, slot: u32, style: &StyleProps) -
 }
 
 /// The environment `slot`'s lengths resolve against: the arena's, with the
-/// local insets `slot` inherits ([`local_at`]) in place of the session
-/// root's.
+/// local insets `slot` inherits ([`local_at`]).
 pub(crate) fn env_at(arena: &NodeArena, slot: u32) -> Cow<'_, Env> {
-    let local = local_at(arena, slot);
-    if Edge::ALL.map(|e| arena.env().local_inset(e)) == local {
-        return Cow::Borrowed(arena.env());
-    }
     let mut env = arena.env().clone();
-    env.local = Some(local);
+    env.local = Some(local_at(arena, slot));
     Cow::Owned(env)
+}
+
+impl NodeArena {
+    /// The environment a box's lengths resolve against (LLP 1123 D9): the
+    /// document's, with the box's own local insets where its style reads
+    /// one. Every reader of a box's style rows takes this, never
+    /// [`NodeArena::env`]: the document's has no local insets, and a
+    /// length that reads one there would take the session root's under a
+    /// route's bar (a debug build stops at it, `Env::local_inset`).
+    pub fn env_of(&self, slot: u32) -> Cow<'_, Env> {
+        env_for(self, slot, &self.effective_style(slot))
+    }
 }
 
 /// The four insets at `slot`, top right bottom left (LLP 1123 D9): an
@@ -80,7 +87,7 @@ pub(crate) fn local_at(arena: &NodeArena, slot: u32) -> [f32; 4] {
         Some(host) => host,
         None => match arena.parent(slot) {
             Some(parent) => local_at(arena, parent),
-            None => Edge::ALL.map(|e| arena.env().local_inset(e)),
+            None => Edge::ALL.map(|e| arena.env().root_inset(e)),
         },
     };
     let style = arena.style(slot);
@@ -210,7 +217,7 @@ impl Kernel {
     /// whether a layout is owed, as [`Kernel::set_env`] does.
     pub fn set_root_local_insets(&mut self, insets: Option<[f32; 4]>) -> Result<bool, KernelError> {
         let mut next = self.arena.env().clone();
-        next.local = insets;
+        next.root_local = insets;
         if !next.is_finite() || insets.is_some_and(|l| l.iter().any(|v| *v < 0.0)) {
             return Err(LayoutError::InvalidEnv.into());
         }
@@ -231,7 +238,11 @@ impl Kernel {
     pub fn env_of(&self, view: ViewId) -> Env {
         match self.arena.slot_of(view) {
             Some(slot) => env_at(&self.arena, slot).into_owned(),
-            None => self.env(),
+            // A node gone (a leaving view's last style) reads the root's
+            None => Env {
+                local: Some(Edge::ALL.map(|e| self.arena.env().root_inset(e))),
+                ..self.env()
+            },
         }
     }
 

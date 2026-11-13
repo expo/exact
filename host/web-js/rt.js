@@ -410,7 +410,8 @@ export const Store = {
 };
 /** Resource instances, including list members; list aggregates have no entry. */
 export const Resources = [];
-const Inspections = resourceInspection(!!DEVELOPMENT_STORE, () => clock.now);
+// A release build's DEVELOPMENT_STORE is null: it inspects nothing, and its bundle drops the inspection's code.
+const Inspections = DEVELOPMENT_STORE ? resourceInspection(true, () => clock.now) : { track() {}, begin() {}, placeholder() {}, take() {}, fail() {} };
 let Ticket = 0;
 const sameReq = (a, b) => a && b && a.storage === b.storage && a.method === b.method && a.url === b.url && a.body === b.body && JSON.stringify(a.headers) === JSON.stringify(b.headers) && a.http === b.http && a.cache === b.cache && JSON.stringify(a.longPoll) === JSON.stringify(b.longPoll);
 export const inflight = { n: 0 }; // Requests in flight, for the agent's `clock settle`.

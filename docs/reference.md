@@ -2138,9 +2138,10 @@ A TypeScript source's `http:`/`https:` stream whose 2xx body is not
 2026-10-23): each `message` has an ArrayBuffer `data`, the bytes read since the
 mapper's last turn, at arbitrary boundaries (a framing is the mapper's to
 parse), never dropped or coalesced. At most 1 MiB, or the stream's
-`exactIndependentHttp.maxResponseBytes` if smaller, waits for the mapper; a read
-past it ends the stream with `Refused` (`byte stream receive queue exceeds 1
-MiB`) after the bytes already waiting. The body's end is `Network`, `the byte
+`exactIndependentHttp.maxResponseBytes` if smaller, waits in the receive queue. A read that would pass this bound waits until
+the runner takes the queued bytes; the host stops reading in the meantime.
+A slow drain loses no bytes and does not end the stream. The separate limit
+on messages waiting behind an unsettled mapper still applies. The body's end is `Network`, `the byte
 stream ended`. A 204, a 205 and a `HEAD` have no body and stay the one answer.
 The request carries `Accept: text/event-stream`, as every stream's does, unless
 the source names an `accept` header; name one where the server negotiates by
@@ -2871,14 +2872,13 @@ that output plays (a change then interrupts other apps' audio). The driver's fro
 skips preparation and opens no surface output. With `EXACT_AGENT_TIMING=platform`,
 preparation runs, but the driver drops `exact:audio` requests, so they do not
 raise the prepared ambient session.
-On the web, the sound output sets the Audio Session API's type where supported:
+On the web, page initialization sets the Audio Session API's type where supported:
 `"ambient"` and `"playback"` pass through, and `"playback-mix"` maps to `"ambient"`: the
 [W3C draft](https://w3c.github.io/audio-session/)
 has no mixing playback type. This preserves other apps' audio but obeys the
-ring/silent switch in WebKit. Without a `sound` declaration or a command or
-sequence that initializes sound output, the browser keeps `auto`: `video`,
-`audio` and GPU audio alone do not apply this setting. `data-audio-session`
-keeps the manifest's value.
+ring/silent switch in WebKit. The policy applies to `video`, `audio` and GPU audio
+without a `sound` declaration or an `AudioContext`. Without `audio_session`, the
+browser keeps `auto`. `data-audio-session` keeps the manifest's value.
 The Mac has no session. A development run with `EXACT_SOUND_CHECK=1` taps the
 engine's main mixer and journals (and prints) how far each onset after a
 silence reached the speaker from its time.
@@ -3517,6 +3517,13 @@ string, a template or `+` of constants, an array of them `.join('\n')`, or a
 top-level `const` holding one). Numbers keep their type: `1 + 2` is `3`, while
 `'a' + 1 + 2` is `'a12'`. Conditional expressions are refused.
 
+A backend override (`--backend`, `EXACT_BACKEND_ORIGIN` or `.exact/backend-origin`)
+needs one top-level `const origin`, set to a literal http(s) string or a setting
+such as `import.meta.env.API_BASE_URL ?? 'https://api.example'`, and used in
+`net.fetch ${origin}`. Settings are inlined before the override. A refused
+selection names its selector and reports `backend-selection`, including in
+`contract build --json`.
+
 For grants that differ by backend, write an object literal such as
 `export const grants = { 'http://127.0.0.1:4790': ['net.fetch http://127.0.0.1:4790', 'secret.keep fixture-token'], 'https://discord.com': ['net.fetch https://discord.com', 'net.websocket wss://gateway.discord.gg', 'secret.keep discord-token'] };`.
 Keys must be unique string literals naming http(s) origins without credentials,
@@ -3829,7 +3836,11 @@ checkout by name, and any other path only through that placeholder. The web buil
 `web/build.rs` passes to `contract::bake(plan, …)` into a module of its own, where build.rs's `use`s and
 locals are not: write it as a path from the data crate (`my_app_data::MyApp`), or that path's `::default()`
 or `::new()` with no arguments, with no comma after it (rustfmt adds one when it breaks the call across
-lines). A source built with arguments is exported by a crate of the app's own
+lines). For a mixed app, the build copies the third argument to
+`exact_js_bake::build_mixed_with`: a reference to the same data-crate value or constructor,
+with no constructor arguments. TypeScript answers the other sources. A declared
+`rust.module.package` supplies the module instead of a generated one.
+A source built with arguments is exported by a crate of the app's own
 instead, named in app.json's `rust.module.package` (Update Lab's `logic/`).
 
 A source that wraps another implements `exact_runner::DataSourceWrapper`.

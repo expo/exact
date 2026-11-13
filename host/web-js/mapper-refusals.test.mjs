@@ -1,6 +1,6 @@
 // What a stream's mapper may call on the web JS target (LLP 1016.000 D7, the amendment of 2026-11-10): `fetch`,
 // timers and storage refuse in every mapper call of every stream kind and in its call for the stream's end, before
-// its first `await` and after it, with Hermes's words (js/src/prelude.js `request`, `storageCall`); a socket's mapper
+// its first `await` and after it, with Hermes's words (js/src/fetch.js `request`, storage.js `storageCall`); a socket's mapper
 // still sends on its own socket while it answers `open` or a `message`. The mappers are lowered as the bundle lowers
 // `async` (js/bake/src/typescript.mjs `asyncContextHelper`), so each step after an `await` runs in the context
 // ts-data.js's `__exact_async_context` puts back.

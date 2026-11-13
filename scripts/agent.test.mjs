@@ -684,6 +684,24 @@ test('a native named store is kept unless the drive resets it, under its lock; a
   } finally { [console.log, console.error] = quiet; }
 });
 
+// `--reader` and `--headless` reach the Android carrier as `open`'s `reader` (LLP 1107 D1), never through the
+// environment of the driver's process.
+test('main hands --reader and --headless to open', async () => {
+  const quiet = [console.log, console.error], before = process.env.EXACT_ANDROID_READER, said = [];
+  console.log = console.error = () => {};
+  delete process.env.EXACT_ANDROID_READER;
+  try {
+    const injected = { driveServer: async () => null, exclusiveNativeStore: async (key, launch) => launch(), resolveDevice: () => 'a device',
+      open: async (o) => { said.push(o.reader); return { state: async () => ({}), close: async () => {} }; } };
+    for (const flags of [[], ['--reader'], ['--headless']]) assert.equal(await main(['android', ...flags, 'state'], injected), 0);
+    assert.deepEqual(said, [undefined, true, false]);
+    assert.equal(process.env.EXACT_ANDROID_READER, undefined);
+  } finally {
+    [console.log, console.error] = quiet;
+    if (before !== undefined) process.env.EXACT_ANDROID_READER = before;
+  }
+});
+
 // The euxy port's `tap play` missed on a mode an earlier drive persisted, and the miss read like a broken view.
 test('a miss on a drive that kept its store says so, and how to start empty', async () => {
   const quiet = console.error;

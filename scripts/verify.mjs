@@ -48,7 +48,7 @@ import { findings as feelFindings, summary as feelSummary } from '../host/apple/
 import { compilerWarnings, information, windowsWindow } from './app-cli.mjs';
 import { guardFlags } from './help.mjs';
 import { holderOf, takePort } from './port-lock.mjs';
-import { backendOriginSelection, privateNetwork } from '../js/bake/src/typescript.mjs';
+import { backendOriginSelection, privateNetwork, selectBackendOrigin } from '../js/bake/src/typescript.mjs';
 import { contractVerify, semanticsSummary } from './verify-semantics.mjs';
 import { byRule, groups, ruleOf, largeRemedy, iosNavigationContent } from './verify-findings.mjs';
 import { cargoDiagnosticFilter } from './cargo-check.mjs';
@@ -1455,6 +1455,8 @@ async function deviceMain(argv, emitJSON, declined, ended) {
 // a server verify will not start or write to) stops both: it is one line and nothing runs (LLP 1116.008 D1).
 async function main(argv) {
   const args = guardFlags('verify', argv), json = args.includes('--json');
+  const backend = args.indexOf('--backend');
+  if (backend >= 0) { selectBackendOrigin(args[backend + 1]); args.splice(backend, 2); }
   const { resolveApp } = await import('./app.mjs');
   const app = resolveApp(args.includes('--app') ? args[args.indexOf('--app') + 1] : undefined);
   const semantics = contractVerify(app, json);

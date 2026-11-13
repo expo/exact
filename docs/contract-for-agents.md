@@ -1465,6 +1465,35 @@ next `open` asks for the token again and sends it as the first message.
 The token never enters the URL, subprotocols or a Contract answer. Adapt the
 message and refusal handling to the service; do not retry indefinitely.
 
+**Development identity servers.** `issuer`, every `endpoints` URL and each
+`apis` origin require HTTPS, except loopback (`localhost`, `127.0.0.1` or
+`[::1]`). A refusal names the option, such as `endpoints.token` or `apis[2]`.
+For a phone reaching your Mac over the LAN, serve the identity server and API
+through HTTPS with a certificate the phone trusts, or an HTTPS tunnel. A
+simulator can use the Mac's loopback server. Development builds keep this
+HTTPS rule; they have no insecure-origin switch.
+
+**Parameters chosen at the press.** Keep provider defaults in
+`authorizationParams`; pass a login hint, connection or account-choice prompt
+with the sign-in itself:
+
+```ts
+provider.signIn(store, { params: { login_hint: email, prompt: 'select_account' } });
+```
+
+`params` overrides those defaults for this request alone, including when
+`authorize` sends it. The package still opens a prepared browser request
+before awaiting anything. Both parameter maps refuse `response_type`,
+`client_id`, `redirect_uri`, `scope`, `state`, `code_challenge`,
+`code_challenge_method`, `nonce` and `max_age` with `TypeError`; the package
+sets those fields or cannot validate what they ask for.
+
+For flows the package does not cover, data code may use `openAuthSession`
+and `authCallback` directly; their public declarations and rejection statuses
+are in the generated `app.d.ts`. A callback must carry exactly one `state`,
+equal to the nonempty value supplied to `openAuthSession`. Keep callback URLs
+in data code: they can contain credentials.
+
 **An app's own sign-in screens.** A provider that lets an app sign the person
 in with its own screens (ForgeRock's authentication trees) still issues an
 authorization code. The app sends the authorization request as the provider
@@ -1565,8 +1594,9 @@ validation to AuthenticationServices; an authorization failure returns `Identity
 does not establish successful sign-in on a signed device.
 
 Google on Apple, `getCredentialState`, and the combined Apple/passkey sheet
-remain unimplemented. The existing native capabilities still advertise
-Google active requests and the Apple/passkey combination. A combined `publicKey` and passive `identity` call still belongs to
+remain unimplemented. Native capabilities report Google unavailable and Apple
+`withPublicKey: false`. For Google on Apple, use `@exact/oauth` through the
+system browser. A combined `publicKey` and passive `identity` call still belongs to
 passkeys; this Apple-only path does not implement it (LLP 1133.014 D10).
 
 ### Convex live queries
@@ -1806,9 +1836,13 @@ states would stop their input.
 
 `class=Style` applies literal style values; node attributes win. Conditional
 classes select two named styles with `class=(condition ? A : B)`. Computed values
-go on nodes. There is no selector cascade, dynamic style object, or arbitrary
-class-string composition. A style branch can mix a number and a CSS keyword in
-a property's admitted value space; this does not add general union types.
+go on nodes. Styles can also carry `backgroundMaterial`, `glassGroup` and
+`buttonStyle`. In a conditional class, each prop must be set in both styles or
+neither, unless the node supplies its own value. `backgroundMaterial="none"`
+explicitly removes a material. There is no selector cascade, dynamic style
+object, or arbitrary class-string composition. A style branch can mix a number
+and a CSS keyword in a property's admitted value space; this does not add
+general union types.
 On a number-only row such as `opacity`, a computed branch known to be a string
 is refused at build time even when another branch is numeric.
 
@@ -3475,6 +3509,27 @@ round's tick (`when screen == "play"`), a flight's frames
 one gated task, and each is the root's: a child component declares none
 (`type-child-resource`), so a sheet a component draws has its task in the root.
 
+**Retry backoff.** For a bounded ladder of delays, use one gated task per step.
+Only the active step has a timer, which wakes once at its deadline:
+
+```text
+  state waiting = false
+  state attempt = 1
+  task retry1 when waiting and attempt == 1
+    after(250, again)
+  task retry2 when waiting and attempt == 2
+    after(500, again)
+  task retry3 when waiting and attempt >= 3
+    after(1000, again)
+```
+
+Have `again` clear `waiting` and send the request. On failure, increment `attempt`
+and set `waiting` again; reset `attempt` to 1 on success. A new attempt then arms
+its step's timer. If the step stays active between retries, use `key=attempt` to
+restart its timer. Computed intervals remain refused. A wait that must track a
+continuous value can use a gated `every(frame, check)` and compare
+`performanceNow()` with its deadline; see "Following the transport" for tempo.
+
 **Repeating while a condition holds.** Use a task with `when` and `every`. The
 timer runs only while the condition is true. Any action that makes it false
 stops the timer.
@@ -4205,8 +4260,18 @@ Apple, Windows): `running`, `suspended` (hidden, or waiting for a gesture),
 `interrupted` (suspended by the host's interruption: a call or alarm on iOS,
 the window losing focus on Windows) or `closed` (no device: under the
 agent's virtual clock, or not yet opened); `none` on the Linux family and for
-a game without audio. `gpuMs`, `gpuMaxMs`, `cpuSubmitMs` and
-`cpuSubmitMaxMs` are not measured on any host yet and stay `none`. The 16 KiB snapshot limit is separate from the public surface
+a game without audio. `gpuMs` and `gpuMaxMs` are the mean and longest GPU
+execution of the window's frames, from the first pass's start to the last
+pass's end by GPU timestamps, read back a frame or two late: on Metal natively
+(macOS, iOS, tvOS), on the web only where the browser grants
+`timestamp-query`, and on the Linux family and Windows where the adapter has
+timestamp queries; `none` elsewhere and for a window with no sample. A canvas
+writes timestamps only while a plan reads the resource (or the agent's `perf`
+is armed). `cpuSubmitMs` and
+`cpuSubmitMaxMs` are the mean and longest wall time of the queue submission of
+the frames the canvas drew in the window, on every host (on Apple the
+submission also schedules the frame's presentation); a frame shared by several
+canvases is one submission, which each of them reports. The 16 KiB snapshot limit is separate from the public surface
 record's limit.
 
 A GPU HUD can show its last successful publication while its world loads:

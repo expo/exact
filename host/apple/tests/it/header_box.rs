@@ -127,3 +127,29 @@ fn a_dots_authored_size_and_a_rows_gap_are_sent() {
     let bare = style(id("unsized"));
     assert!(bare.get("width").is_none(), "an unwritten size ({bare})");
 }
+
+/// LLP 1123 D9: a face's size that reads the safe area where the box is is
+/// read there, here an author's `--exact-safe-area-inset-top` above it, not
+/// the document's 0.
+#[test]
+fn a_faces_size_reads_the_boxes_own_inset() {
+    let src = concat!(
+        "component App\n  view\n    column --exact-safe-area-inset-top=\"36px\"\n",
+        "      column width=\"var(--exact-safe-area-inset-top)\" ",
+        "height=\"var(--exact-safe-area-inset-top)\" background-color=\"#dcfce7\" testId=\"avatar\"\n",
+        "        text \"MC\"\n",
+    );
+    let plan = contract::bake(contract::compile(src).unwrap(), NoData).unwrap();
+    let (host, first) = Host::boot(
+        &plan.encode(),
+        NoData,
+        Box::new(MonospaceMeasurer::default()),
+        402.0,
+        874.0,
+    )
+    .unwrap();
+    let k = host.runner().kernel();
+    let avatar = k.node_by_key(k.find_by_test_id("avatar")[0]).unwrap().id;
+    let props = props_of(&first, avatar).expect("the avatar is created with props");
+    assert_eq!(props["faceBoxSize"], "36x36", "{first}");
+}

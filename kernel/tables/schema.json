@@ -472,7 +472,8 @@
     {
       "id": 54,
       "name": "backgroundMaterial",
-      "kind": "str"
+      "kind": "str",
+      "styleable": true
     },
     {
       "id": 55,
@@ -1326,6 +1327,7 @@
       "id": 216,
       "name": "glassGroup",
       "kind": "float",
+      "styleable": true,
       "_comment": "@ref LLP 1053.000.000 D1: the element's subtree is one Liquid Glass group whose glass begins to merge this many points apart (UIGlassContainerEffect, NSGlassEffectContainerView). Layout-neutral; drawn only on Apple 26+."
     },
     {

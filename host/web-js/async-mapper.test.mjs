@@ -17,9 +17,11 @@ beforeAll(async () => {
   dir = mkdtempSync(resolve(tmpdir(), 'exact-ts-async-mapper-'));
   for (const name of ['ts-stream.js', 'ts-fetch.js', 'ts-body-from.js', 'shape.js', 'uploads.js']) cpSync(resolve(root, 'host/web-js', name), resolve(dir, name));
   for (const name of ['grant-admission.js', 'faults.js', 'address-space.js', 'navigation.js', 'storage-environment.js']) writeFileSync(resolve(dir, name), hostFixtureFile(resolve(root, 'host/web', name)));
-  writeFileSync(resolve(dir, 'http-body.js'), `export function streamed(req, grantSet, message) {
+  writeFileSync(resolve(dir, 'http-body.js'), `export async function streamed(req, grantSet, message) {
   const q = new URL(req.url).searchParams, all = [...q.getAll('e'), ...Array(Number(q.get('n') ?? 0)).fill('x')];
-  all.forEach((data, i) => message({ event: '', id: '', data, coalesced: 0, ...(q.has('together') && i < all.length - 1 ? { more: true } : {}) }));
+  const send = (data, i) => message({ event: '', id: '', data, coalesced: 0, ...(q.has('together') && i < all.length - 1 ? { more: true } : {}) });
+  if (q.has('pull')) { for (const [i, data] of all.entries()) await send(data, i); }
+  else all.forEach(send);
   return Promise.resolve({ status: 200, body: new Uint8Array() });
 }\n`);
   writeFileSync(resolve(dir, 'admission.js'), readFileSync(resolve(root, 'host/web-js/admission.js'), 'utf8').replaceAll("'../web/", "'./"));
@@ -101,4 +103,17 @@ test('a read of 100,000 events maps every one, and 4097 behind a mapper that awa
   expect(behind).toEqual(["the stream's mapper fell behind: 4096 messages (4096 bytes) waited for its turns, and 1 more arrived"]);
   release();
   await done;
+});
+
+test('a pull-driven byte transport waits for the mapper promise', async () => {
+  const { promise, resolve: release } = Promise.withResolvers(), seen = [];
+  const map = e => {
+    seen.push(e.data);
+    return e.data === 'a' ? promise : e.data;
+  };
+  const done = open({ input: 'https://example.test/?e=a&e=b&pull', init: { exactStream: map } }, v => v, null, () => {}, new AbortController());
+  expect(seen).toEqual(['a']);
+  release('a');
+  await done;
+  expect(seen.slice(0, 2)).toEqual(['a', 'b']);
 });

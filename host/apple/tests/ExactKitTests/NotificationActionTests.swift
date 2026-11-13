@@ -332,6 +332,26 @@ final class NotificationActionTests: XCTestCase {
         XCTAssertNil(NotificationPresenter.shared.declared("approve", in: "approve", for: session))
     }
 
+    func testALaunchThatDeclaresNothingDoesNotAskTheCentre() throws {
+        let (session, _) = self.session()
+        let presenter = NotificationPresenter.shared
+        presenter.declare([], for: session) // neither the centre nor the kept ownership holds anything of Exact's
+        registered = [UNNotificationCategory(identifier: "embedder", actions: [], intentIdentifiers: [], options: [])]
+        var reads = 0
+        presenter.categories.read = { [unowned self] in reads += 1; $0(registered) }
+        var ready = false
+        presenter.declare([], for: session) { ready = true }
+        XCTAssertTrue(ready, "data does not wait for a centre it has nothing to tell")
+        XCTAssertEqual(reads, 0)
+        XCTAssertEqual(Set(registered.map(\.identifier)), ["embedder"])
+        presenter.declare(DeclaredCategories.lists(declared), for: session)
+        XCTAssertEqual(reads, 1, "a declaration is registered")
+        XCTAssertEqual(Set(registered.map(\.identifier)), ["approve,note", "embedder"])
+        presenter.declare([], for: session)
+        XCTAssertEqual(reads, 2, "its removal is reconciled from the kept ownership")
+        XCTAssertEqual(Set(registered.map(\.identifier)), ["embedder"])
+    }
+
     func testCategoryOwnershipTransitionsPreserveEmbedderDefinitions() throws {
         let (a, _) = session(label: "owner")
         let presenter = NotificationPresenter.shared

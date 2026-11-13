@@ -521,7 +521,8 @@ impl<D: DataSource> Presenter<D> {
             // The edge is where an auto width puts it in the containing block,
             // not the route's frame: a cover wider than the box widens it. A
             // width that does not end there is refused below.
-            let (env, style) = (kernel.arena().env(), root.style);
+            let env = kernel.env_of(root.id);
+            let (env, style) = (&env, root.style);
             let edge = if root.layout_position() == exact_kernel::PositionType::Absolute {
                 s.rect.2
                     - style.right.at_basis(env, s.rect.2)

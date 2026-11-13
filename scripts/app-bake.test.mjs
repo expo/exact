@@ -960,8 +960,8 @@ test.each(['success', 'failure'])('web std preparation isolates Cargo homes afte
       mock.module('node:child_process', () => ({ ...processes, spawnSync(command, args, { env }) {
         assert.equal(env.RUSTUP_TOOLCHAIN, 'nightly-2026-08-21');
         if (command === 'rustc') {
-          assert.deepEqual(args, ['--print', 'sysroot']);
-          return { status: 0, stdout: sysroot };
+          assert.deepEqual(args, ['--print', 'sysroot', '--print', 'host-tuple']);
+          return { status: 0, stdout: sysroot + '\\naarch64-apple-darwin\\n' };
         }
         assert.equal(command, 'cargo');
         assert.equal(env.HERMES_LEAN_SYS_OFFLINE, '1');

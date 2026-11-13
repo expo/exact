@@ -6,6 +6,56 @@ import { chromium, suiteBrowser } from './agent-launch.mjs';
 import { need } from './coverage.mjs';
 import { formControlsSmoke, isDeckURL, rebooted } from './smoke-inspect.mjs';
 
+test('web smoke builds keep module apps separate from generic fixture carriers', () => {
+  const script = `
+    import assert from 'node:assert/strict';
+    import { existsSync } from 'node:fs';
+    import { resolve } from 'node:path';
+    import { mock } from 'bun:test';
+    import * as processes from 'node:child_process';
+    const builds = [], sweeps = [];
+    mock.module('node:child_process', () => ({ ...processes, spawnSync(command, args, options) {
+      if (command === 'cargo') {
+        assert.deepEqual(args, ['test', '-p', 'exact-web', '--test', 'it', 'navigation::', '--', '--ignored', '--nocapture']);
+        sweeps.push(options.env);
+      } else {
+        assert.ok(args[0].endsWith('/host/web/build.mjs'));
+        builds.push({ args, env: options.env });
+      }
+      return { status: 0 };
+    } }));
+    const { resolveApp } = await import('./scripts/app.mjs');
+    const { webSmokeBuild, webSmokeSweep } = await import('./scripts/smoke-inspect.mjs');
+    for (const app of [resolveApp(resolve('apps/messages')), resolveApp(resolve('apps/fieldnotes'))]) {
+      process.env.EXACT_APP_DIR = app.dir;
+      builds.length = 0;
+      const result = webSmokeBuild(app, false);
+      assert.equal(builds[0].env.EXACT_APP_DIR, app.dir);
+      assert.equal(builds[0].env.EXACT_WEB_DIST, result.selectedWebDist);
+      const fixture = resolveApp(result.fixtureOptions.app);
+      assert.notEqual(fixture.dir, app.dir, 'generic plans have their own app');
+      assert.equal(existsSync(resolve(fixture.dir, 'app.ts')), false);
+      assert.equal(fixture.manifest.rust?.module, undefined);
+      assert.notEqual(result.fixtureOptions.webDist, result.selectedWebDist);
+      const generic = builds.filter(build => build.env.EXACT_APP_DIR === fixture.dir);
+      assert.ok(generic.some(build => !build.args.includes('--wasm') && build.env.EXACT_WEB_DIST === result.fixtureOptions.webDist));
+      assert.ok(generic.some(build => build.args.includes('--wasm') && build.env.EXACT_WEB_LINK === 'all' && build.env.EXACT_WEB_DIST === result.fixtureWebDist));
+      assert.equal(webSmokeSweep(result.fixtureWebDist).status, 0);
+      assert.equal(sweeps.at(-1).EXACT_ROUTER_DIST, result.fixtureWebDist);
+      assert.ok(!sweeps.at(-1).EXACT_APP_DIR, 'the navigation fixtures choose their own app');
+      assert.equal(process.env.EXACT_APP_DIR, app.dir, 'the selected app stays in the parent environment');
+      builds.length = 0;
+      const only = webSmokeBuild(app, true);
+      assert.equal(builds.length, 1, '--app-only builds the selected app alone');
+      assert.equal(builds[0].env.EXACT_APP_DIR, app.dir);
+      assert.equal(only.fixtureOptions, null);
+      assert.equal(only.fixtureWebDist, null);
+    }
+  `;
+  const r = spawnSync(process.execPath, ['-e', script], { cwd: resolve(import.meta.dir, '..'), encoding: 'utf8', timeout: 20_000 });
+  assert.equal(r.status, 0, r.stdout + r.stderr + (r.error ?? ''));
+});
+
 need('chrome', chromium().unavailable)('a reload waits for the replacement document to define and resolve runtime readiness', async () => {
   const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(req) {
     if (new URL(req.url).pathname !== '/') return new Response('', { status: 404 });

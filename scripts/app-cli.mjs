@@ -397,7 +397,7 @@ if (verb === 'contract') {
   if (backendFlag >= 0) {
     const value = rest[backendFlag + 1];
     if (!value || value.startsWith('--')) { console.error('--backend <url>: name the backend origin'); return log(2); }
-    process.env.EXACT_BACKEND_ORIGIN = value;
+    (await import('../js/bake/src/typescript.mjs')).selectBackendOrigin(value);
     rest.splice(backendFlag, 2);
   }
   // `--url` with a page served elsewhere drives that page; `--url /path` opens this app's build at a path, so it builds too.

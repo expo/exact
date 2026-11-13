@@ -804,6 +804,29 @@ test.skipIf(process.platform !== 'darwin' || !releaseJavaEnv ||
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }, 200000);
 
+// The package suites read the roster, manifest and APK from apkBuildDir; under the reader's own build directory an
+// outside app's were never found.
+test("apkBuildDir holds the APK build --apk makes: an outside app's own target, a checkout app's the reader's", async () => {
+  const { androidBinary, apkBuildDir } = await import('./agent-android.mjs');
+  const { resolveApp } = await import('./app.mjs');
+  const before = { EXACT_APP_DIR: process.env.EXACT_APP_DIR, EXACT_ANDROID_READER: process.env.EXACT_ANDROID_READER, CARGO_TARGET_DIR: process.env.CARGO_TARGET_DIR };
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-apk-dir-'));
+  try {
+    delete process.env.EXACT_APP_DIR; delete process.env.CARGO_TARGET_DIR;
+    process.env.EXACT_ANDROID_READER = '1';
+    writeFileSync(resolve(dir, 'app.contract'), 'component Fixture\n  view\n    text "fixture"\n');
+    const outside = resolveApp(dir);
+    expect(apkBuildDir(dir)).toBe(resolve(outside.target, 'android/app'));
+    expect(androidBinary(outside)).toBe(resolve(apkBuildDir(dir), 'outputs/apk/release/app-release.apk'));
+    const root = resolve(import.meta.dir, '..');
+    expect(apkBuildDir('caltrain')).toBe(resolve(root, 'host/android/app/build/caltrain'));
+    expect(androidBinary(resolveApp('caltrain'))).toBe(resolve(apkBuildDir('caltrain'), 'outputs/apk/release/app-release.apk'));
+  } finally {
+    for (const [name, value] of Object.entries(before)) if (value === undefined) delete process.env[name]; else process.env[name] = value;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('Android distribution refuses bad metadata and incomplete credentials before compiling', async () => {
   const { androidReleaseEnvironment } = await import('./agent-android.mjs');
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-upload-'));

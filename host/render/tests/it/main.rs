@@ -523,7 +523,25 @@ fn a_page_is_the_shell_around_the_document() {
         !rest.contains("navigation.js"),
         "an interaction page names navigation.js outside a comment, so something fetches it before intent"
     );
+    audio_policy_precedes_runtime(&shell, &interaction);
     a_javascript_page_preloads_its_runtime_and_runs_it_after_first_paint(interaction);
+}
+
+fn audio_policy_precedes_runtime(shell: &str, rendered: &Rendered) {
+    let entry = "<script src=\"./audio-session.js\"></script>\n";
+    let shell = shell.replace(
+        "<div id=\"exact-root\"></div>",
+        &format!("<div id=\"exact-root\" data-audio-session=\"ambient\"></div>{entry}"),
+    );
+    let html = exact_render::page(&shell, rendered).unwrap();
+    assert_eq!(html.matches(entry).count(), 1);
+    assert!(html.contains("data-audio-session=\"ambient\""));
+    assert!(
+        html.find(entry).unwrap()
+            < html
+                .find("<script type=\"application/vnd.exact.checkpoint\"")
+                .unwrap()
+    );
 }
 
 /// The shell with its CSS (`/* … */`) and HTML (`<!-- … -->`) comments cut:
@@ -646,6 +664,7 @@ fn a_javascript_page_preloads_its_runtime_and_runs_it_after_first_paint(mut r: R
     let html = exact_render::page(shell, &r).unwrap();
     assert!(html.contains("data-activate=\"interaction\""));
     assert!(!html.replace(capture, "").contains(".js"), "{html}");
+    audio_policy_precedes_runtime(shell, &r);
     // A shell that declares the plan's fonts (their faces with
     // `font-display`, their preloads early in the head) keeps its own: the
     // render's copies would replace the shell's rules.

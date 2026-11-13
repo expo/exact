@@ -274,7 +274,7 @@ impl SizeIndex {
             });
         }
         rows.extend_from_slice(&self.rows[end..]);
-        let tree = SumTree::new(&rows)?;
+        self.tree.replace(&rows, &self.rows)?;
         let after = start + middle.len();
         self.positions.retain(|_, position| {
             if *position >= end {
@@ -296,7 +296,6 @@ impl SizeIndex {
         order.extend_from_slice(&self.order[end..]);
         self.order = Rc::from(order);
         self.rows = rows;
-        self.tree = tree;
         self.next_generation = generation;
         Ok(())
     }
@@ -890,37 +889,64 @@ impl HeightPreview<'_> {
 }
 
 impl SumTree {
-    fn new(rows: &[RowHeight]) -> Result<Self, IndexError> {
-        let base = rows
-            .len()
-            .max(1)
+    fn capacity(len: usize) -> Result<usize, IndexError> {
+        len.max(1)
             .checked_next_power_of_two()
-            .ok_or(IndexError::CapacityOverflow)?;
-        let capacity = base.checked_mul(2).ok_or(IndexError::CapacityOverflow)?;
-        let mut sums = vec![0.0; capacity];
-        let mut measured = vec![u64::MAX; capacity];
-        let mut zeros = 0;
-        for (i, row) in rows.iter().enumerate() {
-            sums[base + i] = row.height;
-            measured[base + i] = row.measured_epoch.unwrap_or(0);
-            zeros += usize::from(row.height == 0.0);
-        }
-        for node in (1..base).rev() {
-            sums[node] = sums[node * 2] + sums[node * 2 + 1];
-            measured[node] = measured[node * 2].min(measured[node * 2 + 1]);
-        }
-        if !sums[1].is_finite() {
-            return Err(IndexError::ExtentOverflow);
-        }
-        Ok(Self {
-            sums,
-            measured,
-            base,
-            len: rows.len(),
-            zeros,
+            .and_then(|base| base.checked_mul(2))
+            .filter(|&capacity| capacity <= isize::MAX as usize / std::mem::size_of::<f64>())
+            .ok_or(IndexError::CapacityOverflow)
+    }
+
+    fn new(rows: &[RowHeight]) -> Result<Self, IndexError> {
+        let capacity = Self::capacity(rows.len())?;
+        let mut tree = Self {
+            sums: vec![0.0; capacity],
+            measured: vec![u64::MAX; capacity],
+            base: capacity / 2,
+            len: 0,
+            zeros: 0,
             #[cfg(test)]
             visits: std::cell::Cell::new(0),
-        })
+        };
+        tree.fill(rows);
+        if !tree.total().is_finite() {
+            return Err(IndexError::ExtentOverflow);
+        }
+        Ok(tree)
+    }
+
+    /// `previous` is the current row snapshot, retained until the splice commits.
+    fn replace(&mut self, rows: &[RowHeight], previous: &[RowHeight]) -> Result<(), IndexError> {
+        let capacity = Self::capacity(rows.len())?;
+        if capacity != self.sums.len() {
+            *self = Self::new(rows)?;
+            return Ok(());
+        }
+        self.fill(rows);
+        if !self.total().is_finite() {
+            self.fill(previous);
+            return Err(IndexError::ExtentOverflow);
+        }
+        Ok(())
+    }
+
+    fn fill(&mut self, rows: &[RowHeight]) {
+        let base = self.base;
+        if rows.len() < self.len {
+            self.sums[base + rows.len()..base + self.len].fill(0.0);
+            self.measured[base + rows.len()..base + self.len].fill(u64::MAX);
+        }
+        self.zeros = 0;
+        for (i, row) in rows.iter().enumerate() {
+            self.sums[base + i] = row.height;
+            self.measured[base + i] = row.measured_epoch.unwrap_or(0);
+            self.zeros += usize::from(row.height == 0.0);
+        }
+        for node in (1..base).rev() {
+            self.sums[node] = self.sums[node * 2] + self.sums[node * 2 + 1];
+            self.measured[node] = self.measured[node * 2].min(self.measured[node * 2 + 1]);
+        }
+        self.len = rows.len();
     }
 
     fn total(&self) -> f64 {

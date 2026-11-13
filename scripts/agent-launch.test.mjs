@@ -126,18 +126,18 @@ import { timeReporter } from '../host/web/navigation/environment.js';
 // The Snapback device checks need the Snapback client (snapback4/), which this repository does not ship.
 const hasSnapback = existsSync(new URL('../snapback4/web/device-build.mjs', import.meta.url));
 
-// LLP 1107 D1: `--reader` is a flag of the drive, said to the Android carrier as the variable it reads
-// (agent-android.mjs `androidBinary`), and never an op.
-test('--reader names the Canvas reader to the Android carrier', () => {
+// LLP 1107 D1: `--reader` and `--headless` are flags of the drive, which `main` hands to `open` as `reader`, and never
+// ops; neither sets EXACT_ANDROID_READER, which is how a script that opens a drive says it.
+test('--reader and --headless name the Android carrier as drive flags', () => {
   const before = process.env.EXACT_ANDROID_READER;
   try {
     delete process.env.EXACT_ANDROID_READER;
     expect(parseFlags(['android', '--app', 'shelf', 'tree']).flags.reader).toBeUndefined();
-    expect(process.env.EXACT_ANDROID_READER).toBeUndefined();
     const { flags, rest } = parseFlags(['android', '--reader', '--app', 'shelf', 'tree']);
     expect(flags.reader).toBe(true);
     expect(rest).toEqual(['android', 'tree']);
-    expect(process.env.EXACT_ANDROID_READER).toBe('1');
+    expect(parseFlags(['android', '--headless', 'tree']).flags.reader).toBe(false);
+    expect(process.env.EXACT_ANDROID_READER).toBeUndefined();
   } finally {
     if (before === undefined) delete process.env.EXACT_ANDROID_READER; else process.env.EXACT_ANDROID_READER = before;
   }
@@ -676,7 +676,7 @@ const other = 'http://127.0.0.1:4400';`;
   expect(next).toContain('net.fetch https://other.example');
   expect(next).toContain("const other = 'http://127.0.0.1:4400'");
   expect(next).toContain("// const origin = 'http://comment'");
-  expect(() => injectBackendOrigin('const origin = compute();', 'http://new', parseSync)).toThrow(/top-level literal/);
+  expect(() => injectBackendOrigin('const origin = compute();', 'http://new', parseSync)).toThrow(/top-level const origin/);
   for (const init of ["'http://127.0.0.1:4400' as const", "('http://127.0.0.1:4400' satisfies string)", '`http://127.0.0.1:4400` as const']) {
     const wrapped = `export const origin = ${init}; export const grants = \`net.fetch \${origin}\`;`;
     expect(literalBackendOrigin(wrapped, parseSync)).toBe('http://127.0.0.1:4400');
@@ -1413,4 +1413,14 @@ test('a widget address carries a configuration of parameter names to values', as
   expect(parsed.argv).toEqual(['ios', 'state']);
   for (const bad of ['three', '[]', '{"categories":3}'])
     expect(() => widgetArguments(['ios', 'widget', 'plan', '--configuration', bad, 'state'])).toThrow('widget --configuration: expected a JSON object');
+});
+
+
+test('a backend flag keeps its source through child builds and an environment override replaces it', async () => {
+  const { backendOriginSelection, selectBackendOrigin } = await import('../js/bake/src/typescript.mjs');
+  const env = {};
+  selectBackendOrigin('https://chosen.example/', env);
+  expect(backendOriginSelection('.', env)).toEqual({ origin: 'https://chosen.example', source: '--backend' });
+  env.EXACT_BACKEND_ORIGIN = 'https://other.example';
+  expect(backendOriginSelection('.', env)).toEqual({ origin: 'https://other.example', source: 'EXACT_BACKEND_ORIGIN' });
 });

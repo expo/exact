@@ -209,11 +209,15 @@ extension NotificationPresenter {
     //   and releases its responses; another session's equal declaration keeps ownership.
     private func reconcileCategories() {
         guard !reconcilingCategories, !categoryUpdates.isEmpty else { return }
+        // With nothing declared, registered or kept, the write would be the set the
+        // read returned. A launch waits for this before its data starts, so an app
+        // with no notification actions does not ask the centre.
+        if combinedCategories.isEmpty, registeredCategories.isEmpty, DeclaredCategories.kept.isEmpty {
+            return categoriesRegistered([:])
+        }
         reconcilingCategories = true
         let centre = categories
         centre.read { [self] registered in
-            let updates = categoryUpdates
-            categoryUpdates = []
             let owned = DeclaredCategories.kept
             let others = registered.filter { category in
                 guard let prior = owned[category.identifier] else { return true }
@@ -223,15 +227,23 @@ extension NotificationPresenter {
             let ours = combinedCategories.filter { !foreign.contains($0.key) }
             centre.write(others.union(ours.map { Self.category($0.key, $0.value) }))
             DeclaredCategories.keep(ours)
-            registeredCategories = ours
-            for session in app?.sessions ?? [] where declarations(for: session) != nil {
-                currentCategories[ObjectIdentifier(session)]?.ready = true
-            }
-            reconcilingCategories = false
-            updates.forEach { $0() }
-            for session in app?.sessions ?? [] { deliverWaiting(session) }
-            reconcileCategories()
+            categoriesRegistered(ours)
         }
+    }
+
+    /// The centre holds `ours` beside the embedder's: live declarations are ready,
+    /// and what waited for them goes on.
+    private func categoriesRegistered(_ ours: [String: [DeclaredAction]]) {
+        let updates = categoryUpdates
+        categoryUpdates = []
+        registeredCategories = ours
+        for session in app?.sessions ?? [] where declarations(for: session) != nil {
+            currentCategories[ObjectIdentifier(session)]?.ready = true
+        }
+        reconcilingCategories = false
+        updates.forEach { $0() }
+        for session in app?.sessions ?? [] { deliverWaiting(session) }
+        reconcileCategories()
     }
 
     func deliverWaiting(_ session: ExactSession) {

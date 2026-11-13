@@ -153,7 +153,7 @@ pub(crate) fn apply(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
     let Some(table) = table else {
         return;
     };
-    let env = arena.env();
+    let env = &*arena.env_of(slot);
     match part {
         Part::Table => {
             s.display = taffy::style::Display::Grid;
@@ -196,8 +196,11 @@ pub(crate) fn apply(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
             // another box, has no padding of its own.
             let t = arena.style(table);
             let padded = lays_out(arena, table);
-            let (spacing, _) = spacing(t, env);
-            let inset = |d: Dimension| match d.spaced(env, cells::COLUMN).resolve(env) {
+            // The table's lengths in the table's environment, the caption's
+            // margins in its own (LLP 1123 D9)
+            let table_env = &*arena.env_of(table);
+            let (spacing, _) = spacing(t, table_env);
+            let inset = |d: Dimension| match d.spaced(table_env, cells::COLUMN).resolve(table_env) {
                 Dimension::Points(v) if padded => v.max(0.0) + spacing,
                 _ => spacing,
             };

@@ -27,12 +27,23 @@ function httpOrigin(value, label) {
   return url.origin;
 }
 
+/** Carry a drive flag's selection into its child builds. */
+export function selectBackendOrigin(value, env=process.env) {
+  if (!value || value.startsWith('--')) throw new Error('--backend <url>: name the backend origin');
+  env.EXACT_BACKEND_ORIGIN=value;
+  env.EXACT_BACKEND_PROVENANCE=JSON.stringify({origin:value,source:'--backend'});
+}
+
 /** Explicit backend, saved development selection, then the checkout's declared fixture default. */
 export function backendOriginSelection(app, env=process.env, parse) {
   const file=resolve(app,'.exact/backend-origin');
   const value=env.EXACT_BACKEND_ORIGIN ?? (existsSync(file) ? readFileSync(file,'utf8').trim() : null);
   if (value===null) return fixtureBackendSelection(app,env,parse);
-  return { origin: httpOrigin(value,'EXACT_BACKEND_ORIGIN'), source: env.EXACT_BACKEND_ORIGIN != null ? 'EXACT_BACKEND_ORIGIN' : '.exact/backend-origin' };
+  // A child build keeps the flag's provenance only while it names that exact selection.
+  let flag; try { flag=JSON.parse(env.EXACT_BACKEND_PROVENANCE ?? 'null'); } catch { /* no flag provenance */ }
+  const source=env.EXACT_BACKEND_ORIGIN != null ? (flag?.origin===value && flag?.source==='--backend' ? '--backend' : 'EXACT_BACKEND_ORIGIN') : '.exact/backend-origin';
+  try { return { origin: httpOrigin(value,source), source }; }
+  catch (error) { throw Object.assign(error,{code:'backend-selection'}); }
 }
 export const backendOrigin = (app, env=process.env) => backendOriginSelection(app, env)?.origin ?? null;
 
@@ -200,7 +211,7 @@ export function injectBackendOrigin(code, origin, parse, env=process.env) {
     : init?.type==='TemplateLiteral' && !init.expressions.length ? init.quasis[0].value.cooked : null;
   if (targets.length!==1 || !literal || !/^https?:\/\//.test(literal))
     throw new Error(keyed.length ? `app.ts:${lineColumn(code)(init?.start ?? keyed[0].start)}: grants keyed by origin need one top-level literal const origin`
-      : 'EXACT_BACKEND_ORIGIN: app.ts needs one top-level literal const origin; use it in net.fetch ${origin}');
+      : "EXACT_BACKEND_ORIGIN: app.ts needs one top-level const origin, set to a literal http(s) string or import.meta.env.NAME ?? '<literal>'; use it in net.fetch ${origin}");
   const edits=origin===null ? [] : [[init.start,init.end,JSON.stringify(origin)]];
   const at=lineColumn(code);
   if (keyed.length) {
@@ -743,8 +754,8 @@ export function replayCaptured(stage, allowed=[]) {
 }
 
 // Time and seeds are source arguments (LLP 1027.000): every executor refuses the clock, randomness and every
-// timer but an answer's own `setTimeout` (D1) when they are used, with these words (js/src/prelude.js,
-// js/src/binary.js, host/web-js/ts-fetch.js). A direct use in the app's own code is refused here too, at
+// timer but an answer's own `setTimeout` (D1) when they are used, with these words (js/src/time.js,
+// js/src/crypto.js, host/web-js/ts-fetch.js). A direct use in the app's own code is refused here too, at
 // build, by file and line, so a test that runs the module under Bun, which has no such guard, cannot hide it.
 const ambient=(api)=>api+' is unavailable in data sources; pass time or a random seed as an argument';
 const timers=(api)=>api+' is unavailable in data sources: an answer waits with setTimeout; pass time as an argument';
@@ -889,7 +900,13 @@ export function configure(stage, incremental=false, parse) {
     // `import.meta.env` first: a `const origin` it sets is a literal the backend selection may then override.
     const settings=inlineSettings(authored,app,parse);
     writeFileSync(resolve(stage,'__exact_env.json'), JSON.stringify(settings.record));
-    const after=developmentGrants(injectBackendOrigin(settings.code,selection?.origin ?? null,parse),parse);
+    let injected;
+    try { injected=injectBackendOrigin(settings.code,selection?.origin ?? null,parse); }
+    catch (error) {
+      if (!selection) throw error;
+      throw Object.assign(new Error(`${selection.source}: ${error.message.replace(/^EXACT_BACKEND_ORIGIN: /,'')}`),{code:'backend-selection'});
+    }
+    const after=developmentGrants(injected,parse);
     writeFileSync(resolve(stage,'__exact_backend.json'), JSON.stringify({origin:literalBackendOrigin(after,parse),warning}));
     if (before!==after) writeFileSync(modulePath,after);
     // Every producer refuses alike what the web build cannot read without running it.

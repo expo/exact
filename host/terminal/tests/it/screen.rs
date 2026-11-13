@@ -1420,3 +1420,16 @@ fn dashed_and_dotted_borders_draw_their_own_lines() {
         );
     }
 }
+
+/// A corner rounds by its own box's radius, which may read the safe area
+/// where the box is (LLP 1123 D9): here an inset its parent declares.
+#[test]
+fn a_corner_reads_its_boxs_own_inset() {
+    let source = "component App\n  view\n    column --exact-safe-area-inset-top=\"8px\"\n      column width=\"6ch\" height=\"3lh\" border=\"thin solid\" border-radius=\"var(--exact-safe-area-inset-top)\"\n";
+    let plan = contract::compile(source).unwrap();
+    let mut host = Host::boot(plan, (), Mode::Fullscreen, 20, 6).unwrap();
+    let mut vt = Vt::new(&mut host);
+    vt.render(&mut host);
+    let screen = vt.text(false);
+    assert!(screen.starts_with('╭'), "{screen}");
+}

@@ -202,6 +202,30 @@ test('bare dep-info keeps an absent optional directory fresh', async () => {
   } finally { rmSync(dir, {recursive:true, force:true}); }
 });
 
+// A new app's first Apple build writes the copy after its start; the driver refused that build as stale.
+test("the compiled copy of a linked bake, written during the build, is not newer than the build; the sources are", async () => {
+  const {depInfoNewer} = await import('./agent-launch.mjs');
+  const {COMPILED_BAKE, compiledBakeDir} = await import('./linked-plan.mjs');
+  const scratch = resolve(import.meta.dir, '../target');
+  mkdirSync(scratch, {recursive:true});
+  const dir = mkdtempSync(resolve(scratch, 'compiled-bake-'));
+  try {
+    const baked = resolve(dir, 'ios.baked'), source = resolve(dir, 'app.contract');
+    mkdirSync(baked);
+    for (const name of COMPILED_BAKE) writeFileSync(resolve(baked, name), `// ${name}\n`);
+    writeFileSync(source, 'component App\n');
+    const started = Date.now() - 60_000;
+    utimesSync(source, new Date(started - 60_000), new Date(started - 60_000));
+    const copy = compiledBakeDir(baked, resolve(dir, 'target/bake-compiled'));
+    const info = resolve(dir, 'archive.d');
+    writeFileSync(info, `archive: ${[source, ...COMPILED_BAKE.map(name => resolve(copy, name))].join(' ')}\n`);
+    expect(statSync(resolve(copy, COMPILED_BAKE[0])).mtimeMs).toBeGreaterThan(started);
+    expect(depInfoNewer(started, null, info, dir)).toEqual([]);
+    utimesSync(source, new Date(), new Date());
+    expect(depInfoNewer(started, null, info, dir).map(path => resolve(import.meta.dir, '..', path))).toEqual([source]);
+  } finally { rmSync(dir, {recursive:true, force:true}); }
+});
+
 test('optional package inputs keep the bake revision through test edits and change on creation or deletion', async () => {
   const {cargoBakeInputs} = await import('./cargo-dep-info.mjs');
   const scratch = resolve(import.meta.dir, '../target');

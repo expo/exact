@@ -642,6 +642,12 @@ while the activity shows but is paused, as it is when a permission dialog's answ
 start waits for the resume; the app stopping first ends it. `failed` names why nothing started: `InvalidStateError`
 (no activity showing), `AbortError` (the app stopped first), `NotFoundError` (no app handles the intent),
 `NotAllowedError` (a `SecurityException`) or `UnknownError`. Without `failed`, such a start answers `RESULT_CANCELED`.
+It returns a function that withdraws a start still waiting for the resume, answering neither, which a call let go
+(`cancel(request)`) uses so that no sheet opens for it.
+`visible` says whether the activity shows, resumed or paused under a dialog: Android lets such an app start an
+activity, as Credential Manager starts its sheet. `whenResumed(failed, go)` runs `go` with the activity once it is
+resumed, waiting as a start does, for a prompt the platform keeps only over the app's own top activity
+(`BiometricPrompt`); `failed` has `InvalidStateError` or `AbortError`, and the function it returns withdraws the wait.
 `invoke(handle, handler, args, reply)` runs an app handler on the host's owner thread and delivers its answer on the
 main thread. The activity binds the roster's names as it
 is made (`Native.bindExtensions`). Outside the agent the host binds them as in production; under it, those a drive

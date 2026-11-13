@@ -29,7 +29,7 @@ pub(super) fn focus_fragments(
         })
         .collect();
     paragraph
-        .inline_backgrounds(&backgrounds, &kernel.env())
+        .inline_backgrounds(&backgrounds, &kernel.env_of(focus))
         .into_iter()
         .map(|(shape, _)| shape)
         .collect()
@@ -131,7 +131,7 @@ fn collect_backgrounds(
                     n.style.border_radius_bottom_right.clone(),
                     n.style.border_radius_bottom_left.clone(),
                 ]
-                .map(|d| d.resolve(&kernel.env())),
+                .map(|d| d.resolve(&kernel.env_of(n.id))),
             })
     };
     if let Some(text) = node.props.str(PropId::Text) {

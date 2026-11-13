@@ -321,10 +321,11 @@ fn main_of(axis: ListAxis, offset: (f32, f32)) -> f32 {
         ListAxis::Horizontal => offset.0,
     }
 }
-/// A padding against a containing block `basis` wide, clamped at 0, padding's
-/// range: a `calc()` that resolves below it computes to 0 (CSS Values 4 §10.12)
-fn length(kernel: &Kernel, value: Dimension, basis: f64) -> f64 {
-    f64::from(value.at_basis(kernel.arena().env(), basis as f32)).max(0.)
+/// `view`'s padding against a containing block `basis` wide, clamped at 0,
+/// padding's range: a `calc()` that resolves below it computes to 0 (CSS
+/// Values 4 §10.12).
+fn length(kernel: &Kernel, view: ViewId, value: Dimension, basis: f64) -> f64 {
+    f64::from(value.at_basis(&kernel.env_of(view), basis as f32)).max(0.)
 }
 
 fn containing_width(kernel: &Kernel, view: ViewId, viewport: f64) -> f64 {
@@ -365,8 +366,8 @@ fn containing_width(kernel: &Kernel, view: ViewId, viewport: f64) -> f64 {
             (node.frame.width as f64
                 - left as f64
                 - right as f64
-                - length(kernel, style.padding_left, basis)
-                - length(kernel, style.padding_right, basis)
+                - length(kernel, node.id, style.padding_left, basis)
+                - length(kernel, node.id, style.padding_right, basis)
                 - covered)
                 .max(0.)
         })
@@ -387,7 +388,7 @@ fn geometry(kernel: &Kernel, snapshot: &CollectionSnapshot, viewport: f64) -> Op
         } else {
             0.
         };
-        length(kernel, d, basis)
+        length(kernel, snapshot.view, d, basis)
     };
     let s = node.style;
     let axis = snapshot.axis;
@@ -562,7 +563,7 @@ impl<D: DataSource> Presenter<D> {
                         style.padding_bottom.clone(),
                         style.padding_left.clone(),
                     ]
-                    .map(|d| length(kernel, d, basis)),
+                    .map(|d| length(kernel, view, d, basis)),
                     borders: style.border_widths(),
                 }
             });

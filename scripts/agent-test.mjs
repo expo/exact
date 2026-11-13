@@ -627,7 +627,7 @@ async function propertyFailure(p, line, state, previous, s, file, test, step, in
  * `atStep(s, { name, line, op })` runs on the session after each input step (and `reload`) lands; returning 'stop' ends
  * that test there, 'done' every test from there (verify's tour of the screens the tests pass through).
  */
-export async function runTests({ host, browser, file, plan, app, size, env, webDist, device = false, phone, url, seed, locale, formatLocale, timeZone, epoch, failFetch, storage = 'test', touch = 'agent', chrome: bars = 'agent', scale, atEnd, atStep, port } = {}) {
+export async function runTests({ host, browser, file, plan, app, size, env, webDist, device = false, phone, reader, url, seed, locale, formatLocale, timeZone, epoch, failFetch, storage = 'test', touch = 'agent', chrome: bars = 'agent', scale, atEnd, atStep, port } = {}) {
   const root = resolve(fileURLToPath(new URL('..', import.meta.url))), selected = resolveApp(app);
   webDist ??= defaultWebDist(selected);
   if (host === 'web' && !url) await backendPreflight(selected, resolve(webDist));
@@ -731,7 +731,7 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
     // (every `clock +N`, settle and timer), as the runner reports it; whole milliseconds, which every host takes.
     const first = facts.epoch; // the test's launch date, which a `reload` moves `facts.epoch` on from
     const reached = async () => { const { clock } = await s.op({ op: 'tags' }).catch(() => ({})); return facts.epoch + Math.floor(Number.isFinite(clock) ? clock : s.now); };
-    const launch = (environment) => open({ host, browser, plan, ...facts, env: { ...environment, EXACT_AGENT_EPHEMERAL_PORT: '1' }, app, webDist, device, phone, url: opensAt ?? url, storage: store, touch: fingers, chrome: bars, scale, port });
+    const launch = (environment) => open({ host, browser, plan, ...facts, env: { ...environment, EXACT_AGENT_EPHEMERAL_PORT: '1' }, app, webDist, device, phone, reader, url: opensAt ?? url, storage: store, touch: fingers, chrome: bars, scale, port });
     let s = await launch(fresh);
     const prefer = async (st) => {
       const facts = { [st.name]: st.value };
@@ -769,7 +769,7 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
       const failFetch = now.faults ? faultSpecOf(now.faults) : undefined;
       facts.epoch = await reached();
       if (s.host === 'web') { await s.carrier.reset({ keep: true, failFetch, epoch: facts.epoch }); s.now = 0; resetLogs(s); s.notes = notes; return; }
-      await s.close(); s = await open({ host, browser, plan, ...facts, failFetch: failFetch ?? facts.failFetch, env: { ...(env ?? {}), ...fixture }, app, webDist, device, phone, url, storage: store, touch: fingers, chrome: bars, scale, port }); s.notes = notes;
+      await s.close(); s = await open({ host, browser, plan, ...facts, failFetch: failFetch ?? facts.failFetch, env: { ...(env ?? {}), ...fixture }, app, webDist, device, phone, reader, url, storage: store, touch: fingers, chrome: bars, scale, port }); s.notes = notes;
       for (const [name, value] of Object.entries(media)) {
         const r = await s.prefer({ [name]: value });
         if (r?.error) throw new Error(r.error);

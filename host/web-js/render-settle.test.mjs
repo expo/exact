@@ -303,7 +303,7 @@ export const answer = (): any => {
 
 // A fetch an app module makes as it loads, which the reader's page runs as its answer's wait, is work in flight: the
 // render waits for it, on a page with no status too, and the page shows its answer. (A device's executor refuses a
-// fetch with no answer running, js/src/prelude.js `request`, so the render host answers this page with `r` pending.)
+// fetch with no answer running, js/src/fetch.js `request`, so the render host answers this page with `r` pending.)
 test('a render waits for a fetch an app module made as it loaded', async () => {
   const dir = scratch();
   const api = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Promise(resolve => setTimeout(() => resolve(new Response('loaded')), 200)) });

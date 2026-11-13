@@ -12,8 +12,9 @@
 //   already redacted (a country, a region, a city, a postal code), and the full one comes with the payment.
 // - The final handler's answer is D6's table: `success` closes the sheet; `fail`, `unknown` and `retry` are Google's
 //   error result, which keeps the sheet up for another card or a corrected address.
-// - A call let go cannot withdraw Google's activity: the request is abandoned, and an authorization that arrives is
-//   answered as failed without calling the app (D6 phase 3).
+// - A call let go cannot withdraw Google's activity once it shows: the request is abandoned, and an authorization that
+//   arrives is answered as failed without calling the app (D6 phase 3). Let go before it shows (its start waiting for
+//   the activity's resume, or Google's answer not yet in), the sheet is never opened.
 package exact.payments
 
 import android.app.Activity
@@ -66,6 +67,8 @@ class PaymentsModule(context: ExtensionContext) : ExactExtension(context) {
         var authorizing = false
         var result: JSONObject? = null
         var option: String? = null
+        /** Withdraws the sheet's start while it waits for the resume ([ExtensionContext.startIntentSenderForResult]). */
+        var withdraw: () -> Boolean = { false }
         val details = JSONObject(args.optJSONObject("details")?.toString() ?: "{}")
     }
     private var sheet: Sheet? = null
@@ -172,8 +175,10 @@ class PaymentsModule(context: ExtensionContext) : ExactExtension(context) {
         client.loadPaymentData(made).addOnCompleteListener { task ->
             when {
                 task.isSuccessful -> finish(s, Activity.RESULT_OK, task.result)
+                // Let go before Google answered: nothing opens.
+                task.exception is ResolvableApiException && s.letGo -> finish(s, Activity.RESULT_CANCELED, null)
                 task.exception is ResolvableApiException -> {
-                    context.startIntentSenderForResult((task.exception as ResolvableApiException).resolution.intentSender) { code, intent ->
+                    s.withdraw = context.startIntentSenderForResult((task.exception as ResolvableApiException).resolution.intentSender) { code, intent ->
                         finish(s, code, intent?.let { PaymentData.getFromIntent(it) }, intent)
                     }
                 }
@@ -288,11 +293,13 @@ class PaymentsModule(context: ExtensionContext) : ExactExtension(context) {
         }
     }
 
-    /** The call was let go: Google's activity stays, so the request is abandoned (D6 phase 3). */
+    /** The call was let go: a sheet waiting to open never does; one up stays, so the request is abandoned (D6
+     * phase 3). */
     override fun cancel(request: Int) {
         val s = sheet ?: return
         if (s.request != request || s.authorizing) return
         s.letGo = true
+        if (s.withdraw()) return finish(s, Activity.RESULT_CANCELED, null)
         context.log("payment ${s.id}: abandoned, its call was let go; the sheet stays until it is closed")
     }
 

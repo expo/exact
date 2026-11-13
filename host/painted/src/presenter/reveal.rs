@@ -455,7 +455,7 @@ impl<D: DataSource> Presenter<D> {
                     r.scroll_margin_bottom.clone(),
                     r.scroll_margin_left.clone(),
                 ]
-                .map(|d| d.at_basis(kernel.arena().env(), 0.0))
+                .map(|d| d.at_basis(&kernel.env_of(n.id), 0.0))
             })
             .unwrap_or([0.0; 4]);
         let mut at = self.scroll_parent(id);
@@ -510,7 +510,7 @@ impl<D: DataSource> Presenter<D> {
             let basis = [port.3, port.2, port.3, port.2];
             let padding = std::array::from_fn(|i| {
                 padding[i]
-                    .at_basis(self.host.kernel().arena().env(), basis[i])
+                    .at_basis(&self.host.kernel().env_of(a), basis[i])
                     .max(0.0)
             });
             let off = self.scroll.get(&a).copied().unwrap_or((0.0, 0.0));

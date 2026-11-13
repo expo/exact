@@ -721,8 +721,10 @@ targets excluded) and
 `geometryMemoryBytes` (the shared vertex and index buffers' allocated bytes);
 the GPU module adds the process's footprint and, on the web, its own heap. `audioState` is the game audio output's (`running`, `suspended`,
 `interrupted`, `closed`) where the target has a player. CPU encoding is distinct
-from queue submission and GPU execution; unsupported timing, memory and audio
-fields stay unavailable. No simulation state, save or hash contains these readings.
+from queue submission (`cpuSubmitMs`, which the GPU module times) and GPU
+execution (`gpuMs`: each frame's timestamp envelope, measured by the agent's
+timing without its samples or trace while only a reader asks); unsupported
+timing, memory and audio fields stay unavailable. No simulation state, save or hash contains these readings.
 
 ### Texture families
 

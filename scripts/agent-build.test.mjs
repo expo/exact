@@ -390,6 +390,10 @@ test('missing native products name their build command before checking backend m
       await assert.rejects(openStdio({ host, app: dir }), host === 'macos' ? /EXACT_MAC_BIN names no file/ : /run .* first/);
     }
     await assert.rejects(openStdio({ host: 'ios', device: true, app: dir }), /run bun host\/apple\/build.mjs --device first/);
+    // The Canvas reader's drive runs the APK, whose build is the one named; the headless one names the Linux host's.
+    delete process.env.EXACT_ANDROID_BIN;
+    await assert.rejects(openStdio({ host: 'android', app: dir, reader: true }), /bun exact\.mjs android\) first/);
+    await assert.rejects(openStdio({ host: 'android', app: dir, reader: false }), /bun exact\.mjs android --headless\) first/);
   } finally {
     for (const key of ['EXACT_MAC_BIN', 'EXACT_WINDOWS_BIN', 'EXACT_LINUX_BIN', 'EXACT_ANDROID_BIN']) {
       if (saved[key] === undefined) delete process.env[key]; else process.env[key] = saved[key];

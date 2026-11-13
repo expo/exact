@@ -27,7 +27,7 @@ function deadlineOf(init) {
 }
 
 // `exactIndependentHttp.maxResponseBytes`: the largest body the fetch takes,
-// checked with Hermes's words (js/src/prelude.js); without it, the ordered
+// checked with Hermes's words (js/src/fetch.js); without it, the ordered
 // lane's 64 MiB, as on native. Browsers have no lanes, so only the bound applies.
 function ceilingOf(init) {
   const independent = init.exactIndependentHttp;
@@ -115,7 +115,7 @@ export async function fetchWith(set, input, init = {}, expires = null, redirect 
     if (given !== undefined) rest.signal = given;
     own = given !== undefined ? given : typeof Request === 'function' && input instanceof Request ? input.signal : undefined;
     if (!decided) armed = signalDeadline.arm?.(own, deadline?.ms);
-    // The signal's deadline replaces an `exactTimeout` no earlier, as natively (prelude.js `timers.left`)
+    // The signal's deadline replaces an `exactTimeout` no earlier, as natively (time.js `timers`: `left`)
     if (armed) deadline = until = null;
     // The deadline reaches the request only until its body is read: a
     // response that arrived in time stays readable after the deadline.
