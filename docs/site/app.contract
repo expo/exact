@@ -134,6 +134,7 @@ routes nav
   referenceContractGrammarSemanticRestrictions "/reference/contract-grammar/semantic-restrictions" render=build activate=idle
   reference "/reference/developer" render=build activate=idle
   referenceDeveloperRuntimeFontFamiliesAndAriaDisabled "/reference/developer/runtime-font-families-and-aria-disabled" render=build activate=idle
+  referenceDeveloperGroupedSectionShadows "/reference/developer/grouped-section-shadows" render=build activate=idle
   referenceDeveloperServeRealworld "/reference/developer/serve-realworld" render=build activate=idle
   referenceDeveloperInspectAndFormatContract "/reference/developer/inspect-and-format-contract" render=build activate=idle
   referenceDeveloperContractEvaluationLimits "/reference/developer/contract-evaluation-limits" render=build activate=idle
