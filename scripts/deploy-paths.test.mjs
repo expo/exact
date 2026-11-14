@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpath
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve, sep, toNamespacedPath } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { assertCapturedContractSources, bake, buildFor, canonicalBytes, classify, classifyArtifacts, cohortReceipt, contractCompiler, copyBake, disposeSnapshot, installedContractPackage, materializeSnapshot, namesNative, nativePlatforms, publishRoot, snapshotOf, sourcePathspec, streamHead, unrelocatableContractDependency } from './deploy.mjs';
+import { assertCapturedContractSources, bake, buildFor, canonicalBytes, classify, classifyArtifacts, cohortReceipt, contractCompiler, copyBake, disposeSnapshot, installedContractPackage, materializeSnapshot, namesNative, nativePlatforms, publishRoot, snapshotOf, sourcePaths, streamHead, unrelocatableContractDependency } from './deploy.mjs';
 import { bakeOutput, bakeTarget, buildBake } from './app.mjs';
 import * as asyncLane from './async.mjs';
 import { pinned } from './test-workspace.mjs';
@@ -269,7 +269,7 @@ test('a deploy snapshot leaves out dist and everything a build keeps beside it, 
     reapGenerations(dist, { newest: 1, ageMs: 0, bytes: 2 ** 30 });
     const release = leaseGeneration(dist, readdirSync(`${dist}.gen`)[0]);
     write('dist.lock', '1'); write('dist.stage-a1b2c3/app.js', 'half a build'); write('dist.previous/app.js', 'aside');
-    const ignored = git('ls-files', '-z', '--others', '--ignored', '--exclude-standard', '--', ...sourcePathspec(repo, { dir: repo, workspace: repo, manifest: {} }, resolve(repo, 'exact2')));
+    const ignored = git('ls-files', '-z', '--others', '--ignored', '--exclude-standard', '--', ...sourcePaths(repo, { dir: repo, workspace: repo, manifest: {} }, resolve(repo, 'exact2')).pathspec);
     expect(ignored.status, ignored.stderr).toBe(0);
     expect(existsSync(`${dist}.gen.reaped`)).toBe(true);
     expect(ignored.stdout.split('\0').filter(Boolean)).toEqual(['local.json']);
@@ -572,6 +572,78 @@ test('a deploy snapshot omits the Exact corpus link and still validates applicat
   const app = { name: 'test', dir: external, workspace: external, manifest: {} };
   expect(() => snapshotOf(app, { compiler, dirty: true }, exact)).toThrow(/symlink llp.*escapes the captured source repositories/);
 }, 30000);
+
+test('a deploy omits each Cargo crate target and still refuses dirty source', () => {
+  const root = mkdtempSync(join(fixture, 'cargo-outputs-'));
+  const exact = join(root, 'exact'), external = join(root, 'app');
+  const compiler = contractCompiler(compilerRoot('fn main() { print!(r#"{{"packages":[],"sources":[],"consulted":[],"errors":[]}}"#); }\n'));
+  const git = (repo, ...args) => {
+    const result = spawnSync('git', args, { cwd: repo, encoding: 'utf8' });
+    expect(result.status, result.stderr).toBe(0);
+    return result.stdout;
+  };
+  const write = (repo, name, text) => {
+    const path = join(repo, name);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, text);
+  };
+  const crate = 'vendor/ibex/crates/hermes-lean-sys-installer';
+  for (const repo of [exact, external]) {
+    write(repo, '.gitignore', 'target/\n/local.rs\n');
+    write(repo, 'app.contract', 'app Test\n');
+    write(repo, `${crate}/Cargo.toml`, '[workspace]\n[package]\nname="installer"\nversion="0.1.0"\n');
+    write(repo, `${crate}/src/main.rs`, 'fn main() {}\n');
+    write(repo, 'fixtures/target/input.rs', 'source named target\n');
+    git(repo, 'init', '-q');
+    git(repo, 'add', '-A');
+    git(repo, 'add', '--force', 'fixtures/target/input.rs');
+    git(repo, '-c', 'user.name=Exact Test', '-c', 'user.email=exact@example.invalid', 'commit', '-qm', 'fixture');
+    write(repo, `${crate}/target/debug/incremental/output.o`, 'build output');
+  }
+  const app = { name: 'test', dir: external, workspace: external, manifest: {} };
+  const snapshot = snapshotOf(app, { compiler }, exact);
+  try {
+    expect(snapshot.dirty).toBe(false);
+    const captured = materializeSnapshot(snapshot, join(root, 'run'), app);
+    for (const repo of [captured.exactRoot, captured.app.dir]) {
+      expect(existsSync(join(repo, crate, 'target'))).toBe(false);
+      expect(readFileSync(join(repo, 'fixtures/target/input.rs'), 'utf8')).toBe('source named target\n');
+    }
+  } finally { disposeSnapshot(snapshot); }
+  for (const repo of [exact, external]) {
+    for (const path of ['local.rs', 'fixtures/target/local.rs', 'untracked.rs']) {
+      write(repo, path, 'uncommitted source\n');
+      expect(() => snapshotOf(app, { compiler }, exact)).toThrow(`A  ${path}`);
+      rmSync(join(repo, path));
+    }
+    write(repo, `${crate}/src/main.rs`, 'fn main() { panic!() }\n');
+    expect(() => snapshotOf(app, { compiler }, exact)).toThrow(/uncommitted or ignored source files:[\s\S]*src\/main.rs/);
+    write(repo, `${crate}/src/main.rs`, 'fn main() {}\n');
+  }
+  git(exact, 'add', '--force', `${crate}/target/debug/incremental/output.o`);
+  expect(() => snapshotOf(app, { compiler, dirty: true }, exact)).toThrow(/tracked source .*target.*inferred output root/);
+}, 30_000);
+
+test('Cargo manifest count does not grow deployment Git arguments', () => {
+  const repo = mkdtempSync(join(fixture, 'many-manifests-'));
+  const app = { dir: repo, workspace: repo, manifest: {} };
+  const git = (...args) => {
+    const result = spawnSync('git', args, { cwd: repo, encoding: 'utf8' });
+    expect(result.status, result.stderr).toBe(0);
+  };
+  git('init', '-q');
+  const argv = paths => ['git', 'ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', ...paths].join(' ').length;
+  const before = argv(sourcePaths(repo, app, repo).pathspec);
+  for (let index = 0; index < 400; index++) {
+    const crate = join(repo, 'vendor/crates', `standalone-installer-${index}`);
+    mkdirSync(crate, { recursive: true });
+    writeFileSync(join(crate, 'Cargo.toml'), '[workspace]\n');
+  }
+  git('add', '-A');
+  const after = argv(sourcePaths(repo, app, repo).pathspec);
+  expect(after).toBeLessThan(32767);
+  expect(after).toBe(before);
+});
 
 test('Contract discovery builds in the selected private Cargo target', () => {
   const root = compilerRoot(), target = mkdtempSync(join(fixture, 'cargo-target-'));
