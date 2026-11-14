@@ -36,6 +36,23 @@ export function compileFixtures(root, run, env, dir, prefix, appId) {
   contract([resolve(root, 'host/apple/tests/fixtures/canvas-capture.contract'), '-o', env[`${prefix}_CANVAS_CAPTURE_PLAN`] = resolve(dir, 'canvas-capture.plan')]);
   // A test that writes its own manifest names the app the tests link (`SheetFixture`'s `data`).
   env[`${prefix}_TEST_APP_ID`] = appId;
+  contract([resolve(root, 'host/apple/tests/fixtures/page-freeze.contract'), '-o', env[`${prefix}_PAGE_FREEZE_PLAN`] = resolve(dir, 'page-freeze.plan')]);
+  const clicks = resolve(dir, 'page-freeze-sound');
+  mkdirSync(resolve(clicks, 'assets'), { recursive: true });
+  const wave = Buffer.alloc(44 + 8820);
+  wave.write('RIFF'); wave.writeUInt32LE(wave.length - 8, 4); wave.write('WAVEfmt ', 8); wave.writeUInt32LE(16, 16);
+  wave.writeUInt16LE(1, 20); wave.writeUInt16LE(1, 22); wave.writeUInt32LE(44100, 24); wave.writeUInt32LE(88200, 28);
+  wave.writeUInt16LE(2, 32); wave.writeUInt16LE(16, 34); wave.write('data', 36); wave.writeUInt32LE(8820, 40);
+  writeFileSync(resolve(clicks, 'assets/click.wav'), wave);
+  const pulse = readFileSync(resolve(root, 'host/apple/tests/fixtures/page-freeze.contract'), 'utf8')
+    .replace('beats=4', 'beats=1').replace('steps=[]', 'steps=[Step(beat=0, src="assets/click.wav", gain=1, group="pulse", note=-1, velocity=100, channel=0, duration=0.1, haptic="")]')
+    .replace('  view\n', '  action stop\n    playing = false\n  action stopWithSound\n    playing = false\n    playSound("assets/click.wav")\n  view\n')
+    + '      button "Stop" testId="stop" press=stop\n      button "Stop with sound" testId="stop-with-sound" press=stopWithSound\n';
+  writeFileSync(resolve(clicks, 'app.contract'), 'sound "assets/click.wav"\n' + pulse);
+  contract([resolve(clicks, 'app.contract'), '-o', env[`${prefix}_PAGE_FREEZE_SOUND_PLAN`] = resolve(dir, 'page-freeze-sound.plan')]);
+  writeFileSync(resolve(clicks, 'no-sequence.contract'), ('sound "assets/click.wav"\n' + pulse)
+    .replace(/  sequence pulse when playing\n    play\([^\n]+\n/, ''));
+  contract([resolve(clicks, 'no-sequence.contract'), '-o', env[`${prefix}_PAGE_FREEZE_NO_SEQUENCE_PLAN`] = resolve(dir, 'page-freeze-no-sequence.plan')]);
   // A box's length read against the document's environment stops a test (LLP 1123 D9).
   env[`${prefix}_STRICT_LOCAL_INSETS`] = '1';
   contract([resolve(root, 'host/apple/tests/fixtures/headless-reply.contract'), '-o', env[`${prefix}_HEADLESS_REPLY_PLAN`] = resolve(dir, 'headless-reply.plan')]);

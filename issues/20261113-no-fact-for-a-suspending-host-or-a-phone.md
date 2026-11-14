@@ -54,11 +54,33 @@ P11, and record the decision in LLP 1023 D10.
 
 ## Partial implementation
 
-`exactPage().frozen` exposes the dynamic execution transition, with web
-Page Lifecycle and Android Activity producers, desktop defaults, runner and JS
-stream cancellation, and `prefer frozen`. Apple reports false until its Mac
-stage replaces the audio-category prediction with actual background execution
-eligibility. That stage must restore sequence stopping with the corrected
-producer, add Apple `prefer` coverage, and qualify socket release on a device.
-The issue stays open for that work and the navigation consumer's tree review;
-no device-idiom field is added.
+`exactPage().frozen` exposes execution eligibility, with web Page Lifecycle,
+Android Activity/service and Apple audio/lifecycle producers. iOS and tvOS freeze in
+the background without active eligible audio; a configured playback category
+alone grants nothing. macOS stays false. Apple forwards the freeze bit,
+stops sequences and releases gated streams in that commit, and accepts
+`prefer frozen`. A failed capture-engine restart releases its background claim;
+a new capture lease reacquires it. A UIKit background task covers the freeze
+commit's socket-close wait: URLSession confirms the peer's close, portable sockets
+the close-frame write, within a shared 250 ms bound before aborting unfinished I/O.
+
+Each host composes its execution sources in one function. Apple's
+`AudioSession.backgroundExecutionEligible()` requires the background audio mode
+and counts system-activated calls, activated background captures, playback speech,
+and successfully activated sound and audible video owners under the
+effective playback or play-and-record category. Canvas audio releases on the
+background edge and does not keep execution running. Video counts only while
+`timeControlStatus` is playing. Android's `Exact.executionEligible()` counts a
+started Activity or a live claim on a successfully promoted microphone, call or
+screen-capture foreground service. Pending, failed and agent-only service claims
+grant no device execution. Both hosts update the page when the last eligible
+owner ends while hidden.
+
+The watch bundle links `ExactCore` and `ExactSnapshot`, without `PageFacts`. Its
+live driver pauses timers in the background but does not publish `frozen`;
+that lifecycle producer and its watch qualification remain to be implemented.
+
+The issue remains open for that watch work and a signed-phone run: confirm the server sees the
+socket close before suspension and a fresh socket on return; repeat with
+active background playback and with playback ending while hidden. The
+navigation consumer's tree review is also owed. No device-idiom field is added.

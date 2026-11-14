@@ -32,11 +32,12 @@ has to finish. The last answer stays visible, and reopening the gate asks again
 and opens a fresh socket. Resources default to kept answers; add `transient`
 for sensitive feed data.
 
-On Linux and Windows desktops `frozen` stays false even with a hidden window.
+On macOS, Linux and Windows desktops `frozen` stays false even with a hidden window.
 Android sets it when the Activity stops without a promoted foreground-service
 claim, or when the last such claim ends while hidden; a started Activity clears
-it. Apple currently answers the bake default false; its producer and a device
-run remain owed.
+it. iOS and tvOS set it in the background unless active audio with the background
+audio mode keeps execution eligible. A configured playback category alone grants
+nothing; ending playback while hidden freezes the page. A signed-phone run remains owed.
 On the web it follows Page Lifecycle `freeze`/`resume` where fired, else false.
 A browser promises nothing after hidden: save as changes happen and handle
 reconnection; no lifecycle notification guarantees a final send will finish.

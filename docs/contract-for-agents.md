@@ -4402,7 +4402,9 @@ waiting for an authored cleanup handler. A sequence stops in that commit too
 | Android | Stopped Activity with no successfully promoted foreground-service claim; a started Activity or promoted service keeps it false |
 | Linux desktop | Constant false |
 | Windows desktop | Constant false |
-| Apple | Bake default false pending the Apple execution-eligibility producer and device qualification |
+| iOS and tvOS | Background without active audio eligible for background execution; an idle playback category grants nothing |
+| macOS | Constant false |
+| watchOS | Constant false: the live watch driver has no page lifecycle producer yet |
 | Terminal and render hosts | Constant false |
 
 A browser promises nothing after `hidden`: it may stop or discard a page without

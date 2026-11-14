@@ -553,6 +553,8 @@ final class TrackAudioSource: ExactAudioSource {
 final class ProcessCapture: ExactAudioSource {
     static let shared = ProcessCapture()
     private var engine: AVAudioEngine?
+    private let openEngine: ((CaptureOptions) throws -> Void)?
+    init(openEngine: ((CaptureOptions) throws -> Void)? = nil) { self.openEngine = openEngine }
     private var leases = 0
     private var claim: ExactSubscription?
     private var options: CaptureOptions?
@@ -580,13 +582,15 @@ final class ProcessCapture: ExactAudioSource {
 
     /// A lease: the first claims the session and starts the engine with its options.
     func lease(_ options: CaptureOptions, session: ExactAudioSession, log: @escaping (String) -> Void) throws {
-        if leases == 0 {
+        if claim == nil {
+            let options = leases > 0 ? self.options ?? options : options
             self.log = log
             guard let claim = session.claim(mode: options.mode, options: options.categoryOptions, background: options.background,
                                             events: { [weak self] in self?.tell($0) }) else { throw CaptureError("NotReadableError: the audio session would not activate") }
             self.claim = claim
             self.options = options
             do { try start(options) } catch { claim.cancel(); self.claim = nil; throw error }
+            if leases > 0 { tell("reopened") }
         }
         leases += 1
     }
@@ -600,6 +604,7 @@ final class ProcessCapture: ExactAudioSource {
     }
 
     private func start(_ options: CaptureOptions) throws {
+        if let openEngine { return try openEngine(options) }
         let engine = AVAudioEngine()
         let input = engine.inputNode
         #if os(iOS)
@@ -693,7 +698,7 @@ final class ProcessCapture: ExactAudioSource {
     }
 
     /// The engine stopped under a configuration change: another one, the gap journaled.
-    private func reopen() {
+    func reopen() {
         guard leases > 0, let options else { return }
         let began = Date()
         stop()
@@ -702,6 +707,8 @@ final class ProcessCapture: ExactAudioSource {
             log("media-capture: capture reopened, \(Int(Date().timeIntervalSince(began) * 1000)) ms, \(Int(format.sampleRate)) Hz, \(format.channelCount) ch")
             tell("reopened")
         } catch {
+            claim?.cancel()
+            claim = nil
             log("media-capture: the capture did not reopen: \(error)")
             tell("interrupted")
         }
