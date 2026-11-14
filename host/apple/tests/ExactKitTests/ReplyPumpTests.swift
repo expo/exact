@@ -14,9 +14,9 @@ final class ReplyPumpTests: XCTestCase {
         var calls = 0
         session.runtime.topLayer = {
             XCTAssertTrue(Thread.isMainThread, "native modal geometry belongs to main")
-            guard Thread.isMainThread else { return ([], nil) }
+            guard Thread.isMainThread else { return ([], nil, nil) }
             calls += 1
-            return capture?() ?? ([], nil)
+            return capture?() ?? ([], nil, nil)
         }
         session.pumpReplies()
         XCTAssertEqual(calls, 1, "capture before submitting to the owner")

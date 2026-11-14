@@ -3961,6 +3961,8 @@ and dialogs are hidden, and open ones answer. For an Inspect overlay,
 point, front to back. Both are action snapshots; `frame(id)` gives each
 returned node's box for an outline. Point reads skip inert subtrees and use
 the presenter's placement and order for open top-layer content.
+The front modal's native backdrop names its dialog or presented route where it accepts input,
+below any later popover, without exposing the page or a lower modal.
 
 | Scope | Swift (`ExactModule`) | Page module (`modules/web/index.js`) |
 |---|---|---|

@@ -120,6 +120,9 @@ package struct RuntimeHooks {
 /// A top-layer view, its viewport frame and optional viewport clip (LLP 1123 D2).
 /// Clipping bounds reads without changing the box's mapping.
 package typealias TopLayerFrame = (UInt32, CGRect, CGRect?)
+/// A modal backdrop's view, viewport bounds and optional excluded rectangle.
+package typealias TopLayerBackdrop = (UInt32, CGRect, CGRect?)
+package typealias TopLayerGeometry = (frames: [TopLayerFrame], modal: Int?, backdrop: TopLayerBackdrop?)
 
 /// A runtime handle and its calls. `destroy` is idempotent at this layer and
 /// one-shot at the C boundary; a call after it is refused by the library by
@@ -127,7 +130,7 @@ package typealias TopLayerFrame = (UInt32, CGRect, CGRect?)
 package final class Runtime {
     package let rt: ExactRuntime
     private(set) package var destroyed = false
-    package var topLayer: (() -> (frames: [TopLayerFrame], modal: Int?))?
+    package var topLayer: (() -> TopLayerGeometry)?
     package var inlineFrame: ((UInt32) -> CGRect?)?
     package var rangeFrame: ((UInt32, UInt32, UInt32) -> CGRect?)?
     #if DEBUG
@@ -198,23 +201,32 @@ package final class Runtime {
     package func on(_ body: () -> Batch, caller: String = #function) -> Batch {
         if holds(caller) { return Runtime.heldBatch }
         if Thread.isMainThread { entered &+= 1 } // (`later` calls on the owner: the spy counts main's)
-        let (open, modal) = topLayer?() ?? ([], nil)
+        let (open, modal, backdrop) = topLayer?() ?? ([], nil, nil)
         return Owner.shared.sync({
-            installTopLayer(open, modal: modal)
+            installTopLayer(open, modal: modal, backdrop: backdrop)
             return body()
         }, busy: Runtime.busy)
     }
-    private func installTopLayer(_ open: [TopLayerFrame], modal: Int?) {
+    private func installTopLayer(_ open: [TopLayerFrame], modal: Int?, backdrop: TopLayerBackdrop?) {
         let ids = open.map(\.0)
         let rects = open.flatMap { [Double($0.1.minX), Double($0.1.minY), Double($0.1.width), Double($0.1.height)] }
         let clips = open.flatMap { entry -> [Double] in
             guard let clip = entry.2 else { return [.nan, 0, 0, 0] }
             return [Double(clip.minX), Double(clip.minY), Double(clip.width), Double(clip.height)]
         }
+        let backdropRect = backdrop.map { entry -> [Double] in
+            let bounds = entry.1, excluded = entry.2
+            return [Double(bounds.minX), Double(bounds.minY), Double(bounds.width), Double(bounds.height),
+                    excluded.map { Double($0.minX) } ?? .nan, excluded.map { Double($0.minY) } ?? 0,
+                    excluded.map { Double($0.width) } ?? 0, excluded.map { Double($0.height) } ?? 0]
+        } ?? []
         ids.withUnsafeBufferPointer { ids in
             rects.withUnsafeBufferPointer { rects in
                 clips.withUnsafeBufferPointer { clips in
-                    exact_top_layer(rt, ids.baseAddress, rects.baseAddress, clips.baseAddress, UInt32(open.count), modal.map(UInt32.init) ?? .max)
+                    backdropRect.withUnsafeBufferPointer { region in
+                        exact_top_layer(rt, ids.baseAddress, rects.baseAddress, clips.baseAddress, UInt32(open.count), modal.map(UInt32.init) ?? .max,
+                                        backdrop?.0 ?? 0, region.isEmpty ? nil : region.baseAddress)
+                    }
                 }
             }
         }
@@ -405,10 +417,10 @@ package final class Runtime {
     /// Capture native presentation on the caller before parsing replies on the owner.
     package func pumpAsync(now: Double, done: @escaping (Batch?) -> Void) {
         if holds() { Owner.shared.post { done(nil) }; return } // (held: answered on the owner as a cancelled reply, `held`)
-        let (open, modal) = topLayer?() ?? ([], nil)
+        let (open, modal, backdrop) = topLayer?() ?? ([], nil, nil)
         Owner.shared.post { [self] in
             guard !destroyed else { done(nil); return }
-            installTopLayer(open, modal: modal)
+            installTopLayer(open, modal: modal, backdrop: backdrop)
             done(read(exact_pump(rt, now)))
         }
     }

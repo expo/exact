@@ -197,9 +197,11 @@ impl<D: DataSource> Bridge<D> {
         &mut self,
         frames: &[exact_runner::geometry::TopLayerFrame],
         modal: Option<usize>,
+        backdrop: Option<exact_runner::geometry::TopLayerBackdrop>,
     ) {
         if let Some(h) = self.host.as_mut() {
             h.runner_mut().top_layer_frames(frames, modal);
+            h.runner_mut().top_layer_backdrop(backdrop);
         }
     }
 

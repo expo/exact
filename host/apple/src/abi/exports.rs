@@ -581,8 +581,10 @@ macro_rules! host {
         /// `views` points to `count` valid ids, `rects` to `count * 4` doubles.
         /// `clips` is null or points to `count * 4` doubles; NaN at an
         /// entry's x means no clip.
+        /// `backdrop` is null or points to eight viewport doubles: the
+        /// backdrop bounds and an exclusion (NaN at x means no exclusion).
         #[no_mangle]
-        pub unsafe extern "C" fn exact_top_layer(rt: u32, views: *const u32, rects: *const f64, clips: *const f64, count: u32, modal: u32) {
+        pub unsafe extern "C" fn exact_top_layer(rt: u32, views: *const u32, rects: *const f64, clips: *const f64, count: u32, modal: u32, backdrop_view: u32, backdrop: *const f64) {
             let ids = if count == 0 { &[] } else {
                 // SAFETY: the caller keeps `count` ids live for this synchronous call.
                 unsafe { std::slice::from_raw_parts(views, count as usize) }
@@ -602,7 +604,13 @@ macro_rules! host {
                     (id, [r[0], r[1], r[2], r[3]], clip)
                 }).collect();
             let modal = (modal != u32::MAX).then_some(modal as usize);
-            $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.top_layer(&frames, modal), |_| ())
+            let backdrop = if backdrop.is_null() { None } else {
+                // SAFETY: the caller keeps eight doubles live for this call.
+                let r = unsafe { std::slice::from_raw_parts(backdrop, 8) };
+                let excluding = (!r[4].is_nan()).then(|| [r[4], r[5], r[6], r[7]]);
+                Some((backdrop_view, [r[0], r[1], r[2], r[3]], excluding))
+            };
+            $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.top_layer(&frames, modal, backdrop), |_| ())
         }
 
         /// Copy current region source/paint metadata. No returned bytes outlive exact_out.

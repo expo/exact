@@ -738,7 +738,7 @@ public final class ExactSession {
         landFill()
     }
     private func wire() {
-        runtime.topLayer = { [weak self] in self?.presenter.openTopLayer ?? ([], nil) }
+        runtime.topLayer = { [weak self] in self?.presenter.openTopLayer ?? ([], nil, nil) }
         runtime.setInlineGeometry({ [weak self] id in self?.presenter.inlineFrame(id) },
                                   range: { [weak self] id, start, end in self?.presenter.rangeFrame(id, start: start, end: end) })
         if ExactSession.asyncFills {

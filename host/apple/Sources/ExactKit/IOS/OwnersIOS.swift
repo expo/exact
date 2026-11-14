@@ -188,6 +188,7 @@ struct TopLayerBox {
     /// are mounting, or laid out empty), still begins the modal boundary.
     let frame: TopLayerFrame?
     let modal: UIViewController?
+    var backdrop: (bounds: CGRect, excluding: CGRect?)? = nil
 }
 
 /// Each route's root laid out in its controller's view (LLP 1123 D2): the
@@ -271,10 +272,13 @@ final class OwnerBlocks {
     var presented: [TopLayerBox] {
         let top = presenter.modals.topNavigation
         var boxes = presenter.modals.navigations.flatMap { nav in
-            routes(of: nav, presented: true).filter(\.shown).map { route in
+            let backdrop = (nav === top ? nav.parent?.presentationController : nil)
+                .flatMap { NativeGeometry.sheetBackdrop(of: $0, in: presenter.viewport) }
+                .map { (presenter.viewportPoints($0.bounds), $0.excluding.map(presenter.viewportPoints)) }
+            return routes(of: nav, presented: true).filter(\.shown).map { route in
                 TopLayerBox(view: route.view,
                             frame: (route.route.node.id, presenter.viewportPoints(NativeGeometry.convert(route.block, from: route.view, to: presenter.viewport)), nil),
-                            modal: nav === top ? nav : nil)
+                            modal: nav === top ? nav : nil, backdrop: backdrop)
             }
         }
         if let top, !boxes.contains(where: { $0.modal === top }) { boxes.append(TopLayerBox(view: top.view, frame: nil, modal: top)) }
@@ -406,7 +410,7 @@ extension Presenter {
     /// 1123 D2). A popover's current host decides which sheet it is above:
     /// one opened earlier or outside the dialog stays beneath its card.
     /// The last modal boundary leaves only it and what is above it live.
-    package var openTopLayer: (frames: [TopLayerFrame], modal: Int?) {
+    package var openTopLayer: TopLayerGeometry {
         let boxes = owners.presented + menus.sheets.presented + menus.presented.map {
             // Reported by its block, the viewport's (stage 14 B), as a dialog's sheet is.
             TopLayerBox(view: $0, frame: ($0.id, $0.topLayerFrame(in: viewport, containingBlock: owners.blockRects[$0.id]), nil), modal: nil)
@@ -433,10 +437,14 @@ extension Presenter {
         let modal = topModal.flatMap { controller in
             ordered.firstIndex { $0.modal === controller }.map { at in ordered[..<at].filter { $0.frame != nil }.count }
         }
-        if let confirmation = menus.nativeConfirmation {
-            return (frames + [(confirmation.id, CGRect.zero, nil)], menus.openModally(confirmation) == true ? frames.count : modal)
+        let backdrop = ordered.last { $0.modal === topModal && $0.modal != nil }.flatMap { box -> TopLayerBackdrop? in
+            guard let id = box.frame?.0, let region = box.backdrop else { return nil }
+            return (id, region.bounds, region.excluding)
         }
-        return (frames, modal)
+        if let confirmation = menus.nativeConfirmation {
+            return (frames + [(confirmation.id, CGRect.zero, nil)], menus.openModally(confirmation) == true ? frames.count : modal, menus.openModally(confirmation) == true ? nil : backdrop)
+        }
+        return (frames, modal, backdrop)
     }
     package var openTopLayerFrames: [(UInt32, CGRect)] { openTopLayer.frames.map { ($0.0, $0.1) } }
 

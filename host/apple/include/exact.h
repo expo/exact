@@ -677,8 +677,12 @@ const uint8_t *exact_field_decorations(const uint8_t *input, size_t len, size_t 
  * none is open: it and the views after it are live, and the views before it
  * and the page are inert behind it. `clips` is null or four viewport
  * x/y/width/height doubles per id; NaN at x means no clip for that entry.
- * A clip bounds hits and visibility without changing the frame's mapping. */
-void exact_top_layer(ExactRuntime rt, const uint32_t *views, const double *rects, const double *clips, uint32_t count, uint32_t modal);
+ * A clip bounds hits and visibility without changing the frame's mapping.
+ * `backdrop` is null or eight viewport doubles: x/y/width/height bounds of
+ * the front modal's input-accepting backdrop, attributed to `backdrop_view`,
+ * then an excluded rectangle (NaN at x means no exclusion).
+ * Its hit region is independent of the content's clip and pointer events. */
+void exact_top_layer(ExactRuntime rt, const uint32_t *views, const double *rects, const double *clips, uint32_t count, uint32_t modal, uint32_t backdrop_view, const double *backdrop);
 /* Versioned LE collection feedback in exact_in; returns the ordinary batch. */
 uint32_t exact_collection_feedback(ExactRuntime rt, size_t len, double now_ms);
 /* Read a local row-root snap without mounting views; NaN when absent.
