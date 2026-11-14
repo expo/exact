@@ -695,3 +695,80 @@ fn a_break_before_no_break_glue_after_a_space_stays() {
     assert_eq!(exact_textflow::line_breaks(text, &[]), [6, text.len()]);
     assert_eq!(exact_textflow::line_breaks("a\u{a0}b c", &[]), [5, 6]);
 }
+
+/// `|` in `marked` must be an opportunity, `/` must not.
+fn assert_marked_breaks(marked: &str) {
+    let text: String = marked.chars().filter(|c| !matches!(c, '|' | '/')).collect();
+    let found = exact_textflow::line_breaks(&text, &[]);
+    let mut at = 0;
+    for ch in marked.chars() {
+        match ch {
+            '|' => assert!(
+                found.contains(&at),
+                "no break at {at} in {marked:?}: {found:?}"
+            ),
+            '/' => assert!(
+                !found.contains(&at),
+                "break at {at} in {marked:?}: {found:?}"
+            ),
+            _ => at += ch.len_utf8(),
+        }
+    }
+}
+
+/// Chrome breaks before a full-width opening bracket after a letter or digit
+/// (UAX #14 LB30) and before an opening or after a closing quotation mark
+/// between East Asian characters (Unicode 15.1 LB19a).
+#[test]
+fn east_asian_brackets_and_quotes_break_as_chrome() {
+    for marked in [
+        "iPhone|（アイフォーン）",
+        "2024|（令和6年）",
+        "他说|“你好”|然后",
+        "他说：|“你好。”",
+        "abc/“def/”ghi",
+        "a/“本/”a",
+        "日「/“本",
+        "日“本”/。",
+    ] {
+        assert_marked_breaks(marked);
+    }
+}
+
+/// LB19a's East Asian neighbours are East_Asian_Width F, W or H: `㉈` is A,
+/// so a quote beside it stays glued.
+#[test]
+fn a_quote_beside_an_ambiguous_width_character_stays_glued() {
+    assert_marked_breaks("本”/㉈");
+    assert_marked_breaks("㉈/“本");
+}
+
+/// A combining mark takes its base's class and width (UAX #14 LB9), so
+/// decomposed text breaks where its composed form does.
+#[test]
+fn decomposed_text_breaks_as_composed() {
+    let marks = |c: &char| matches!(c, '\u{301}' | '\u{3099}');
+    // Each break as the number of base characters before it.
+    let bases = |text: &str| -> Vec<usize> {
+        let found = exact_textflow::line_breaks(text, &[]);
+        found
+            .iter()
+            .map(|&at| text[..at].chars().filter(|c| !marks(c)).count())
+            .collect()
+    };
+    for (composed, decomposed) in [
+        ("café（本）", "cafe\u{301}（本）"),
+        ("本が“本”が", "本か\u{3099}“本”か\u{3099}"),
+        ("が”本", "か\u{3099}”本"),
+    ] {
+        assert_eq!(bases(composed), bases(decomposed), "{decomposed:?}");
+    }
+    for marked in [
+        "cafe\u{301}|（本）",
+        "か\u{3099}|“本",
+        "a\u{3099}/“本",
+        "a\u{3099}”/本",
+    ] {
+        assert_marked_breaks(marked);
+    }
+}
