@@ -707,6 +707,10 @@ export const resourceIdentities = (appDir, manifest) => new Set(['macos', 'ios']
   .flatMap(platform => (manifest.host?.[platform]?.resources ?? []).map(({ from }) => fileIdentity(resolve(appDir, from))))
   .filter(Boolean));
 
+/** The app directories Exact owns (sources, assets, build output), which no `host.*.resources` `from` may be under;
+ *  app.schema.json and the shipped-data recipe list them too (LLP 1168.000 D7.1). */
+export const RESERVED_RESOURCE_ROOTS = new Set(['assets', 'deck', 'gpu', 'fonts', 'strings', 'web', 'apple', 'linux', 'src', 'data', 'modules', 'node_modules', 'target', 'dist']);
+
 /** Native files are binary inputs, never plan assets or TypeScript sources:
  *  `host.macos.resources` under the Mac's `Contents`, `host.ios.resources`
  *  (iOS and tvOS) under `IOS_RESOURCE_ROOT`, as resources only. */
@@ -715,8 +719,8 @@ export function nativeResourceMappings(manifest, platform = 'macos') {
   const mappings = manifest.host?.[platform]?.resources ?? [];
   const safe = path => typeof path === 'string' && path.length && !isAbsolute(path)
     && !path.includes('\\') && !path.includes('\0') && path.split('/').every(p => p && p !== '.' && p !== '..');
-  const reserved = new Set(['assets', 'deck', 'gpu', 'fonts', 'strings', 'web', 'apple', 'linux', 'src', 'data', 'modules', 'node_modules', 'target', 'dist']);
   const overlap = (a, b) => a === b || a.startsWith(b + '/') || b.startsWith(a + '/');
+  const reserved = RESERVED_RESOURCE_ROOTS;
   for (const [i, entry] of mappings.entries()) {
     // A root Exact owns says which, and what to name instead (the chat benchmark's `data` was refused unexplained).
     const root = typeof entry.from === 'string' ? entry.from.split('/')[0] : '';

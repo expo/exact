@@ -754,7 +754,7 @@
               "additionalProperties": false
             },
             "resources": {
-              "description": "Resource trees a data module reads through `bundle:/` (LLP 1133.007 D6), on iOS, iPadOS and tvOS: copied, modes kept, into the bundle's `ExactResources/` folder before it is signed, which then holds them and nothing else. Read only, through `fs.read bundle:/<to>` (`fs.read bundle:/Resources/data-files`), the line the Mac's `host.macos.resources` takes for the same `to`. A tree holds no links and no Mach-O code; changing it requires a new binary, never an update.",
+              "description": "Resource trees a data module reads through `bundle:/` (LLP 1133.007 D6), on iOS, iPadOS and tvOS: copied, modes kept, into the bundle's `ExactResources/` folder before it is signed, which then holds them and nothing else. Read only, through `fs.read bundle:/<to>` (`fs.read bundle:/Resources/data-files`), the line the Mac's `host.macos.resources` takes for the same `to`. A tree holds no links and no Mach-O code; changing it requires a new binary, never an update. A `from` is a directory of its own, such as `data-files/`: one under `assets/`, `deck/`, `gpu/`, `fonts/`, `strings/`, `web/`, `apple/`, `linux/`, `src/`, `data/`, `modules/`, `node_modules/`, `target/` and `dist/` (directories Exact owns) is refused, naming them (LLP 1168.000 D7.1).",
               "type": "array",
               "items": {
                 "type": "object",
@@ -935,7 +935,7 @@
               "description": "Primary Icon Composer .icon directory, relative to app.json and inside the app. Compiled with the app's catalogs; conflicts with an .appiconset in those catalogs are refused. Absent: use icons."
             },
             "resources": {
-              "description": "Native-only resource trees, copied under Contents with modes and internal relative symlinks preserved, before the bundle is sealed (a build stamp placed here is inside the seal). Excluded from plan assets and TypeScript capture; changing them requires a new binary. Mach-O code is signed with the bundle; a helper executable needing a hardened-runtime exception names it in the source's grants, as `runtime.allow-jit Helpers/node/bin/node`; the app's own executable takes none (LLP 1069.008 D9).",
+              "description": "Native-only resource trees, copied under Contents with modes and internal relative symlinks preserved, before the bundle is sealed (a build stamp placed here is inside the seal). Excluded from plan assets and TypeScript capture; changing them requires a new binary. A `from` under a directory Exact owns is refused, as `host.ios.resources`' is. Mach-O code is signed with the bundle; a helper executable needing a hardened-runtime exception names it in the source's grants, as `runtime.allow-jit Helpers/node/bin/node`; the app's own executable takes none (LLP 1069.008 D9).",
               "type": "array",
               "items": {
                 "type": "object", "required": ["from", "to"], "additionalProperties": false,

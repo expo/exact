@@ -80,6 +80,7 @@ pub const RECIPES: &[(&str, &str)] = &[
     recipe!("rest-backend"),
     recipe!("properties"),
     recipe!("sequencer"),
+    recipe!("shipped-data"),
     recipe!("sign-in"),
     recipe!("snapback"),
     recipe!("snapback-auth"),

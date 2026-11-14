@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
-import { appleAssets, appleAssetCatalogInventory, rasterIconAssets, iosAssets, iosExecutableRefusal, nativeResourceMappings, plistFile } from './assets.mjs';
+import { appleAssets, appleAssetCatalogInventory, rasterIconAssets, iosAssets, iosExecutableRefusal, nativeResourceMappings, plistFile, RESERVED_RESOURCE_ROOTS } from './assets.mjs';
 import { pngPixels } from './image.mjs';
 import { useXcode } from './devices.mjs';
 
@@ -96,4 +96,9 @@ test('a resource directory under a root Exact owns is refused by name, with anot
   assert.throws(refused('assets/raw'), /"assets\/raw" is under `assets\/`[^]*such as `assets-files\/`$/);
   assert.throws(refused('../outside'), /must name a separate app-relative resource directory/);
   assert.deepEqual(nativeResourceMappings({ host: { ios: { resources: [{ from: 'data-files', to: 'Resources/data-files' }] } } }, 'ios'), [{ from: 'data-files', to: 'Resources/data-files' }]);
+  // The schema's description and the shipped-data recipe list the same roots (LLP 1168.000 D7.1).
+  const schema = JSON.parse(readFileSync(new URL('../../scripts/app.schema.json', import.meta.url), 'utf8')).properties.host.properties.ios.properties.resources.description;
+  const recipe = readFileSync(new URL('../../docs/recipes/shipped-data.md', import.meta.url), 'utf8');
+  for (const root of RESERVED_RESOURCE_ROOTS) for (const [name, text] of [['app.schema.json', schema], ['shipped-data.md', recipe]])
+    assert.ok(text.includes(`\`${root}/\``), `${name} names \`${root}/\``);
 });
