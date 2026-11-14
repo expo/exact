@@ -8,35 +8,11 @@
 // with the real shape.js.
 import { test, expect, describe, beforeAll, afterAll } from 'bun:test';
 import { suiteBrowser } from '../../../scripts/agent-launch.mjs';
-import { copyFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { standIns } from './stand-ins.mjs';
+import { dir, webJs, freshRuntime } from './js-runtime-harness.mjs';
 import { fileURLToPath } from 'node:url';
 
-// The runtime in a `web-js` directory, as built: modules.js imports the web host's `../web/address-space.js`, stood in.
-const root = mkdtempSync(resolve(tmpdir(), 'exact-js-baked-')), dir = resolve(root, 'web-js');
-mkdirSync(dir);
-mkdirSync(resolve(root, 'web'));
-writeFileSync(resolve(root, 'web/address-space.js'), 'export const setSpaceState = () => {};');
-const webJs = name => resolve(fileURLToPath(new URL(`../../web-js/${name}`, import.meta.url)));
-
-const REAL = ['rt.js', 'format.js', 'clock.js', 'resources.js', 'tree.js', 'events.js', 'pieces.js', 'mount.js', 'strings.js', 'request-send.js', 'presence-bindings.js', 'rows.js', 'uploads.js', 'held.js', 'font-family.js', 'observers.js', 'grid.js', 'overlay.js', 'roster.js', 'router.js', 'route-pattern.js', 'schedule.js', 'budget.js', 'shape.js', 'modules.js', 'permissions.js', 'samples.js', 'spans.js', 'update.js', 'arrival.js', 'devices.js', 'wakes.js', 'reach.js', 'members.js', 'resource-inspection.js', 'sheets.js'];
-for (const f of REAL) copyFileSync(webJs(f), resolve(dir, f));
-// The stand-ins export what these modules and ts-data.js import; the values the tests read are stated.
-const STATED = {
-  'admission.js': { createSecretFacade: '() => ({ read: false })', hasGrant: '() => true', appGrantSet: '() => null', coversPath: '() => true',
-    setAppGrantSet: 'g => g', overlaying: '{ on: false }', inOverlay: 'api => new Error(api)' },
-  'admission-data.js': { tsGrantSet: '{}' },
-  // The build points ts-data.js's `__FETCH_MODULE__` here, from which it imports `fetch`.
-  'ts-fetch.js': { fetch: '() => {}', answering: '{ call: null, untraced: new Set(), ordinary: (start) => start() }', files: '{ appId: null }', activeCall: '() => answering.call',
-    SOCKET_AND_FETCH: "'a mutation cannot both send on a socket and fetch'" },
-  'names.js': { sourceTypes: '{}' },
-};
-for (const [file, source] of standIns([...REAL, 'ts-data.js'], STATED)) writeFileSync(resolve(dir, file), source);
-// A view transition that holds every tree update (shared.js's commit returns before its callback).
-writeFileSync(resolve(dir, 'shared.js'), 'export const commit = (tail) => { globalThis.heldTail = tail; return true; };');
-writeFileSync(resolve(dir, 'presence-glue.js'), 'globalThis.exact.presence = () => ({ before() {}, after() {}, exit() {} });');
 // ts-data.js over a scripted store (the storage test below), written before
 // anything is imported from here: the loader reads this directory once.
 const stub = (file, text) => writeFileSync(resolve(dir, file), text);
@@ -1268,11 +1244,6 @@ test('an argument or a write past MAX_STRING is refused by name, and a trapping 
 
 // A runtime with state of its own: the runtime's files copied to a directory of their own, so each module is loaded
 // afresh (a query on rt.js alone would load only rt.js again, not the files it is split into).
-const freshRuntime = tag => {
-  const own = resolve(root, `web-js-${tag}`);
-  cpSync(dir, own, { recursive: true });
-  return import(resolve(own, 'rt.js'));
-};
 
 test('a refused derive names itself and only the failed resources it reads', async () => {
   const { memo, res, data } = await freshRuntime('derive-refusal');

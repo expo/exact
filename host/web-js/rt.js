@@ -513,7 +513,7 @@ export function commit(f, what = 'commit', finished) {
     }
   }
   const [out, cmds, landed, finishes] = [Out, Commands, Landed, Finishes],
-    changed = Sched?.changed(queued), invocation = Invocation.id;
+    changed = Sched?.changed(queued), invocation = Invocation.id, origin = Origin.now();
   // A key handler's preventDefault/stopPropagation act on its event before the dispatch ends, a tree update a view
   // transition defers too (review C3).
   if (KeyEvent || Propagating)
@@ -582,11 +582,12 @@ export function commit(f, what = 'commit', finished) {
       Input?.arrive();
     }
     // An answer's `then` is armed, due now, once however many land: the next advance runs it as its own commit
-    // (LLP 1016.001 D3).
+    // (LLP 1016.001 D3), under its answer's invocation and origin (LLP 1133.002 D12).
     for (const m of landed)
       if (m.then) {
         m.due = armedAt();
         m.thenInvocation = invocation;
+        m.thenOrigin = origin;
         if (!clock.agent) drive();
       }
     Sched?.scan(true, changed); // a free queue's waiting send is due (LLP 1092 D3)
