@@ -96,6 +96,7 @@ let core: [Target] = [
 ]
 
 let executables: [Target] = [
+    // The live watch driver owns its lifecycle; it has no ExactKit page-facts producer.
     .executableTarget(name: "ExactWatch", dependencies: ["ExactCore", "ExactSnapshot"], path: "Sources/ExactWatch", swiftSettings: devTools),
     .executableTarget(name: "ExactMac", dependencies: ["ExactKit", "ExactComposition", "ExactLaunchParts"], path: "Sources/ExactMac"),
     .executableTarget(name: "ExactIOS", dependencies: ["ExactKit", "ExactComposition", "ExactLaunchParts"], path: "Sources/ExactIOS",
@@ -109,6 +110,7 @@ let executables: [Target] = [
 // loop, and no clock (LLP 1033 D4a).
 let tests: [Target] = [
     .target(name: "ExactPackage", path: "modules", exclude: ["ExactExtensions.swift", "ExactNativeModule.swift", "ExactNativeViews.swift", "ExactServices.swift", "ExactTamber.swift"], sources: ["ExactPackage.swift"]),
+    .target(name: "MediaCaptureImplementation", dependencies: ["ExactPackage"], path: "tests/MediaCaptureImplementation"),
     .target(name: "SignInImplementation", dependencies: ["ExactPackage"], path: "tests/SignInImplementation"),
     .target(name: "PasskeysImplementation", dependencies: ["ExactPackage"], path: "tests/PasskeysImplementation"),
     .target(name: "ExactWidgetTimeline", dependencies: ["ExactCore"], path: "widget", exclude: ["Timeline.swift"], sources: ["WidgetTimelineWaiters.swift"]),
@@ -121,7 +123,7 @@ let tests: [Target] = [
     .target(name: "ExactNowPlaying", path: "videoarm", exclude: ["VideoArm.swift", "PictureInPicture.swift"], sources: ["NowPlaying.swift"]),
     // The share extension's Swift (LLP 1133.024 D4), which links no Exact runtime; build.mjs compiles the appex itself.
     .target(name: "ExactShare", path: "share"),
-    .testTarget(name: "ExactKitTests", dependencies: ["ExactPackage", "SignInImplementation", "PasskeysImplementation", "ExactWidgetTimeline", "ExactCore", "ExactSnapshot", "ExactKit", "ExactUpdates", "ExactGroupedLists", "ExactMarkdown", "ExactSurfaces", "ExactDrag", "ExactMediaPicker", "ExactAuthSession", "ExactNumerals", "ExactTips", "ExactSoundRender", "ExactNowPlaying", "ExactShare"], path: "tests/ExactKitTests",
+    .testTarget(name: "ExactKitTests", dependencies: ["ExactPackage", "MediaCaptureImplementation", "SignInImplementation", "PasskeysImplementation", "ExactWidgetTimeline", "ExactCore", "ExactSnapshot", "ExactKit", "ExactUpdates", "ExactGroupedLists", "ExactMarkdown", "ExactSurfaces", "ExactDrag", "ExactMediaPicker", "ExactAuthSession", "ExactNumerals", "ExactTips", "ExactSoundRender", "ExactNowPlaying", "ExactShare"], path: "tests/ExactKitTests",
                 resources: [.copy("ColorFixtures"), .copy("SnapshotFixtures")], swiftSettings: devTools + gallerySettings + caltrainSettings),
 ]
 

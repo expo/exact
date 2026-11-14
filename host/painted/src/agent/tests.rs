@@ -364,12 +364,13 @@ fn prefer_sets_contrast_scheme_and_the_page_facts() {
     p.app_scheme(Some(false));
     let reply: serde_json::Value = serde_json::from_str(&handle(
         &mut p,
-        r#"{"op":"prefer","media":{"prefers-contrast":"more","prefers-color-scheme":"dark"},"page":{"visibility-state":"hidden","online":false,"can-share":"true","can-open-files":true,"has-focus":false}}"#,
+        r#"{"op":"prefer","media":{"prefers-contrast":"more","prefers-color-scheme":"dark"},"page":{"visibility-state":"hidden","online":false,"can-share":"true","can-open-files":true,"has-focus":false,"frozen":true}}"#,
     ))
     .unwrap();
     assert_eq!(reply["media"]["prefers-contrast"], "more");
     assert_eq!(reply["page"]["online"], false);
     assert_eq!(reply["page"]["has-focus"], false);
+    assert_eq!(reply["page"]["frozen"], true);
     assert!(
         text(&mut p).contains("more dark hidden offline share pickers no-focus"),
         "{}",
@@ -382,6 +383,7 @@ fn prefer_sets_contrast_scheme_and_the_page_facts() {
     assert_eq!(state["device"]["visibilityState"], "hidden");
     assert_eq!(state["device"]["canOpenFiles"], true);
     assert_eq!(state["device"]["hasFocus"], false);
+    assert_eq!(state["device"]["frozen"], true);
     let refused = handle(&mut p, r#"{"op":"prefer","page":{"online":"maybe"}}"#);
     assert!(refused.contains("\"error\""), "{refused}");
     // LLP 1069.000 D3: the root font size is layout, not a resource.

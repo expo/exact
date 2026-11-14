@@ -248,8 +248,8 @@ object Native {
     /** Picture [source] changed, so it is asked for again, or was [revoked]: every box showing it is emptied. On the
      * host's thread. */
     @JvmStatic external fun pictureChanged(source: String, revoked: Boolean)
-    /** The activity stopped (true) or started (false): the page's `visibilityState`. On the host's thread. */
-    @JvmStatic external fun hidden(hidden: Boolean)
+    /** Activity visibility and the process's execution eligibility. On the host's thread. */
+    @JvmStatic external fun hidden(hidden: Boolean, eligible: Boolean)
     /** Waits up to [ms] for the store's writes, which exact2 makes on a thread of its own: whether every commit handed
      * over was written (a write that failed is tried once more; failing again, it stays pending). Any thread. */
     @JvmStatic external fun storeDrain(ms: Int): Boolean

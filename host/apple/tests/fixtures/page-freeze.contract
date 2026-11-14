@@ -1,0 +1,40 @@
+shape Page
+  frozen: bool
+shape Transport
+  state: string
+  reason: string
+shape Step
+  beat: number
+  src: string
+  gain: number
+  group: string
+  note: number
+  velocity: number
+  channel: number
+  duration: number
+  haptic: string
+shape Track
+  beats: number
+  loops: number
+  offset: number
+  output: string
+  steps: Step[]
+component App
+  resource page = exactPage() as shape Page
+  resource transport = exactTransport() as shape Transport
+  state playing = false
+  action start
+    playing = true
+  sequence pulse when playing
+    play([Track(beats=4, loops=0, offset=0, output="", steps=[])], bpm=60)
+  view
+    column
+      text `${page.frozen}` testId="frozen"
+      text `${page.frozen}:${playing}` testId="status"
+      if page.frozen
+        text "Frozen" testId="freeze-branch"
+      if not playing and not page.frozen
+        text "Stopped" testId="unfrozen-stop"
+      text `${transport.state}` testId="transport"
+      text `${transport.reason}` testId="reason"
+      button "Play" testId="play" press=start

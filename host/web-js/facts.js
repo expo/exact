@@ -12,7 +12,7 @@
 //   baked; a JS build links no update store, so nothing is ever staged.
 // - `exactSurface` (LLP 1047 D3; runner/src/surface_record.rs): a GPU
 //   surface's published record, decoded against each reader's shape.
-import { data, Resources, commit, R, Refusal, Kept, say } from "./rt.js";
+import { data, Resources, commit, R, Refusal, Kept, say, Sounds } from "./rt.js";
 import { environment, keyboardInset, onKeyboard, displayMode, preferences, UPDATES, updateCode, onPreferences, pageReporter, fold, foldEnv, onFold, preferFold } from "./navigation.js";
 
 const again = (source, why) => () => commit(() => { for (const r of Resources) if (r.source === source) R(r); }, why);
@@ -63,7 +63,7 @@ const AGENT_ADMITTED = true;
 // One reporter per session for both sources (`exactViewport().gpuTier` is a
 // page fact), and the agent's `prefer` page group (LLP 1069.000 D6) sets it,
 // whichever of them the plan reads.
-let pageFacts, viewportChanged = () => {}, pageChanged = () => {};
+let pageFacts, pageReaders = {}, pageSequences = false, pageWatching = false, viewportChanged = () => {}, pageChanged = () => {};
 const reporter = () => pageFacts !== undefined ? pageFacts : (pageFacts = typeof document === "object" && document.createElement
   ? pageReporter(AGENT_ADMITTED && typeof location === "object" && new URLSearchParams(location.search).has("agent")) : null);
 function shareReporter() {
@@ -71,15 +71,39 @@ function shareReporter() {
   if (!facts) return;
   (globalThis.exact ??= {}).page = { prefer: p => { facts.prefer(p); pageChanged(); if (p?.["gpu-tier"]) viewportChanged(); return facts.read(); }, read: () => facts.read() };
 }
+const pageFields = f => ({ visibilityState: f["visibility-state"], frozen: f.frozen, onLine: f.online, canShare: f["can-share"], canShareFiles: f["can-share-files"], canSharePictures: f["can-share-pictures"], canOpenFiles: f["can-open-files"], hasFocus: f["has-focus"], navigationType: f["navigation-type"], persisted: f.persisted, restores: f.restores, iframePartition: f["iframe-partition"] === true });
 export function page(readers) {
+  pageReaders = readers;
   const facts = reporter();
   (data.reserved ??= {}).exactPage = (_, a, name) => {
     // A render has no page: the bake's answer (runner/src/page.rs `Page::default`).
-    const f = facts ? facts.read() : { "visibility-state": "visible", online: true, "can-share": false, "can-share-files": false, "can-share-pictures": false, "can-open-files": false, "has-focus": true, "navigation-type": "", persisted: false, restores: 0, "iframe-partition": false };
-    return byName(readers, name, { visibilityState: f["visibility-state"], onLine: f.online, canShare: f["can-share"], canShareFiles: f["can-share-files"], canSharePictures: f["can-share-pictures"], canOpenFiles: f["can-open-files"], hasFocus: f["has-focus"], navigationType: f["navigation-type"], persisted: f.persisted, restores: f.restores, iframePartition: f["iframe-partition"] === true });
+    const f = facts ? facts.read() : { "visibility-state": "visible", online: true, "can-share": false, "can-share-files": false, "can-share-pictures": false, "can-open-files": false, "has-focus": true, "navigation-type": "", frozen: false, persisted: false, restores: 0, "iframe-partition": false };
+    return byName(readers, name, pageFields(f));
   };
   if (!facts) return;
-  pageChanged = again("exactPage", "page");
+  watchPage();
+}
+
+// A sequence needs the freeze edge even if the plan reads no page fields.
+export function watchPage(sequences = false) {
+  pageSequences ||= sequences;
+  const facts = reporter();
+  if (!facts || pageWatching) return;
+  pageWatching = true;
+  let previous = facts.read();
+  Sounds.frozen = previous.frozen;
+  pageChanged = () => {
+    const next = facts.read();
+    const before = pageFields(previous), after = pageFields(next);
+    const readers = Resources.filter(r => r.source === "exactPage" && pageReaders[r.name]?.[0].some(k => before[k] !== after[k]));
+    if (!readers.length && !(pageSequences && previous.frozen !== next.frozen)) { previous = next; return; }
+    // Transport consumes the edge in the readers' commit (LLP 1125 D4).
+    if (commit(() => {
+      Sounds.frozen = next.frozen;
+      for (const r of readers) R(r);
+    }, "page") !== false) previous = next;
+    else Sounds.frozen = previous.frozen;
+  };
   facts.onChange(pageChanged);
   shareReporter();
 }

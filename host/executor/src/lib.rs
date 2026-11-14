@@ -221,6 +221,8 @@ struct Shared {
     roots_checked: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     #[cfg(test)]
     deadline_armed: Mutex<Option<std::sync::mpsc::Sender<Deadline>>>,
+    #[cfg(test)]
+    before_stream_release: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     /// Open two-way sockets by stream ticket (LLP 1016.000 D7; `stream.rs`).
     sockets: Mutex<std::collections::HashMap<u64, stream::Socket>>,
     /// Long polls waiting to ask again, by stream ticket (LLP 1016.000 D8;
@@ -427,6 +429,8 @@ impl Core {
             roots_checked: Mutex::default(),
             #[cfg(test)]
             deadline_armed: Mutex::default(),
+            #[cfg(test)]
+            before_stream_release: Mutex::default(),
             sockets: Mutex::default(),
             retrying: Mutex::default(),
             uploads: stream::Uploads::default(),

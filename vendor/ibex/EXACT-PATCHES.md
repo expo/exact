@@ -963,3 +963,11 @@ collection. Exact's shim recognizes that exception only when the bundle receipt
 enables exception-on-OOM and RTTI. The pinned v6 release enables both.
 Exact's heap tests exercise retirement and replacement with the published bundle,
 including timers, stream mappers, worker placement and in-flight storage.
+
+## Socket close confirmation
+
+`MessageSender::wait_close` distinguishes submission from completion. URLSession
+confirms receipt of the peer's closing frame through its delegate; the portable
+pump confirms that the close frame reached TCP. The native executor waits across
+this boundary before a suspending host returns, with a bounded deadline. Ordinary
+resource releases wait on a worker. Replay on a refresh.

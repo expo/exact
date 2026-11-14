@@ -39,6 +39,7 @@ extern "C" {
     fn ibex2_darwin_ws_cancel(handle: *mut c_void);
     fn ibex2_darwin_ws_send_text(handle: *mut c_void, data: *const u8, len: usize) -> c_int;
     fn ibex2_darwin_ws_send_binary(handle: *mut c_void, data: *const u8, len: usize) -> c_int;
+    fn ibex2_darwin_ws_wait_close(handle: *mut c_void, timeout_seconds: f64) -> c_int;
     fn ibex2_darwin_ws_close(handle: *mut c_void, code: c_int, reason: *const u8, len: usize);
     fn ibex2_darwin_ws_buffered_amount(handle: *mut c_void) -> usize;
     fn ibex2_darwin_ws_buffered_messages(handle: *mut c_void) -> usize;
@@ -149,6 +150,11 @@ impl MessageSender for DarwinSender {
             )
         };
         Ok(())
+    }
+
+    fn wait_close(&self, timeout: std::time::Duration) -> bool {
+        // SAFETY: the sender retains the native socket throughout this bounded wait.
+        unsafe { ibex2_darwin_ws_wait_close(self.handle.pointer(), timeout.as_secs_f64()) != 0 }
     }
 
     fn buffered_amount(&self) -> usize {

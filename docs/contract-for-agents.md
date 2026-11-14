@@ -4368,7 +4368,7 @@ screen is never `high`, nor is any iOS or Android device natively. A game's rend
 read it to offer a quality setting. A native host answers its GPU module's tier
 once the module loads (`high` before it). Under the agent it is `high` from launch, and
 `prefer gpu-tier low` substitutes it and remakes each world's renderer at its rung.
-`exactPage` answers `visibilityState`, `onLine`, `canShare`,
+`exactPage` answers `visibilityState`, `frozen`, `onLine`, `canShare`,
 `canShareFiles` and `canSharePictures` (whether `share(files=…)` takes
 `app:/` files and an element's `"#id"`; the web never takes a picture),
 `canOpenFiles` and `hasFocus` (`document.hasFocus()`: the app's window has the
@@ -4388,6 +4388,34 @@ is the drive's (`prefer has-focus false`; `state.device`). Use dimensions,
 media preferences, page facts,
 and capability state rather than suffixing files by platform. Preference facts
 inform authored policy; the engine does not automatically remove all motion.
+
+`frozen: bool` means the host has backgrounded the app and will stop its ordinary
+work, until execution resumes. Gate a feed with `when not page.frozen`: the runner
+lets its resource or stream go in the commit that turns `frozen` true, without
+waiting for an authored cleanup handler. A sequence stops in that commit too
+(LLP 1125 D4). This is a dynamic execution fact, not a phone or desktop label:
+`visibilityState` can be hidden while `frozen` stays false.
+
+| Host | `frozen` producer |
+|---|---|
+| Web (both targets) | Page Lifecycle `freeze`/`resume` on `document`, where fired; false elsewhere |
+| Android | Stopped Activity with no successfully promoted foreground-service claim; a started Activity or promoted service keeps it false |
+| Linux desktop | Constant false |
+| Windows desktop | Constant false |
+| iOS and tvOS | Background without active audio eligible for background execution; an idle playback category grants nothing |
+| macOS | Constant false |
+| watchOS | Constant false: the live watch driver has no page lifecycle producer yet |
+| Terminal and render hosts | Constant false |
+
+A browser promises nothing after `hidden`: it may stop or discard a page without
+a `freeze` event. False does not promise continued execution. Persist data as it
+changes; do not depend on a final asynchronous cleanup. The bake and an agent
+launch answer false; `prefer frozen true` substitutes the transition, and
+`prefer frozen false` resumes it. See the [feed recipe](recipes/suspending-feed.md).
+
+Leave navigation presentation to the host first: a root `tablist` becomes UIKit's
+tab bar on iOS and a sidebar on macOS, and `navigationPresentation` chooses a
+route's presentation. Neither pointer coarseness nor `frozen` identifies a phone.
 
 `exactCanvasPerformance("world")` is an opt-in, read-only metrics resource for
 that named canvas. Declare only the fields your HUD needs, each as an option:
