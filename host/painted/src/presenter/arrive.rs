@@ -116,6 +116,15 @@ impl<D: DataSource> Presenter<D> {
         None
     }
 
+    /// A flight ended: an `autofocus` in it, refused in the air, is offered now.
+    pub(super) fn focus_landed(&mut self) {
+        if std::mem::take(&mut self.host.flights.landed) {
+            if let Some(error) = self.autofocus() {
+                self.host.log(error);
+            }
+        }
+    }
+
     /// Whether `id` is what a press presses: a button, a link or a tab
     /// stop, and no field or other control (which a press edits).
     fn presses(&self, id: ViewId) -> bool {

@@ -293,6 +293,10 @@ impl<D: DataSource> Presenter<D> {
         if hidden || inert {
             return Some("not rendered");
         }
+        // A flight's content takes no input until it lands, pointer or key.
+        if self.host.flying(id) {
+            return Some("in a shared-element flight");
+        }
         let region = self.host.content_region();
         let content = region.map(|r| r.binding().content);
         if self.brush.region_blocks_action(id) {

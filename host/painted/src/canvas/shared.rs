@@ -630,6 +630,83 @@ component App
     }
 
     #[test]
+    fn a_replaced_reader_ends_the_flights_it_holds_no_source_for() {
+        let app = r#"component App
+  state open = false
+  action toggle
+    open = not open
+  view
+    column
+      button "Toggle" press=toggle testId="toggle"
+      if open
+        column sharedElement="card" width=300 height=200 border-radius=20 background-color="red" -exact-layout-transition="10s linear"
+          button "Inside" press=toggle testId="inside"
+      else
+        box sharedElement="card" width=100 height=80 border-radius=10 background-color="red" -exact-layout-transition="10s linear"
+"#;
+        // Replaced during a flight, then while idle with a handoff before its first paint.
+        for during in [true, false] {
+            let (mut p, error) = Presenter::boot_with(
+                &crate::test_plan(app),
+                (),
+                (400., 800.),
+                1.,
+                std::path::PathBuf::new(),
+                PainterChoice::Canvas,
+            )
+            .unwrap();
+            assert!(error.is_none(), "{error:?}");
+            p.host_mut().flights.enabled = true;
+            p.frame();
+            let toggle = p.host().kernel().find_by_test_id("toggle")[0];
+            let toggle = p.host().kernel().node_by_key(toggle).unwrap().id;
+            let press = |p: &mut Presenter<()>| {
+                p.host_mut()
+                    .dispatch_at(toggle, exact_runner::Event::Press, 100.);
+                p.after_commit();
+            };
+            if during {
+                press(&mut p);
+                p.frame();
+                assert_eq!(p.host().flight_frames().len(), 1);
+            }
+            p.reader_replaced(Box::new(Recorder::new()));
+            stream::reader_replaced();
+            if !during {
+                press(&mut p);
+            }
+            assert!(
+                p.host().flight_frames().is_empty(),
+                "the new reader captured no source: during {during}"
+            );
+            p.frame();
+            let ops = take();
+            assert_eq!(ops[0], STATE);
+            assert_eq!(ops[3], 0, "no flight reaches the new reader");
+            let rounded = sets(&ops).iter().any(|def| {
+                let parents = 31 + def[30] as usize;
+                let mut at = parents + 1 + def[parents] as usize * 2;
+                while at < def.len() {
+                    if def[at] == RRECT && def[at + 6..at + 14] == [20f32.to_bits(); 8] {
+                        return true;
+                    }
+                    at = stream::end(def, at).unwrap();
+                }
+                false
+            });
+            assert!(
+                rounded,
+                "the destination keeps its corners: during {during}"
+            );
+            let child = p.host().kernel().find_by_test_id("inside")[0];
+            let child = p.host().kernel().node_by_key(child).unwrap().id;
+            let rect = p.boxes().iter().find(|b| b.id == child).unwrap().rect;
+            assert_eq!(p.hit(rect.0 + 5., rect.1 + 5.), Some(child));
+            assert!(p.access_tree().0.iter().any(|n| n.view == child));
+        }
+    }
+
+    #[test]
     fn retained_flight_corners_refresh_when_reduced_motion_changes_or_the_flight_lands() {
         let app = r#"component App
   state open = false

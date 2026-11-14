@@ -27,6 +27,9 @@ pub(crate) struct Flights {
     pub recorded: std::collections::HashSet<u64>,
     running: Vec<Flight>,
     pub reveal: Vec<NodeKey>,
+    /// A flight ended since the presenter last asked: its content may take
+    /// the focus it was refused in the air.
+    pub landed: bool,
 }
 
 impl<D: DataSource> Host<D> {
@@ -153,7 +156,29 @@ impl<D: DataSource> Host<D> {
             }
             flying
         });
-        self.flights.running.len() != before
+        let landed = self.flights.running.len() != before;
+        self.flights.landed |= landed;
+        landed
+    }
+
+    /// A new reader holds no source and no definition of the last one's, so
+    /// it can draw no flight: each ends, and the next handoff waits for a
+    /// source recorded for this reader.
+    pub(crate) fn reader_lost_flights(&mut self) {
+        for f in self.flights.running.drain(..) {
+            self.engine.remove(motion_node(f.frame.to) | FLIGHT);
+            self.row_dirty.node(f.frame.to);
+            self.flights.landed = true;
+        }
+        self.flights.recorded.clear();
+    }
+
+    /// Reduced motion changed: a flight's destination draws its own corners
+    /// under it, so each is recorded again.
+    pub(crate) fn flights_restyled(&mut self, changed: bool) {
+        for f in self.flights.running.iter().filter(|_| changed) {
+            self.row_dirty.node(f.frame.to);
+        }
     }
 
     /// A destination the last paint found not rendering (`display: none`, a
@@ -560,6 +585,91 @@ component App
         assert_eq!(p.hit(rect.0 + 5.0, rect.1 + 5.0), Some(child));
         let (ax, _, _) = p.access_tree();
         assert!(ax.iter().any(|n| n.view == child));
+    }
+
+    #[test]
+    fn flying_controls_take_no_keyboard_focus_or_activation() {
+        let mut p = presenter(APP);
+        let toggle = id(p.host(), "toggle");
+        p.host_mut().dispatch_at(toggle, Event::Press, 100.0);
+        p.after_commit();
+        p.frame();
+        let child = id(p.host(), "inside");
+        assert!(p.host().flying(child));
+        // Tab and a remote's arrows pass over the flying button.
+        for _ in 0..4 {
+            p.key_down("Tab", 200.0);
+            assert_ne!(p.focus(), Some(child), "Tab stops on a flying control");
+        }
+        assert_eq!(p.focus_refusal(child), Some("in a shared-element flight"));
+        // A focus that reached it some other way activates nothing until it lands.
+        assert!(p.set_focus(Some(child), 300.0).is_none());
+        for (key, code) in [("Enter", "Enter"), (" ", "Space"), ("Enter", "Select")] {
+            p.key_down_with(key, code, false, 400.0);
+            p.key_up(key, code, 410.0);
+            assert!(
+                !p.host().kernel().find_by_test_id("inside").is_empty(),
+                "{code} pressed a flying button"
+            );
+        }
+        p.tick(1101.0);
+        p.frame();
+        assert!(!p.host().flying(child));
+        assert_eq!(p.focus_refusal(child), None);
+        p.key_down("Enter", 1200.0);
+        p.key_up("Enter", "Enter", 1210.0);
+        assert!(
+            p.host().kernel().find_by_test_id("inside").is_empty(),
+            "a landed button is pressed by Enter"
+        );
+    }
+
+    #[test]
+    fn an_autofocus_inside_a_flight_waits_for_its_landing() {
+        let app = APP.replace(
+            "            button \"Inside\" press=toggle testId=\"inside\"\n",
+            "            input autofocus testId=\"inside\"\n",
+        );
+        // Landed by the presenter's tick, then by a live reader's later frame.
+        for reader in [false, true] {
+            let mut p = presenter(&app);
+            if reader {
+                p.set_live_clock(Some(std::rc::Rc::new(|| 0.)));
+            }
+            let toggle = id(p.host(), "toggle");
+            p.host_mut().dispatch_at(toggle, Event::Press, 100.0);
+            p.after_commit();
+            if reader {
+                p.reader_clock(116.0, true);
+            }
+            p.frame();
+            let field = id(p.host(), "inside");
+            assert!(p.host().flying(field));
+            assert_ne!(p.focus(), Some(field), "a flying field took the focus");
+            if reader {
+                p.reader_clock(700.0, true);
+                assert!(p.host().flying(field));
+                p.reader_clock(1300.0, true);
+            } else {
+                p.tick(1101.0);
+            }
+            assert!(!p.host().flying(field), "reader {reader}");
+            assert_eq!(
+                p.focus(),
+                Some(field),
+                "the landed field takes its autofocus: reader {reader}"
+            );
+        }
+        // A handoff with no duration has no flight to wait for.
+        let mut p = presenter(&app.replace("1s linear", "0s linear"));
+        p.set_live_clock(Some(std::rc::Rc::new(|| 0.)));
+        let toggle = id(p.host(), "toggle");
+        p.host_mut().dispatch_at(toggle, Event::Press, 100.0);
+        p.after_commit();
+        p.reader_clock(116.0, true);
+        let field = id(p.host(), "inside");
+        assert!(!p.host().flying(field));
+        assert_eq!(p.focus(), Some(field));
     }
 
     #[test]
