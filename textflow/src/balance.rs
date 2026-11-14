@@ -41,3 +41,94 @@ pub fn balanced_width(width: f32, mut lines: impl FnMut(f32) -> usize) -> Option
     }
     Some(at(hi))
 }
+
+/// Blink's cost of a final line that holds only the paragraph's last word.
+const LAST_WORD_ALONE_PENALTY: f64 = 10_000.0;
+
+/// Blink's cost of each line, as a multiple of the width times the font size.
+const LINE_PENALTY_MULTIPLIER: f64 = 4.0;
+
+/// The breaks Chromium balances a paragraph at: Blink's
+/// `ScoreLineBreaker::BalanceBreakPoints`, which minimises a score rather
+/// than searching for the narrowest width that keeps the line count.
+///
+/// `opportunities` are the paragraph's break opportunities in order, each as
+/// `(end, next)`: where a line breaking there ends (trailing space excluded)
+/// and where the next line starts, measured from the paragraph's start. The
+/// last entry is the paragraph's end (its `next` unused). `width` floors to
+/// 1/64 px (a layout unit); positions stay unrounded, as Blink's text break
+/// candidates do. A line fits when it is at most one layout unit wider than
+/// `width` (`AvailableWidthToFit`, matching Blink's greedy `LineBreaker`), and
+/// its unused width is measured from that, in `f32` as `ComputeScores` does.
+/// A line's score is its unused width squared, the final line's included,
+/// plus a line penalty of 4 × `width` × `font_size` (`SetupParameters`), plus
+/// 10,000 when the final line holds only the last word (`Optimize`). A tie
+/// goes to the later break: `ComputeScores` keeps a start whose score is `<=`
+/// the best so far.
+///
+/// Returns the indices into `opportunities` where lines break (`lines` − 1 of
+/// them), or `None`, leaving the paragraph greedy, when the best breaking
+/// has other than `lines` lines (the greedy count), when `lines` is outside
+/// 2..=[`BALANCE_MAX_LINES`], or when `width` is not finite and positive.
+pub fn balanced_breaks(
+    width: f32,
+    font_size: f32,
+    opportunities: &[(f32, f32)],
+    lines: usize,
+) -> Option<Vec<usize>> {
+    if !(width.is_finite() && width > 0.0)
+        || !(2..=BALANCE_MAX_LINES).contains(&lines)
+        || opportunities.len() < lines
+    {
+        return None;
+    }
+    let width = (width * 64.0).floor() / 64.0;
+    let fit = width + 1.0 / 64.0;
+    let line_penalty = LINE_PENALTY_MULTIPLIER * f64::from(width) * f64::from(font_size);
+    // Node 0 is the paragraph's start; node `k` breaks at `opportunities[k - 1]`.
+    let n = opportunities.len();
+    let mut score = vec![f64::INFINITY; n + 1];
+    let mut from = vec![0; n + 1];
+    let mut count = vec![0; n + 1];
+    score[0] = 0.0;
+    // Lines from nodes before `active` overflow every later end (Blink's
+    // `active`): starts and ends only move forward.
+    let mut active = 0;
+    for b in 1..=n {
+        // Blink's `start_edge`: a line starting before it overflows.
+        let edge = opportunities[b - 1].0 - fit;
+        let first = active;
+        for a in first..b {
+            let start = if a == 0 { 0.0 } else { opportunities[a - 1].1 };
+            let unused = start - edge;
+            if unused < 0.0 {
+                active = a + 1;
+                continue;
+            }
+            if !score[a].is_finite() {
+                continue;
+            }
+            let unused = f64::from(unused);
+            let mut s = score[a] + unused * unused + line_penalty;
+            if b == n && a + 1 == n && a > 0 {
+                s += LAST_WORD_ALONE_PENALTY;
+            }
+            if s <= score[b] {
+                score[b] = s;
+                from[b] = a;
+                count[b] = count[a] + 1;
+            }
+        }
+    }
+    if !score[n].is_finite() || count[n] != lines {
+        return None;
+    }
+    let mut breaks = Vec::with_capacity(lines - 1);
+    let mut node = from[n];
+    while node > 0 {
+        breaks.push(node - 1);
+        node = from[node];
+    }
+    breaks.reverse();
+    Some(breaks)
+}
