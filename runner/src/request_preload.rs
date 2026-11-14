@@ -65,13 +65,15 @@ impl LaunchRequest {
     }
 }
 
-/// A string parsed at bake; secrets are read only when the request leaves.
+/// A string parsed at bake; secrets and launch settings are filled when the request leaves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PreloadPart {
     /// Bytes written by the author, with escaped braces decoded.
     Literal(&'static str),
     /// The name of a kept secret.
     Secret(&'static str),
+    /// A launch setting and its build value (LLP 1162.000 D2).
+    Env(&'static str, &'static str),
 }
 
 /// When a host may start a launch request.
@@ -104,37 +106,67 @@ pub struct Preload {
     pub secrets: &'static [&'static str],
 }
 
-/// A secret the device could not supply; no request was produced.
+/// A reference that cannot safely become a request (LLP 1162.000 D2).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MissingPreloadSecret(pub &'static str);
+pub enum PreloadFillError {
+    /// The device could not supply this secret.
+    MissingSecret(&'static str),
+    /// A launch setting moved a secret before the URL's path.
+    SecretInOrigin,
+}
 
 impl Preload {
-    /// Fill every reference from one read of each secret, or return the missing name.
+    /// Fill references once per secret and reject a secret moved into the origin by a launch setting.
     pub fn fill(
         &self,
         mut lookup: impl FnMut(&str) -> Option<String>,
-    ) -> Result<Request, MissingPreloadSecret> {
+    ) -> Result<Request, PreloadFillError> {
         let secrets: BTreeMap<_, _> = self
             .secrets
             .iter()
             .map(|&name| {
                 lookup(name)
                     .map(|s| (name, s))
-                    .ok_or(MissingPreloadSecret(name))
+                    .ok_or(PreloadFillError::MissingSecret(name))
             })
             .collect::<Result<_, _>>()?;
-        let fill = |parts: &[PreloadPart]| -> Result<String, MissingPreloadSecret> {
+        let fill = |parts: &[PreloadPart]| -> Result<String, PreloadFillError> {
             let mut text = String::new();
             for part in parts {
                 text.push_str(match part {
                     PreloadPart::Literal(text) => text,
-                    PreloadPart::Secret(name) => {
-                        secrets.get(name).ok_or(MissingPreloadSecret(name))?
+                    PreloadPart::Env(name, build) => {
+                        text.push_str(crate::launch_env::value(name).as_deref().unwrap_or(build));
+                        continue;
                     }
+                    PreloadPart::Secret(name) => secrets
+                        .get(name)
+                        .ok_or(PreloadFillError::MissingSecret(name))?,
                 });
             }
             Ok(text)
         };
+        if let Some(first) = self
+            .url
+            .iter()
+            .position(|p| matches!(p, PreloadPart::Secret(_)))
+        {
+            let safe_url: String = self
+                .url
+                .iter()
+                .map(|part| match part {
+                    PreloadPart::Literal(text) => (*text).to_owned(),
+                    PreloadPart::Env(name, build) => {
+                        crate::launch_env::value(name).unwrap_or_else(|| (*build).into())
+                    }
+                    PreloadPart::Secret(_) => "secret".into(),
+                })
+                .collect();
+            let prefix = fill(&self.url[..first])?;
+            if secret_in_origin(&safe_url, &prefix) {
+                return Err(PreloadFillError::SecretInOrigin);
+            }
+        }
         let mut request = Request::get(&fill(self.url)?);
         request.method = self.method.into();
         request.headers = self
@@ -151,6 +183,28 @@ impl Preload {
         request.timeout_ms = self.timeout_ms;
         Ok(request)
     }
+}
+
+/// Whether a secret after `prefix` could enter the URL's scheme or authority.
+/// URL parsing strips whitespace and treats backslashes as slashes for HTTP.
+pub fn secret_in_origin(target: &str, prefix: &str) -> bool {
+    let clean = |text: &str| -> String {
+        text.chars()
+            .filter(|c| !matches!(c, '\t' | '\n' | '\r'))
+            .collect()
+    };
+    let target = clean(target);
+    let target = target.trim_start_matches(|c| c <= ' ');
+    let prefix = clean(prefix);
+    let prefix = prefix.trim_start_matches(|c| c <= ' ');
+    let authority_end = target.split_once(':').map_or(target.len(), |(_, tail)| {
+        let authority = tail.trim_start_matches(['/', '\\']);
+        target.len() - authority.len()
+            + authority
+                .find(['/', '\\', '?', '#'])
+                .unwrap_or(authority.len())
+    });
+    prefix.len() < authority_end
 }
 
 #[cfg(test)]
@@ -204,7 +258,7 @@ mod tests {
     fn a_missing_secret_returns_its_name_and_no_request() {
         assert_eq!(
             DEFINITION.fill(|name| (name == "other").then(|| "yes".into())),
-            Err(MissingPreloadSecret("session"))
+            Err(PreloadFillError::MissingSecret("session"))
         );
     }
 

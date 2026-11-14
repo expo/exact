@@ -43,7 +43,7 @@ fn change_wait(cache: &mut cache::Cache, change: WaitChange) {
     };
 }
 
-/// A plain HTTP request prepared by the host, with its present secrets filled in.
+/// A plain HTTP request with its secrets and launch settings filled in.
 #[derive(Clone)]
 pub struct Definition {
     /// Stable app-defined name used in the journal.
@@ -54,6 +54,55 @@ pub struct Definition {
     pub deadline_ms: Option<u32>,
     /// Secret names whose writes invalidate this request and its reply.
     pub secrets: Vec<String>,
+}
+
+impl Definition {
+    /// Fill the manifest's references before validating or journalling its origin (LLP 1162.000 D2).
+    pub fn fill(
+        definition: &exact_runner::request::Preload,
+        lookup: impl FnMut(&str) -> Option<String>,
+    ) -> Result<Self, Fact> {
+        use ibex2::stdlib::fetch;
+        let request = definition.fill(lookup).map_err(|error| Fact {
+            name: definition.name.into(),
+            origin: definition
+                .fill(|_| Some("redacted".into()))
+                .ok()
+                .map(|r| origin(&r))
+                .unwrap_or_default(),
+            outcome: match error {
+                exact_runner::request::PreloadFillError::MissingSecret(_) => Event::MissingSecret,
+                exact_runner::request::PreloadFillError::SecretInOrigin => Event::InvalidUrl,
+            },
+        })?;
+        let invalid = if url::Url::parse(&request.url).is_err() {
+            Some(Event::InvalidUrl)
+        } else if request.headers.iter().any(|(_, value)| {
+            !fetch::is_valid_value(value) || fetch::normalize_value(value) != value
+        }) {
+            Some(Event::InvalidHeader)
+        } else {
+            None
+        };
+        if let Some(outcome) = invalid {
+            return Err(Fact {
+                name: definition.name.into(),
+                origin: origin(&request),
+                outcome,
+            });
+        }
+        Ok(Self {
+            name: definition.name.into(),
+            request,
+            deadline_ms: definition.timeout_ms,
+            secrets: definition.secrets.iter().map(|s| (*s).into()).collect(),
+        })
+    }
+}
+fn origin(request: &Request) -> String {
+    url::Url::parse(&request.url)
+        .map(|u| u.origin().ascii_serialization())
+        .unwrap_or_default()
 }
 
 /// An outcome recorded at most once per preload.

@@ -278,6 +278,7 @@ pub fn compatibility_id_sources_with_entries(
         rust_grants,
         entries,
         None,
+        &serde_json::Value::Null,
     )
 }
 
@@ -297,8 +298,9 @@ pub fn stored_module<'a>(
 }
 
 /// As [`compatibility_id_sources_with_entries`], with an optional compiled-module
-/// pin. When supplied, `module` enters the id as `typescriptModule`, so changing
-/// it changes the baked cohort. Signed delivery may carry a replacement module
+/// pin and the module receipt's `env` settings. When supplied, `module` enters
+/// the id as `typescriptModule`, so changing it changes the baked cohort.
+/// Signed delivery may carry a replacement module
 /// pair within an installed cohort, subject to its runtime, identity, grants
 /// and module policy; this helper does not decide candidate admission.
 #[allow(clippy::too_many_arguments)]
@@ -311,6 +313,7 @@ pub fn compatibility_id_pinned(
     rust_grants: Option<&str>,
     entries: Option<&std::collections::BTreeMap<String, contract::snapshot::Entry>>,
     module: Option<&str>,
+    settings: &serde_json::Value,
 ) -> Result<Compat, String> {
     // Cargo must rebake even when only the explicit trust selection changes.
     // External apps call this same entrypoint from their own build scripts.
@@ -330,7 +333,13 @@ pub fn compatibility_id_pinned(
     };
     crate::reach::parsed(app_dir, grants, rust_grants, trust == "production")?;
     let ceiling = rust_grants.map(|rust| grant_union(grants.unwrap_or(""), rust));
-    let preloads = crate::preload::checked(app_dir, manifest, ceiling.as_deref().or(grants))?;
+    let preloads = crate::preload::checked(
+        app_dir,
+        manifest,
+        ceiling.as_deref().or(grants),
+        settings,
+        !matches!(platform, "web" | "android"),
+    )?;
     // @ref LLP 1100 D1 — a colour this platform can't show is refused here.
     // The app's plan, compiled once here: its colours checked, and (stage
     // 14 C2) its icons' fill rules read below.

@@ -194,12 +194,14 @@ function planGraph(tool, app, plan, compat, env, entries) {
 
 /** Derive target-specific requirements from captured source, with the fresh
  * web bake supplying the source grants. This computes no native artifact. */
-function snapshotCompat(tool, app, cohort, snapshot, env) {
+function snapshotCompat(tool, app, cohort, snapshot, built, env) {
   const inputs = snapshot.compat.inputs;
   const args = ['compat', app.dir, '--platform', cohort.compat.inputs.platform, '--target', cohort.compat.target, '--json'];
   const grants = inputs.javascriptGrants ?? inputs.rustGrants ?? inputs.grantCeiling;
   if (typeof grants === 'string') args.push('--grants', grants);
   if (typeof inputs.javascriptGrants === 'string' && typeof inputs.rustGrants === 'string') args.push('--rust-grants', inputs.rustGrants);
+  const settings = built.receipt && JSON.parse(built.receipt).env;
+  if (settings) args.push('--settings', JSON.stringify(settings));
   const r = spawnSync(tool, args, { env, encoding: 'utf8' });
   if (r.status !== 0) refuse(r.stderr.trim());
   return JSON.parse(r.stdout);
@@ -309,7 +311,7 @@ export async function streamCandidates(app, origin, found, env, { baker = null, 
   for (const { stream, head, cohort, platform, build: binary } of found) {
     try {
       let built = variants.get(cohort.compat.target) ?? variants.values().next().value;
-      const compat = snapshot?.compat ? snapshotCompat(tools.graph, app, cohort, snapshot, env) : cohort.compat;
+      const compat = snapshot?.compat ? snapshotCompat(tools.graph, app, cohort, snapshot, built, env) : cohort.compat;
       const graph = planGraph(tools.graph, app, built.plan, compat, env, built.entries);
       const inputs = cohort.compat.inputs;
       // Plans check their required raster renditions. Native packaging owns

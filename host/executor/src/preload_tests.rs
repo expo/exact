@@ -1464,3 +1464,6 @@ mod journal;
 
 #[path = "preload_refresh_tests.rs"]
 mod refresh;
+
+#[path = "preload_env_tests.rs"]
+mod env;

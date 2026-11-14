@@ -271,3 +271,19 @@ test('a marked read takes what the launch module asked for before any module ran
     } finally { rmSync(dir,{recursive:true,force:true}); }
   }
 });
+
+test('a preload names settings that are undeclared or have no build value, and accepts a module default', async () => {
+  const { inlineSettings } = await import('../src/__exact_env.mjs');
+  const { parseSync } = await import('rolldown/utils');
+  const app = mkdtempSync(resolve(tmpdir(), 'exact-preload-settings-'));
+  const parse = parseSync;
+  try {
+    const write = env => writeFileSync(resolve(app, 'app.json'), JSON.stringify({ env, preload: { feed: { url: '{env:EONE_API}/feed' } } }));
+    write([]);
+    expect(() => inlineSettings('', app, parse, {})).toThrow('preload.feed.url: setting EONE_API is not declared');
+    write([{ name: 'EONE_API', launch: true }]);
+    expect(() => inlineSettings('const API = import.meta.env.EONE_API;', app, parse, {})).toThrow('preload.feed.url: setting EONE_API has no build value');
+    const { record } = inlineSettings("const API = import.meta.env.EONE_API ?? 'https://built.test';", app, parse, {});
+    expect(record).toEqual({ EONE_API: { value: 'https://built.test', source: 'default', launch: true } });
+  } finally { rmSync(app, { recursive: true, force: true }); }
+});

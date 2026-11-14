@@ -1297,3 +1297,132 @@ fn empty_launch_journal_drains_take_no_lock_and_late_facts_are_not_lost() {
         .all(|(i, fact)| fact.name == i.to_string()));
     assert!(launch.journal().is_empty());
 }
+
+#[test]
+fn manifest_settings_leave_at_launch_and_equal_reads_take_the_reply() {
+    const TEST: &str =
+        "launch_preloads::tests::manifest_settings_leave_at_launch_and_equal_reads_take_the_reply";
+    let Ok(case) = std::env::var("EONE_APPLE_CASE") else {
+        for case in ["unset", "empty", "launch", "grant", "header"] {
+            let server = Server::new(1);
+            let build = format!("http://{}/build", server.address);
+            let value = format!("http://{}/launch", server.address);
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command
+                .args([TEST, "--exact", "--nocapture"])
+                .env("EONE_APPLE_CASE", case)
+                .env("EONE_APPLE_BUILD", &build)
+                .env_remove("EONE_APPLE_URL")
+                .env_remove("EONE_APPLE_HEADER")
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped());
+            if case == "empty" {
+                command.env("EONE_APPLE_URL", "");
+            }
+            if case == "launch" {
+                command.env("EONE_APPLE_URL", &value);
+            }
+            if case == "grant" {
+                command.env("EONE_APPLE_URL", "https://denied.example");
+            }
+            if case == "header" {
+                command.env("EONE_APPLE_HEADER", "bad\nheader");
+            }
+            let child = command.spawn().unwrap();
+            if !matches!(case, "grant" | "header") {
+                assert!(server.request().contains(if case == "launch" {
+                    "/launch/feed"
+                } else {
+                    "/build/feed"
+                }));
+                server.release(0);
+            }
+            let output = child.wait_with_output().unwrap();
+            assert!(
+                output.status.success(),
+                "{case}: {}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                server.count.load(Ordering::Acquire),
+                usize::from(!matches!(case, "grant" | "header"))
+            );
+        }
+        return;
+    };
+    let server = Server::new(1);
+    let mut source = server.source(PreloadWhen::Start, false);
+    let build: &'static str = std::env::var("EONE_APPLE_BUILD").unwrap().leak();
+    source.definitions = vec![Baked {
+        url: vec![
+            PreloadPart::Env("EONE_APPLE_URL", build),
+            PreloadPart::Literal("/feed"),
+        ]
+        .leak(),
+        headers: &[("X-Note", &[PreloadPart::Env("EONE_APPLE_HEADER", "built")])],
+        ..source.definitions[0]
+    }]
+    .leak();
+    source.grants = format!(
+        "net.fetch {}\nenv.launch EONE_APPLE_URL\nenv.launch EONE_APPLE_HEADER",
+        url::Url::parse(build)
+            .unwrap()
+            .origin()
+            .ascii_serialization()
+    );
+    let launch = fixture();
+    launch.begin(false, factory(&source));
+    launch.0.set.get().unwrap().control.wait_definitions();
+    if matches!(case.as_str(), "grant" | "header") {
+        let facts = if case == "header" {
+            launch.journal()
+        } else {
+            launch.0.set.get().unwrap().control.handed();
+            launch.journal()
+        };
+        assert_eq!(facts.len(), 1, "{facts:?}");
+        assert_eq!(
+            facts[0].outcome,
+            if case == "header" {
+                crate::executor::PreloadEvent::InvalidHeader
+            } else {
+                crate::executor::PreloadEvent::RefusedGrant
+            }
+        );
+        assert_eq!(
+            facts[0].origin,
+            if case == "grant" {
+                "https://denied.example".into()
+            } else {
+                url::Url::parse(build)
+                    .unwrap()
+                    .origin()
+                    .ascii_serialization()
+            }
+        );
+        return;
+    }
+    ready(&launch);
+    let value = if case == "launch" {
+        std::env::var("EONE_APPLE_URL").unwrap()
+    } else {
+        build.into()
+    };
+    let mut request = exact_runner::Request::get(&format!("{value}/feed"));
+    request.headers = vec![("X-Note".into(), "built".into())];
+    let out = exact_runner::RequestOut {
+        ticket: 1,
+        target: "feed".into(),
+        request,
+        class: exact_runner::RequestClass::Read,
+        forced: false,
+    };
+    let (reply, timing) = launch.answer(&out).expect("equal read takes held reply");
+    assert!(timing.cached);
+    assert!(matches!(reply, Outcome::Response(r) if r.body == b"content"));
+    assert!(launch
+        .journal()
+        .iter()
+        .any(|fact| fact.outcome == crate::executor::PreloadEvent::Taken));
+}

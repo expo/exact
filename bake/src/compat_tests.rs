@@ -1123,6 +1123,7 @@ fn a_stored_module_client_pins_its_module_into_the_id() {
             None,
             None,
             module,
+            &serde_json::Value::Null,
         )
         .unwrap()
     };

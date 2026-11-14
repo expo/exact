@@ -324,6 +324,7 @@ fn build_sources(
         mixed_grants(&meta, rust)?,
         Some(&baked.entries),
         module,
+        &meta["env"],
     )?;
     // A TypeScript app's update carries its module pair (`typescript/`); a
     // mixed app's two modules travel as one generation, which no host takes yet.

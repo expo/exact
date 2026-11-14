@@ -18,11 +18,13 @@ const NAME = /^[A-Z][A-Z0-9_]*$/;
 // (LLP 1153.002 D1). `"launch": false`, or an object with only its name, is the bare name.
 const entryName = entry => entry !== null && typeof entry === 'object' && !Array.isArray(entry) && typeof entry.name === 'string'
   && Object.keys(entry).every(key => key === 'name' || key === 'launch') && ['boolean', 'undefined'].includes(typeof entry.launch) ? entry.name : entry;
-const manifestEnv = app => {
+const manifestOf = app => {
   let manifest = {};
   try { manifest = JSON.parse(readFileSync(resolve(app, 'app.json'), 'utf8')); } catch { /* no manifest: none declared */ }
-  return Array.isArray(manifest?.env) ? manifest.env : [];
+  return manifest;
 };
+
+const manifestEnv = app => { const manifest = manifestOf(app); return Array.isArray(manifest?.env) ? manifest.env : []; };
 
 /** The names app.json's `env` declares in the app directory `app` (none without one); an entry of no shape it takes
  * is kept as written, for `inlineSettings` to refuse. */
@@ -177,7 +179,8 @@ const grantsBinding = body => {
  * launch gives a value) a marked name is inlined as any other, and its record still says `launch: true`. */
 export function inlineSettings(code, app, parse, env = process.env, { launches = true } = {}) {
   const entries = manifestEnv(app), declared = settingNames(entries), launch = launchNames(entries);
-  if (!declared.length && !/\bimport\b/.test(code)) return { code, record: {} };
+  const preloads = manifestOf(app).preload ?? {};
+  if (!declared.length && !/\bimport\b/.test(code) && !Object.keys(preloads).length) return { code, record: {} };
   const parsed = parse('app.ts', code);
   // The type check says what does not parse.
   if (parsed.errors?.length) return { code, record: {} };
@@ -238,6 +241,15 @@ export function inlineSettings(code, app, parse, env = process.env, { launches =
     if (launched) for (const wrapper of wrappers) {
       if (wrapper.type !== 'TSSatisfiesExpression' && wrapper.typeAnnotation?.typeName?.name !== 'const') continue;
       edits.push([wrapper.start, wrapper.expression.start, ''], [wrapper.expression.end, wrapper.end, '']);
+    }
+  }
+  for (const [preload, entry] of Object.entries(preloads)) {
+    const fields = [['url', entry.url], ['body', entry.body], ...Object.entries(entry.headers ?? {}).map(([key, value]) => [`headers.${key}`, value])];
+    for (const [field, text] of fields) if (typeof text === 'string') for (const reference of text.matchAll(/{{|{env:([^{}]*)}/g)) {
+      const name = reference[1];
+      if (name === undefined) continue;
+      if (!declared.includes(name)) refusals.push(`preload.${preload}.${field}: setting ${name} is not declared in app.json's env`);
+      else if (typeof record[name]?.value !== 'string') refusals.push(`preload.${preload}.${field}: setting ${name} has no build value or ?? default`);
     }
   }
   if (refusals.length) throw new Error(refusals.join('\n'));

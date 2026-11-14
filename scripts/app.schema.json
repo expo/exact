@@ -16,7 +16,7 @@
     },
     "preload": {
       "type": "object",
-      "description": "Named requests sent at process start by hosts that support them (LLP 1162.000 D2). Strings in url, header values and body may use {secret:NAME} for a secret.keep grant; {{ writes a literal brace. Checked and parsed at bake, with present secrets filled in on the device.",
+      "description": "Named requests sent at process start by hosts that support them (LLP 1162.000 D2). Strings in url, header values and body may use {secret:NAME} for a secret.keep grant or {env:NAME} for a declared setting with a build value; {{ writes a literal brace. Fixed settings are written in at bake; launch settings and present secrets are filled on the device. Android and the web use build settings.",
       "maxProperties": 8,
       "propertyNames": { "pattern": "^[a-z][a-z0-9-]*$" },
       "additionalProperties": {

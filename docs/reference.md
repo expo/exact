@@ -446,7 +446,14 @@ method?: string, headers?: { [name]: string }, body?: string,
 timeoutMs?: integer, when?: "start" | "foreground" }` (LLP 1162.000 D2).
 `method` defaults to `GET`, `when` to `"start"`. URL, header values and body may
 reference a kept secret as `{secret:NAME}`, except in a URL’s scheme or authority;
-write `{{` for a literal brace.
+write `{{` for a literal brace. `{env:NAME}` references a setting declared in the
+manifest's `env`, including in a URL's origin. It must have a build value (a
+module's `??` default counts). The bake writes a fixed setting's value into the
+request. A setting marked `launch: true` uses the same process-wide nonempty
+launch value as `import.meta.env.NAME`, falling back to the build's value
+(LLP 1153.002 D2). Android and the web use the build's value. Filled URLs remain
+subject to the binary's grants; invalid filled headers send nothing. The journal
+names the filled origin, without the path, query, headers or body.
 The bake checks at most eight entries against fetch and `secret.keep` grants.
 Hosts that support preloads send them at process start; the app's own reads take
 a preload's reply, and a read made for a tool is sent. A Rust data source may

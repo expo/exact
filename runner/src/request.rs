@@ -84,7 +84,8 @@ pub use http::{CacheMode, Redirect};
 #[path = "request_preload.rs"]
 mod preload;
 pub use preload::{
-    Launch, LaunchContext, LaunchRequest, MissingPreloadSecret, Preload, PreloadPart, PreloadWhen,
+    secret_in_origin, Launch, LaunchContext, LaunchRequest, Preload, PreloadFillError, PreloadPart,
+    PreloadWhen,
 };
 #[path = "request_http.rs"]
 mod http;

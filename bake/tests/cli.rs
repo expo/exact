@@ -211,3 +211,52 @@ fn versions_default_only_when_unset_and_do_not_change_the_cohort() {
         assert_eq!(changed["inputs"], default["inputs"]);
     }
 }
+
+#[test]
+fn compat_uses_recorded_settings_instead_of_its_own_environment() {
+    let app = App::new("preload-settings");
+    app.write("app.json", r#"{"app":{"id":"test.preload-settings","name":"Settings"},"deploy":{"store":{"ios":"0","linux":"0","web":"0"}},"env":[{"name":"EONE_API","launch":true},"EONE_NOTE"],"preload":{"feed":{"url":"{env:EONE_API}/feed","headers":{"X-Note":"{env:EONE_NOTE}"}}}}"#);
+    let settings = serde_json::json!({
+        "EONE_API":{"value":"https://built.example","source":"default","launch":true},
+        "EONE_NOTE":{"value":"built","source":"environment"}
+    })
+    .to_string();
+    for platform in ["ios", "linux", "web"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_exact-bake"))
+            .args([
+                "compat",
+                ".",
+                "--platform",
+                platform,
+                "--grants",
+                "net.fetch https:",
+                "--settings",
+                &settings,
+                "--json",
+            ])
+            .current_dir(&app.0)
+            .env("EXACT_UPDATE_TRUST", "development")
+            .env("EONE_API", "https://unrelated.example")
+            .env_remove("OUT_DIR")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let compat: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let preload = &compat["inputs"]["preload"][0];
+        assert_eq!(
+            preload["headers"][0][1],
+            serde_json::json!([["literal", "built"]])
+        );
+        assert_eq!(
+            preload["url"],
+            if platform == "web" {
+                serde_json::json!([["literal", "https://built.example/feed"]])
+            } else {
+                serde_json::json!([
+                    ["env", "EONE_API", "https://built.example"],
+                    ["literal", "/feed"]
+                ])
+            }
+        );
+    }
+}
