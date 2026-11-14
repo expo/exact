@@ -447,12 +447,14 @@ runtime 13 (LLP 1162.000 D1, D2).
 
 For a read the next screen will make, use `fetch(url, { exactPrefetch: true })`
 or `Request::get(url).prefetch()` in Rust. On Apple, Linux, Windows and Android hosts,
-an app's own plain read starts a preload unless an equal hold already exists.
-It starts none if earlier work, a fence or a barrier makes the read wait, or if
-the read cannot take a hold (a forced ask, `reload` or `no-cache`). A full worker
-lane alone does not stop it. A skipped preload is never started later.
-The caller's fetch and later equal reads wait for that preload and take its reply;
-if it fails, is refused or is dropped, each read is sent itself. The preload uses
+the option starts a preload only when the app's own read would go to the network
+now as an unconditional request and could take its hold; otherwise it is the plain read.
+For example, a read waiting for earlier work or launch definitions, one taking a
+hold or using an HTTP-cache entry, and an `only-if-cached` miss start none.
+A forced ask, `reload` or `no-cache` cannot take a hold. A full worker lane alone
+does not stop a preload. A skipped preload is never started later.
+The caller's fetch and the app's own later equal reads wait for that preload and
+take its reply; if it fails, is refused or is dropped, each read is sent itself. The preload uses
 the asking source's grants at every redirect and is speculative, so Low Data Mode
 may refuse it while the caller's read still runs. Forgetting or aborting the caller
 leaves the preload running.
@@ -463,9 +465,10 @@ fit beside the launch's eight: a ninth evicts the oldest complete one; with eigh
 in flight it starts no preload. Prefetches have no name; `exactPreload` keeps its
 usual meaning on the caller's read. These native executors hold replies
 also when they adopted no launch preloads. The render host, the web and an executor
-without an HTTP cache make an ordinary fetch. A tool's, wake's or device's plain read starts no
-preload. A send, a mutation, a stream, a file-bodied or an independent request, or
-native work, refuses the option. In TypeScript the value must be a boolean.
+without an HTTP cache make an ordinary fetch. A tool's, wake's or device's plain read
+starts no preload and never waits for or takes a hold. A send, a mutation, a stream,
+a file-bodied or an independent request, or native work, refuses the option.
+In TypeScript the value must be a boolean.
 A TypeScript bundle naming it needs runtime 13; the Rust module seam needs ABI 9
 or later (LLP 1162.000 D5).
 

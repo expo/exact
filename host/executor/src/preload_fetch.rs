@@ -129,6 +129,19 @@ fn finish(
     );
 }
 
+fn worker_pool(
+    destination: &Arc<Location>,
+) -> std::io::Result<ibex2::stdlib::fetch_async::BoundedWorkerPool> {
+    #[cfg(test)]
+    if destination.fail_pool.swap(false, Ordering::Relaxed) {
+        return Err(std::io::Error::other("injected preload pool failure"));
+    }
+    let guards: Vec<_> = (0..MAX_PRELOADS)
+        .map(|_| ThreadGuard::new(destination))
+        .collect();
+    ibex2::stdlib::fetch_async::BoundedWorkerPool::with_worker_guards(guards, MAX_PRELOADS)
+}
+
 pub(super) fn run(
     destination: &Arc<Location>,
     send: &mpsc::Sender<Message>,
@@ -176,14 +189,18 @@ pub(super) fn run(
                     &mut launch_workers
                 };
                 if workers.is_none() {
-                    let guards: Vec<_> = (0..MAX_PRELOADS)
-                        .map(|_| ThreadGuard::new(destination))
-                        .collect();
-                    match ibex2::stdlib::fetch_async::BoundedWorkerPool::with_worker_guards(
-                        guards,
-                        MAX_PRELOADS,
-                    ) {
+                    match worker_pool(destination) {
                         Ok(pool) => *workers = Some(Arc::new(pool)),
+                        Err(_) if prefetch => {
+                            update(destination, |cache| {
+                                for (i, generation) in indices {
+                                    if cache.preloads[i].generation == generation {
+                                        drop_held(cache, i, Event::Cancelled);
+                                    }
+                                }
+                            });
+                            continue;
+                        }
                         Err(_) => {
                             update(destination, cancel_all);
                             return;

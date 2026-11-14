@@ -250,16 +250,10 @@ impl Core {
             }
             return Ok(());
         }
-        // A fenced read sends itself when admitted again (LLP 1162.000 D5).
-        if first_admission {
-            if let Some(preloads) = preloads.as_mut() {
-                self.prefetch(&mut state, preloads, &r, work.is_some());
-            }
-        }
         if let Some(cache) = state.cache.as_mut() {
             preload::refresh(cache, &r);
         }
-        state.jobs[lane].push_back(Job {
+        let job = Job {
             ticket: r.ticket,
             request: r.request,
             forced: r.forced,
@@ -272,7 +266,14 @@ impl Core {
             overlap,
             class: r.class,
             cache_store_withheld,
-        });
+        };
+        // A fenced read sends itself when admitted again (LLP 1162.000 D5).
+        if first_admission {
+            if let Some(preloads) = preloads.as_mut() {
+                self.prefetch(&mut state, preloads, &job);
+            }
+        }
+        state.jobs[lane].push_back(job);
         cache::serve_ready(&mut state);
         #[cfg(test)]
         self.shared

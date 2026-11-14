@@ -71,6 +71,18 @@ impl Entry {
                 .max_age
                 .is_none_or(|n| age <= Duration::from_secs(n))
     }
+    fn answers(&self, request: &Request, now: Instant) -> bool {
+        // Fetch §4.6 lets these modes override freshness (LLP 1162 D4).
+        request.cache != CacheMode::NoCache
+            && (matches!(
+                request.cache,
+                CacheMode::ForceCache | CacheMode::OnlyIfCached
+            ) || self.fresh(request, now))
+    }
+    fn validates(&self) -> bool {
+        first(&self.response.headers, "etag").is_some()
+            || first(&self.response.headers, "last-modified").is_some()
+    }
     fn response_head(&self, now: Instant) -> Response {
         let mut response = Response {
             status: self.response.status,
@@ -216,8 +228,17 @@ fn eligible(request: &Request, class: RequestClass) -> bool {
     class == RequestClass::Read && request.method.eq_ignore_ascii_case("GET")
         && request.http == HttpScheduling::Ordered && request.is_plain_http()
         // Partial and caller-conditional requests are forwarded (RFC 9111 §4).
-        && !request.headers.iter().any(|(k, _)| matches!(k.to_ascii_lowercase().as_str(),
-            "range" | "if-range" | "if-match" | "if-unmodified-since" | "if-none-match" | "if-modified-since"))
+        && !conditional(request)
+        && !request.headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("range"))
+}
+
+fn conditional(request: &Request) -> bool {
+    request.headers.iter().any(|(k, _)| {
+        matches!(
+            k.to_ascii_lowercase().as_str(),
+            "if-range" | "if-match" | "if-unmodified-since" | "if-none-match" | "if-modified-since"
+        )
+    })
 }
 
 pub(super) fn barrier(request: &Request, class: RequestClass, work: bool) -> bool {
@@ -310,6 +331,41 @@ pub(super) fn granted_url(grants: &str, request: &Request, url: &str) -> Result<
     checked.map_err(|e| fetch_failure(e, &AbortController::new()))
 }
 
+fn lookup<'a>(
+    state: &'a State,
+    ticket: u64,
+    request: &Request,
+    class: RequestClass,
+    forced: bool,
+    key: &Key,
+) -> Option<&'a Arc<Entry>> {
+    let cache = state.cache.as_ref()?;
+    if !eligible(request, class)
+        || forced
+        || matches!(request.cache, CacheMode::NoStore | CacheMode::Reload)
+        || Directives::of(&request.headers).no_store
+        || replacing_before(state, ticket, key)
+        || super::preload::different_body(cache, request)
+    {
+        return None;
+    }
+    cache.entries.iter().find(|e| e.key == *key)
+}
+
+pub(super) fn unconditional(state: &State, job: &Job) -> bool {
+    !conditional(&job.request)
+        && missing(&job.request, job.forced).is_none()
+        && lookup(
+            state,
+            job.ticket,
+            &job.request,
+            job.class,
+            job.forced,
+            &Key::of(&job.request),
+        )
+        .is_none_or(|e| !e.answers(&job.request, Instant::now()) && !e.validates())
+}
+
 /// Hits settle without a worker, behind earlier non-reads (LLP 1162 D1, D4).
 pub(super) fn serve_ready(state: &mut State) {
     super::preload::serve_ready(state);
@@ -335,44 +391,20 @@ pub(super) fn serve_ready(state: &mut State) {
             break;
         }
         if super::preload::waiting(state, job)
-            || state
-                .cache
-                .as_ref()
-                .is_some_and(|c| super::preload::different_body(c, &job.request))
             || job.request.reach.origin != exact_runner::CallOrigin::App
-            || job.forced
-            || matches!(
-                job.request.cache,
-                CacheMode::NoStore | CacheMode::Reload | CacheMode::NoCache
-            )
-            || !eligible(&job.request, job.class)
-            || Directives::of(&job.request.headers).no_store
         {
             index += 1;
             continue;
         }
         let key = Key::of(&job.request);
-        if replacing_before(state, job.ticket, &key) {
-            index += 1;
-            continue;
-        }
-        let cache = state.cache.as_mut().expect("enabled");
         let now = Instant::now();
-        // Fetch §4.6 allows force-cache and only-if-cached to use stored replies
-        // under no-cache or must-revalidate, overriding RFC 9111 §4.2.4 by
-        // author precedence (LLP 1162 D4; LLP 1115). Native apps have no page
-        // origin to restrict the hit.
-        let Some(entry) = cache.entries.iter().find(|e| {
-            e.key == key
-                && (matches!(
-                    job.request.cache,
-                    CacheMode::ForceCache | CacheMode::OnlyIfCached
-                ) || e.fresh(&job.request, now))
-        }) else {
+        let Some(entry) = lookup(state, job.ticket, &job.request, job.class, job.forced, &key)
+            .filter(|e| e.answers(&job.request, now))
+        else {
             index += 1;
             continue;
         };
-        let checked = granted(&cache.grants, &job.request);
+        let checked = granted(&state.cache.as_ref().expect("enabled").grants, &job.request);
         let (outcome, cached) = match checked {
             Ok(()) => {
                 let mut response = entry.response_head(now);
@@ -393,7 +425,7 @@ pub(super) fn serve_ready(state: &mut State) {
             break;
         }
         if cached {
-            cache.find(&key);
+            state.cache.as_mut().expect("enabled").find(&key);
         }
         let job = state.jobs[0].remove(index).expect("cache job");
         state.bytes[0] = state.bytes[0] - job.charge + bytes;
@@ -442,51 +474,29 @@ pub(super) fn prepare(
     let mut state = shared.state.lock().unwrap();
     state.cache.as_ref()?;
     let key = Key::of(request);
-    let replacing = replacing_before(&state, ticket, &key)
-        || state
-            .cache
-            .as_ref()
-            .is_some_and(|c| super::preload::different_body(c, request));
+    let entry = lookup(&state, ticket, request, class, forced, &key).cloned();
     let cache = state.cache.as_mut().expect("enabled");
     {
         let now = Instant::now();
-        if !forced
-            && !replacing
-            && !matches!(request.cache, CacheMode::Reload | CacheMode::NoCache)
-            && !Directives::of(&request.headers).no_store
-        {
-            if let Some(entry) = cache.entries.iter().find(|e| {
-                e.key == key
-                    && (matches!(
-                        request.cache,
-                        CacheMode::ForceCache | CacheMode::OnlyIfCached
-                    ) || e.fresh(request, now))
-            }) {
-                let outcome = match checked {
-                    Ok(()) => granted(&cache.grants, request).map(|()| entry.response(now)),
-                    Err(e) => Err(fetch_failure(e, &AbortController::new())),
-                };
-                let cached = outcome.is_ok();
-                if cached {
-                    cache.find(&key);
-                }
-                if let Some(run) = state.running.iter_mut().find(|r| r.ticket == ticket) {
-                    run.cached = cached;
-                }
-                return Some(outcome.map_or_else(|outcome| outcome, Outcome::Response));
+        if let Some(entry) = entry.as_ref().filter(|e| e.answers(request, now)) {
+            let outcome = match checked {
+                Ok(()) => granted(&cache.grants, request).map(|()| entry.response(now)),
+                Err(e) => Err(fetch_failure(e, &AbortController::new())),
+            };
+            let cached = outcome.is_ok();
+            if cached {
+                cache.find(&key);
             }
+            if let Some(run) = state.running.iter_mut().find(|r| r.ticket == ticket) {
+                run.cached = cached;
+            }
+            return Some(outcome.map_or_else(|outcome| outcome, Outcome::Response));
         }
     }
     let store = !Directives::of(&request.headers).no_store;
-    let previous = if !forced && !replacing && request.cache != CacheMode::Reload && store {
-        cache.find(&key)
-    } else {
-        None
-    };
-    let previous = previous.filter(|e| {
-        first(&e.response.headers, "etag").is_some()
-            || first(&e.response.headers, "last-modified").is_some()
-    });
+    let previous = entry
+        .and_then(|_| cache.find(&key))
+        .filter(|e| e.validates());
     if let Some(entry) = &previous {
         for (validator, condition) in [
             ("etag", "If-None-Match"),

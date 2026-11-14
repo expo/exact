@@ -219,6 +219,8 @@ struct Location {
     changed: Condvar,
     threads: Mutex<usize>,
     exited: Condvar,
+    #[cfg(test)]
+    fail_pool: std::sync::atomic::AtomicBool,
 }
 struct ThreadGuard(Arc<Location>);
 impl ThreadGuard {
@@ -296,6 +298,8 @@ impl Preloads {
             changed: Condvar::new(),
             threads: Mutex::new(0),
             exited: Condvar::new(),
+            #[cfg(test)]
+            fail_pool: std::sync::atomic::AtomicBool::new(false),
         });
         let (send, receive) = mpsc::channel();
         let set = Self {
@@ -758,17 +762,22 @@ pub(super) fn waiting(state: &State, job: &Job) -> bool {
 }
 // The earliest queued request keeps room to finish before later replies
 // can fill its lane. A preload failure still needs that room (D1).
-pub(super) fn reserve_front(state: &mut State) -> bool {
+pub(super) fn front_reservation(state: &State) -> usize {
     if !state.jobs[0].iter().any(|job| waiting(state, job)) {
-        return true;
+        return 0;
     }
     let job = state.jobs[0].front().expect("a preload waiter");
-    let more = job.limit - job.charge;
-    if more > BYTES[0].saturating_sub(state.bytes[0]) {
+    job.limit - job.charge
+}
+pub(super) fn reserve_front(state: &mut State) -> bool {
+    let more = front_reservation(state);
+    if !reads::has_room(state, 0, more) {
         return false;
     }
-    state.jobs[0].front_mut().unwrap().charge += more;
-    state.bytes[0] += more;
+    if more != 0 {
+        state.jobs[0].front_mut().unwrap().charge += more;
+        state.bytes[0] += more;
+    }
     true
 }
 pub(super) fn effect_count(state: &State) -> usize {
@@ -851,7 +860,8 @@ pub(super) fn serve_ready(state: &mut State) {
         }
         let job = state.jobs[0].remove(index).expect("preload read");
         state.bytes[0] = state.bytes[0] - job.charge + bytes;
-        state.light += 1;
+        let light = reads::safe_read(&job.request, job.work.is_some(), job.class);
+        state.light += usize::from(light);
         state.completed[0].push_back(Completed {
             cached,
             elapsed_ms: 0,
@@ -861,7 +871,7 @@ pub(super) fn serve_ready(state: &mut State) {
             bytes,
             message: false,
             stream: false,
-            light: true,
+            light,
             again: false,
             reply: false,
         });

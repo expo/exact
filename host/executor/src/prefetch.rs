@@ -6,23 +6,16 @@ impl Core {
         &self,
         state: &mut State,
         owned: &mut Option<Preloads>,
-        r: &RequestOut,
-        work: bool,
+        r: &Job,
     ) {
-        if !r.request.prefetch || !eligible(&r.request, r.class, r.forced, work) {
+        if !r.request.prefetch || !eligible(&r.request, r.class, r.forced, r.work.is_some()) {
             return;
         }
-        // A preload must not outrun its read's ordering dependencies (LLP 1162.000 D5).
-        if state.ordered_barrier
-            || !state.fenced.is_empty()
-            || state.running.iter().any(|before| {
-                before.lane == 0
-                    && before.blocking
-                    && reads::waits_for(r.class, before.class, before.overlap)
-            })
-            || state.jobs[0]
-                .iter()
-                .any(|before| reads::waits_for(r.class, before.class, before.overlap))
+        // Only an unconditional read ready for the network can start a preload (LLP 1162.000 D5).
+        if !reads::unblocked(state, r)
+            || waiting(state, r)
+            || !reads::room_to_start(state, r)
+            || !cache::unconditional(state, r)
         {
             return;
         }
@@ -30,10 +23,7 @@ impl Core {
             return;
         };
         expire(cache);
-        if !valid_request(&r.request)
-            || cache::granted(&self.grants, &r.request).is_err()
-            || matching(cache, &r.request, true).is_some()
-        {
+        if !valid_request(&r.request) || cache::granted(&self.grants, &r.request).is_err() {
             return;
         }
         let slot = cache

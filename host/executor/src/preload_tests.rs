@@ -990,7 +990,7 @@ fn refresh_admission_drops_equal_ready_and_pending_preloads_and_releases_waiters
 }
 
 #[test]
-fn a_post_preload_waiter_counts_as_an_effect_from_admission_and_a_hit_frees_it() {
+fn a_post_preload_waiter_keeps_its_effect_place_until_the_held_reply_is_drained() {
     for asynchronous in [false, true] {
         let server = Server::new();
         let release = held_plan(&server, "/preload", b"held");
@@ -1023,13 +1023,15 @@ fn a_post_preload_waiter_counts_as_an_effect_from_admission_and_a_hit_frees_it()
         {
             let state = core.shared.state.lock().unwrap();
             assert_eq!(effect_count(&state), 16);
-            assert!(state.fenced.is_empty());
+            assert_eq!(state.fenced.front().unwrap().ticket(), 17);
             assert!(state.completed[0].iter().any(|r| r.ticket == 1 && r.cached));
         }
+        assert_eq!(collect(&core, &woke).0, 1);
+        assert!(core.shared.state.lock().unwrap().fenced.is_empty());
         for release in releases {
             release.send(()).unwrap();
         }
-        for ticket in 1..=17 {
+        for ticket in 2..=17 {
             assert_eq!(collect(&core, &woke).0, ticket);
         }
     }

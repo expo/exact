@@ -1,5 +1,119 @@
 use super::*;
 
+#[test]
+fn a_prefetch_uses_a_fresh_entry_or_force_caches_a_stale_one_without_a_hold() {
+    for asynchronous in [false, true] {
+        for mode in [
+            CacheMode::Default,
+            CacheMode::ForceCache,
+            CacheMode::OnlyIfCached,
+        ] {
+            let server = Server::new();
+            let (core, woke) = server.core(asynchronous, true);
+            let headers = if mode == CacheMode::Default {
+                FRESH
+            } else {
+                &[("Cache-Control", "no-cache"), ("ETag", "old")]
+            };
+            server.plan("/next", Plan::new(200, headers, b"stored"));
+            assert!(!read(&core, &woke, &server, 1, "/next").1);
+            server.plan("/next", Plan::new(200, &[], b"speculative"));
+            let (reply, cached) = ask(
+                &core,
+                &woke,
+                job(2, server.request("/next").prefetch().cache(mode)),
+            );
+            assert_eq!(reply.body, b"stored");
+            assert!(cached);
+            assert_eq!(server.count(), 1);
+            assert!(core.preloads.lock().unwrap().is_none());
+            assert!(core
+                .shared
+                .state
+                .lock()
+                .unwrap()
+                .cache
+                .as_ref()
+                .unwrap()
+                .preloads
+                .is_empty());
+        }
+    }
+}
+
+#[test]
+fn a_prefetch_revalidates_a_stale_entry_with_the_callers_conditional_exchange() {
+    for asynchronous in [false, true] {
+        for (validator, condition, value) in [
+            ("ETag", "if-none-match", "old"),
+            (
+                "Last-Modified",
+                "if-modified-since",
+                "Sun, 06 Nov 1994 08:49:37 GMT",
+            ),
+        ] {
+            let server = Server::new();
+            let (core, woke) = server.core(asynchronous, true);
+            server.plan(
+                "/next",
+                Plan::new(
+                    200,
+                    &[("Cache-Control", "no-cache"), (validator, value)],
+                    b"stored",
+                ),
+            );
+            read(&core, &woke, &server, 1, "/next");
+            server.plan("/next", Plan::new(304, FRESH, b""));
+            let (reply, cached) = ask(&core, &woke, job(2, server.request("/next").prefetch()));
+            assert_eq!(first(&server.headers(1), condition), Some(value));
+            assert_eq!(reply.body, b"stored");
+            assert!(cached);
+            assert_eq!(server.count(), 2);
+            assert!(core.preloads.lock().unwrap().is_none());
+            assert!(core
+                .shared
+                .state
+                .lock()
+                .unwrap()
+                .cache
+                .as_ref()
+                .unwrap()
+                .preloads
+                .is_empty());
+        }
+    }
+}
+
+#[test]
+fn a_caller_conditional_prefetch_starts_only_the_callers_exchange() {
+    for asynchronous in [false, true] {
+        for method in ["GET", "POST"] {
+            for condition in [
+                "If-None-Match",
+                "If-Modified-Since",
+                "If-Match",
+                "If-Unmodified-Since",
+                "If-Range",
+            ] {
+                let server = Server::new();
+                let (core, woke) = server.core(asynchronous, true);
+                server.plan("/next", Plan::new(200, &[], b"caller"));
+                let mut request = server
+                    .request("/next")
+                    .prefetch()
+                    .header(condition, "value");
+                request.method = method.into();
+                let (reply, cached) = ask(&core, &woke, job(1, request));
+                assert_eq!(reply.body, b"caller");
+                assert_eq!(first(&server.headers(0), condition), Some("value"));
+                assert!(!cached);
+                assert_eq!(server.count(), 1);
+                assert!(core.preloads.lock().unwrap().is_none());
+            }
+        }
+    }
+}
+
 fn wait_for_reply(core: &Core, ticket: u64) {
     let end = Instant::now() + HANG;
     let mut state = core.shared.state.lock().unwrap();

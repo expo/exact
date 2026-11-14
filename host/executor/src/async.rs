@@ -1034,7 +1034,7 @@ fn charge(book: &Book, lane: usize, job: &Job, kind: Kind) -> (usize, usize) {
 /// Whether `job` fits the lane's free bytes now.
 fn fits(state: &State, lane: usize, job: &Job, kind: Kind) -> bool {
     let (more, upload) = charge(&state.book, lane, job, kind);
-    more + upload <= BYTES[lane].saturating_sub(state.bytes[lane])
+    super::reads::has_room(state, lane, more + upload)
 }
 
 /// The same shared admission for a read's first hop and its redirects (LLP 1162 D1).

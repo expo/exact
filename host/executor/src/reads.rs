@@ -73,12 +73,26 @@ pub(super) fn next_job(
     take_job(state, 0, index)
 }
 
-pub(super) fn can_start(state: &State, job: &Job) -> bool {
+pub(super) fn unblocked(state: &State, job: &Job) -> bool {
     let class = if job.overlap {
         job.class
     } else {
         RequestClass::Ordered
     };
+    !state
+        .running
+        .iter()
+        .any(|run| run.lane == 0 && run.blocking && waits_for(class, run.class, run.overlap))
+        && !state.jobs[0]
+            .iter()
+            .take_while(|before| before.ticket != job.ticket)
+            .any(|before| waits_for(class, before.class, before.overlap))
+}
+
+pub(super) fn can_start(state: &State, job: &Job) -> bool {
+    if !unblocked(state, job) {
+        return false;
+    }
     let mut overlapping = 0;
     let mut parallel = 0;
     for run in state.running.iter().filter(|r| r.lane == 0 && r.blocking) {
@@ -87,9 +101,6 @@ pub(super) fn can_start(state: &State, job: &Job) -> bool {
         } else {
             RequestClass::Ordered
         };
-        if waits_for(class, run.class, run.overlap) {
-            return false;
-        }
         overlapping += usize::from(run.overlap);
         parallel += usize::from(matches!(before, RequestClass::Parallel(_)));
     }
@@ -97,17 +108,33 @@ pub(super) fn can_start(state: &State, job: &Job) -> bool {
     // it does not enlarge the overlap limits (LLP 1162 D1).
     if job.overlap
         && (overlapping >= INDEPENDENT
-            || (matches!(class, RequestClass::Parallel(_)) && parallel >= 3))
+            || (matches!(job.class, RequestClass::Parallel(_)) && parallel >= 3))
     {
         return false;
     }
     true
 }
 
+pub(super) fn has_room(state: &State, lane: usize, more: usize) -> bool {
+    more <= BYTES[lane].saturating_sub(state.bytes[lane])
+}
+
+pub(super) fn room_to_start(state: &State, job: &Job) -> bool {
+    let more = state.jobs[0]
+        .iter()
+        .take_while(|before| before.ticket != job.ticket)
+        .filter(|before| !preload::waiting(state, before))
+        .fold(
+            job.limit - job.charge + preload::front_reservation(state),
+            |more, before| more.max(before.limit - before.charge),
+        );
+    has_room(state, 0, more)
+}
+
 fn take_job(state: &mut State, lane: usize, index: usize) -> Option<(Job, AbortController)> {
     let job = state.jobs[lane].get(index)?;
     let more = job.limit - job.charge;
-    if more > BYTES[lane].saturating_sub(state.bytes[lane]) {
+    if !has_room(state, lane, more) {
         return None;
     }
     let mut job = state.jobs[lane].remove(index)?;
