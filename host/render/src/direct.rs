@@ -249,7 +249,7 @@ pub(crate) fn render_js<D: DataSource + 'static, F: Fn() -> D>(
     );
     let to = boot.as_ref().map(|boot| boot.to(&document.controls));
     hand(close_after_boot(close.clone(), to).as_bytes());
-    let settled = page.settled;
+    let (settled, drew) = (page.settled, page.runner.store().entropy_draws() > 0);
     retire(page, data);
     if over {
         return Err(format!("the page is {sent} bytes"));
@@ -266,6 +266,7 @@ pub(crate) fn render_js<D: DataSource + 'static, F: Fn() -> D>(
             activate,
             wake,
             runtime_form: true,
+            drew,
         },
         body,
         boot,

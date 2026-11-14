@@ -48,6 +48,7 @@ component Blog
 #[derive(Default)]
 struct Posts;
 static CACHE_READS: AtomicUsize = AtomicUsize::new(0);
+static DRAWS: AtomicUsize = AtomicUsize::new(0);
 
 fn post(title: &str) -> Value {
     Value::record(vec![Value::str(title)])
@@ -58,7 +59,12 @@ impl DataSource for Posts {
         Err(DataError::UnknownSource(source.into()))
     }
 
-    fn answer(&mut self, _: &mut Store, source: &str, args: &[Value]) -> Result<Answer, DataError> {
+    fn answer(
+        &mut self,
+        store: &mut Store,
+        source: &str,
+        args: &[Value],
+    ) -> Result<Answer, DataError> {
         let id = match args.first() {
             Some(Value::List(ids)) => ids
                 .first()
@@ -75,6 +81,13 @@ impl DataSource for Posts {
             ]))),
             ("posts", _) if args == [Value::str("drafts")] => {
                 Ok(Answer::Now(Value::list(vec![Value::str("d1")])))
+            }
+            ("post", "draw-probe") => {
+                store.observe_entropy();
+                Ok(Answer::Now(post(&format!(
+                    "Draw {}",
+                    DRAWS.fetch_add(1, Ordering::SeqCst) + 1
+                ))))
             }
             ("post", "slow") => Ok(Answer::Later(Request::continuation(1))),
             ("post", "boom") => Err(DataError::Unavailable("boom".into())),
@@ -496,6 +509,21 @@ fn cached_pages_reuse_public_answers_and_honor_request_cache_controls() {
     assert_eq!(get(addr, "/post/cache-probe").2, refreshed);
     assert!(get(addr, "/live/cache-probe").2.contains("Read 4"));
     assert!(get(addr, "/live/cache-probe").2.contains("Read 5"));
+}
+
+/// A draw of randomness is the device's (LLP 1069.005 D2): a `cached`
+/// route's page whose render drew is no one's to keep or share.
+#[test]
+fn cached_pages_whose_render_drew_are_neither_kept_nor_shared() {
+    let served = start("origin-draw", 1, 8, 1000);
+    let (status, headers, first) = get(served.addr, "/post/draw-probe");
+    assert_eq!(status, 200);
+    assert!(first.contains(">Draw "), "{first}");
+    assert_eq!(header(&headers, "cache-control"), Some("no-store"));
+    let (_, headers, second) = get(served.addr, "/post/draw-probe");
+    assert_eq!(header(&headers, "cache-control"), Some("no-store"));
+    assert_eq!(header(&headers, "age"), None);
+    assert_ne!(second, first);
 }
 
 /// A list that answers a moment after it is asked, before a sibling: the
@@ -1345,6 +1373,14 @@ fn a_navigation_gets_the_head_before_the_render_and_the_rest_after() {
     assert!(header(&headers, "age").is_some(), "{headers:?}");
     assert!(header(&headers, "etag").is_some());
     assert_eq!(kept, flushed);
+    // One whose render drew randomness is kept for no one: the next request
+    // renders again.
+    let (_, _, body) = fetch(addr, &navigate("/post/draw-probe"));
+    let flushed = String::from_utf8(unchunk(body.as_bytes())).unwrap();
+    assert!(flushed.contains(">Draw "), "{flushed}");
+    let (_, headers, again) = get(addr, "/post/draw-probe");
+    assert_eq!(header(&headers, "age"), None);
+    assert_ne!(again, flushed);
     // A conditional navigation waits for its validator on both a cold miss
     // and a forced refresh, then revalidates the kept page without a body.
     let conditional = |tag: &str, cache: &str| {
