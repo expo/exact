@@ -1259,15 +1259,10 @@ impl<D: DataSource> Host<D> {
 
     /// The display preferences (LLP 1061 D5): re-answer `exactViewport()` in one commit.
     pub fn set_preferences(&mut self, preferences: exact_runner::Preferences) -> Option<String> {
-        let reduced_changed =
-            self.runner.viewport().preferences.reduced_motion != preferences.reduced_motion;
+        let was = self.runner.viewport().preferences.reduced_motion;
         let answer = self.runner.set_preferences(preferences);
         let error = self.told(answer, "preferences");
-        if error.is_none() && reduced_changed {
-            for flight in self.flight_frames() {
-                self.row_dirty.node(flight.to);
-            }
-        }
+        self.flights_restyled(error.is_none() && was != preferences.reduced_motion);
         error
     }
 

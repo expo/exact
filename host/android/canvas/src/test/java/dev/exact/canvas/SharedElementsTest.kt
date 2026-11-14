@@ -40,7 +40,7 @@ class SharedElementsTest {
     }
     private class Fixture {
         val pictures = HashMap<Int, Bitmap>()
-        val layers = Layers({ _, _, _, _, _ -> })
+        val layers = Layers({ _, _, _, _, _, _ -> })
         var scroll = 0f
         var layerScale = 1f
         val player = Player(emptyMap())
