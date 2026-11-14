@@ -77,11 +77,18 @@ impl<D: DataSource> Presenter<D> {
         // Its session's roles, whatever else lives on the thread (LLP 1121 stage 5).
         let _roles = self.host.runner().bind_roles();
         let frame = crate::text::cache::deferring_eviction(|| {
-            let frame = self.paint_frame(target, canvas_frame);
+            // The probe draws nothing, so the canvases' tick stays with the frame's own paint.
+            if !self.host.flights.reveal.is_empty() {
+                self.paint_frame(FrameTarget::Geometry, false, true);
+                if self.last_frame_succeeded {
+                    self.reveal_flights();
+                }
+            }
+            let frame = self.paint_frame(target, canvas_frame, false);
             // A field's caret, or a fragment's target as pictures arrive
             // (LLP 1153 D5), moved by this frame's layout: paint again.
             if self.last_frame_succeeded && (self.reveal_field_cursor() | self.hold_fragment()) {
-                self.paint_frame(target, false)
+                self.paint_frame(target, false, false)
             } else {
                 frame
             }
@@ -97,7 +104,13 @@ impl<D: DataSource> Presenter<D> {
     pub fn last_frame_succeeded(&self) -> bool {
         self.last_frame_succeeded
     }
-    fn paint_frame(&mut self, target: FrameTarget, canvas_frame: bool) -> Option<Arc<Pixmap>> {
+    fn paint_frame(
+        &mut self,
+        target: FrameTarget,
+        canvas_frame: bool,
+        flight_probe: bool,
+    ) -> Option<Arc<Pixmap>> {
+        self.brush.shared.update(&self.host);
         self.brush.composition = self.ime_paint();
         self.alert_sync();
         self.prepare_overlay();
@@ -214,6 +227,7 @@ impl<D: DataSource> Presenter<D> {
             motion: &motion,
         };
         let mut paint = |brush: &mut Painter| match region {
+            _ if flight_probe => brush.flight_probe(&scene, self.viewport),
             Some(region) => brush
                 .paint_region(
                     &scene,
@@ -276,6 +290,14 @@ impl<D: DataSource> Presenter<D> {
                 }
             }
         };
+        if self.last_frame_succeeded && !flight_probe && self.host.flights.enabled {
+            self.host
+                .flights
+                .recorded
+                .clone_from(&self.brush.shared.recorded);
+            self.host
+                .retire_unrendered_flights(&self.brush.shared.unrendered);
+        }
         for key in self.brush.flow_failures().collect::<Vec<_>>() {
             if let Some(node) = self.host.kernel().node_by_key(key) {
                 self.host.log(format!(

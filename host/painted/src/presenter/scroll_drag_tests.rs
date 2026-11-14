@@ -304,3 +304,110 @@ fn a_scroller_that_hears_no_refresh_is_never_pulled() {
     assert_eq!(p.reader_refresh(id(&p, "list")), None);
     assert_eq!(log(&p), "");
 }
+
+#[test]
+fn agent_reader_scrolls_both_axes_and_retains_the_position_for_return() {
+    let mut p = boot(LIST);
+    let list = id(&p, "list");
+    let reply: serde_json::Value = serde_json::from_str(
+        &p.agent_scroll_drag(&serde_json::json!({
+            "id": list, "scrollDrag": [0, -400], "ms": 250
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    assert!((reply["scrolledBy"][1].as_f64().unwrap() - 400.).abs() < 0.01);
+    assert!(p.contact_position().is_none());
+    assert!(
+        log(&p).starts_with('s') && log(&p).ends_with("e(0,0,-,-)"),
+        "{}",
+        log(&p)
+    );
+    p.frame();
+    assert!((p.scroll[&list].1 - 400.).abs() < 0.01);
+    p.agent_scroll_drag(&serde_json::json!({"id": list, "scrollDrag": [0, 400], "ms": 250}))
+        .unwrap();
+    assert!(p.scroll[&list].1.abs() < 0.01);
+
+    let mut p = boot("component App\n  view\n    scroll width=300 height=200 overflow-x=\"scroll\" overflow-y=\"hidden\" testId=\"shelf\"\n      box width=1000 height=200\n");
+    let shelf = id(&p, "shelf");
+    p.agent_scroll_drag(&serde_json::json!({"id": shelf, "scrollDrag": [-260, 0], "ms": 250}))
+        .unwrap();
+    p.frame();
+    assert!((p.scroll[&shelf].0 - 260.).abs() < 0.01);
+    p.agent_scroll_drag(&serde_json::json!({"id": shelf, "scrollDrag": [-2000, 0], "ms": 250}))
+        .unwrap();
+    assert!(
+        (p.scroll[&shelf].0 - 700.).abs() < 0.01,
+        "{:?}",
+        p.scroll[&shelf]
+    );
+}
+
+#[test]
+fn agent_reader_scroll_refuses_bad_input_and_covered_starts_without_moving() {
+    let mut p = boot(LIST);
+    let list = id(&p, "list");
+    for request in [
+        serde_json::json!({"id": list, "scrollDrag": [0], "ms": 250}),
+        serde_json::json!({"id": list, "scrollDrag": [0, -40], "ms": -1}),
+        serde_json::json!({"id": list, "scrollDrag": [0, -40], "ms": 250, "from": [200, 350]}),
+        serde_json::json!({"id": id(&p, "log"), "scrollDrag": [0, -40], "ms": 250}),
+    ] {
+        assert!(p.agent_scroll_drag(&request).is_err());
+    }
+    assert_eq!(p.scroll.get(&list).copied().unwrap_or_default(), (0., 0.));
+    assert_eq!(log(&p), "");
+}
+
+#[test]
+fn agent_reader_scroll_preserves_pan_ownership_and_nested_containment() {
+    let mut p = boot(
+        r#"component App
+  state n = 0
+  action drag(dx: number, dy: number)
+    n = n + 1
+  view
+    scroll width=300 height=200 testId="outer" overflow-x="scroll" overflow-y="scroll" pan=drag touch-action="pan-y"
+      box width=1000 height=1000
+"#,
+    );
+    let outer = id(&p, "outer");
+    let probe = p
+        .agent_scroll_drag(
+            &serde_json::json!({"id": outer, "scrollDrag": [40, 0], "ms": 250, "probe": true}),
+        )
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&probe).unwrap()["scrollDrag"],
+        "presenter"
+    );
+    assert!(p
+        .agent_scroll_drag(&serde_json::json!({"id": outer, "scrollDrag": [10, -40], "ms": 250}))
+        .unwrap_err()
+        .contains("gesture owns"));
+    assert_eq!(p.scroll.get(&outer).copied().unwrap_or_default(), (0., 0.));
+
+    let mut p = boot(
+        r#"component App
+  view
+    scroll width=300 height=200 testId="outer" overflow-x="scroll" overflow-y="scroll"
+      scroll width=1000 height=100 testId="inner" overscroll-behavior-y="contain"
+        box width=1000 height=1000
+      box width=1000 height=1000
+"#,
+    );
+    let outer = id(&p, "outer");
+    assert!(p
+        .agent_scroll_drag(
+            &serde_json::json!({"id": outer, "scrollDrag": [-40, -10], "ms": 250, "from": [50, 50]})
+        )
+        .unwrap_err()
+        .contains("contains this axis"));
+    assert_eq!(p.scroll.get(&outer).copied().unwrap_or_default(), (0., 0.));
+    p.agent_scroll_drag(
+        &serde_json::json!({"id": outer, "scrollDrag": [-40, 0], "ms": 250, "from": [50, 50]}),
+    )
+    .unwrap();
+    assert!((p.scroll[&outer].0 - 40.).abs() < 0.01);
+}

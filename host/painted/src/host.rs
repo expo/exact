@@ -29,6 +29,8 @@ mod bars;
 mod content;
 #[path = "host_error.rs"]
 mod error;
+#[path = "flights.rs"]
+pub(crate) mod flights;
 #[path = "hatches/host.rs"]
 mod hatch;
 #[path = "height.rs"]
@@ -137,6 +139,7 @@ pub struct Host<D: DataSource> {
     router_op: Option<exact_runner::RouterChange>,
     pub(crate) navigation: crate::navigation::Navigation,
     presence: presence::Presence,
+    pub(crate) flights: flights::Flights,
     presses: BTreeMap<NodeKey, press::Feedback>,
     /// The 2D canvases' bitmaps (LLP 1056 D7).
     canvas2d: crate::canvas2d::Canvases,
@@ -339,6 +342,7 @@ impl<D: DataSource> Host<D> {
             router_op: None,
             navigation: Default::default(),
             presence: Default::default(),
+            flights: Default::default(),
             presses: Default::default(),
             canvas2d: Default::default(),
             renewed: Vec::new(),
@@ -1255,8 +1259,11 @@ impl<D: DataSource> Host<D> {
 
     /// The display preferences (LLP 1061 D5): re-answer `exactViewport()` in one commit.
     pub fn set_preferences(&mut self, preferences: exact_runner::Preferences) -> Option<String> {
+        let was = self.runner.viewport().preferences.reduced_motion;
         let answer = self.runner.set_preferences(preferences);
-        self.told(answer, "preferences")
+        let error = self.told(answer, "preferences");
+        self.flights_restyled(error.is_none() && was != preferences.reduced_motion);
+        error
     }
 
     /// The page's visibility, connectivity and share sheet (LLP 1069.000
@@ -1395,6 +1402,7 @@ impl<D: DataSource> Host<D> {
             self.retire_svg_geometry(&sync.retired);
             self.lower_eligibility(&sync);
             self.sync_paint(&t.receipt);
+            self.start_flights(&t.receipt);
             if let Err(error) = self.sync_height_owner() {
                 self.log(error);
                 paint = true;

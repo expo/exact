@@ -71,6 +71,8 @@ pub use native::NativeKind;
 mod order;
 mod placed;
 mod presented;
+mod shared;
+pub use shared::{SharedElement, SharedState};
 mod region;
 pub mod rows;
 mod shadow;
@@ -472,6 +474,7 @@ pub struct Painter {
     cpu_ms: Option<f64>,
     /// What a reorder lifts: a row in its list, or a ghost over everything.
     pub(crate) lift: Lift,
+    pub(crate) shared: SharedState,
     // Accepted owners retain their paragraph leases while a subsequent backend frame fails.
     accepted_text: BTreeMap<exact_kernel::NodeKey, Rc<Paragraph>>,
     pub(crate) field_text: HashMap<ViewId, Rc<field::PaintedField>>,
@@ -569,6 +572,7 @@ impl Painter {
         self.native_session = native::new_session();
         // A fresh kernel can reuse both epochs and node keys.
         self.paint_epoch = None;
+        self.shared = SharedState::default();
         self.svg_warned.clear();
         // The old tree's presses: its view ids are another tree's now.
         self.ripples.clear();
@@ -595,6 +599,7 @@ impl Painter {
             ranks: Rc::default(),
             accepted_text: BTreeMap::new(),
             lift: Lift::default(),
+            shared: SharedState::default(),
             region_picture: None,
             region_frame: None,
             damage: Default::default(),
@@ -839,12 +844,15 @@ impl Painter {
             self.svg_warned
                 .retain(|key| scene.kernel.node_by_key(*key).is_some());
             self.refresh_ranks(scene.kernel);
+            self.order_shared(scene);
             self.paint_epoch = Some(scene.kernel.epoch());
             #[cfg(test)]
             {
                 self.rank_passes += 1;
             }
         }
+        self.drop_unrendered_flights(scene);
+        self.backend.shared_frame(&self.shared);
         let mut walk = Walk {
             scene,
             boxes: Vec::with_capacity(self.boxes_hint),
@@ -917,7 +925,7 @@ impl Painter {
         })
     }
 
-    fn node_at(
+    fn node_content(
         &mut self,
         walk: &mut Walk<'_, '_>,
         id: ViewId,
@@ -1090,9 +1098,11 @@ impl Painter {
             paint.background = [0; 4];
         }
         self.clipped = Some((node.id, paint.background));
-        let geometry = paint.geometry(rect);
+        let mut geometry = paint.geometry(rect);
         // @ref LLP 1063 — a layout transition's size is the surface's alone.
-        let surface = paint.geometry(shown.surface(rect));
+        let mut surface = paint.geometry(shown.surface(rect));
+        self.flight_geometry(node, &mut geometry);
+        self.flight_geometry(node, &mut surface);
         // A hidden box paints none of its own chrome. Children still do,
         // and a text node still walks its runs so a visible inline paints.
         if paints_self {

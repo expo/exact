@@ -19,6 +19,20 @@ impl<P> Frame<P> {
 }
 
 impl Painter {
+    /// Place a new shared destination without publishing a stream before its reveal.
+    pub(crate) fn flight_probe(
+        &mut self,
+        scene: &Scene<'_>,
+        viewport: (f32, f32),
+    ) -> Result<Frame<Option<Arc<Pixmap>>>, String> {
+        let backend = std::mem::replace(&mut self.backend, Box::new(layer::Unpainted));
+        let rows = std::mem::take(&mut self.rows);
+        let frame = self.paint_selected_for(scene, viewport, None, None, FrameTarget::Geometry);
+        self.rows = rows;
+        self.backend = backend;
+        frame
+    }
+
     pub(super) fn paint_selected(
         &mut self,
         scene: &Scene<'_>,

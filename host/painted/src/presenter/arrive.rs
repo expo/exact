@@ -116,6 +116,30 @@ impl<D: DataSource> Presenter<D> {
         None
     }
 
+    /// A flight ended: the node a `focus()` named in the air takes the focus
+    /// once it flies no longer, and an `autofocus` refused there is offered.
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn focus_landed(&mut self) {
+        if !std::mem::take(&mut self.host.flights.landed) {
+            return;
+        }
+        let kernel = self.host.kernel();
+        let asked = (self.host.flights.focus)
+            .and_then(|key| kernel.node_by_key(key))
+            .map(|n| n.id);
+        if asked.is_none_or(|id| !self.host.flying(id)) {
+            self.host.flights.focus = None;
+        }
+        let error = match asked.filter(|&id| self.focusable(id) && self.focus_refusal(id).is_none())
+        {
+            Some(id) => self.set_focus(Some(id), self.host.now()),
+            None => self.autofocus(),
+        };
+        if let Some(error) = error {
+            self.host.log(error);
+        }
+    }
+
     /// Whether `id` is what a press presses: a button, a link or a tab
     /// stop, and no field or other control (which a press edits).
     fn presses(&self, id: ViewId) -> bool {

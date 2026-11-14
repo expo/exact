@@ -97,6 +97,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     private val main: Player = Player(fonts).also { p ->
         p.dotsAtOnce = (context as Activity).intent.getStringExtra("dots") != "0"
         p.layer = { layers.lookup(it) }
+        p.shared = { shared.node(it) }
         p.image = { images[it] }
         p.animated = { animated[it] }
         p.native = { natives?.node(it) ?: fields?.node(it) }
@@ -106,6 +107,9 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         p.slot = { slots.nodes[it] }
     }
     private val background = Player(fonts)
+    private val shared = SharedElements(main, { images[it] }, layers::mapShared, layers::sharedOpacity) { id, rect ->
+        groups[id]?.let { rect.offset(it.translationX, it.translationY) }
+    }
     /** Each picture's slot; its own Player records one again while [main] may be mid-replay. */
     private val slots = Slots(Player(fonts).also { p -> p.image = { images[it] }; p.animated = { animated[it] } },
         { images.containsKey(it) }).also { it.changed = { heldCopy = null } }
@@ -428,6 +432,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         if (owned) takeOwned() else if (taken) taken = false else take()
         android.os.Trace.beginSection("exact replay")
         ops?.let { main.replay(canvas, it, 0, it.limit()) }
+        shared.draw(canvas)
         android.os.Trace.endSection()
         // The first frame after startup counts even with no page ops (an empty page, or only bars).
         // Its mark goes before any turn this frame schedules.
@@ -626,12 +631,12 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     }
 
     /** lazy=0: every platform element has its view for as long as the stream keeps its row, to compare. Otherwise a
-     * row's WebView or module view exists while the row is within [NEAR_AHEAD] view heights of the view in the
-     * direction of the scroll and [NEAR_BEHIND] the other way ([Natives.near]; half a view more to keep one). */
+     * row's WebView or module view exists while the row is within [Structure.NEAR_AHEAD] view heights of the view in the
+     * direction of the scroll and [Structure.NEAR_BEHIND] the other way ([Natives.near]; half a view more to keep one). */
     private val lazyOn = (context as Activity).intent.getStringExtra("lazy") != "0"
-    private val nearAhead = (context as Activity).intent.getStringExtra("nearahead")?.toFloatOrNull() ?: NEAR_AHEAD
-    private val nearBehind = (context as Activity).intent.getStringExtra("nearbehind")?.toFloatOrNull() ?: NEAR_BEHIND
-    private val nearKeepMore = (context as Activity).intent.getStringExtra("nearkeep")?.toFloatOrNull() ?: NEAR_KEEP
+    private val nearAhead = (context as Activity).intent.getStringExtra("nearahead")?.toFloatOrNull() ?: Structure.NEAR_AHEAD
+    private val nearBehind = (context as Activity).intent.getStringExtra("nearbehind")?.toFloatOrNull() ?: Structure.NEAR_BEHIND
+    private val nearKeepMore = (context as Activity).intent.getStringExtra("nearkeep")?.toFloatOrNull() ?: Structure.NEAR_KEEP
     /** The feed's rows in the last stream: ids and tops in the group's coordinates. */
     private var feedIds = IntArray(64)
     private var feedTops = FloatArray(64)
@@ -704,7 +709,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
 
 
     /** near=0: a row out of view when exact2 painted it records on the worker however soon the scroll brings it in.
-     * Otherwise a new row within [NEAR_S] of travel of the view (where the stream draws it, in the direction of the
+     * Otherwise a new row within [Structure.NEAR_S] of travel of the view (where the stream draws it, in the direction of the
      * scroll) records here, as one in view does: on the worker it was drawn a frame or more after it came into view
      * (its group recorded again only once it was made), and at 24k dp/s rows come into view as they are built. */
     private val nearOn = (context as Activity).intent.getStringExtra("near") != "0"
@@ -715,7 +720,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     /** The feed's rows' tops in [stream] (device px, where the view will draw them), when the scroll is fast. */
     private fun nearRows(stream: IntBuffer) {
         nearY.clear()
-        if (!nearOn || !async || Math.abs(scrollV) * NEAR_S < height * 0.1f) return
+        if (!nearOn || !async || Math.abs(scrollV) * Structure.NEAR_S < height * 0.1f) return
         val range = groupRange(stream, feed) ?: return
         var residual = 0f
         for ((_, d) in sent) residual += d
@@ -726,10 +731,10 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         }
     }
 
-    /** Whether row [id], [h] px tall, is in view or comes into it within [NEAR_S] of the scroll. */
+    /** Whether row [id], [h] px tall, is in view or comes into it within [Structure.NEAR_S] of the scroll. */
     private fun near(id: Int, h: Float): Boolean {
         val y = nearY[id] ?: return false
-        val reach = Math.abs(scrollV) * NEAR_S
+        val reach = Math.abs(scrollV) * Structure.NEAR_S
         val top = if (scrollV < 0) -reach else 0f
         val bottom = if (scrollV > 0) height + reach else height.toFloat()
         return y + h > top && y < bottom
@@ -782,13 +787,13 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         var down = top
         for (r in spans) {
             if (r[1] <= down) continue
-            if (r[0] > down + REACH_GAP || r[2] == 0f) break
+            if (r[0] > down + Structure.REACH_GAP || r[2] == 0f) break
             down = r[1]
         }
         var up = bottom
         for (r in spans.asReversed()) {
             if (r[0] >= up) continue
-            if (r[1] < up - REACH_GAP || r[2] == 0f) break
+            if (r[1] < up - Structure.REACH_GAP || r[2] == 0f) break
             up = r[0]
         }
         reachDown = down; reachUp = up
@@ -944,6 +949,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
 
     /** A new paint: what it announces made, then replayed by [onDraw]. */
     private fun applyStream(stream: IntBuffer) {
+        shared.begin(stream)
         streamFrame = true
         for (g in groups.values) { g.translationX = 0f; g.translationY = 0f }
         ops = stream
@@ -959,6 +965,8 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         // A row's platform view waits for [feedRows] to say where the row is (it gives every one its view when it cannot).
         natives?.lazy = lazyOn
         ingest(stream, 0, stream.limit())
+        shared.finish()
+        shared.releaseImages { id -> ingest(IntBuffer.wrap(intArrayOf(12, id)), 0, 2) }
         if (layers.playing()) { layers.sample(System.nanoTime()); playLayers() }
         // After the stream: a row drawn again under a new id names its elements before the old row lets them go.
         natives?.let { n -> for (id in freed) n.rowFreed(id); n.unrowed(unrowedSeen) }
@@ -1061,6 +1069,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
                     i += 4
                 }
                 12 -> {
+                    if (shared.holdImage(b.get(i + 1))) { i += 2; continue }
                     owner?.made?.remove(b.get(i + 1))?.recycle()
                     // Slots still drawing it draw nothing from now on (their rows are gone or about to change).
                     slots.pictureFreed(b.get(i + 1))
@@ -1122,7 +1131,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
                         // Out of view and not about to come into it: what it and its slots and layers define (faces,
                         // pictures, platform views, nodes) is known now, as the rows after it may draw with them; its
                         // drawing is made in the frames after ([makeLater]), a few rows a frame.
-                        val wait = Later(b, i, body + len)
+                        val wait = Structure.Later(b, i, body + len)
                         sets@ while (j < n) {
                             when (b.get(j)) {
                                 // A row still waiting with an older set of that slot is made first, as below (op 24).
@@ -1143,7 +1152,11 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
                     } else makeRow(b, i, shown)
                     i = j
                 }
-                17 -> { if (ingestRow == 0) { rowTop.put(b.get(i + 1), b.get(i + 3)); rowGroup.put(b.get(i + 1), ingestGroup) }; i += 4 }
+                17 -> {
+                    shared.placeRow(b.get(i + 1), f(b, i + 2), f(b, i + 3))
+                    if (ingestRow == 0) { rowTop.put(b.get(i + 1), b.get(i + 3)); rowGroup.put(b.get(i + 1), ingestGroup) }
+                    i += 4
+                }
                 18 -> { freeing.add(b.get(i + 1)); i += 2 }
                 20 -> { if (ingestRow == 0) ingestGroup = b.get(i + 1); i += 2 }
                 21 -> { if (ingestRow == 0) ingestGroup = 0; i += 1 }
@@ -1196,6 +1209,8 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
                     slots.set(id, b, i + 3, i + 3 + len, main)
                     i += 3 + len
                 }
+                51 -> { shared.define(b, i) { from, end -> ingest(b, from, end) }; i += 2 + b.get(i + 1) }
+                52 -> { shared.node(SharedElements.key(b, i + 1)); i += 3 }
                 else -> i = structure.end(b, i)
             }
         }
@@ -1227,24 +1242,15 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
             rows.put(id, into)?.let { if (it !== into) it.discardDisplayList() }
         }
     }
-    /** A row out of view whose making waits ([ingest]): op 15 at [at] in [b], then its slots' and layers' sets from
-     * [sets] to [end]. [made]: made, or freed before it was. */
-    private class Later(val b: IntBuffer, val at: Int, val sets: Int) {
-        var end = sets
-        var made = false
-        /** Its top where the last stream drew it, in the feed's group (NaN: no stream drew it yet). */
-        var top = Float.NaN
-        /** Tracks and clocks (ops 31, 33) that came for its layers while it waited, in order. */
-        val after = ArrayList<IntArray>(0)
-    }
-    private val later = java.util.ArrayDeque<Later>()
+
+    private val later = java.util.ArrayDeque<Structure.Later>()
     private var laterPosted = false
     /** The waiting rows by id, and by the layers and slots their sets name: a later stream that frees a row drops it;
      * one that sets or frees one of its layers or slots makes that row first ([makeOne]); and the tracks and clocks
      * that come for its layers meanwhile (every move sends them) are kept for when it is made. */
-    private val laterRows = HashMap<Int, Later>()
-    private val laterLayers = HashMap<Int, Later>()
-    private val laterSlots = HashMap<Int, Later>()
+    private val laterRows = HashMap<Int, Structure.Later>()
+    private val laterLayers = HashMap<Int, Structure.Later>()
+    private val laterSlots = HashMap<Int, Structure.Later>()
     /** While a waiting row's sets are replayed: what they define was made when the stream came. */
     private var skipDefs = false
     /** later=N: the main thread's ms a frame for rows that wait (2 by default; 0: every row is made as its stream
@@ -1271,11 +1277,11 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         if (laterRows.isEmpty()) return
         val y = feedY()
         val margin = Math.max(height * 0.25f, Math.abs(scrollV) * 0.025f)
-        var soon: ArrayList<Later>? = null
+        var soon: ArrayList<Structure.Later>? = null
         for (l in laterRows.values) {
             if (l.top.isNaN()) continue
             val top = l.top + y
-            if (top + f(l.b, l.at + 4) > -margin && top < height + margin) (soon ?: ArrayList<Later>().also { soon = it }).add(l)
+            if (top + f(l.b, l.at + 4) > -margin && top < height + margin) (soon ?: ArrayList<Structure.Later>().also { soon = it }).add(l)
         }
         val now = soon ?: return
         android.os.Trace.beginSection("exact rows soon")
@@ -1298,7 +1304,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
 
     /** A waiting row freed before it was made: its slots' sets, the latest of each slot (a later one makes this row
      * first), are recorded, as exact2 does not send a slot's drawing again. */
-    private fun keepSlots(l: Later) {
+    private fun keepSlots(l: Structure.Later) {
         val outer = skipDefs
         skipDefs = true
         var j = l.sets
@@ -1312,7 +1318,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
 
     /** Make one waiting row: its node (here when [now], else on the worker unless it is in view), then its slots'
      * and layers' drawings and tracks. */
-    private fun makeOne(l: Later, now: Boolean = false) {
+    private fun makeOne(l: Structure.Later, now: Boolean = false) {
         if (l.made) return
         l.made = true
         val id = l.b.get(l.at + 1)
@@ -1354,6 +1360,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         val hosted = fields?.snapshot() ?: emptyMap()
         val held = heldCopy ?: HashMap(slots.nodes).also { heldCopy = it }
         val animating = layers.nodes()
+        val named = shared.nodes()
         pending[id] = previous
         if (coverTrace) definedAt[id] = System.nanoTime()
         val replacing = previous != 0
@@ -1366,6 +1373,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
             background.native = { elements[it] ?: hosted[it] }
             background.slot = { held[it] }
             background.layer = { animating[it] }
+            background.shared = { named[it] }
             val c = node.beginRecording()
             background.replay(c, IntBuffer.wrap(copy), 0, copy.size)
             node.endRecording()
@@ -1427,14 +1435,3 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         slotOwner = outer
     }
 }
-
-/** Seconds of travel within which a new row is made on the main thread rather than the worker. */
-private const val NEAR_S = 0.033f
-/** How far from the view, in its heights, a row's platform view exists: the way the scroll goes, and the other. */
-private const val NEAR_AHEAD = 1f
-private const val NEAR_BEHIND = 0.5f
-/** How much farther, in view heights, a row keeps the view it has (so a small scroll back and forth makes none). */
-private const val NEAR_KEEP = 0.5f
-
-/** Px between a feed's rows that still count as one reach of drawn rows. */
-private const val REACH_GAP = 64f

@@ -173,6 +173,36 @@ fn read(words: &[i32]) -> Vec<Told> {
     out
 }
 
+#[test]
+fn shared_flights_make_native_fields_inert_until_landing() {
+    let (_, _guard) = shell();
+    let mut p = boot(
+        r#"component App
+  state open = false
+  action toggle
+    open = not open
+  view
+    column
+      button "Toggle" press=toggle testId="toggle"
+      if open
+        column sharedElement="card" width=200 height=100 -exact-layout-transition="1s linear"
+          input testId="field" placeholder="Name"
+      else
+        view sharedElement="card" width=80 height=50 -exact-layout-transition="1s linear"
+"#,
+    );
+    p.brush
+        .replace_backend(Box::new(crate::canvas::Recorder::new()));
+    p.host_mut().flights.enabled = true;
+    p.frame();
+    p.tap(id(&p, "toggle")).unwrap();
+    p.frame();
+    assert_eq!(read(&p.reader_fields(1.).unwrap())[0].flags & 2, 2);
+    p.tick(1001.);
+    p.frame();
+    assert_eq!(read(&p.reader_fields(1.).unwrap())[0].flags & 2, 0);
+}
+
 /// The statement as it now stands, whether or not it was told before.
 fn told(p: &mut Presenter<()>) -> Vec<Told> {
     p.hosted.last.clear();

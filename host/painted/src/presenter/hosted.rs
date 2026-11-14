@@ -320,7 +320,7 @@ impl<D: DataSource> Presenter<D> {
         if place.is_some() {
             flags |= PLACED;
         }
-        if inert || disabled {
+        if inert || disabled || self.host.flying(id) {
             flags |= INERT;
         }
         let group = place.map_or(0, |p| p.2);

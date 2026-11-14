@@ -100,6 +100,8 @@ pub(super) fn end(b: &[u32], i: usize) -> Option<usize> {
         RING => i + 26,
         SLOT_SET | LAYER_SET | TRACKS => i + 3 + at(2)?,
         CLOCK => i + 3,
+        shared::STATE | shared::SET => i + 2 + at(1)?,
+        shared::DRAW => i + 3,
         _ => return None,
     })
 }
@@ -117,6 +119,7 @@ pub(super) fn needs_world(b: &[u32]) -> bool {
             ROW_BEGIN if needs_world(&b[i + 6..j - 1]) => return true,
             SLOT_SET if needs_world(&b[i + 3..j]) => return true,
             LAYER_SET if needs_world(&b[i + 19..j]) => return true,
+            shared::SET | shared::DRAW => return true,
             _ => (),
         }
         i = j;
@@ -139,6 +142,8 @@ fn defines(op: u32) -> bool {
             | TRACKS
             | LAYER_FREE
             | CLOCK
+            | shared::STATE
+            | shared::SET
     )
 }
 
@@ -162,10 +167,17 @@ pub fn drawing(b: &[u32]) -> Option<(Vec<u32>, bool)> {
 
 /// Carry only retained definitions into a newer frame. Unknown streams stay whole.
 fn carry_definitions(older: &[u32], newer: &mut Vec<u32>) -> bool {
+    // The reader captures shared sources before any earlier definitions mutate them.
+    if newer.first() == Some(&shared::STATE) {
+        return false;
+    }
     let mut definitions = Vec::new();
     let mut row_sets = false;
     let mut i = 0;
     while i < older.len() {
+        if older[i] == shared::STATE {
+            return false;
+        }
         let Some(j) = end(older, i).filter(|j| *j <= older.len()) else {
             return false;
         };
@@ -250,6 +262,18 @@ impl Recorder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn entering_shared_state_after_an_ordinary_frame_preserves_both_boundaries() {
+        let old = vec![IMAGE_DEF, 7, 10, 10, IMAGE, 7, 0, 0, 10, 10];
+        let state = vec![shared::STATE, 5, 0, 0, 1, 9, 0, shared::DRAW, 9, 0];
+        let mut new = state.clone();
+        assert!(!carry_definitions(&old, &mut new));
+        assert_eq!(
+            new, state,
+            "STATE must remain first before reader mutations"
+        );
+    }
 
     #[test]
     fn a_scrolls_direct_child_background_keeps_the_device_scale() {

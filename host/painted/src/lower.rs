@@ -161,11 +161,10 @@ impl<D: DataSource> Host<D> {
                     .iter()
                     .any(|a| a.keyframes.0.iter().any(|f| !f.dark.is_empty()))
                 && !self.engine.timeline_bound(*node)
-                && self
-                    .runner
-                    .kernel()
-                    .node_by_key(key)
-                    .is_some_and(|n| playable(&n, &props));
+                && self.runner.kernel().node_by_key(key).is_some_and(|n| {
+                    n.props.str(exact_kernel::PropId::SharedElement).is_none()
+                        && playable(&n, &props)
+                });
             self.engine.set_node_sampled(*node, !playable);
             let mask = if playable { mask(&props) } else { 0 };
             let old = if mask == 0 {
@@ -250,12 +249,19 @@ impl<D: DataSource> Host<D> {
             })
             .collect();
         for (node, property) in keys {
+            if self
+                .engine
+                .transition_ends(node, property)
+                .is_some_and(|t| t.waits)
+            {
+                continue;
+            }
             let key = exact_kernel::motion::node_key(node);
-            let layered = self
-                .runner
-                .kernel()
-                .node_by_key(key)
-                .is_some_and(|n| playable(&n, &[property]) && recolors(&n, property));
+            let layered = self.runner.kernel().node_by_key(key).is_some_and(|n| {
+                n.props.str(exact_kernel::PropId::SharedElement).is_none()
+                    && playable(&n, &[property])
+                    && recolors(&n, property)
+            });
             if !layered {
                 continue;
             }

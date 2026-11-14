@@ -45,12 +45,13 @@ impl<D: DataSource> Presenter<D> {
         }
     }
 
-    /// Whether `node` and what is under it are left out: hidden, inert, not
-    /// displayed or `aria-hidden`.
+    /// Whether `node` and what is under it are left out: hidden, inert, in a
+    /// shared-element flight, not displayed or `aria-hidden`.
     fn access_excluded(&self, node: &NodeRef<'_>) -> bool {
         let (hidden, inert) = self.host.route_visibility(node.id);
         hidden
             || inert
+            || self.host.flying(node.id)
             || node.style.display == Display::None
             || node.props.bool(PropId::AccessibilityElementsHidden) == Some(true)
     }

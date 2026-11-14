@@ -16,7 +16,28 @@ pub(super) enum Cause {
     FocusMove,
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum Geometry {
+    Presented,
+    /// An internal preflight walk; never used to route input to an unshown node.
+    Current,
+}
+
 impl<D: DataSource> Presenter<D> {
+    pub(super) fn reveal_flights(&mut self) {
+        let arrivals = std::mem::take(&mut self.host.flights.reveal);
+        for key in arrivals {
+            let Some(id) = self.host.kernel().node_by_key(key).map(|n| n.id) else {
+                continue;
+            };
+            self.scroll_into_with(id, false, true, false, Geometry::Current, |t, p| {
+                (
+                    aligned("nearest", t.0, t.0 + t.2, p.0, p.2) - p.0,
+                    aligned("nearest", t.1, t.1 + t.3, p.1, p.3) - p.1,
+                )
+            });
+        }
+    }
     /// `{"revealed":id,"scrolled":…}`, with the observed middle before and after the request.
     pub fn reveal(&mut self, id: ViewId) -> Result<String, String> {
         // The page under an open box is not scrolled: a tap there dismisses
@@ -210,7 +231,7 @@ impl<D: DataSource> Presenter<D> {
         };
         let (block, inline) = (text(1).unwrap_or("start"), text(2).unwrap_or("nearest"));
         let glide = self.reveal_glides(text(3));
-        self.scroll_into_with(id, true, true, glide, |t, p| {
+        self.scroll_into_with(id, true, true, glide, Geometry::Presented, |t, p| {
             (
                 aligned(inline, t.0, t.0 + t.2, p.0, p.2) - p.0,
                 aligned(block, t.1, t.1 + t.3, p.1, p.3) - p.1,
@@ -424,7 +445,7 @@ impl<D: DataSource> Presenter<D> {
         completion: bool,
         by: impl Fn(Rect4, Rect4) -> (f32, f32),
     ) -> bool {
-        self.scroll_into_with(id, spacing, completion, false, by)
+        self.scroll_into_with(id, spacing, completion, false, Geometry::Presented, by)
     }
 
     /// [`Self::scroll_into`], each move a glide when `glide` says so: the
@@ -436,15 +457,20 @@ impl<D: DataSource> Presenter<D> {
         spacing: bool,
         completion: bool,
         glide: bool,
+        geometry: Geometry,
         by: impl Fn(Rect4, Rect4) -> (f32, f32),
     ) -> bool {
         self.restore_scroll_anchors();
         let mut glides = Vec::new();
-        if self.box_of(id).is_none() {
+        if self.reveal_box(id, geometry).is_none() {
             return false;
         }
         let mut scrolled = false;
-        let (vw, vh) = self.display.viewport().unwrap_or(self.viewport);
+        let (vw, vh) = if geometry == Geometry::Current {
+            self.viewport
+        } else {
+            self.display.viewport().unwrap_or(self.viewport)
+        };
         // The scroll containers above it, innermost first, with their axes and travel.
         let mut scrollers = Vec::new();
         let collection_limits = self.collection_scroll_limits();
@@ -462,17 +488,20 @@ impl<D: DataSource> Presenter<D> {
                 .map(|d| d.at_basis(&kernel.env_of(n.id), 0.0))
             })
             .unwrap_or([0.0; 4]);
-        let mut at = self.scroll_parent(id);
+        let mut at = self.reveal_parent(id, geometry);
         while let Some(a) = at {
             let Some(node) = kernel.node(a) else { break };
-            let bounds = self.display.bounds(kernel, a).unwrap_or_else(|| {
-                self.brush.scroll_bounds(
-                    kernel,
-                    self.host.content_region(),
-                    &node,
-                    collection_limits.get(&a).copied(),
-                )
-            });
+            let bounds = (geometry == Geometry::Presented)
+                .then(|| self.display.bounds(kernel, a))
+                .flatten()
+                .unwrap_or_else(|| {
+                    self.brush.scroll_bounds(
+                        kernel,
+                        self.host.content_region(),
+                        &node,
+                        collection_limits.get(&a).copied(),
+                    )
+                });
             // `auto` scrolls as `scroll` does (a `scroll`'s default, `wheel_at`).
             let scrolls = |o| matches!(o, Overflow::Scroll | Overflow::Auto);
             let (ox, oy) = bounds.axes;
@@ -496,12 +525,13 @@ impl<D: DataSource> Presenter<D> {
             if self.alert_root() == Some(a) {
                 break;
             }
-            at = self.scroll_parent(a);
+            at = self.reveal_parent(a, geometry);
         }
         for (a, sx, sy, max, padding, borders) in scrollers {
-            let (Some((target_map, target)), Some((port_map, port))) =
-                (self.reveal_geometry(id), self.reveal_geometry(a))
-            else {
+            let (Some((target_map, target)), Some((port_map, port))) = (
+                self.reveal_geometry(id, geometry),
+                self.reveal_geometry(a, geometry),
+            ) else {
                 continue;
             };
             let Some(to_port) = inverse(port_map) else {
@@ -560,10 +590,14 @@ impl<D: DataSource> Presenter<D> {
         // The page under an open box does not move; the scrollers above
         // still glide (below).
         let page = (!self.alert_inert())
-            .then(|| self.reveal_rect(id))
+            .then(|| self.reveal_rect(id, geometry))
             .flatten();
         if let Some(target) = page {
-            let doc = self.document();
+            let doc = if geometry == Geometry::Current {
+                self.live_document()
+            } else {
+                self.document()
+            };
             let max = ((doc.0 - vw).max(0.0), (doc.1 - vh).max(0.0));
             let target = if spacing {
                 inset(target, margin.map(|n| -n))
@@ -605,20 +639,43 @@ impl<D: DataSource> Presenter<D> {
 
     /// Geometry for a new scroll intent, projected through offsets already queued
     /// by earlier input. Hit testing keeps the acknowledged picture.
-    fn reveal_rect(&mut self, id: ViewId) -> Option<Rect4> {
-        let (mapping, b) = self.reveal_geometry(id)?;
+    fn reveal_rect(&mut self, id: ViewId, geometry: Geometry) -> Option<Rect4> {
+        let (mapping, b) = self.reveal_geometry(id, geometry)?;
         b.scroll_bounds(&mapping)
     }
 
-    fn reveal_geometry(&mut self, id: ViewId) -> Option<([f32; 9], PaintedBox)> {
-        let b = self.box_of(id)?;
+    fn reveal_box(&mut self, id: ViewId, geometry: Geometry) -> Option<PaintedBox> {
+        match geometry {
+            Geometry::Presented => self.box_of(id),
+            Geometry::Current => self
+                .boxes
+                .iter()
+                .find(|b| b.id == id)
+                .copied()
+                .or_else(|| self.inline_box(id)),
+        }
+    }
+
+    fn reveal_parent(&self, id: ViewId, geometry: Geometry) -> Option<ViewId> {
+        match geometry {
+            Geometry::Presented => self.scroll_parent(id),
+            Geometry::Current => self.geometry_parent(id),
+        }
+    }
+
+    fn reveal_geometry(
+        &mut self,
+        id: ViewId,
+        geometry: Geometry,
+    ) -> Option<([f32; 9], PaintedBox)> {
+        let b = self.reveal_box(id, geometry)?;
         let mut mapping = b.scroll_mapping()?;
         let page = self.boxes_page;
         let mut page_shift = (page.0 - self.page.0, page.1 - self.page.1);
-        let mut at = self.scroll_parent(id);
+        let mut at = self.reveal_parent(id, geometry);
         while let Some(a) = at {
-            at = self.scroll_parent(a);
-            let Some(scroller) = self.box_of(a) else {
+            at = self.reveal_parent(a, geometry);
+            let Some(scroller) = self.reveal_box(a, geometry) else {
                 continue;
             };
             if let Some(before) = scroller.scroll {
@@ -629,12 +686,13 @@ impl<D: DataSource> Presenter<D> {
                         a,
                         mapping,
                         scroller.scroll_mapping()?,
-                        before,
-                        after,
+                        (before, after),
+                        geometry,
                     )?;
                 }
             } else if at.is_none() && page != self.page {
-                mapping = self.reveal_shift(id, a, mapping, IDENTITY, page, self.page)?;
+                mapping =
+                    self.reveal_shift(id, a, mapping, IDENTITY, (page, self.page), geometry)?;
                 page_shift = (0., 0.);
             }
         }
@@ -648,8 +706,8 @@ impl<D: DataSource> Presenter<D> {
         scroller: ViewId,
         mut mapping: [f32; 9],
         space: [f32; 9],
-        before: (f32, f32),
-        after: (f32, f32),
+        (before, after): ((f32, f32), (f32, f32)),
+        geometry: Geometry,
     ) -> Option<[f32; 9]> {
         let mut at = Some(id);
         while let Some(id) = at.filter(|id| *id != scroller) {
@@ -657,13 +715,13 @@ impl<D: DataSource> Presenter<D> {
             let constraint = kernel
                 .node(id)
                 .and_then(|n| kernel.sticky_constraint(n.key));
-            at = self.scroll_parent(id);
+            at = self.reveal_parent(id, geometry);
             if let Some(c) = constraint.filter(|c| c.scroller == scroller) {
                 let old = c.offset(before);
                 let new = c.offset(after);
                 // Sticky placement precedes the box's own transform in the painter.
                 let parent = at
-                    .and_then(|parent| self.box_of(parent))
+                    .and_then(|parent| self.reveal_box(parent, geometry))
                     .map_or(Some(IDENTITY), |b| b.scroll_mapping())?;
                 mapping = shifted(mapping, parent, (new.0 - old.0, new.1 - old.1))?;
             }

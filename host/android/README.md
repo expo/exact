@@ -41,6 +41,31 @@ What changed on the way in, one commit each:
 
 ## Building an app
 
+### Shared elements
+
+`sharedElement="photo"` with `-exact-layout-transition="-exact-spring(270, 33, 1)"`
+flies the arriving subtree between matching names in one commit (LLP 1013.000).
+Rust supplies the curve; `SharedElements` retains live RenderNodes, captures the
+displayed source before teardown, and re-reads the destination each frame. Native
+row placement, scrolling and lowered ancestor transforms contribute to the boxes.
+The destination is revealed with nearest scrolling; flight content takes no hits
+and is hidden from accessibility. Remove animations shows the destination at once.
+A destination that stops rendering (`display: none`, a hidden route) ends its flight;
+a route's hiding is read at every paint, since a crossing's end changes it with no commit.
+
+Plain raster images interpolate their full fitted image rectangles in points,
+applying each decoded image's crop afterward. A pending destination keeps the
+source raster, fitted at the destination's density. Symbols, animated images,
+`visibility: hidden` images, and images with tint, filter, mask, clip path, border,
+background or shadow use the live-subtree scale path instead. The largest corner radius is
+used while flying. Reversal preserves position, not velocity.
+
+This supports in-page transitions. Separate native dialog panes, presentation
+zooms and the platform's edge-stretch deformation are not covered. The Android
+reader and Rust recorder must be rebuilt together after a stream change.
+
+### Build
+
     bun scripts/agent-android.mjs build caltrain --apk
 
 It needs the Android SDK (`ANDROID_HOME`, else `~/Library/Android/sdk` or `~/Android/Sdk`) with platform 37.2 and an

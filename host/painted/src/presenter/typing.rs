@@ -754,7 +754,8 @@ impl<D: DataSource> Presenter<D> {
             self.remote_key(id, (name, code, repeat), now_ms);
             return;
         }
-        if !self.display.allows(self.host.kernel(), id) {
+        // Nor do a flight's controls take a key, as they take no press.
+        if !self.display.allows(self.host.kernel(), id) || self.host.flying(id) {
             return;
         }
         if self

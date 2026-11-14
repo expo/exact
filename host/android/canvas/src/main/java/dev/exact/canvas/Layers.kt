@@ -182,6 +182,18 @@ internal class Layers(
     fun originX(id: Int) = layers[id]?.ox ?: 0f
     fun originY(id: Int) = layers[id]?.oy ?: 0f
 
+    /** A shared source through the layer as it is displayed, in stream coordinates. */
+    fun mapShared(id: Int, rect: android.graphics.RectF) {
+        val layer = layers[id] ?: return
+        val matrix = Matrix()
+        layer.node.getMatrix(matrix)
+        rect.offset(-layer.ox, -layer.oy)
+        matrix.mapRect(rect)
+        rect.offset(layer.ox, layer.oy)
+    }
+
+    fun sharedOpacity(id: Int): Float = layers[id]?.node?.alpha ?: 1f
+
     /** A snapshot for the worker: one shared by every row recorded until a layer comes or goes (a fast fling records
      * many rows a frame, and copying the map for each cost the main thread ~2%). */
     private var snapshot: Map<Int, RenderNode>? = null
