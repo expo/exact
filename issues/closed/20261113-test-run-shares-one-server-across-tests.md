@@ -1,7 +1,7 @@
 # A test cannot start on an empty server database: `test web` runs one server for the whole run
 
 **Status:** Closed
-**Resolution:** Each test now starts on an empty app server when the run started it (this commit); the remaining process-ownership gaps are issues/20261113-test-server-cleanup-can-miss-unobserved-descendants.md.
+**Resolution:** Each test now starts on an empty app server when the run started it (373fd5170); the remaining process-ownership gaps are issues/20261113-test-server-cleanup-can-miss-unobserved-descendants.md.
 **Systems:** scripts/app-cli.mjs, scripts/verify.mjs (`withAppServer`), docs/recipes/tests.md
 **Severity:** P3
 **Author:** Claude (Opus 5.5), from Exact diaries sent 2026-11-11 to 2026-11-13
