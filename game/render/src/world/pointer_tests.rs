@@ -44,6 +44,7 @@ impl Game for Panning {
             delta: pan.delta,
             horizontal: HORIZONTAL,
             vertical: VERTICAL,
+            ..Default::default()
         };
         drop(pan);
         p.insert(p.named("camera").unwrap(), sample);
@@ -337,4 +338,196 @@ fn mouse_look_turns_the_drawn_camera_and_its_children_about_the_eye() {
         .transform_vector3(-Vec3::Z);
     assert!((up.y - exact_game::math::sin(0.5)).abs() < 1e-4);
     assert!(f.frame(&w, 1., 1.).attachments.is_empty());
+}
+
+#[test]
+fn pointer_pan_bounds_limit_the_world_camera_and_move_its_children() {
+    let mut w = World::new(60, 0);
+    let camera = w.spawn((
+        Transform::at(1., 2., 3.),
+        Camera::default(),
+        PointerPan {
+            pointer: 1,
+            horizontal: Vec3::X,
+            vertical: Vec3::Z,
+            bounds: Some([Vec3::new(-2., 2., -4.), Vec3::new(2., 2., 4.)]),
+            ..Default::default()
+        },
+    ));
+    let child = w.spawn((Transform::at(0., 0., -1.), Parent(camera), Mesh::cube(0.1)));
+    w.propagate();
+    let hash = w.hash();
+    let save = w.save();
+    let mut feed = Feed::default();
+    feed.feed_to(&w, &mut Recording::default()).unwrap();
+    for (position, expected) in [
+        (Vec2::splat(100.), Vec3::new(2., 2., 4.)),
+        (Vec2::splat(-100.), Vec3::new(-2., 2., -4.)),
+        (Vec2::new(0.5, -0.5), Vec3::new(1.5, 2., 2.5)),
+    ] {
+        feed.pointer_sample(Some(exact_game::PointerSample {
+            id: 1,
+            position,
+            phase: PointerPhase::Move,
+            buttons: 1,
+            at_ms: 1.,
+            current_contact: true,
+        }));
+        let frame = feed.frame(&w, 0.5, 1.);
+        assert!(frame.camera_position.distance(expected) < 1e-5);
+        let moved = frame
+            .attachments
+            .iter()
+            .find(|a| a.entity == child)
+            .unwrap();
+        assert!(((frame.view * moved.matrix).w_axis.truncate() - Vec3::NEG_Z).length() < 1e-5);
+    }
+    assert_eq!(w.hash(), hash);
+    assert_eq!(w.save(), save);
+}
+
+#[test]
+fn pointer_pan_ignores_invalid_bounds_and_allows_open_axes() {
+    for bounds in [
+        [Vec3::splat(f32::NAN), Vec3::ONE],
+        [Vec3::ONE, Vec3::ZERO],
+        [Vec3::INFINITY, Vec3::INFINITY],
+        [Vec3::NEG_INFINITY, Vec3::NEG_INFINITY],
+        [Vec3::NEG_INFINITY, Vec3::INFINITY],
+    ] {
+        let mut w = World::new(60, 0);
+        w.spawn((
+            Transform::default(),
+            Camera::default(),
+            PointerPan {
+                pointer: 1,
+                horizontal: Vec3::X,
+                bounds: Some(bounds),
+                ..Default::default()
+            },
+        ));
+        w.propagate();
+        let mut feed = Feed::default();
+        feed.feed_to(&w, &mut Recording::default()).unwrap();
+        feed.pointer_sample(Some(exact_game::PointerSample {
+            id: 1,
+            position: Vec2::X,
+            phase: PointerPhase::Move,
+            buttons: 1,
+            at_ms: 1.,
+            current_contact: true,
+        }));
+        assert_eq!(feed.frame(&w, 1., 1.).camera_position, Vec3::X);
+    }
+}
+
+#[test]
+fn pointer_pan_bounds_leave_a_camera_with_no_unshown_motion_where_its_tick_put_it() {
+    let mut w = World::new(60, 0);
+    w.spawn((
+        Transform::at(5., 0., 0.),
+        Camera::default(),
+        PointerPan {
+            pointer: 1,
+            horizontal: Vec3::X,
+            bounds: Some([Vec3::splat(-2.), Vec3::splat(2.)]),
+            ..Default::default()
+        },
+    ));
+    w.propagate();
+    let mut feed = Feed::default();
+    feed.feed_to(&w, &mut Recording::default()).unwrap();
+    // No sample: the limits apply to the frame's own translation only.
+    assert_eq!(feed.frame(&w, 1., 1.).camera_position, Vec3::X * 5.);
+    feed.pointer_sample(Some(exact_game::PointerSample {
+        id: 1,
+        position: Vec2::ZERO,
+        phase: PointerPhase::Move,
+        buttons: 1,
+        at_ms: 1.,
+        current_contact: true,
+    }));
+    assert_eq!(feed.frame(&w, 1., 1.).camera_position, Vec3::X * 5.);
+}
+
+const EDGE: f32 = 1.;
+const BOUNDS: [Vec3; 2] = [
+    Vec3::new(-EDGE, f32::NEG_INFINITY, f32::NEG_INFINITY),
+    Vec3::new(EDGE, f32::INFINITY, f32::INFINITY),
+];
+/// `Panning` whose tick clamps the camera at the same limits it presents.
+struct ClampedPanning;
+impl Game for ClampedPanning {
+    const ID: &'static str = "pointer-pan-clamped";
+    const HZ: u32 = 120;
+    type Args = ();
+    fn setup(w: &mut World, args: &()) {
+        Panning::setup(w, args);
+        w.get_mut::<Transform>("camera").unwrap().position.x = 0.;
+    }
+    fn tick(w: &mut World, input: &Input, args: &()) {
+        Panning::tick(w, input, args);
+        let mut camera = w.get_mut::<Transform>("camera").unwrap();
+        camera.position = camera.position.clamp(BOUNDS[0], BOUNDS[1]);
+    }
+    fn present(p: &mut Present<'_>, args: &()) {
+        Panning::present(p, args);
+        let camera = p.named("camera").unwrap();
+        let mut pan = *p.get::<PointerPan>(camera).unwrap();
+        pan.bounds = Some(BOUNDS);
+        p.insert(camera, pan);
+    }
+}
+
+#[test]
+fn a_clamped_tick_does_not_hold_the_drawn_camera_at_the_edge() {
+    let mut sim = Sim::<ClampedPanning>::new(()).unwrap();
+    let mut feed = Feed::default();
+    let mut writes = Recording::default();
+    feed.feed_to(sim.world(), &mut writes).unwrap();
+    sim.advance(0., Clock::Seekable);
+    touch_clamped(&mut sim, PointerPhase::Down, 0., 0., 0.);
+    // 60 points would move the camera 1.5; the tick at 8.3 ms clamps it to 1.
+    touch_clamped(&mut sim, PointerPhase::Move, 60., 60., 1.);
+    // A newer sample, after that tick, turns back by 10 points.
+    touch_clamped(&mut sim, PointerPhase::Move, 50., -10., 9.);
+    sim.advance_with(12.5, Clock::Seekable, |w, left| {
+        if left < 2 {
+            feed.feed_to(w, &mut writes).unwrap();
+        }
+    });
+    let camera = sim.world().get::<Transform>("camera").unwrap().position.x;
+    assert_eq!(camera, EDGE, "the tick clamped");
+    assert!((sim.alpha() - 0.5).abs() < 0.01, "{}", sim.alpha());
+    let sample = sim.frame_pointer(feed.pointer_pan().unwrap()).unwrap();
+    assert_eq!(sample.position.x, 50.);
+    feed.pointer_sample(Some(sample));
+    let shown = feed.frame(sim.world(), sim.alpha(), 1.).camera_position.x;
+    // The clamped camera moved back by the newer sample, not held at 1.
+    let expected = EDGE - 10. * HORIZONTAL.x;
+    assert!((shown - expected).abs() < 1e-5, "{shown} != {expected}");
+    // The next tick consumes that sample: the drawn camera stays, no jump.
+    sim.advance_with(20.8, Clock::Seekable, |w, left| {
+        if left < 2 {
+            feed.feed_to(w, &mut writes).unwrap();
+        }
+    });
+    assert!((sim.alpha() - 0.5).abs() < 0.01, "{}", sim.alpha());
+    let sample = sim.frame_pointer(feed.pointer_pan().unwrap()).unwrap();
+    feed.pointer_sample(Some(sample));
+    let next = feed.frame(sim.world(), sim.alpha(), 1.).camera_position.x;
+    assert!((next - expected).abs() < 1e-5, "{next} != {expected}");
+}
+fn touch_clamped(sim: &mut Sim<ClampedPanning>, phase: PointerPhase, x: f32, dx: f32, at_ms: f64) {
+    sim.input(InputEvent::Pointer {
+        id: 1,
+        phase,
+        x,
+        y: 0.,
+        dx,
+        dy: 0.,
+        buttons: 1,
+        at_ms,
+        player: 0,
+    });
 }

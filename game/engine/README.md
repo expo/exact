@@ -527,8 +527,19 @@ the tick and presentation can share `horizontal = Vec3::X * 0.02` and
 `vertical = Vec3::Z * 0.02`; a ten-point horizontal move translates the eye and
 everything parented under it by 0.2 world units. Panning the eye preserves its
 direction, so a separately stored target must receive that same tick translation.
-This seam describes a direct pan, without clamping, inertia, rotation or a locked
-mouse. It adds no spring and predicts no future sample.
+Set optional `bounds: Some([min, max])` to clamp the presented camera position
+in world space to the same limits the tick applies. The default `None` keeps
+today's unbounded translation. Infinite limits leave an axis unbounded; NaN or
+reversed bounds are ignored. Only the frame's own translation is limited: a frame
+with no unshown pointer motion draws the camera where its tick put it. Children
+receive the camera's clamped translation. Between ticks, the part of the latest
+tick not yet drawn is limited the same way, so a tick that stopped at a limit
+does not hold the drawn camera there when a newer sample turns back. This
+assumes the camera's parent, if any, does not move between ticks.
+For a target-based camera, add the eye-to-target offset to the target limits.
+After the release tick, set `delta` to zero: any tick-driven coast uses normal
+interpolation and needs no frame-time adjustment. This adds no spring or
+prediction and does not handle rotation or a locked mouse.
 
 The stock `WorldSurface` supplies the frame sample automatically. A custom
 renderer can call `Sim::frame_pointer(id)` and pass the result to

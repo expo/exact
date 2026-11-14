@@ -66,9 +66,12 @@ impl CameraPointer {
             history.update(w, next_tick, chains);
         }
     }
+    /// `tick_move` is the camera's position change over the latest tick, the
+    /// one `alpha` interpolates.
     pub fn frame(
         &mut self,
         camera: &mut Transform,
+        tick_move: Vec3,
         out: &mut Vec<DisplayedAttachment>,
         alpha: f32,
     ) {
@@ -79,6 +82,11 @@ impl CameraPointer {
             .map_or(glam::Quat::IDENTITY, |look| {
                 look.turn(camera.rotation, motion)
             });
+        let bounds = self.pan.and_then(|pan| pan.bounds).filter(|[min, max]| {
+            min.cmple(*max).all()
+                && min.cmplt(Vec3::INFINITY).all()
+                && max.cmpgt(Vec3::NEG_INFINITY).all()
+        });
         let translation = match (self.pan, self.sample.take()) {
             (Some(pan), Some(sample)) if sample.id == pan.pointer && sample.current_contact => {
                 let undrawn = if self.pan_interpolates {
@@ -86,7 +94,18 @@ impl CameraPointer {
                 } else {
                     0.
                 };
-                pan.translation(sample.position - pan.position + pan.delta * undrawn)
+                // The pan move the latest tick made. A tick that clamps moved
+                // the camera less than `delta`: start from the camera's pose
+                // before that tick and apply the same limits.
+                let ticked = pan.translation(pan.delta);
+                let ticked = match bounds {
+                    Some([min, max]) => {
+                        let before = camera.position - tick_move * alpha;
+                        (before + ticked).clamp(min, max) - before
+                    }
+                    None => ticked,
+                };
+                pan.translation(sample.position - pan.position) + ticked * undrawn
             }
             _ => Vec3::ZERO,
         };
@@ -94,6 +113,14 @@ impl CameraPointer {
             translation
         } else {
             Vec3::ZERO
+        };
+        // Only the frame's own translation is limited: a camera with no
+        // unshown pointer motion is drawn where its tick put it.
+        let translation = match bounds {
+            Some([min, max]) if translation != Vec3::ZERO => {
+                (camera.position + translation).clamp(min, max) - camera.position
+            }
+            _ => translation,
         };
         if translation == Vec3::ZERO && turn == glam::Quat::IDENTITY {
             return;
