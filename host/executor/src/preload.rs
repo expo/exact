@@ -526,7 +526,7 @@ impl Control {
         if let Destination::Staging(cache) = &mut *self.destination.state.lock().unwrap() {
             cache.grants = grants.into();
         }
-        update(&self.destination, |cache| {
+        update_state(&self.destination, |cache, state| {
             if !cache.preloads_open {
                 return;
             }
@@ -542,8 +542,21 @@ impl Control {
                     Some(observer.clone()),
                     generation,
                 ));
+                let i = cache.preloads.len() - 1;
+                let held = &cache.preloads[i];
+                if state.is_some_and(|state| {
+                    refresh_underway(
+                        state,
+                        cache.preload_names,
+                        held.request.as_ref().expect("new definition"),
+                        &held.name,
+                    )
+                }) {
+                    drop_held(cache, i, Event::DroppedByRefresh);
+                }
             }
             let indices: Vec<_> = (first..cache.preloads.len())
+                .filter(|i| matches!(cache.preloads[*i].reply, ReplyState::Pending { .. }))
                 .map(|i| (i, cache.preloads[i].generation))
                 .collect();
             if !indices.is_empty() {
@@ -592,10 +605,16 @@ impl Drop for Preloads {
 // Adoption moves the cache under the executor's lock. A callback releases
 // the destination lock before taking that lock, in the same order as boot.
 fn update<T>(location: &Location, f: impl FnOnce(&mut cache::Cache) -> T) -> Option<T> {
+    update_state(location, |cache, _| f(cache))
+}
+fn update_state<T>(
+    location: &Location,
+    f: impl FnOnce(&mut cache::Cache, Option<&State>) -> T,
+) -> Option<T> {
     let mut destination = location.state.lock().unwrap();
     match &mut *destination {
         Destination::Staging(cache) => {
-            let result = f(cache);
+            let result = f(cache, None);
             location.changed.notify_all();
             Some(result)
         }
@@ -606,7 +625,9 @@ fn update<T>(location: &Location, f: impl FnOnce(&mut cache::Cache) -> T) -> Opt
             if state.retired {
                 return None;
             }
-            let result = f(state.cache.as_mut()?);
+            let mut cache = state.cache.take()?;
+            let result = f(&mut cache, Some(&state));
+            state.cache = Some(cache);
             cache::serve_ready(&mut state);
             rouse(&shared, &state);
             #[cfg(test)]
@@ -1106,35 +1127,72 @@ pub(super) fn withhold_store(cache: &mut cache::Cache, request: &Request) {
     }
 }
 pub(super) fn refresh(cache: &mut cache::Cache, r: &RequestOut) {
-    if r.class != RequestClass::Read
-        || !r.request.is_plain_http()
-        || !(r.forced
-            || matches!(
-                r.request.cache,
-                exact_runner::CacheMode::Reload | exact_runner::CacheMode::NoCache
-            ))
-    {
+    let Some(refresh) = Refresh::of(&r.request, r.class, r.forced) else {
         return;
-    }
-    let key = Equal::of(&r.request);
+    };
     for i in 0..cache.preloads.len() {
         let held = &cache.preloads[i];
-        let named = cache.preload_names
-            && r.request.preload.as_deref() == Some(held.name.as_str())
-            && held.key.method == key.method
-            && held.key.url == key.url;
-        // Ignore cache mode so a refresh also drops an older no-store hold (LLP 1162.000 D1).
-        let equal = held.key.same_cache_key(&key)
-            && held.key.redirect == key.redirect
-            && held
-                .request
-                .as_ref()
-                .is_some_and(|request| request.body == r.request.body);
-        if named || equal {
+        if held
+            .request
+            .as_ref()
+            .is_some_and(|request| refresh.drops(cache.preload_names, request, &held.name))
+        {
             cache::drop_preload_copy(cache, i);
             drop_held(cache, i, Event::DroppedByRefresh);
         }
     }
+}
+
+pub(super) struct Refresh {
+    key: Equal,
+    body: Option<Vec<u8>>,
+    name: Option<Box<str>>,
+}
+impl Refresh {
+    pub(super) fn of(request: &Request, class: RequestClass, forced: bool) -> Option<Self> {
+        (class == RequestClass::Read
+            && request.is_plain_http()
+            && (forced
+                || matches!(
+                    request.cache,
+                    exact_runner::CacheMode::Reload | exact_runner::CacheMode::NoCache
+                )))
+        .then(|| Self {
+            key: Equal::of(request),
+            // A larger body can match a hold only by name (LLP 1162.000 D1).
+            body: (request.body.len() <= MAX_BODY_BYTES).then(|| request.body.clone()),
+            name: request.preload.clone(),
+        })
+    }
+    fn drops(&self, names: bool, request: &Request, name: &str) -> bool {
+        let key = Equal::of(request);
+        let named = names
+            && self.name.as_deref() == Some(name)
+            && self.key.method == key.method
+            && self.key.url == key.url;
+        // Refresh equality ignores cache mode, including no-store (LLP 1162.000 D1).
+        named
+            || (self.key.same_cache_key(&key)
+                && self.key.redirect == key.redirect
+                && self.body.as_deref() == Some(request.body.as_slice()))
+    }
+}
+
+// Cache lookup asks only about earlier tickets; a hold must exclude every
+// unfinished refresh, including one behind it (LLP 1162.000 D1, D5).
+fn refresh_underway(state: &State, names: bool, request: &Request, name: &str) -> bool {
+    reads::pending(state).any(|pending| match pending {
+        reads::Pending::Running(r) => r
+            .refresh
+            .as_ref()
+            .is_some_and(|r| r.drops(names, request, name)),
+        reads::Pending::Queued(j) => Refresh::of(&j.request, j.class, j.forced)
+            .is_some_and(|r| r.drops(names, request, name)),
+    }) || state.fenced.iter().any(|f| match f {
+        Fenced::Held(r, ..) => Refresh::of(&r.request, r.class, r.forced)
+            .is_some_and(|r| r.drops(names, request, name)),
+        _ => false,
+    })
 }
 fn drop_secret(cache: &mut cache::Cache, name: &str) {
     for i in 0..cache.preloads.len() {

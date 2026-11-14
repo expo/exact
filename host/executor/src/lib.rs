@@ -112,6 +112,7 @@ struct Running {
     cache_exchange: Option<cache::Exchange>,
     cache_barrier: bool,
     cache_replacing: Option<cache::Key>,
+    refresh: Option<preload::Refresh>,
     invalidates: Option<(String, bool)>,
 }
 struct Completed {

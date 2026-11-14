@@ -1,6 +1,27 @@
 //! Selection and dependencies in the ordered sequence (LLP 1162 D1).
 use super::*;
 
+pub(super) enum Pending<'a> {
+    Running(&'a Running),
+    Queued(&'a Job),
+}
+impl Pending<'_> {
+    pub(super) fn ticket(&self) -> u64 {
+        match self {
+            Self::Running(r) => r.ticket,
+            Self::Queued(j) => j.ticket,
+        }
+    }
+}
+pub(super) fn pending(state: &State) -> impl Iterator<Item = Pending<'_>> {
+    state
+        .running
+        .iter()
+        .filter(|r| r.lane == 0 && !r.terminal)
+        .map(Pending::Running)
+        .chain(state.jobs[0].iter().map(Pending::Queued))
+}
+
 pub(super) fn overlaps(r: &RequestOut, work: bool) -> bool {
     r.class != RequestClass::Ordered && r.request.is_plain_http() && !work
 }
@@ -170,6 +191,7 @@ fn take_job(state: &mut State, lane: usize, index: usize) -> Option<(Job, AbortC
         cached: false,
         cache_exchange: cache::exchange(state, &job),
         cache_replacing: cache::replacing(&job.request, job.class, job.forced, job.work.is_some()),
+        refresh: preload::Refresh::of(&job.request, job.class, job.forced),
         cache_barrier: cache::barrier(&job.request, job.class, job.work.is_some()),
         invalidates: cache::invalidates(&job.request, job.work.is_some()),
     });

@@ -206,6 +206,7 @@ fn the_launch_deadline_sends_a_named_read_without_the_function_reporting_its_end
             }
             let (core, woke) = server.core(asynchronous, true);
             adopt(&core, set);
+            assert_eq!(control.thread_count(), 0);
             if after_adoption {
                 control.launch_pending(Some(deadline));
             }
@@ -228,6 +229,8 @@ fn the_launch_deadline_sends_a_named_read_without_the_function_reporting_its_end
             } else {
                 core.shared.ready.notify_all();
             }
+            // The deadline must start the read before a host pumps again.
+            server.seen(1);
             let (ticket, outcome, timing) = collect(&core, &woke);
             assert_eq!(ticket, 1);
             assert!(!timing.cached);

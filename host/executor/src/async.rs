@@ -659,6 +659,7 @@ impl Machine {
                 job.work.is_some(),
             ),
             cache_barrier: super::cache::barrier(&job.request, job.class, job.work.is_some()),
+            refresh: super::preload::Refresh::of(&job.request, job.class, job.forced),
             invalidates: super::cache::invalidates(&job.request, job.work.is_some()),
         });
         let start: Start =

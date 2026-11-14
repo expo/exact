@@ -19,6 +19,10 @@ impl Core {
             || waiting(state, r)
             || !reads::room_to_start(state, r)
             || !cache::unconditional(state, r)
+            || state
+                .cache
+                .as_ref()
+                .is_some_and(|cache| refresh_underway(state, cache.preload_names, &r.request, ""))
         {
             return;
         }

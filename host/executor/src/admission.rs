@@ -222,6 +222,7 @@ impl Core {
                 cached: false,
                 cache_exchange: None,
                 cache_replacing: cache::replacing(&r.request, r.class, r.forced, work.is_some()),
+                refresh: None,
                 cache_barrier: cache::barrier(&r.request, r.class, work.is_some()),
                 invalidates: cache::invalidates(&r.request, work.is_some()),
             });

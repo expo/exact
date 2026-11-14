@@ -328,16 +328,18 @@ pub(super) fn asked(state: &mut State, r: &RequestOut, work: bool) {
 }
 
 fn replacing_before(state: &State, ticket: u64, key: &Key) -> bool {
-    state.ordered.iter().take_while(|t| **t != ticket).any(|t| {
+    reads::pending(state).any(|pending| {
         state
-            .running
+            .ordered
             .iter()
-            .any(|r| r.ticket == *t && !r.terminal && r.cache_replacing.as_ref() == Some(key))
-            || state.jobs[0].iter().any(|j| {
-                j.ticket == *t
-                    && replacing(&j.request, j.class, j.forced, j.work.is_some()).as_ref()
-                        == Some(key)
-            })
+            .take_while(|t| **t != ticket)
+            .any(|t| *t == pending.ticket())
+            && match pending {
+                reads::Pending::Running(r) => r.cache_replacing.as_ref() == Some(key),
+                reads::Pending::Queued(j) => {
+                    replacing(&j.request, j.class, j.forced, j.work.is_some()).as_ref() == Some(key)
+                }
+            }
     })
 }
 
@@ -930,9 +932,12 @@ pub(super) fn observe(shared: &Arc<Shared>, request: &mut ibex2::stdlib::fetch::
         move |method, url, status, headers| {
             if unsafe_method(method) {
                 if let Some(shared) = shared.upgrade() {
-                    if let Some(cache) = shared.state.lock().unwrap().cache.as_mut() {
+                    let mut state = shared.state.lock().unwrap();
+                    if let Some(cache) = state.cache.as_mut() {
                         invalidate_head(cache, url, status, headers.entries());
                     }
+                    // A complete hold has no abort callback to wake its readers (LLP 1162.000 D1).
+                    rouse(&shared, &state);
                     #[cfg(test)]
                     shared.ready.notify_all();
                 }

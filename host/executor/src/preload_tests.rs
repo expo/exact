@@ -1461,3 +1461,6 @@ mod exchange;
 
 #[path = "preload_journal_tests.rs"]
 mod journal;
+
+#[path = "preload_refresh_tests.rs"]
+mod refresh;
