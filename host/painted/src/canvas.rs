@@ -882,12 +882,16 @@ impl Backend for Recorder {
         }
         self.group = Some(id);
         self.ops.extend([GROUP_BEGIN, id]);
+        // The group records on a fresh Canvas, independently of the outer matrix.
+        self.matrix = None;
         GROUPS.with(|g| g.borrow_mut().push((id, scroll)));
     }
 
     fn group_end(&mut self) {
         self.group = None;
         self.ops.push(GROUP_END);
+        // The reader returns to the outer Canvas, whose matrix may differ.
+        self.matrix = None;
     }
 
     fn row_draw(&mut self, id: u32, origin: (f32, f32), bounds: Rect4) {
