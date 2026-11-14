@@ -38,6 +38,7 @@ test('a tempo edit on a hit plays it once', () => {
 });
 
 test('freeze stops a sequence in its commit without a page reader and resume leaves it stopped', () => {
+  Object.assign(globalThis, {document, addEventListener() {}, getComputedStyle: () => ({fontSize:'16px'})});
   document.visibilityState = 'hidden';
   sequence([[() => true, null, () => [[[16, 0, 0, '', [[0, 'hat', 1, '', -1, 100, 0, 0.25, '']]]], 120, 0, [], '', ''], null, 'frozen']]);
   expect(exact.transport.state().state).toBe('playing');

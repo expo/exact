@@ -908,3 +908,69 @@ test.each([false, true])('freezing releases a gated stream in its page commit (a
     expect(await freeze(false)).toMatchObject({frozen:false, ticket:true, streams:2});
   } finally { await browser.close(); server.stop(true); }
 }, 30000);
+
+
+test.each(['pending', 'resume', 'resume-refreeze', 'refused', 'skipped'])('freeze releases streams and stops sequences before a deferred tree update (%s)', async mode => {
+  const server = runtimeServer(), browser = await suiteBrowser(), page = await browser.newPage();
+  try {
+    await page.goto(server.url.href);
+    await page.evaluate(async () => {
+      const rt = await import('/host/web-js/rt.js'), facts = await import('/host/web-js/facts.js');
+      const { install } = await import('/host/web-js/sounds.js'), { sequence, transport } = await import('/host/web-js/transport.js');
+      rt.clock.agent = true;
+      install([]); transport({});
+      facts.page({page:[['frozen']]});
+      const controllers = [], changed = rt.sig(false), key = rt.sig(0);
+      rt.data.answer = () => ({stream: (deliver, controller) => {
+        controllers.push(controller); deliver({v:7}); return new Promise(() => {});
+      }});
+      let pageFact, feed;
+      rt.mount(root => {
+        pageFact = rt.res('page', 'exactPage', () => [], undefined, undefined, {frozen:'b'}, [false]);
+        feed = rt.res('feed', 'feed', Object.assign(() => [], {gate: () => !pageFact()[0]}), undefined, undefined, 'n', 0);
+        rt.hd(root, {headTitle: () => `${pageFact()[0]} ${feed()}`});
+        const label = text => parent => {
+          const el = document.createElement('div'); el.textContent = text; el.dataset.sharedElement = 'panel';
+          el.style.setProperty('--exact-layout-transition', '20 0 linear'); parent.append(el); rt.pr(el);
+        };
+        rt.when(root, changed, label('After'), label('Before'));
+      });
+      sequence([[() => true, () => key(), () => [[[16, 0, 0, '', []]], 120, 0, [], '', ''], null, 'freeze']]);
+      await rt.pieces();
+      const gate = Promise.withResolvers(), start = document.startViewTransition.bind(document);
+      let transition;
+      document.startViewTransition = update => transition = start(async () => { await gate.promise; return update(); });
+      const state = () => ({frozen:pageFact()[0], ticket:!!feed.r.ticket, aborted:controllers[0].signal.aborted,
+        transport:exact.transport.state().state, reason:exact.transport.state().reason, streams:controllers.length});
+      window.fixture = {rt, feed, state, openStreams: () => controllers.filter(c => !c.signal.aborted).length, refuseFreeze: () => rt.memo(() => {
+        if (pageFact()[0]) throw new rt.Refusal('freeze refused'); return 0;
+      }), restart: () => rt.commit(() => rt.W(key, 2)), begin: () => { rt.commit(() => rt.W(changed, true)); rt.commit(() => rt.W(key, 1)); return !!transition; },
+        finish: async skip => { if (skip) transition.skipTransition(); gate.resolve(); await transition.updateCallbackDone; await transition.finished; }};
+    });
+    await page.waitForFunction(() => fixture.feed() === 7);
+    const observed = await page.evaluate(async mode => {
+      const deferred = fixture.begin();
+      let refused;
+      if (mode === 'refused') {
+        const guard = fixture.refuseFreeze();
+        document.dispatchEvent(new Event('freeze'));
+        refused = fixture.state(); fixture.rt.end(guard.n);
+      }
+      document.dispatchEvent(new Event('freeze'));
+      const frozen = fixture.state();
+      if (mode.startsWith('resume')) document.dispatchEvent(new Event('resume'));
+      if (mode === 'resume-refreeze') { fixture.restart(); document.dispatchEvent(new Event('freeze')); }
+      const beforeUpdate = fixture.state();
+      await fixture.finish(mode === 'skipped');
+      return {deferred, frozen, refused, beforeUpdate, afterUpdate:fixture.state(), openStreams:fixture.openStreams(), stops:fixture.rt.journal.filter(l => l.includes('stopped (background)')).length};
+    }, mode);
+    expect(observed.deferred).toBe(true);
+    if (mode === 'refused') expect(observed.refused).toEqual({frozen:false, ticket:true, aborted:false, transport:'playing', reason:'', streams:1});
+    expect(observed.stops).toBe(mode === 'resume-refreeze' ? 2 : 1);
+    expect(observed.openStreams).toBe(mode === 'resume' ? 1 : 0);
+    expect(observed.frozen).toEqual({frozen:true, ticket:false, aborted:true, transport:'stopped', reason:'background', streams:1});
+    expect(observed.beforeUpdate).toMatchObject({aborted:true, transport:'stopped', reason:'background'});
+    expect(observed.afterUpdate).toEqual({frozen:mode !== 'resume', ticket:mode === 'resume', aborted:true,
+      transport:'stopped', reason:'background', streams:mode.startsWith('resume') ? 2 : 1});
+  } finally { await browser.close(); server.stop(true); }
+}, 30000);
