@@ -4,6 +4,64 @@ mod fixture;
 use fixture::{plan, Replies};
 
 #[test]
+fn completion_during_an_activation_probe_keeps_its_next_turn() {
+    use exact_runner::{DataError, Value};
+    use std::cell::{Cell, RefCell};
+
+    #[derive(Default)]
+    struct Loading {
+        ready: Cell<bool>,
+        finish_on_probe: Cell<bool>,
+        wake: RefCell<Option<Box<dyn FnOnce() + Send>>>,
+    }
+    impl DataSource for Loading {
+        fn query(&mut self, _: &str, _: &[Value]) -> Result<Value, DataError> {
+            Ok(Value::Number(99.))
+        }
+        fn preload(&self) -> Result<bool, DataError> {
+            let ready = self.ready.get();
+            if self.finish_on_probe.replace(false) {
+                // Completion races with a probe that already observed loading.
+                self.ready.set(true);
+                self.wake.borrow_mut().take().unwrap()();
+            }
+            Ok(ready)
+        }
+        fn when_preloaded(&self, wake: Box<dyn FnOnce() + Send>) {
+            *self.wake.borrow_mut() = Some(wake);
+        }
+    }
+    let plan = crate::test_plan(include_str!(
+        "../../../../logic/tests/fixtures/activation.contract"
+    ));
+    let (mut p, error) = Presenter::boot_with(
+        &plan,
+        Loading::default(),
+        (40., 40.),
+        1.,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    let frame = p.display_frame().unwrap();
+    assert!(p.display_complete(&frame));
+    assert!(p.module_pending());
+    p.host.runner().data_ref().finish_on_probe.set(true);
+    p.executor.notify();
+    assert!(p.pump(0.).is_none());
+    assert!(p.module_pending());
+    assert!(
+        p.executor.take_wake(),
+        "completion during the readiness probe must survive wake acknowledgement"
+    );
+    assert!(p.pump(0.).is_none());
+    assert!(!p.module_pending());
+    let frame = p.display_frame().unwrap();
+    assert_eq!(frame.pixels.pixel(39, 39).unwrap().blue(), 255);
+}
+
+#[test]
 fn ready_replies_share_one_presenter_layout_with_count_and_time_bounds() {
     for (count, advance_after, first) in [(20, None, 20), (40, None, 32), (10, Some(3), 3)] {
         let mut source = Replies::new();

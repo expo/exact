@@ -1501,6 +1501,7 @@ dependencies = [
  "potential_utf",
  "serde_core",
  "serde_json",
+ "sha2 0.10.9",
  "slotmap",
  "stable_deref_trait",
  "subtle",
@@ -1810,10 +1811,14 @@ dependencies = [
  "drm",
  "evdev",
  "exact-kernel",
+ "exact-logic",
  "exact-painted",
+ "exact-plan",
  "exact-runner",
  "getrandom 0.3.4",
  "libc",
+ "serde_json",
+ "sha2 0.10.9",
  "tiny-skia",
 ]
 

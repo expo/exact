@@ -232,7 +232,7 @@ impl<D: DataSource> Presenter<D> {
         self.scroll_end.model = models;
     }
 
-    #[cfg(any(target_os = "linux", target_os = "android", test))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android", test))]
     pub(super) fn scroll_end_acknowledged(
         &mut self,
         view: ViewId,

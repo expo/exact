@@ -9,6 +9,10 @@ use std::sync::{Arc, Mutex};
 
 type Wake = Box<dyn FnOnce() + Send>;
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[path = "activation_native_tests.rs"]
+mod native;
+
 /// Prepares in the background until `ready`; keeps the wakes it is given.
 struct Loading {
     ready: Arc<AtomicBool>,

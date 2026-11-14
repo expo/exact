@@ -21,7 +21,7 @@ pub(in crate::presenter) enum Origin {
 }
 
 impl<D: DataSource> Presenter<D> {
-    #[cfg(any(target_os = "linux", target_os = "android", test))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android", test))]
     pub(in crate::presenter) fn acknowledge_collection_scroll(
         &mut self,
         painted: BTreeMap<ViewId, ModelScroll>,

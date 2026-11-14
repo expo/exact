@@ -26,9 +26,9 @@ use std::rc::Rc;
 use std::sync::Arc;
 use tiny_skia::{Pixmap, Point, Transform};
 mod backend;
-#[cfg(any(target_os = "linux", target_os = "android", test))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "android", test))]
 mod presentation;
-#[cfg(any(target_os = "linux", target_os = "android", test))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "android", test))]
 pub(crate) use presentation::Presentation;
 pub mod border;
 mod shape;

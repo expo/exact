@@ -734,7 +734,7 @@ impl<D: DataSource> Presenter<D> {
         next
     }
 
-    #[cfg(any(target_os = "linux", target_os = "android", test))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android", test))]
     pub(super) fn painted_collection_scroll(
         &self,
         boxes: &[PaintedBox],

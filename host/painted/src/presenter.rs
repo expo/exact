@@ -83,7 +83,7 @@ mod svg_hit;
 mod tabs;
 #[cfg(windows)]
 mod windows_field;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use display_frame::SubmittedFrame;
 #[path = "content_region/presenter.rs"]
 mod content_region;
@@ -814,7 +814,7 @@ impl<D: DataSource> Presenter<D> {
 
     /// The display's frame period changed to `ms`: every module loaded now
     /// and later is given it (`Frame::period_ms`, LLP 1009).
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
     pub fn set_frame_period(&mut self, ms: f64) {
         self.surfaces.period(ms);
     }

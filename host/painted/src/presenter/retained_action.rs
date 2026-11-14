@@ -225,7 +225,7 @@ impl<D: DataSource> Presenter<D> {
                     .is_some_and(|t| old.matches(&t))
             })
     }
-    #[cfg(any(target_os = "linux", target_os = "android", test))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android", test))]
     fn retained_picture_current(&self, key: NodeKey, picture: &Weak<()>) -> bool {
         self.host
             .content_region()
@@ -235,7 +235,7 @@ impl<D: DataSource> Presenter<D> {
             })
             .is_some_and(|(current, _)| Weak::ptr_eq(picture, &Rc::downgrade(current)))
     }
-    #[cfg(any(target_os = "linux", target_os = "android", test))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android", test))]
     pub(super) fn retained_contact_picture_current(&self, contact: &RetainedContact) -> bool {
         [&contact.press, &contact.swipe, &contact.swipe_left]
             .into_iter()
@@ -277,7 +277,7 @@ impl<D: DataSource> Presenter<D> {
             self.retained_motion = None;
         }
     }
-    #[cfg(any(target_os = "linux", target_os = "android", test))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android", test))]
     pub(super) fn retire_retained_motion_picture(&mut self) {
         if self
             .retained_motion

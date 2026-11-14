@@ -1,0 +1,5 @@
+component App
+  resource value = loaded() as shape number
+  view
+    box width=40 height=40 background-color=(pending(value) ? "#ff0000" : "#0000ff") testId="result"
+      text (pending(value) ? "loading" : value.toString()) testId="value"
