@@ -44,11 +44,12 @@ fn hard_breaks_blank_lines_and_terminal_newline() {
         },
     );
     let ls = lines(&p, 1000.0);
-    assert_eq!(ls.len(), 4);
+    // Edge renders three lines: U+2028 is not a segment break in CSS, only the line feeds are.
+    assert_eq!(ls.len(), 3);
     assert!(ls.iter().all(|l| l.hard_break));
     assert_eq!(
         ls.iter().map(|l| l.width).collect::<Vec<_>>(),
-        [24.0, 24.0, 0.0, 40.0]
+        [24.0, 24.0, 40.0]
     );
     assert_eq!(
         ls.last().unwrap().end.byte,
@@ -694,4 +695,76 @@ fn a_break_before_no_break_glue_after_a_space_stays() {
     let text = "hello \u{a0}world";
     assert_eq!(exact_textflow::line_breaks(text, &[]), [6, text.len()]);
     assert_eq!(exact_textflow::line_breaks("a\u{a0}b c", &[]), [5, 6]);
+}
+
+/// Preserved text forces a break only at a line feed, as Chrome renders it
+/// (Edge 157, a 500px `pre-wrap` div): `"a\nb"` is two lines, while a lone CR,
+/// form feed, NEL, U+2028 or U+2029 keeps one.
+#[test]
+fn preserved_text_breaks_only_at_line_feeds_as_chrome_renders() {
+    for white_space in [
+        exact_textflow::WhiteSpace::PreWrap,
+        exact_textflow::WhiteSpace::Pre,
+    ] {
+        let count = |s: &str| {
+            lines(
+                &prepare(
+                    s,
+                    Options {
+                        white_space,
+                        ..Options::default()
+                    },
+                ),
+                1000.0,
+            )
+            .len()
+        };
+        assert_eq!(count("a\nb"), 2);
+        for s in [
+            "a\rb",
+            "a\u{000C}b",
+            "a\u{0085}b",
+            "a\u{2028}b",
+            "a\u{2029}b",
+        ] {
+            assert_eq!(count(s), 1, "{white_space:?} {s:?}");
+        }
+    }
+}
+
+/// A form feed, NEL, U+2028 or U+2029 that a preserved line wraps after is
+/// measured as text, so it is painted too; only the hung space or the line
+/// feed a line ends at carries no ink.
+#[test]
+fn preserved_controls_a_line_wraps_after_are_measured_and_painted() {
+    let options = Options {
+        white_space: exact_textflow::WhiteSpace::PreWrap,
+        ..Options::default()
+    };
+    for control in ['\u{000C}', '\u{0085}', '\u{2028}', '\u{2029}'] {
+        let text = format!("a{control}b");
+        let p = prepare(&text, options);
+        let got = lines(&p, 8.0);
+        assert_eq!(got.len(), 2, "{control:?}");
+        let first = got[0].start.byte..got[0].end.byte;
+        assert_eq!(&text[first.clone()], format!("a{control}"));
+        assert_eq!(
+            got[0].width,
+            advance(&text[first.clone()]),
+            "{control:?} is measured"
+        );
+        assert_eq!(
+            p.paint_range(&text, first.clone()),
+            first,
+            "{control:?} is painted"
+        );
+        assert_eq!(&text[got[1].start.byte..got[1].end.byte], "b");
+    }
+    let text = "a \nb";
+    let p = prepare(text, options);
+    let got = lines(&p, 8.0);
+    assert_eq!(
+        p.paint_range(text, got[0].start.byte..got[0].end.byte),
+        0..1
+    );
 }
