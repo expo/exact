@@ -290,3 +290,25 @@ for (const [from, label, path, title] of [
     expect(new URL(page.url()).pathname).toBe(path);
   }));
 }
+
+for (const path of ['/', '/recipes/website', '/learn/website-recipe', '/_components']) {
+  test(`no link on ${path} takes the accent colour or an underline on hover`, () => withPage({}, async page => {
+    await visit(page, path);
+    const devtools = await page.context().newCDPSession(page);
+    const { root } = await devtools.send('DOM.getDocument');
+    await devtools.send('CSS.enable');
+    const { nodeIds } = await devtools.send('DOM.querySelectorAll', { nodeId: root.nodeId, selector: '#exact-root a[data-view][href]' });
+    expect(nodeIds.length).toBeGreaterThan(0);
+    for (const nodeId of nodeIds) await devtools.send('CSS.forcePseudoState', { nodeId, forcedPseudoClasses: ['hover', 'focus-visible'] });
+    const textLinks = await page.evaluate(() => {
+      const accent = document.createElement('span');
+      accent.style.color = 'var(--exact-accent, AccentColor)';
+      document.getElementById('exact-root').append(accent);
+      const drawnAsTextLink = a => getComputedStyle(a).color === getComputedStyle(accent).color || getComputedStyle(a).textDecorationLine.includes('underline');
+      const links = [...document.querySelectorAll('#exact-root a[data-view][href]')].filter(a => !a.closest('[data-exact-text]') && drawnAsTextLink(a));
+      accent.remove();
+      return links.map(a => a.getAttribute('href'));
+    });
+    expect(textLinks).toEqual([]);
+  }));
+}

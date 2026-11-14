@@ -68,15 +68,17 @@ component NotFound
       view height=1 background-color="var(--color-border-secondary)" margin="32px 0 24px"
       if moved != ""
         link href=moved testId="moved-to"
-          text `Go to ${moved}` text-decoration="underline" font-size="var(--text-base)"
+          row
+            text `Go to ${moved}` text-decoration="underline" font-size="var(--text-base)"
       else
         if suggestions.length > 0
           text "Did you mean" class=Eyebrow
           column gap=8 margin-bottom=24 testId="suggestions"
             for s in suggestions key=s.href
-              link href=s.href display="flex" align-items="center" gap=8
-                image "symbol:document" aria-hidden=true font-size="var(--text-sm)" color="var(--color-icon-tertiary)"
-                text s.title font-size="var(--text-base)" color="var(--color-text-default)" text-decoration="underline"
+              link href=s.href
+                row align-items="center" gap=8
+                  image "symbol:document" aria-hidden=true font-size="var(--text-sm)" color="var(--color-icon-tertiary)"
+                  text s.title font-size="var(--text-base)" color="var(--color-text-default)" text-decoration="underline"
         text "Or start from" class=Eyebrow
         row flex-wrap="wrap" gap=12
           link href="/start" flex="1 1 12rem" padding="12px 16px" border="1px solid var(--color-border-secondary)" border-radius="var(--radius-lg)" testId="missing-home"
