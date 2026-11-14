@@ -114,6 +114,7 @@ pub(super) struct Held {
     key: Equal,
     reply: ReplyState,
     taken: bool,
+    pub(super) store: bool,
     started: Instant,
     answered_at: Option<Arc<Mutex<Option<Answered>>>>,
     observer: Option<Observer>,
@@ -159,6 +160,7 @@ impl Held {
             secrets: definition.secrets,
             request: Some(definition.request),
             taken: false,
+            store: true,
             started: Instant::now(),
             answered_at: Some(Arc::new(Mutex::new(None))),
             observer,
@@ -917,6 +919,15 @@ pub(super) fn drop_urls(cache: &mut cache::Cache, urls: &[String]) {
     for i in 0..cache.preloads.len() {
         if urls.contains(&cache.preloads[i].key.url) {
             drop_held(cache, i, Event::DroppedByWrite);
+        }
+    }
+}
+pub(super) fn withhold_store(cache: &mut cache::Cache, request: &Request) {
+    let key = Equal::of(request);
+    for held in &mut cache.preloads {
+        if held.key == key && matches!(held.reply, ReplyState::Pending { .. }) {
+            // Asking withholds the HTTP copy; admission drops the hold (LLP 1162 D4).
+            held.store = false;
         }
     }
 }
