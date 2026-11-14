@@ -1008,7 +1008,8 @@ storage work starts after first pixel. This linked composition uses `rust: false
 Keep saves, scores and settings in app storage (SQLite or files under `app:/data`,
 with `exact-data.workspace = true`), not under `secret.keep`, which is for secrets;
 `docs/reference.md`, "Rust data sources", has the requests and a best-times example.
-Games without `game.data` add no data-source dependency.
+Games without `game.data` add no data-source dependency, and their Apple builds share one compiled
+host (`game/app/apple`, `exact-game-apple`): the game's own Apple crate holds only its plan and compat.json.
 
 [Tennis](games/tennis/README.md) uses one for HTTP: the world publishes a numbered
 question, `resource plan = jev(hud.ask)` posts it, and the answer returns as a

@@ -3,7 +3,7 @@
 # exact2 by path, as an app outside the repository does.
 [workspace]
 members = ["engine", "derive", "bake", "render", "physics", "audio", "app"]
-exclude = ["games", "bench"]
+exclude = ["games", "bench", "app/apple"]
 resolver = "2"
 
 [workspace.package]
@@ -19,6 +19,7 @@ exact-game-render = { path = "render" }
 exact-game-physics = { path = "physics" }
 exact-game-audio = { path = "audio" }
 exact-game-app = { path = "app" }
+exact-game-apple = { path = "app/apple" }
 exact-data-host = { path = "../data/host" }
 # A game's Rust data source asks app storage (files, SQLite) through these,
 # as Fieldnotes' does: `exact_data::storage::request` and its JSON.
