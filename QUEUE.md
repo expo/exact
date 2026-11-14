@@ -1135,6 +1135,8 @@ sits on that list carries the trade it would take.
 
 ## Cheap, any time
 
+- **Editor support in the async lane** (2026-11-13, LLP 1035.005.003): once TypeScript 7.1 is
+  stable, run `editors/content-mapper`'s tests with a pinned `tsc` (`EXACT_TSC71`).
 - **Weatherlight's Android APK does not build on main: its Gradle locks do not match** (2026-11-14, at 32036894e on the fleet's tier-2 toolchain): `bun scripts/agent-android.mjs build weatherlight --apk` stops with "Gradle locks or verification metadata do not match its dependencies". Find the dependency change that moved the graph, then run the command's `--write-locks` and review `gradle.lockfile` and `gradle-verification.xml` before committing them. Tier 2 of the async lane builds this APK.
 - **On iOS a scroller that hides one axis cannot reveal a target past it on that axis** (2026-11-13, Astra's review of the fragment scroll): an ordinary `overflow-x: hidden; overflow-y: auto` scroller (`host/apple/Sources/ExactKit/IOS/NodeViewIOS.swift` ~1343) does not move to a horizontally offscreen target on `scrollIntoView`. A projected route under a scrolling navigation root now keeps that axis's extent and locks the person's drag on it (`NavigationIOS`); the ordinary scroller needs the same.
 - **On iOS a row nested beside the tab panels paints under the native tab container** (2026-11-13, found fixing the tab routes' bottom inset). A bar in a column it shares with the panels now clears the routes' bottom inset, but `placeOwner` orders the container only among the navigation root's children, so the bar is drawn under it and a tap at its centre reaches the route's scroller. Raising the column instead puts its empty panels over the routes; the container would have to mount at the panels' depth. `TabEdgeIOSTests.testAReplacementBarInAColumnWithThePanelsClearsTheGrid` checks the inset only.
@@ -1352,7 +1354,8 @@ sits on that list carries the trade it would take.
 - **Plan / runner** (LLP 1005 §8): cached per-instance derives or resources inside `each`. At-read instance
   expressions share executable rows without caching their values.
 - **Contract** (LLP 1006 §8): inlining budget; `contract` blocks as assertions;
-  `cursor`; per-instance state; LSP.
+  `cursor`; per-instance state; a Contract language server (opt-in editor support
+  through TypeScript's is LLP 1035.005.003).
 - **Web host** (LLP 1007 §9): a text-measurement bridge (the kernel's layout does not
   run on the web — and only grid has a kernel-against-browser layout check,
   `host/web-js/conformance/grid.contract` with `--linux`; a general layout parity

@@ -204,7 +204,7 @@ assigns or sends, inferred (an action declares none), in slot order: router
 state, states, then mutations, each as declared.
 
 `symbols --editor` adds what an editor integration reads
-(LLP 1035.005.003); nothing else asks for it, and without the flag none
+(`editors/content-mapper`, LLP 1035.005.003); nothing else asks for it, and without the flag none
 of it is computed. A definition the type checker types carries `type`, its type in TypeScript as
 `contract types` writes it in `app.d.ts`'s summary: a state, derive, prop,
 inject, resource, mutation (`T | null`), local or parameter by its value, a shape
