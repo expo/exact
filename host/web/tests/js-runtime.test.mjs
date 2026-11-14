@@ -593,6 +593,36 @@ test('a queue with no then asks its waiting send by drive() alone, off the agent
   expect([slot(), m.p(), m.next]).toEqual(['Q', false, Infinity]);
 });
 
+// A queued send's `next` commit runs under the origin of the commit that sent it, as the runner's waiting send keeps
+// it (`queue.rs` `Waiting`), and a `then` under its answer's (LLP 1133.002 D12), or under one less privileged running
+// then: a wake's sends go out as the wake's after its origin is gone, the second once the first is answered, and so
+// does what each `then` asks.
+test('a queued send and a then keep the origin of the commit that made them', async () => {
+  const { mut, M, sig, data, queues, commit, advance, clock, Origin } = await freshRuntime('queued-origin');
+  clock.agent = true;
+  const requests = [], replies = [], slot = sig('seed'), followed = sig('seed');
+  data.answer = (source, args) => ({ req: { method: 'GET', url: [source, ...args].join('/'), headers: [] } });
+  data.fetch = req => new Promise(resolve => { requests.push([req.url, req.origin]); replies.push(resolve); });
+  data.parse = (_source, _args, o) => ({ v: o.value });
+  const queued = mut('queued', slot, [], 's', 1), after = mut('after', followed, [], 's');
+  queues([[slot, followed], [], []]);
+  queued.then = () => M(after, 'after', []);
+  const flush = async () => { for (let i = 0; i < 32; i++) await Promise.resolve(); };
+  const answer = async (i, value) => { replies[i]({ value }); await flush(); advance(clock.now, false); await flush(); };
+  Origin.run('wake', () => commit(() => { M(queued, 'queued', [1]); M(queued, 'queued', [2]); }));
+  await flush();
+  for (const [i, value] of ['one', 'after one', 'two'].entries()) await answer(i, value);
+  expect(requests).toEqual([['queued/1', 'wake'], ['after', 'wake'], ['queued/2', 'wake'], ['after', 'wake']]);
+  // The app's, run while a wake is: the least privileged of the two, as the runner's `data_origin` folds in the wake
+  requests.length = 0;
+  commit(() => { M(queued, 'queued', [3]); M(queued, 'queued', [4]); });
+  await flush();
+  for (const [i, value] of ['three', 'after three', 'four'].entries()) {
+    replies[4 + i]({ value }); await flush(); Origin.run('wake', () => advance(clock.now, false)); await flush();
+  }
+  expect(requests).toEqual([['queued/3', 'app'], ['after', 'wake'], ['queued/4', 'wake'], ['after', 'wake']]);
+});
+
 // LLP 1092 D8 on the JS target: the gate step runs inside the commit's undo `try`, after settlement, so a key that is
 // no key refuses the commit (`TaskKey`), its writes and the timers both as they were; a changed key re-arms from now.
 test('a gate step that refuses rolls back the commit and its timers', async () => {

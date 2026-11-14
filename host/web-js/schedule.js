@@ -1,10 +1,11 @@
 // Sends that wait their turn and tasks that wait for state on the JS target (LLP 1092): runner/src/runner/queue.rs
 // and gates.rs over rt.js's mutations and clock. Installed only by a plan that declares `mutation … queue`
 // (emit.rs, `queues($state)`) or a gated task (timers.rs, `gated(…)`), so no other app carries it.
-// A queue mutation keeps one ticket in flight; a later send waits in `m.wait` with its send-time arguments and is
-// asked in a `next` commit of its own once the mutation is free: no ticket, no `then` or `next` armed, not stalled.
+// A queue mutation keeps one ticket in flight; a later send waits in `m.wait` with its send-time arguments and the
+// invocation and origin of the commit that sent it, and is asked under them in a `next` commit of its own once the
+// mutation is free: no ticket, no `then` or `next` armed, not stalled.
 // A gated task is in `clock.timers` only while its gate holds; a new key re-arms it from the commit's time.
-import { Mutations, Tasks, commit, recommit, M, journal, clock, drive, paint, order, write, eq, untracked, useSchedule, refused, Refusal, armedAt, Invocation } from "./rt.js";
+import { Mutations, Tasks, commit, recommit, M, journal, clock, drive, paint, order, write, eq, untracked, useSchedule, refused, Refusal, armedAt, Invocation, Origin } from "./rt.js";
 const say = line => journal.push(`t=${clock.now} ${line}`);
 const BOUND = 64; // runner QUEUE_BOUND: the 65th waiter refuses its action
 let Asked = new Set(), State = [];
@@ -43,7 +44,7 @@ const Q = {
   hold(m, source, args, undo) {
     if (!Asked.has(m) && idle(m) && !m.wait.length) { Asked.add(m); return false; }
     if (m.wait.length >= BOUND) throw new Refusal(`QueueFull { mutation: ${JSON.stringify(m.name)} }`);
-    m.wait.push([source, args, Invocation.id]);
+    m.wait.push([source, args, Invocation.id, Origin.now()]);
     if (!m.pend.n.v) { undo.push([m.pend.n, false]); write(m.pend.n, true); }
     return true;
   },
@@ -68,7 +69,9 @@ const Q = {
    * good (the successor is due); any other refusal puts it back and stalls `m` until a commit changes the state. */
   next(m) {
     m.next = Infinity; Q.own = null;
-    const ok = Invocation.run(m.wait[0][2], () => commit(() => { const [source, args] = m.wait.shift(); say(`${m.name} next (${m.wait.length} waiting)`); M(m, source, args, true); }, `${m.name} next`));
+    // Its commit, and the one a refused ask makes, are the queued send's, as the runner's
+    const [, , invocation, origin] = m.wait[0], sender = f => Origin.resume(origin, () => Invocation.run(invocation, f));
+    const ok = sender(() => commit(() => { const [source, args] = m.wait.shift(); say(`${m.name} next (${m.wait.length} waiting)`); M(m, source, args, true); }, `${m.name} next`));
     if (ok === true) return true;
     const e = refused();
     if (!e) return ok; // the commit poisoned the runner: `forget` ran
@@ -78,7 +81,7 @@ const Q = {
       const shown = m.ended(); // its write ends: the resources it showed in drop it (overlay.js)
       say(`${m.name} queued send refused: ${e.message}`);
       // Nothing waits behind it and nothing is in flight: the view hears `pending` end, as after a failed reply.
-      if ((!m.wait.length && !m.ticket) || shown) { pending(m); recommit(() => {}, "a refused queued send"); }
+      if ((!m.wait.length && !m.ticket) || shown) { pending(m); sender(() => recommit(() => {}, "a refused queued send")); }
     } else {
       m.stall = untracked(basis);
       say(`${m.name} next refused (${e.message}); waits for a change`);
