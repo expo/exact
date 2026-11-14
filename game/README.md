@@ -548,7 +548,7 @@ nothing yet.
 | A painted, visible sky | The same `EnvironmentMap` with `visible: true` (and `rotation` to turn it) |
 | Mouse look | `input.pointer()`'s `delta` is the device's motion this tick, not a difference of positions. Mark the canvas `data-pointer-lock="true"` (declared in `app.json`'s `data`) and a mouse press captures the mouse on the web, macOS and iPadOS (`GCMouse`) until Escape or blur, so the delta never stops at an edge; the Linux host always sends evdev's relative motion. |
 | Turn the drawn camera between ticks | Put `MouseLook { yaw_per_point, pitch_per_point, pitch_limit }` on the camera at the rates the tick turns it by: the drawn camera and its children turn by `Sim::unshown_motion()`, so a turn shows at the next frame whatever the tick and display rates (`engine/tests/look.rs`). Presentation only; insert it in `setup` or register it. |
-| Frame the launch camera for the canvas's size | `fn first_frame(w: &mut World, input: &Input, args: &Self::Args)` on the `Game`: it runs once for each world `setup` made, with `input.viewport()` the canvas's size, before the first tick and before the first frame is drawn, so that frame already shows the framed pose. A restored world never runs it (its save holds what it wrote), nor does a world that ticked before it had a canvas. It writes the simulation as `setup` does, so the same size frames the same world (`engine/tests/first_frame.rs`) |
+| Frame the launch camera for the canvas's size | `fn first_frame(w: &mut World, input: &Input, args: &Self::Args)` on the `Game`: it runs once for each world `setup` made, with `input.viewport()` the canvas's size, before the first tick and before the first frame is drawn, so that frame already shows the framed pose. A restored world never runs it (its save holds what it wrote), nor does a world that ticked before it had a canvas. Calling `World::invalidate_presentation()` does not rerun it. It writes the simulation as `setup` does, so the same size frames the same world (`engine/tests/first_frame.rs`) |
 | Right or middle mouse button | Bind it as a key: `.button("aim", &["MouseRight"])`; `MouseLeft` and `MouseMiddle` too (`MOUSE_BUTTONS`). Touch contacts press none. |
 | Start a selection rectangle | `input.pointer().and_then(\|p\| p.press_origin)` is the latest MouseLeft/touch Down point, even if movement and Up reach the same tick. Gate commands on your action's pressed/released edges. The origin survives normal Up and saves; Cancel, Blur or replacement clears it. |
 | Several fingers at once | `input.pointers()` (every contact down, by id) and `input.pointer_events()` (this tick's Down, Up and Cancel edges, in order); [Controls](#controls) has a multi-finger grab |
@@ -605,7 +605,14 @@ launch, and again after a restore, a restart or a lost GPU device, until the nex
 such frame; a loading cover over the canvas waits on it, since a value published
 from `setup` means only that the declared assets loaded, not that a frame drew
 (`if !hud.presented` in the view). It changes only at those moments, never per
-frame.
+frame. After applying app data inside the same world, call
+`w.invalidate_presentation()` to declare a new picture. It uses the same
+`presented` reset as restore: `presented` is true again only after a complete
+frame whose shown models and textures are delivered and prepared, so a look
+whose bytes have not arrived does not count as presented. It also resets draw
+histories, without changing simulation state, saves or hashes. Call it once
+after the replacement, not every tick. It does not rerun `Game::first_frame`,
+which remains limited to a world made by `setup`.
 
 A performance HUD reads the canvas's renderer, memory and audio facts through a
 separate resource, `exactCanvasPerformance("world")`, updated about once a

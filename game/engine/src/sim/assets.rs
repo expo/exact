@@ -235,6 +235,25 @@ impl<G: Game> Sim<G> {
                     .is_none_or(|deps| deps.iter().all(|t| self.device_ready(t)))
         })
     }
+    /// Every model and texture the world presents, and each model's textures,
+    /// delivered and prepared for the current device: what a new picture
+    /// ([`World::invalidate_presentation`], restore, restart) waits for.
+    /// Stricter than [`Self::presented_assets_ready`], which lets content not
+    /// yet delivered appear later. A failed name does not wait; it is reported
+    /// by `asset_failures`. Call [`Self::refresh_presented`] first.
+    pub fn presented_assets_resident(&self) -> bool {
+        use crate::asset::AssetState;
+        let assets = &self.world.assets;
+        let resident = |n: &str| match assets.states.get(n) {
+            Some(AssetState::Loaded) => self.device_ready(n),
+            Some(AssetState::Failed(_)) => true,
+            Some(AssetState::Pending) | None => false,
+        };
+        self.presented.iter().all(|n| {
+            resident(n)
+                && (assets.dependencies.get(n)).is_none_or(|deps| deps.iter().all(|t| resident(t)))
+        })
+    }
     /// Whether `name` is prepared for the current device.
     pub fn is_prepared(&self, name: &str) -> bool {
         self.world.assets.prepared.contains(name)
