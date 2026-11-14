@@ -20,7 +20,7 @@ impl FetchEvents for Events {
         });
         if result.is_ok() {
             if let Some((name, observer)) = &self.observed {
-                observer(name, Observation::Complete);
+                notify_observer(observer, name, Observation::Complete);
             }
         }
         let _ = self
@@ -150,6 +150,7 @@ pub(super) fn run(
 ) {
     let mut launch_workers = None;
     let mut prefetch_workers = None;
+    let _pending = PendingGuard(destination.clone());
     loop {
         let delay = update(destination, |cache| {
             expire(cache);
@@ -229,6 +230,20 @@ pub(super) fn run(
     }
 }
 
+struct PendingGuard(Arc<Location>);
+impl Drop for PendingGuard {
+    fn drop(&mut self) {
+        update(&self.0, |cache| {
+            // A coordinator without a receiver cannot resolve another hold (LLP 1162.000 D1, D5).
+            for i in 0..cache.preloads.len() {
+                if matches!(cache.preloads[i].reply, ReplyState::Pending { .. }) {
+                    drop_held(cache, i, Event::Cancelled);
+                }
+            }
+        });
+    }
+}
+
 fn start_indices(
     destination: &Arc<Location>,
     send: &mpsc::Sender<Message>,
@@ -279,12 +294,33 @@ fn start_indices(
         let fetch = reach::gate_fetch(host().endow(grants).fetch, request.reach);
         let transport = Arc::new(fetch.blocking_adapter(workers.clone()));
         let visited = Mutex::new(vec![request.url.clone()]);
+        let timeout = request.timeout_ms;
+        let invalidates = cache::unsafe_method(&request.method);
         let mut req = fetch_request(request, false);
+        if invalidates {
+            let destination = destination.clone();
+            req.received = Some(ibex2::stdlib::fetch::Received(Arc::new(
+                move |method, url, status, headers| {
+                    if cache::unsafe_method(method) {
+                        update(&destination, |cache| {
+                            cache::invalidate_head(
+                                cache,
+                                url,
+                                status,
+                                headers.entries(),
+                                Some((i, generation)),
+                            )
+                        });
+                    }
+                },
+            )));
+        }
         req.max_body = Some(cache::MAX_ENTRY);
+        req.timeout = timeout.map(|ms| Duration::from_millis(u64::from(ms) + 1_000));
         // A preload is asked for by nobody yet: Low Data Mode refuses it (LLP 1162.000 D4).
         req.speculative = true;
         if let Some((name, observer)) = &observed {
-            observer(name, Observation::Handed);
+            notify_observer(observer, name, Observation::Handed);
         }
         fetch.start_async(
             transport.clone(),

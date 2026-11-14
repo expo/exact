@@ -131,6 +131,8 @@ struct Equal {
     method: String,
     url: String,
     headers: Vec<(String, String)>,
+    redirect: exact_runner::Redirect,
+    cache: exact_runner::CacheMode,
 }
 impl Equal {
     fn of(request: &Request) -> Self {
@@ -144,19 +146,35 @@ impl Equal {
             method: request.method.clone(),
             url: cache::identity(&request.url),
             headers,
+            redirect: request.redirect,
+            cache: Self::cache_mode(request.cache),
         }
+    }
+    fn cache_mode(mode: exact_runner::CacheMode) -> exact_runner::CacheMode {
+        use exact_runner::CacheMode;
+        match mode {
+            CacheMode::Unspecified
+            | CacheMode::Default
+            | CacheMode::ForceCache
+            | CacheMode::OnlyIfCached => CacheMode::Default,
+            mode => mode,
+        }
+    }
+    fn same_cache_key(&self, other: &Self) -> bool {
+        self.method == other.method && self.url == other.url && self.headers == other.headers
     }
 }
 impl Held {
     fn new(
-        definition: Definition,
+        mut definition: Definition,
         now: Instant,
         observer: Option<Observer>,
         generation: usize,
     ) -> Self {
+        definition.request.timeout_ms = definition.deadline_ms.or(definition.request.timeout_ms);
         let deadline = definition
-            .deadline_ms
-            .or(definition.request.timeout_ms)
+            .request
+            .timeout_ms
             .map_or(DEFAULT_DEADLINE, |ms| Duration::from_millis(ms.into()));
         let origin = url::Url::parse(&definition.request.url)
             .map(|u| u.origin().ascii_serialization())
@@ -211,6 +229,11 @@ pub enum Observation {
 }
 /// A bounded, nonblocking launch measurement sink.
 pub type Observer = Arc<dyn Fn(&str, Observation) + Send + Sync>;
+
+fn notify_observer(observer: &Observer, name: &str, observation: Observation) {
+    // Measurement callbacks cannot interrupt settlement or poison its lock (LLP 1162.000 D4).
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| observer(name, observation)));
+}
 
 /// `changed`, `threads` and `exited` serve tests, a host's among them, which
 /// reach them through [`Control`]: they are compiled into every build.
@@ -695,6 +718,8 @@ fn find(cache: &cache::Cache, request: &Request) -> Option<usize> {
                 p.name == name.as_ref()
                     && p.key.method == request.method
                     && p.key.url == url
+                    && p.key.redirect == request.redirect
+                    && p.key.cache == Equal::cache_mode(request.cache)
                     && live_at(p, now)
             }) {
                 return Some(i);
@@ -814,7 +839,7 @@ pub(super) fn serve_ready(state: &mut State) {
             break;
         }
         let job = &state.jobs[0][index];
-        if job.forgotten && waiting(state, job) {
+        if job.forgotten && reads::safe_to_forget(&job.request, job.class) && waiting(state, job) {
             let job = state.jobs[0].remove(index).expect("forgotten preload read");
             state.counts[0] -= 1;
             state.bytes[0] -= job.charge;
@@ -835,6 +860,15 @@ pub(super) fn serve_ready(state: &mut State) {
         };
         if !can_take(cache, &job.request, i) {
             index += 1;
+            continue;
+        }
+        if job.forgotten && matches!(cache.preloads[i].reply, ReplyState::Ready(_)) {
+            let job = state.jobs[0].remove(index).expect("forgotten preload read");
+            state.counts[0] -= 1;
+            state.bytes[0] -= job.charge;
+            if state.counts[0] == 0 || !state.fenced.is_empty() {
+                wake(state);
+            }
             continue;
         }
         let outcome = match cache::granted(&cache.grants, &job.request) {
@@ -891,7 +925,11 @@ fn response_bytes(response: &Response) -> usize {
 }
 fn taken(cache: &mut cache::Cache, i: usize, ticket: u64) {
     if let Some(observer) = &cache.preloads[i].observer {
-        observer(&cache.preloads[i].name, Observation::Taken(ticket));
+        notify_observer(
+            observer,
+            &cache.preloads[i].name,
+            Observation::Taken(ticket),
+        );
     }
     let used = cache.touch();
     let held = &mut cache.preloads[i];
@@ -906,6 +944,13 @@ fn taken(cache: &mut cache::Cache, i: usize, ticket: u64) {
 pub(super) fn drop_held(cache: &mut cache::Cache, i: usize, event: Event) {
     let held = &mut cache.preloads[i];
     let reply = std::mem::replace(&mut held.reply, ReplyState::Gone);
+    let invalidates = matches!(reply, ReplyState::Pending { .. })
+        .then(|| {
+            held.request
+                .as_ref()
+                .and_then(|r| cache::invalidates(r, false))
+        })
+        .flatten();
     let bytes = match reply {
         ReplyState::Pending { abort, .. } => {
             abort.abort();
@@ -921,6 +966,10 @@ pub(super) fn drop_held(cache: &mut cache::Cache, i: usize, event: Event) {
     held.key = Equal::default();
     held.answered_at = None;
     cache.release(bytes);
+    // Cancellation settles before the transport can report its failure (LLP 1162 D4).
+    if let Some((url, _)) = invalidates {
+        cache::drop_urls(cache, &[url], None);
+    }
 }
 // Completion wins over a later timer observation (LLP 1162.000 D1).
 pub(super) fn expire(cache: &mut cache::Cache) {
@@ -953,9 +1002,11 @@ pub(super) fn expire(cache: &mut cache::Cache) {
         }
     }
 }
-pub(super) fn drop_urls(cache: &mut cache::Cache, urls: &[String]) {
+pub(super) fn drop_urls(cache: &mut cache::Cache, urls: &[String], keep: Option<(usize, usize)>) {
     for i in 0..cache.preloads.len() {
-        if urls.contains(&cache.preloads[i].key.url) {
+        if keep != Some((i, cache.preloads[i].generation))
+            && urls.contains(&cache.preloads[i].key.url)
+        {
             drop_held(cache, i, Event::DroppedByWrite);
         }
     }
@@ -963,7 +1014,7 @@ pub(super) fn drop_urls(cache: &mut cache::Cache, urls: &[String]) {
 pub(super) fn withhold_store(cache: &mut cache::Cache, request: &Request) {
     let key = Equal::of(request);
     for held in &mut cache.preloads {
-        if held.key == key && matches!(held.reply, ReplyState::Pending { .. }) {
+        if held.key.same_cache_key(&key) && matches!(held.reply, ReplyState::Pending { .. }) {
             // Asking withholds the HTTP copy; admission drops the hold (LLP 1162 D4).
             held.store = false;
         }
@@ -987,7 +1038,8 @@ pub(super) fn refresh(cache: &mut cache::Cache, r: &RequestOut) {
             && r.request.preload.as_deref() == Some(held.name.as_str())
             && held.key.method == key.method
             && held.key.url == key.url;
-        let equal = held.key == key
+        let equal = held.key.same_cache_key(&key)
+            && held.key.redirect == key.redirect
             && held
                 .request
                 .as_ref()

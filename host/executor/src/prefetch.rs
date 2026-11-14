@@ -23,7 +23,10 @@ impl Core {
             return;
         };
         expire(cache);
-        if !valid_request(&r.request) || cache::granted(&self.grants, &r.request).is_err() {
+        if find(cache, &r.request).is_some()
+            || !valid_request(&r.request)
+            || cache::granted(&self.grants, &r.request).is_err()
+        {
             return;
         }
         let slot = cache

@@ -309,7 +309,7 @@ fn equal_reads_and_prefetches_wait_for_the_same_preload_in_flight() {
 }
 
 #[test]
-fn forgetting_or_aborting_the_caller_releases_it_and_leaves_the_preload() {
+fn forgetting_or_aborting_the_caller_leaves_the_preload_and_keeps_forgotten_unsafe_effects() {
     for asynchronous in [false, true] {
         for abort in [false, true] {
             for method in ["GET", "POST"] {
@@ -327,11 +327,13 @@ fn forgetting_or_aborting_the_caller_releases_it_and_leaves_the_preload() {
                 }
                 {
                     let state = core.shared.state.lock().unwrap();
-                    assert_eq!(state.counts, [0, 0]);
-                    assert_eq!(state.bytes, [0, 0]);
+                    let pending_effect = !abort && method == "POST";
+                    assert_eq!(state.counts, [usize::from(pending_effect), 0]);
+                    assert_eq!(state.bytes[0] > 0, pending_effect);
+                    assert_eq!(state.bytes[1], 0);
                     assert!(
                         state.ordered.is_empty()
-                            && state.jobs[0].is_empty()
+                            && state.jobs[0].len() == usize::from(pending_effect)
                             && state.running.is_empty()
                             && state.completed[0].is_empty()
                     );
@@ -342,6 +344,7 @@ fn forgetting_or_aborting_the_caller_releases_it_and_leaves_the_preload() {
                 }
                 release.send(()).unwrap();
                 ready(&core, 1);
+                assert_eq!(core.shared.state.lock().unwrap().counts, [0, 0]);
                 assert!(core.drain().is_empty());
                 request.prefetch = false;
                 assert!(ask(&core, &woke, job(2, request)).1);
@@ -554,18 +557,40 @@ fn another_reach_or_a_source_outside_a_visited_scope_cannot_take_the_prefetch() 
         first.seen(2);
         release.send(()).unwrap();
         expect(&core, &woke, 1, b"held", true);
-        for (ticket, restricted) in [(2, false), (3, true)] {
-            first.plan("/start", Plan::new(200, &[], b"own"));
+        for (ticket, restricted, prefetch) in [
+            (2, false, false),
+            (3, true, false),
+            (4, false, true),
+            (5, true, true),
+        ] {
+            for _ in 0..2 {
+                first.plan("/start", Plan::new(200, &[], b"own"));
+            }
             let mut request = first.request("/start");
+            request.prefetch = prefetch;
             if restricted {
                 request.grants = Some(format!("net.fetch http://{}", first.address));
             } else {
                 request.reach.origin = exact_runner::CallOrigin::Tool;
             }
-            assert_eq!(ask(&core, &woke, job(ticket, request)).0.body, b"own");
+            let (reply, cached) = ask(&core, &woke, job(ticket, request));
+            assert_eq!(reply.body, b"own");
+            assert!(!cached);
+            let slots = core
+                .shared
+                .state
+                .lock()
+                .unwrap()
+                .cache
+                .as_ref()
+                .unwrap()
+                .preloads
+                .len();
+            assert_eq!(slots, 1);
         }
-        assert_eq!(first.count(), 4);
-        assert!(read(&core, &woke, &first, 4, "/start").1);
+        assert_eq!(first.count(), 6);
+        assert_eq!(middle.count(), 1);
+        assert!(read(&core, &woke, &first, 6, "/start").1);
     }
 }
 
@@ -1201,7 +1226,7 @@ fn cacheable_prefetches_report_held_hits_and_keep_the_http_entry_after_the_hold(
             server.seen(1);
             release.send(()).unwrap();
             expect(&core, &woke, 1, b"fresh", true);
-            let (reply, cached) = read(&core, &woke, &server, 2, "/next");
+            let (reply, cached) = ask(&core, &woke, job(2, server.request("/next").cache(mode)));
             assert_eq!(reply.body, b"fresh");
             assert!(cached);
             *clock.lock().unwrap() += HOLD;

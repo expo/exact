@@ -721,7 +721,7 @@ fn a_taking_source_checks_its_own_grants_and_adoption_is_before_dispatch() {
 }
 
 #[test]
-fn forgetting_a_post_waiter_releases_its_ticket_and_keeps_the_launch_exchange() {
+fn forgetting_a_post_waiter_keeps_its_effect_place_until_the_launch_exchange_completes() {
     for asynchronous in [false, true] {
         let server = Server::new();
         let release = held_plan(&server, "/post", b"held");
@@ -739,11 +739,14 @@ fn forgetting_a_post_waiter_releases_its_ticket_and_keeps_the_launch_exchange() 
             let state = core.shared.state.lock().unwrap();
             (state.counts, state.bytes, state.jobs[0].len())
         };
-        assert_eq!(counts, [0, 0]);
-        assert_eq!(bytes, [0, 0]);
-        assert_eq!(jobs, 0);
+        assert_eq!(counts, [1, 0]);
+        assert!(bytes[0] > 0);
+        assert_eq!(bytes[1], 0);
+        assert_eq!(jobs, 1);
         release.send(()).unwrap();
         ready(&core, 1);
+        assert_eq!(core.shared.state.lock().unwrap().counts, [0, 0]);
+        assert!(core.drain().is_empty());
         assert!(ask(&core, &woke, job(2, request)).1);
         assert_eq!(server.count(), 1);
     }
@@ -1470,3 +1473,6 @@ fn launch_fetches_and_preloads_keep_the_sources_scope_at_redirects() {
 
 #[path = "prefetch_tests.rs"]
 mod prefetch;
+
+#[path = "preload_exchange_tests.rs"]
+mod exchange;

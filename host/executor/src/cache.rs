@@ -809,7 +809,7 @@ pub(super) fn identity(value: &str) -> String {
 pub(super) fn invalidates(request: &Request, synthetic: bool) -> Option<(String, bool)> {
     unsafe_method(&request.method).then(|| (identity(&request.url), synthetic))
 }
-fn unsafe_method(method: &str) -> bool {
+pub(super) fn unsafe_method(method: &str) -> bool {
     !["GET", "HEAD", "OPTIONS", "TRACE"]
         .iter()
         .any(|m| method.eq_ignore_ascii_case(m))
@@ -824,15 +824,24 @@ pub(super) fn invalidate(
     invalidation: Option<&(String, bool)>,
     outcome: &Outcome,
 ) {
+    let Some(cache) = state.cache.as_mut() else {
+        return;
+    };
     match (invalidation, outcome) {
         (Some((url, true)), Outcome::Response(response)) => {
-            invalidate_head(state, url, response.status, &response.headers)
+            invalidate_head(cache, url, response.status, &response.headers, None)
         }
-        (Some((url, _)), Outcome::Failed { .. }) => drop_urls(state, &[identity(url)]),
+        (Some((url, _)), Outcome::Failed { .. }) => drop_urls(cache, &[identity(url)], None),
         _ => {}
     }
 }
-fn invalidate_head(state: &mut State, url: &str, status: u16, headers: &[(String, String)]) {
+pub(super) fn invalidate_head(
+    cache: &mut Cache,
+    url: &str,
+    status: u16,
+    headers: &[(String, String)],
+    keep: Option<(usize, usize)>,
+) {
     if !(200..400).contains(&status) {
         return;
     }
@@ -849,13 +858,10 @@ fn invalidate_head(state: &mut State, url: &str, status: u16, headers: &[(String
             }
         }
     }
-    drop_urls(state, &urls);
+    drop_urls(cache, &urls, keep);
 }
-fn drop_urls(state: &mut State, urls: &[String]) {
-    let Some(cache) = state.cache.as_mut() else {
-        return;
-    };
-    super::preload::drop_urls(cache, urls);
+pub(super) fn drop_urls(cache: &mut Cache, urls: &[String], keep: Option<(usize, usize)>) {
+    super::preload::drop_urls(cache, urls, keep);
     for index in (0..cache.entries.len()).rev() {
         if urls.contains(&cache.entries[index].key.url) {
             cache.remove(index);
@@ -889,12 +895,9 @@ pub(super) fn observe(shared: &Arc<Shared>, request: &mut ibex2::stdlib::fetch::
         move |method, url, status, headers| {
             if unsafe_method(method) {
                 if let Some(shared) = shared.upgrade() {
-                    invalidate_head(
-                        &mut shared.state.lock().unwrap(),
-                        url,
-                        status,
-                        headers.entries(),
-                    );
+                    if let Some(cache) = shared.state.lock().unwrap().cache.as_mut() {
+                        invalidate_head(cache, url, status, headers.entries(), None);
+                    }
                     #[cfg(test)]
                     shared.ready.notify_all();
                 }
