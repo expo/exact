@@ -181,7 +181,8 @@ above were read (`adb logcat -v time`, from ActivityManager's "Start proc" line)
 development build reads it.
 
 A development build always writes the data module's `console` lines to logcat under the tag `exact-app` (`adb logcat
--s exact-app`); a release build does not.
+-s exact-app`), each at its method's priority (`console.debug` at debug, `console.log` and `console.info` at info,
+`console.warn` at warn, `console.error` at error); a release build does not.
 
 The published v5 Hermes bundle has ICU Unicode support but no `Intl` (LLP 1107 §4.1).
 An Intl-enabled bundle with receipt-bound English ICU data enables Ibex's
