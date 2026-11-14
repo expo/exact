@@ -12,14 +12,17 @@ extension NodeView {
     /// parent changed, a paragraph added or removed. A `TextIndex` built at
     /// another value is built again before it answers.
     static var textGeometry: UInt64 = 0
-    package override var frame: CGRect { didSet { Self.textGeometry &+= 1 } }
-    package override var bounds: CGRect { didSet { Self.textGeometry &+= 1 } }
-    package override var center: CGPoint { didSet { Self.textGeometry &+= 1 } }
+    package override var frame: CGRect { didSet { Self.textGeometry &+= 1; overflowClipGeometryChanged() } }
+    package override var bounds: CGRect { didSet { Self.textGeometry &+= 1; overflowClipGeometryChanged() } }
+    package override var center: CGPoint { didSet { Self.textGeometry &+= 1; overflowClipGeometryChanged() } }
     // A box under a transform is not indexed (`TextIndex.build`), so only
     // putting one on or taking it off moves what the index holds: a sticky
     // header moved each frame by its translation does not rebuild it.
     package override var transform: CGAffineTransform {
-        didSet { if oldValue.isIdentity != transform.isIdentity { Self.textGeometry &+= 1 } }
+        didSet {
+            if oldValue.isIdentity != transform.isIdentity { Self.textGeometry &+= 1 }
+            overflowClipGeometryChanged()
+        }
     }
 }
 

@@ -123,7 +123,10 @@ impl Op {
                 }
             }
             Op::ClearProp { prop, .. } => w.u16(*prop as u16),
-            Op::SetStyle { patch, .. } => patch.encode_patch(w),
+            Op::SetStyle { patch, .. } => {
+                patch.encode_patch(w);
+                crate::style::relative::wire::encode(&patch.relative, w);
+            }
             Op::ClearStyle { mask, written, .. } => {
                 w.style_mask(*mask);
                 w.u8(u8::from(*written));
@@ -139,6 +142,7 @@ impl Op {
                 for (state, patch) in looks {
                     w.u8(*state);
                     patch.encode_patch(w);
+                    crate::style::relative::wire::encode(&patch.relative, w);
                 }
             }
         }
@@ -185,10 +189,14 @@ impl Op {
                 let prop = PropId::from_wire(raw).ok_or(DecodeError::UnknownProp(raw))?;
                 Op::ClearProp { id, prop }
             }
-            OpCode::SetStyle => Op::SetStyle {
-                id,
-                patch: Box::new(StyleProps::decode_patch(r)?),
-            },
+            OpCode::SetStyle => {
+                let mut patch = StyleProps::decode_patch(r)?;
+                crate::style::relative::wire::decode(&mut patch, r)?;
+                Op::SetStyle {
+                    id,
+                    patch: Box::new(patch),
+                }
+            }
             OpCode::ClearStyle => Op::ClearStyle {
                 id,
                 mask: r.style_mask()?,
@@ -225,7 +233,9 @@ impl Op {
                     {
                         return Err(DecodeError::LookState(state));
                     }
-                    looks.push((state, StyleProps::decode_patch(r)?));
+                    let mut patch = StyleProps::decode_patch(r)?;
+                    crate::style::relative::wire::decode(&mut patch, r)?;
+                    looks.push((state, patch));
                 }
                 Op::SetLooks { id, looks }
             }

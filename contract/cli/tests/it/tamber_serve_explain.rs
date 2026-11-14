@@ -102,10 +102,9 @@ fn explain_answers_a_param_its_declaration_and_the_apps_value() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// C1 review round 2: an icon naming another is explained as written,
-/// that one its chain; a one-colour shape draws everywhere but Apple, a
-/// shape of several colours on the web alone, a missing file nowhere; a
-/// padded param default keeps its chain.
+/// An icon alias is explained as written, with its chain. Multicolour
+/// files draw on the web and Linux; a missing file has no SVG source.
+/// A padded param default keeps its chain.
 #[test]
 fn explain_reads_icons_as_written_and_svgs_as_the_build_does() {
     let design = "tamber t\n\ntheme\n  ink = #000000\n\nicons\n  icon.home = icon(sf \"house\")\n  icon.alias = icon.home\n  icon.two = icon(svg \"icons/two.svg\")\n  icon.gone = icon(sf \"star\", svg \"icons/gone.svg\")\n";
@@ -121,7 +120,7 @@ fn explain_reads_icons_as_written_and_svgs_as_the_build_does() {
     assert_eq!(alias["ok"]["names"], json!(["icon.home"]), "{alias}");
     assert_eq!(
         ask(&mut s, "icon.two")["ok"]["icon"]["draws"],
-        json!({"ios": null, "linux": null, "web": "svg"})
+        json!({"ios": null, "linux": "svg", "web": "svg"})
     );
     assert_eq!(
         ask(&mut s, "icon.gone")["ok"]["icon"]["draws"],
@@ -217,7 +216,7 @@ fn uses_reads_sources_not_text() {
     let dir = app("uses-c2-r1", design);
     std::fs::create_dir_all(dir.join("assets/icons")).unwrap();
     std::fs::write(dir.join("assets/icons/reply.svg"), SVG).unwrap();
-    let view = "component App\n  view\n    column\n      text \"symbol:icon.reply\"\n      image \"photo.png\" aria-label=\"symbol:icon.reply\" // \"symbol:icon.reply\"\n      image (\n        \"symbol:icon.reply\")\n      Card()\n\ncomponent Card\n  params\n    glyph: icon = \"icon.reply\"\n  view\n    column animation-name=\"pulse\" animation-duration=\"motion.fast\"\n      image \"symbol:param.glyph\"\n\nkeyframes pulse\n  from opacity=0\n  to opacity=1\n";
+    let view = "component App\n  view\n    column\n      text \"symbol:icon.reply\"\n      image \"assets/photo.png\" aria-label=\"symbol:icon.reply\" // \"symbol:icon.reply\"\n      image (\n        \"symbol:icon.reply\")\n      Card()\n\ncomponent Card\n  params\n    glyph: icon = \"icon.reply\"\n  view\n    column animation-name=\"pulse\" animation-duration=\"motion.fast\"\n      image \"symbol:param.glyph\"\n\nkeyframes pulse\n  from opacity=0\n  to opacity=1\n";
     std::fs::write(dir.join("app.contract"), view).unwrap();
     let mut s = Serve::start(&dir, &[]);
     let (icon, _) = s.ask(json!({"method": "uses", "token": "icon.reply"}));

@@ -306,3 +306,60 @@ fn cleared_faces_leave_the_index() {
     assert_eq!(set, 0);
     assert_eq!(faces(&r), None);
 }
+
+#[test]
+fn shared_indexing_keeps_theme_flips_and_token_edits_local() {
+    let program = shared("shared-plan");
+    let boot = || boot_shared(&program);
+    let (mut first, mut second) = (boot(), boot());
+    for _ in 0..3 {
+        first.set_mode("dark-style", "dim").unwrap();
+        assert_eq!(paint(&first, "color"), "light-dark(#111111ff, #ccccccff)");
+        assert_eq!(paint(&second, "color"), "light-dark(#111111ff, #eeeeeeff)");
+        first.set_mode("dark-style", "black").unwrap();
+        assert_eq!(paint(&first, "color"), paint(&second, "color"));
+    }
+    first.set_token("brand", "#00ff00", &[]).unwrap();
+    second.set_mode("dark-style", "dim").unwrap();
+    assert_eq!(paint(&first, "backgroundColor"), "#00ff00ff");
+    assert_eq!(paint(&second, "backgroundColor"), "#c8102eff");
+    assert_eq!(paint(&boot(), "backgroundColor"), "#c8102eff");
+}
+
+#[test]
+fn a_runner_booted_after_an_edited_one_is_dropped_starts_from_its_tokens() {
+    let program = shared("shared-plan-dropped");
+    // Each boot clones the retained program's plan, so the clone's buffers
+    // are free to land where the dropped edited runner's were.
+    for _ in 0..8 {
+        let mut edited = boot_shared(&program);
+        edited.set_token("brand", "#00ff00", &[]).unwrap();
+        assert_eq!(paint(&edited, "backgroundColor"), "#00ff00ff");
+        drop(edited);
+        assert_eq!(
+            paint(&boot_shared(&program), "backgroundColor"),
+            "#c8102eff"
+        );
+    }
+}
+
+/// A program, retained by the test, whose faces read `ink` and `brand`.
+fn shared(name: &str) -> crate::Program {
+    crate::Program::new(plan(
+        name,
+        &format!("atom mention prefix=\"@\"\ncomponent App\n  derive faces = [{FACE}, color=\"ink\", backgroundColor=\"brand\")]\n  view\n    column\n      textarea value=\"@a \" markup=\"markdown\" atoms=\"mention\" atomFaces=faces testId=\"editor\"\n"),
+    ))
+}
+
+fn boot_shared(program: &crate::Program) -> Runner<NoData> {
+    Runner::boot_at(
+        program,
+        NoData,
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+        1000.0,
+        Default::default(),
+    )
+    .unwrap()
+}

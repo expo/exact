@@ -66,6 +66,7 @@ enum RowReuse {
 extension Presenter {
     /// A `renew` op: `id`'s view now shows another list item.
     func renew(_ id: UInt32) {
+        if fragmentHeld?.target?.id == id || fragmentHeld?.route?.id == id { cancelFragment() }
         guard let view = views[id] else { return }
         renewing.insert(id)
         if let press = mouseChain.bubbledPress { press.cancel(in: view) }
@@ -99,6 +100,17 @@ extension Presenter {
 }
 
 extension NodeView {
+    /// Props whose new value changes nothing a view paints. A row rebound to
+    /// another item writes these on its wrapper and row (its key, its place
+    /// in the set, a test id): redrawing those boxes for them was AppKit's
+    /// display of two layers a row that showed what they showed before.
+    static let unpaintedProps: Set<String> = ["testId", "listItemKey", "accessibilityPosInSet", "accessibilitySetSize"]
+    /// Whether a props op may change what the view paints: a prop that goes
+    /// is taken for one that may have.
+    static func paints(set: [String: String], clear: [String]) -> Bool {
+        !clear.isEmpty || set.keys.contains { !unpaintedProps.contains($0) }
+    }
+
     /// What this view keeps beyond its props and style, as a new view has it.
     fileprivate func renew() {
         holdGone()

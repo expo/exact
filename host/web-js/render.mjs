@@ -8,18 +8,19 @@
 //
 //   bun host/web-js/render.mjs <dist> --build                      pages for render=build routes, robots.txt, sitemap.xml
 //   bun host/web-js/render.mjs <dist> <location>…                  print pages
-//   bun host/web-js/render.mjs <dist> --serve [--port 8830]        a page per request
+//   bun host/web-js/render.mjs <dist> --serve [--port 8830]        the site, as `serve` serves it (host/web/serve.mjs)
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { resolve, dirname, extname } from 'node:path';
-import { within } from '../../scripts/paths.mjs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs';
+import { resolve, dirname } from 'node:path';
 import vm from 'node:vm';
 import { brotliCompressSync, createBrotliCompress, constants } from 'node:zlib';
 import { createDocument } from './dom.js';
-import { cachingFetch, FRESH } from './http-cache.mjs';
-import { canonical, matchPattern } from './route-pattern.js';
+import { cachingFetch, directives, FRESH } from './http-cache.mjs';
+import { canonical } from './route-pattern.js';
 import { select, tokens } from './page-style.mjs';
-import { writeCrawlerFiles } from '../web/crawl.mjs';
+import { buildPageFiles, writeCrawlerFiles } from '../web/crawl.mjs';
+import { generationOf, withGenerationBase } from '../web/generations.mjs';
+import { lockHeld } from '../web/build-lock.mjs';
 
 const DEADLINE = 3000;
 // Promise reactions and async functions run outside the host's callback wrapper. Their promise's realm owns the
@@ -151,13 +152,16 @@ export function deferredAnswers(hash) {
 /** `/.exact/checkpoint/<hash>.json`'s hash, or null. */
 export const deferredPath = path => /^\/\.exact\/checkpoint\/([0-9a-f]{32})\.json$/.exec(path)?.[1] ?? null;
 
-export function renderer(dist, { closed = false } = {}) {
-  const script = new vm.Script(readFileSync(resolve(dist, '.gen/server.js'), 'utf8'), { filename: 'server.js' });
-  const shell = readFileSync(resolve(dist, existsSync(resolve(dist, 'shell.html')) ? 'shell.html' : 'index.html'), 'utf8');
+/** `read(path)`: a file of the build by its path in it, the bytes (`sitePages` binds it to one generation); `generation`:
+ * the generation each composed head names in its base (generations.mjs `withGenerationBase`). */
+export function renderer(dist, { closed = false, read = path => readFileSync(resolve(dist, path)), generation = null } = {}) {
+  const script = new vm.Script(read('.gen/server.js').toString('utf8'), { filename: 'server.js' });
+  let shell;
+  try { shell = read('shell.html').toString('utf8'); } catch (error) { if (error.code !== 'ENOENT') throw error; shell = read('index.html').toString('utf8'); }
   const capture = readFileSync(new URL('./capture.js', import.meta.url), 'utf8').trim();
   // A dist file once; a wasm compiled once, instantiated per render.
   const cache = new Map();
-  const files = p => { let v = cache.get(p); if (!v) { v = readFileSync(resolve(dist, p.replace(/^\.?\//, ''))); if (p.endsWith('.wasm')) v = new WebAssembly.Module(v); cache.set(p, v); } return v; };
+  const files = p => { let v = cache.get(p); if (!v) { v = read(p.replace(/^\.?\//, '')); if (p.endsWith('.wasm')) v = new WebAssembly.Module(v); cache.set(p, v); } return v; };
   // Every render's fetches share one HTTP cache, for as long as each answer's headers allow (http-cache.mjs).
   const fetched = closed ? () => Promise.reject(new Error('network data is unavailable during Markdown compilation')) : cachingFetch(fetch);
   const name = unesc(/<title>([^<]*)<\/title>/.exec(shell)?.[1] ?? '');
@@ -194,12 +198,14 @@ export function renderer(dist, { closed = false } = {}) {
   const fixedScheme = /<meta name="color-scheme" content="(light|dark)">/.exec(seen)?.[1];
   // The shell's sheet as rules, when the build analyzed it: a page then carries only those its document can match, after
   // its render, and the head sent before the render carries none (page-style.mjs, LLP 1048.007 D4).
-  const rules = existsSync(resolve(dist, '.gen/page-style.json')) ? JSON.parse(readFileSync(resolve(dist, '.gen/page-style.json'), 'utf8')) : null;
+  let rules = null;
+  try { rules = JSON.parse(read('.gen/page-style.json').toString('utf8')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   const sheet = rules ? /<style>[\s\S]*?<\/style>\n?/ : /(?!)/;
+  const rebase = head => generation ? withGenerationBase(head, generation) : head;
   // A rendered page paints without the runtime, which only adopts it, so its preloads are low priority (page.rs `push_low`).
-  const headOf = (preload, language) => shell.slice(0, title).replace(/<html[^>]*>/, () => htmlTag(language)) + `<script>${capture}</script>\n`
+  const headOf = (preload, language) => rebase(shell.slice(0, title).replace(/<html[^>]*>/, () => htmlTag(language)) + `<script>${capture}</script>\n`
     + shell.slice(stop, early).replace(/(<link rel="modulepreload" href="[^"]*")>\n/g, preload ? '$1 fetchpriority="low">\n' : '')
-    + shell.slice(early, root).replace(sheet, '');
+    + shell.slice(early, root).replace(sheet, ''));
   const preloads = (shell.slice(stop, early).match(/<link rel="modulepreload" href="[^"]*">\n/g) ?? []).map(l => l.replace('>', ' fetchpriority="low">')).join('');
   // A realm for one render: a document, a context with the server bundle run in it, and its location, which `begin`
   // fills in. Nothing has run in it but the bundle's own loading, so making it ahead takes that off a request's path
@@ -212,10 +218,27 @@ export function renderer(dist, { closed = false } = {}) {
     const location = { pathname: '/', search: '', href: 'http://render.invalid/', origin: 'http://render.invalid' };
     // What the render read that another render may not read alike: how long its answers stay fresh for any reader
     // (http-cache.mjs `FRESH`), and whether a source drew a random number (its only other reading the clock and
-    // `Math.random` refuse, ts-fetch.js) — so how long its page may be given again (`keep`).
+    // `Math.random` refuse, ts-fetch.js) — so how long its page may be given again (`keep`), and whether it may be
+    // shared at all (`drew`).
     const read = { fresh: Infinity, random: false }, prefers = new Set();
     const noted = response => { read.fresh = Math.min(read.fresh, response?.[FRESH] ?? 0); return response; };
-    const drew = f => (...args) => { read.random = true; return f(...args); };
+    // A call the platform refuses drew nothing
+    const drew = f => (...args) => { const drawn = f(...args); read.random = true; return drawn; };
+    // The `crypto.subtle` calls that draw nothing (LLP 1069.005 D2): hashing; reading, writing, checking, decrypting and
+    // deriving; and the signatures, encryptions and key wraps of algorithms that take no random input. Every other call
+    // that succeeds drew, an algorithm a newer platform adds included.
+    const pure = ['digest', 'importKey', 'exportKey', 'getPublicKey', 'verify', 'decrypt', 'unwrapKey', 'deriveBits', 'deriveKey', 'decapsulateBits', 'decapsulateKey'];
+    const encrypts = ['AES-CTR', 'AES-CBC', 'AES-GCM', 'AES-OCB', 'CHACHA20-POLY1305'];
+    const deterministic = { sign: ['HMAC', 'RSASSA-PKCS1-V1_5', 'ED25519', 'ED448'], encrypt: encrypts, wrapKey: [...encrypts, 'AES-KW'] };
+    const salted = (name, a) => {
+      if (pure.includes(name)) return false;
+      const given = a[name === 'wrapKey' ? 3 : 0], algorithm = String(typeof given === 'string' ? given : given?.name).toUpperCase();
+      // A PSS signature with no salt takes no random input (RFC 8017 §9.1.1); its length truncates, as WebIDL converts it
+      if (name === 'sign' && algorithm === 'RSA-PSS' && Math.trunc(Number(given?.saltLength)) === 0) return false;
+      return !(Object.hasOwn(deterministic, name) && deterministic[name].includes(algorithm));
+    };
+    // `SubtleCrypto`'s own operations, the calls `salted` judges; what it inherits, such as `toString`, passes through
+    const operations = new Set(Object.getOwnPropertyNames(SubtleCrypto.prototype).filter(name => name !== 'constructor'));
     const owner = new AbortController(), timers = new Set(), errors = [];
     let disposed = false;
     const dispose = () => { disposed = true; owner.abort(); for (const timer of timers) clearTimeout(timer); timers.clear(); };
@@ -258,7 +281,11 @@ export function renderer(dist, { closed = false } = {}) {
       performance, console, Request, Response, Headers, URL, URLSearchParams, TextEncoder, TextDecoder, AbortController, AbortSignal,
       ReadableStream, WritableStream, TransformStream, CountQueuingStrategy, ByteLengthQueuingStrategy, CompressionStream, DecompressionStream,
       fetch: fetchOwned,
-      crypto: { subtle: crypto.subtle, getRandomValues: drew(a => crypto.getRandomValues(a)), randomUUID: drew(() => crypto.randomUUID()) },
+      crypto: { subtle: new Proxy(crypto.subtle, { get: (subtle, name) => !operations.has(name) ? Reflect.get(subtle, name) : (...a) => {
+        const made = subtle[name](...a);
+        return salted(name, a) ? made.then(result => { read.random = true; return result; }) : made;
+      } }), getRandomValues: view => { const filled = crypto.getRandomValues(view); if (filled.byteLength > 0) read.random = true; return filled; },
+      randomUUID: drew(() => crypto.randomUUID()) },
       WebAssembly, atob, btoa, Event: class {}, CustomEvent: class {}, __exactRender: true, __files: files,
       ...(closed ? { __exactMarkdown: new Map() } : {}),
       __exactMarkdownBuilt: JSON.parse(builtMarkdown(shell, seen)),
@@ -335,12 +362,23 @@ export function renderer(dist, { closed = false } = {}) {
         // another render would make until the first of those answers goes stale: it may be given again until then, for
         // at most 60 s (LLP 1048.007 D8).
         const keep = status === 200 && settled && !out.failed?.length && out.activation?.kept === false && !out.rust && !read.random && read.fresh > 0 && read.fresh < Infinity ? Math.min(read.fresh, 60000) : 0;
-        return { html: markedHead + body(''), rest: marked + body(late), status, settled, failed: out.failed ?? [], refused, render: out.render, location, policy: info.policy, activate, keep, robots: out.robots, origin: out.origin };
+        return { html: markedHead + body(''), rest: marked + body(late), status, settled, failed: out.failed ?? [], refused, render: out.render, location, policy: info.policy, activate, keep, drew: read.random, robots: out.robots, origin: out.origin };
       } finally { made.dispose(); }
     } };
   }
   const render = async (location, deadline = DEADLINE) => (await begin(location)).finish(deadline);
   render.begin = begin;
+  render.pages = async ({ name, pattern, source, args }, deadline = DEADLINE) => {
+    let made, timer;
+    try {
+      made = realm();
+      const expired = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("it didn't answer before the deadline")), deadline); });
+      const locations = await Promise.race([made.ctx.__pages(pattern, source, args, deadline), expired]);
+      return locations.map(location => ({ location, notfound: false }));
+    } catch (error) {
+      throw new Error(`route \`${name}\`'s pages (${source}): ${error?.message ?? error}`);
+    } finally { clearTimeout(timer); made?.dispose(); }
+  };
   render.markdown = async () => {
     const { ctx } = realm();
     await ctx.__start();
@@ -377,13 +415,11 @@ const VOID = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input'
 
 const refusedLine = ([name, api]) => `resource ${name} is pending: a page rendered on the server has no storage (${api}); the reader's page asks it`;
 
-const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.wasm': 'application/wasm', '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml', '.css': 'text/css', '.mp4': 'video/mp4', '.plan': 'application/octet-stream', '.txt': 'text/plain; charset=utf-8', '.xml': 'application/xml' };
-
 /** A page per request for one built dist, as the Rust render server sends it (host/render/src/serve.rs, stream.rs):
  * `page(location, header)`, where `header(name)` reads a request header, answers `{ status, headers, body }`, the body
  * a string, bytes, or a ReadableStream of bytes. A `cached` route's page is kept at the origin for its public lifetime
  * (60 s, 64 locations); brotli (quality 5) when the reader takes it. A navigation whose page can declare a status waits
- * for the render; others get the head at once. `render.mjs --serve` and `host/web/serve.mjs` answer with it. */
+ * for the render; others get the head at once. `serve` answers with it, through `sitePages`. */
 // runner/src/viewport.rs's page viewport, and a desktop's that sends no width (host/render/src/viewport.rs `DESKTOP`).
 const PAGE = { width: 390, height: 844 }, DESKTOP = { width: 1280, height: 800 };
 /** The viewport a request is rendered at, as the render host chooses it (LLP 1048.006 D2, viewport.rs `Hints`): its client
@@ -413,18 +449,22 @@ export function pageServer(dist, render = renderer(dist), log = console.log) {
     headers['content-encoding'] = 'br';
     return { status, headers, body: brotliCompressSync(html, { params: { [constants.BROTLI_PARAM_QUALITY]: 5 } }) };
   };
+  const shared = page => page.policy === 'cached' && !page.drew;
   return async function page(location, header) {
     // Laid out for the reader's viewport (LLP 1048.006), and kept per viewport.
     const viewport = viewportOf(header), key = `${location} ${JSON.stringify(viewport)}`;
     const t = performance.now(), hit = cache.get(key);
-    const revalidate = /no-cache|no-store|max-age=0/.test(header('cache-control') ?? '');
+    const asked = directives(header('cache-control')), revalidate = asked.has('no-cache') || asked.has('no-store') || Number(asked.get('max-age')) === 0;
     if (hit && hit.until > Date.now() && !revalidate) return send(header, hit.html, hit.status, hit.cacheControl);
     const begun = await render.begin(location, viewport);
     reads = !!begun.readsViewport;
     const keep = page => {
-      // A `cached` route's page is kept 60 s; a `request` route's, as long as what it was made of (`keep`).
-      const ms = page.status !== 200 ? 0 : page.policy === 'cached' ? 60000 : page.policy === 'request' ? page.keep : 0;
-      if (ms > 0) { if (cache.size >= 64) cache.delete(cache.keys().next().value); cache.set(key, { html: page.html, status: page.status, until: Date.now() + ms, cacheControl: page.policy === 'cached' ? 'public, max-age=0, s-maxage=60' : 'no-store' }); }
+      // Keep a `cached` route's page 60 s and share it, unless its render drew randomness: a draw is the device's (LLP
+      // 1069.005 D2), and a shared page gives every reader the same one. Keep a `request` route's page as long as what
+      // it was made of (`keep`). Keep nothing for a request that asks no cache to store its response (RFC 9111
+      // §5.2.1.5), as the render host does.
+      const ms = page.status !== 200 || asked.has('no-store') ? 0 : shared(page) ? 60000 : page.policy === 'request' ? page.keep : 0;
+      if (ms > 0) { if (cache.size >= 64) cache.delete(cache.keys().next().value); cache.set(key, { html: page.html, status: page.status, until: Date.now() + ms, cacheControl: shared(page) ? 'public, max-age=0, s-maxage=60' : 'no-store' }); }
       log(`render ${page.location} ${page.status} ${(performance.now() - t).toFixed(1)}ms bytes=${page.html.length}${page.flushed ? ' flushed' : ''}`);
       for (const failure of page.failed) log(`  ${page.location}: resource ${failure}`);
       for (const refused of page.refused) log(`  ${page.location}: ${refusedLine(refused)}`);
@@ -453,62 +493,108 @@ export function pageServer(dist, render = renderer(dist), log = console.log) {
     }
     const page = await begun.finish();
     keep(page);
-    return send(header, page.html, page.status, page.policy === 'cached' && page.status === 200 ? 'public, max-age=0, s-maxage=60' : 'no-store');
+    return send(header, page.html, page.status, shared(page) && page.status === 200 ? 'public, max-age=0, s-maxage=60' : 'no-store');
   };
+}
+
+/** `serve`'s pages for the JS-target build at `dist`: `(id, location, header)`, the page for `location` rendered from
+ * build generation `id` (servedFile's), its base that generation's. Every file the renderer reads, as it is made or
+ * during a render, is read from wherever that generation is at that moment (`dist`, or `<dist>.gen/<id>` once another
+ * replaced it), so a navigation's head can go before the render and the page is still one build's. Between a swap's
+ * two renames the generation is in neither place: a read waits while the swap holds `dist.lock`, up to a second, and
+ * the page is then a 503. Null for a build with no server bundle (`--render none`), or a generation no longer kept,
+ * whose `render=request` and `cached` routes are then served their shell. */
+export function sitePages(dist, { pageServer: makeServer = (read, id) => pageServer(dist, renderer(dist, { read, generation: id })) } = {}) {
+  const swapping = () => lockHeld(dist + '.lock');
+  const identity = tree => { try { const st = statSync(tree); return st.dev + ':' + st.ino; } catch { return null; } };
+  const treeOf = id => generationOf(dist) === id ? dist : resolve(dist + '.gen', id);
+  // `op(tree)` on generation `id`'s tree: its answer when that tree was the generation's from before it to after it.
+  // Synchronous, as the renderer's reads are; the wait is only for a swap's renames.
+  const inGeneration = (id, op) => {
+    if (!id) return op(dist);
+    for (const end = Date.now() + 1000; ;) {
+      const tree = treeOf(id), before = identity(tree);
+      let value, error = null;
+      try { value = op(tree); } catch (e) { error = e; }
+      if (before && generationOf(tree) === id && identity(tree) === before) { if (error) throw error; return value; }
+      // Moved, or replaced by the same bytes: asked again where it is now. A swap moves a generation once.
+      if (treeOf(id) !== tree || (generationOf(tree) === id && identity(tree) !== before)) continue;
+      if (!swapping()) throw Object.assign(new Error(`build generation ${id} is no longer kept`), { gone: true });
+      if (Date.now() >= end) throw Object.assign(new Error('the build is being replaced'), { busy: true });
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+    }
+  };
+  const servers = new Map(); // generation -> its page server, a `cached` route's pages kept in it
+  const serverOf = id => {
+    if (!servers.has(id)) {
+      const read = path => inGeneration(id, tree => readFileSync(resolve(tree, path)));
+      const server = inGeneration(id, tree => existsSync(resolve(tree, '.gen/server.js'))) ? makeServer(read, id) : null;
+      if (servers.size >= 8) servers.delete(servers.keys().next().value);
+      servers.set(id, server);
+    }
+    return servers.get(id);
+  };
+  const pages = async (id, location, header) => {
+    // Uncompressed (no `accept-encoding`): `serve` compresses what it sends. Laid out for the viewport the request
+    // tells (`viewportOf`, LLP 1048.006), and a navigation's head sent before the render (`sec-fetch-dest`).
+    const asked = name => name === 'cache-control' || name === 'user-agent' || name === 'sec-fetch-dest' || name.startsWith('sec-ch-') || name === 'viewport-width' ? header(name) : undefined;
+    try {
+      const render = serverOf(id ?? null), page = render && await render(location, asked);
+      if (!page) return null;
+      const { status, headers, body } = page;
+      const sent = { status, cacheControl: headers['cache-control'], vary: headers.vary, acceptCH: headers['accept-ch'], retryAfter: headers['retry-after'] };
+      return body instanceof ReadableStream ? { ...sent, stream: body } : { ...sent, html: Buffer.from(body).toString('utf8') };
+    } catch (error) {
+      if (error.gone) return null;
+      if (error.busy) return { status: 503, cacheControl: 'no-store', retryAfter: '1', html: 'The build is being replaced; retry this page.\n' };
+      throw error;
+    }
+  };
+  pages.answers = path => {
+    const hash = deferredPath(path);
+    if (!hash) return null;
+    const body = deferredAnswers(hash);
+    return body === undefined ? { status: 404, body: "These answers are no longer kept; the page builds itself afresh.\n" } : { status: 200, body };
+  };
+  return pages;
 }
 
 if (import.meta.main) {
   const args = process.argv.slice(2);
   const dist = resolve(args[0]);
-  const render = renderer(dist);
   const opt = (n, d) => { const i = args.indexOf(n); return i < 0 ? d : args[i + 1]; };
   if (args.includes('--serve')) {
     const port = Number(opt('--port', 8830));
-    const page = pageServer(dist, render), files = new Map();
-    const routes = existsSync(resolve(dist, 'routes.json')) ? JSON.parse(readFileSync(resolve(dist, 'routes.json'), 'utf8')).routes : [];
-    Bun.serve({ port, hostname: '127.0.0.1', async fetch(req) {
-      const url = new URL(req.url);
-      const file = resolve(dist, '.' + decodeURIComponent(url.pathname));
-      if (file !== dist && within(dist, file) && !/[\\/]\.gen[\\/]/.test(file) && existsSync(file) && extname(file)) {
-        const type = TYPES[extname(file)] ?? 'application/octet-stream';
-        // A dist file compressed once, at quality 11.
-        if (/\bbr\b/.test(req.headers.get('accept-encoding') ?? '') && /html|javascript|css|json|wasm|svg/.test(type)) {
-          let br = files.get(file); if (!br) files.set(file, br = brotliCompressSync(readFileSync(file), { params: { [constants.BROTLI_PARAM_QUALITY]: 11 } }));
-          return new Response(br, { headers: { 'content-type': type, 'content-encoding': 'br', 'cache-control': 'no-cache', vary: 'Accept-Encoding' } });
-        }
-        return new Response(Bun.file(file), { headers: { 'content-type': type, 'cache-control': 'no-cache' } });
+    const { serve } = await import('../web/serve.mjs');
+    process.exitCode = await serve([dist, '--port', String(port), '--loopback'], { js: true, sitePages });
+  } else {
+    const render = renderer(dist);
+    if (args.includes('--build')) {
+      const listed = JSON.parse(readFileSync(resolve(dist, '.gen/pages.json'), 'utf8')), pages = [], docs = [];
+      render.ahead = false;
+      for (const route of listed) {
+        const locations = route.source ? await render.pages(route) : [route];
+        for (const page of locations) pages.push(page);
       }
-      // A route drawn in the browser (`render=client`) gets the shell and one rendered at build its page, as
-      // `serve` gives them (LLP 1153.001 D1); the rest are rendered here.
-      const answers = deferredPath(url.pathname);
-      if (answers) { const checkpoint = deferredAnswers(answers); return new Response(checkpoint ?? 'These answers are no longer kept; the page builds itself afresh.\n', { status: checkpoint ? 200 : 404, headers: checkpoint ? { 'content-type': 'application/json', 'cache-control': 'private, max-age=3600, immutable' } : { 'content-type': 'text/plain', 'cache-control': 'no-store' } }); }
-      const at = matchPattern(routes, canonical(url.pathname)), built = resolve(file, 'index.html');
-      const html = { 'content-type': 'text/html', 'cache-control': 'no-cache' };
-      if (at >= 0 && routes[at].render === 'build' && within(dist, built) && existsSync(built)) return new Response(Bun.file(built), { headers: html });
-      if (at >= 0 && routes[at].render === 'client') return new Response(Bun.file(resolve(dist, 'shell.html')), { headers: html });
-      const { status, headers, body } = await page(url.pathname + url.search, name => req.headers.get(name));
-      return new Response(body, { status, headers });
-    } });
-    console.log(`serving ${dist} with pages rendered by the JavaScript runtime on ${port}`);
-  } else if (args.includes('--build')) {
-    const pages = JSON.parse(readFileSync(resolve(dist, '.gen/pages.json'), 'utf8')), docs = [];
-    const routes = JSON.parse(readFileSync(resolve(dist, 'routes.json'), 'utf8')).routes;
-    let origin = null;
-    for (const p of pages) {
-      const page = await render(p.location);
-      docs.push({ location: canonical(p.location), notfound: p.notfound, status: page.status, robots: page.robots });
-      origin ??= page.origin;
-      const file = p.notfound ? '404.html' : `${p.location.replace(/^\/|\/$/g, '')}/index.html`.replace(/^\//, '');
-      mkdirSync(dirname(resolve(dist, file)), { recursive: true });
-      writeFileSync(resolve(dist, file), page.html);
-      console.log(`${p.location} → ${file} (${page.html.length} B${page.settled ? '' : ', at the deadline'})`);
-      for (const failure of page.failed) console.log(`  ${p.location}: resource ${failure}`);
-      for (const refused of page.refused) console.log(`  ${p.location}: ${refusedLine(refused)}`);
+      const routes = JSON.parse(readFileSync(resolve(dist, 'routes.json'), 'utf8')).routes;
+      const files = buildPageFiles(dist, pages, routes);
+      let origin = null;
+      for (const [i, p] of pages.entries()) {
+        const page = await render(p.location);
+        docs.push({ location: canonical(p.location), notfound: p.notfound, status: page.status, robots: page.robots });
+        origin ??= page.origin;
+        const file = files[i];
+        mkdirSync(dirname(resolve(dist, file)), { recursive: true });
+        writeFileSync(resolve(dist, file), page.html);
+        console.log(`${p.location} → ${file} (${page.html.length} B${page.settled ? '' : ', at the deadline'})`);
+        for (const failure of page.failed) console.log(`  ${p.location}: resource ${failure}`);
+        for (const refused of page.refused) console.log(`  ${p.location}: ${refusedLine(refused)}`);
+      }
+      writeCrawlerFiles(dist, docs, origin, routes);
+    } else for (const location of args.slice(1)) {
+      const page = await render(location);
+      for (const failure of page.failed) console.error(`${location}: resource ${failure}`);
+      process.stdout.write(page.html);
     }
-    writeCrawlerFiles(dist, docs, origin, routes);
-  } else for (const location of args.slice(1)) {
-    const page = await render(location);
-    for (const failure of page.failed) console.error(`${location}: resource ${failure}`);
-    process.stdout.write(page.html);
   }
 }

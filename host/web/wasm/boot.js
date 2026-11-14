@@ -2,6 +2,7 @@ import { host, loadAfterPaint, localAssetURL, agentMode, now, collections, follo
 import { send, applyBatch } from "./commit.js";
 import { navigation, launchLocation, reportTime, reportPlace, preferences, updateCode, foldBits, appRootFontSize, releaseAssets, afterPaint, grantOrigins, modalLayers, inertAncestor, editMenu } from "../navigation.js";
 import { setInputReady } from "./input.js";
+import { startClock } from "./flow.js";
 import { waitForInflight } from "./agent.js";
 import { forgetList } from "./views.js";
 export async function loadRust() {
@@ -63,25 +64,6 @@ function commitFonts(faces) {
     document.fonts.add(face);
   }
   host.installedFonts = faces;
-}
-function startClock() {
-  if (host.timerFactory && !agentMode && !host.textflow && !host.flowLoading) {
-    host.ticker ??= host.timerFactory({
-      now,
-      scrollPending: () => collections.scrollPending(),
-      advance: (time) => {
-        followOffset(time);
-        send(host.wasm.exact_advance(time, 0));
-      },
-      present: host.present,
-      release: (kinds, cutoff) => {
-        const batch = JSON.parse(readOut(host.wasm.exact_advance(cutoff, 16 | kinds << 8)));
-        applyBatch(batch);
-        return batch;
-      }
-    });
-    host.ticker.update(host.flowDue, host.flowFrames, host.flowWaits, host.flowTolerance);
-  }
 }
 function activateData() {
   const batch = JSON.parse(readOut(host.wasm.exact_data_ready()));
@@ -258,6 +240,7 @@ async function bootNow(bytes, assets = host.devAssets, current = () => true, mod
   host.textflow?.dispose();
   host.textflow = null;
   host.flowLoading = null;
+  host.flowFailed = false;
   host.flowContexts = [];
   host.flowDue = null;
   host.flowFrames = false;

@@ -81,8 +81,10 @@ export function video({ changed, agent, log, tracks, nextId, media, shown }) {
     };
   };
 
-  /** The browser's track as this track's source: its settings, and its events as the track's. */
+  /** The browser's track as this track's source: its settings, and its events as the track's. A source it replaces
+   * is stopped. */
   const adopt = (t, source) => {
+    if (t.source && t.source !== source) t.source.stop();
     t.source = source;
     source.enabled = t.enabled;
     const s = source.getSettings?.() ?? {}, c = source.getCapabilities?.() ?? {};
@@ -241,6 +243,8 @@ export function video({ changed, agent, log, tracks, nextId, media, shown }) {
           Object.assign(t, agentCamera(facing));
         } else {
           // Opened even while idle, so the answer and the next lease name the camera moved to; idle, it closes again.
+          // An activation's open already in flight asked for the camera moved from: a new lease drops it.
+          t.lease = (t.lease ?? 0) + 1;
           stopSource(t);
           t.settings = { ...t.settings, deviceId: null };
           let source;
@@ -253,7 +257,7 @@ export function video({ changed, agent, log, tracks, nextId, media, shown }) {
           if (!t.active) stopSource(t);
         }
         say(`${t.id}: moved to ${t.label}`);
-        if (t.active) each(t, x => x.live?.(t.source));
+        if (t.active) { each(t, x => x.live?.(t.source)); muteNow(t); }
         announce();
         return shape(t);
       }

@@ -152,7 +152,7 @@ export function androidHermesDir(env = process.env, local = hermesAndroidBundle(
 }
 
 /** The API level an Android Hermes bundle was built for (its receipt's ANDROID_PLATFORM), or null. Its objects call
- * what bionic has from that level on: the pinned bundle's, built at 30, call `pthread_cond_clockwait`. */
+ * what bionic has from that level on; an API-30 bundle can call `pthread_cond_clockwait`. */
 export function hermesApi(dir) {
   try {
     const flags = JSON.parse(readFileSync(resolve(dir, 'hermes-input-receipt.json'), 'utf8')).build?.flags ?? [];
@@ -1246,9 +1246,6 @@ if (import.meta.main && process.argv[2] === 'reverse') {
   if (args.includes('--no-install') && args.includes('--run')) throw new Error('--no-install takes no --run');
   if (bundle) process.env.EXACT_UPDATE_TRUST = 'production';
   const apkWanted = (bundle || args.includes('--apk')) && !args.includes('--headless');
-  const app = resolveApp(name);
-  const unstreamed = androidStreamRefusal(app.name, app.manifest);
-  if (unstreamed) { console.error(unstreamed); process.exit(1); }
   // The pinned toolchain's targets: the app's workspace builds with it, and rustup in the app's own directory, which
   // pins none, would answer for its default.
   // Without rustup (a toolchain installed by hand) Cargo names a missing target itself.
@@ -1257,6 +1254,9 @@ if (import.meta.main && process.argv[2] === 'reverse') {
     console.error(`the pinned toolchain ${PINNED_RUST} has no ${ANDROID_TARGET} target: rustup target add ${ANDROID_TARGET} --toolchain ${PINNED_RUST}`);
     process.exit(1);
   }
+  const app = resolveApp(name);
+  const unstreamed = androidStreamRefusal(app.name, app.manifest);
+  if (unstreamed) { console.error(unstreamed); process.exit(1); }
   // A TypeScript app's library links the Android Hermes bundle: said before minutes of compiling, not at the link.
   const typescript = androidUsesHermes(app, apkWanted ? 'android' : 'linux'), hermes = androidHermesDir();
   if (!hermes && typescript) {

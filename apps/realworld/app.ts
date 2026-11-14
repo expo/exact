@@ -66,7 +66,9 @@ export const overlay: Overlay = (source, _args, answer, writes) => {
   }
   return undefined;
 };
-const forget = () => { favs.clear(); follows.clear(); wrote(); };
+// Pending presses are forgotten too, so a previous reader's late reply cannot
+// fill the maps again.
+const forget = () => { favs.clear(); follows.clear(); presses.clear(); wrote(); };
 function joined<T extends Fav>(a: T): T {
   const f = favs.get(a.slug);
   return f ? { ...a, favorited: f.favorited, favoritesCount: f.favoritesCount } : a;
@@ -162,9 +164,15 @@ const emptyArticle: Article = { found: false, slug: '', title: '', description: 
 const emptyProfile: Profile = { found: false, username: '', bio: '', image: AVATAR, following: false };
 
 async function currentUser(store: Store): Promise<User> {
-  if (!store.get('realworld.jwt')) return anonymous;
+  const token = store.get('realworld.jwt');
+  if (!token) return anonymous;
   try { return user((await api(store, '/user')).user); } catch (e) {
-    if (e instanceof Failure && e.status === 401) store.forget('realworld.jwt');
+    // A 401 refuses only the token it was sent with: a sign-in may have
+    // replaced it while the request was out.
+    if (e instanceof Failure && e.status === 401 && store.get('realworld.jwt') === token) {
+      store.forget('realworld.jwt');
+      forget();
+    }
     return anonymous;
   }
 }

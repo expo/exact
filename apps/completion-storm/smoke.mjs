@@ -90,8 +90,9 @@ try {
     assert.equal(complete.resources['r'+lane].ok,true);
   }
   const logs=await app.logs();
-  const dropped=logs.lines.filter(line=>String(line).includes('dropped: no such request')).length;
-  // A native host drops forgotten work before it replies; the browser answers an aborted read, which the runner drops.
+  // A native host drops forgotten work before it replies. On the web, the wasm target's browser answers an aborted
+  // read, which the runner drops; the JS target closes the read as it aborts it, so its reply lands nowhere.
+  const dropped=logs.lines.filter(line=>/close stream \d+: its ticket was let go|reply \d+ dropped: no such request in flight/.test(String(line))).length;
   if(host==='web') assert.ok(dropped>0,'old replies should be logged as dropped');
   await app.tap('errors-50');
   await app.tap('start-wave');

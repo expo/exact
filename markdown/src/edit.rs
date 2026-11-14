@@ -740,8 +740,25 @@ fn newline(source: &str, mut sel: B) -> Draft {
     if p.kind == Some(BlockKind::Ordered) {
         // The items below at this level count on from the new one.
         let (mut at, mut number) = (lines.end(sel.end), p.number + 2);
+        // Whether the line at `at` continues an item that starts above it.
+        let continued = |at: usize| {
+            let blocks = &analysis.blocks;
+            let above = blocks.partition_point(|b| b.range.start < at);
+            above > 0 && {
+                let b = &blocks[above - 1];
+                at <= b.range.end
+                    && matches!(
+                        b.kind,
+                        BlockKind::Bullet | BlockKind::Ordered | BlockKind::Task(_)
+                    )
+            }
+        };
         while at < source.len() {
             let next = at + 1..lines.end(at + 1);
+            if continued(next.start) {
+                at = next.end;
+                continue;
+            }
             let q = prefix(source, &next);
             if source[next.clone()].trim().is_empty()
                 || q.marker - next.start < p.marker - line.start

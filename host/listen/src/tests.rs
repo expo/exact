@@ -271,3 +271,29 @@ fn a_connection_can_be_answered_before_its_callback_returns() {
     listener.close();
     std::fs::remove_dir_all(&d).unwrap();
 }
+
+/// A socket directory renamed away and made again at its path is watched
+/// there: another process's takeover in it displaces, and its close gives
+/// the address back.
+#[test]
+#[ignore = "async lane: binds real unix sockets"]
+fn a_replaced_directory_is_watched_at_its_path() {
+    let d = dir("moved");
+    let path = d.join("a.sock");
+    let away = d.with_extension("old");
+    let _ = std::fs::remove_dir_all(&away);
+    let (listener, rx) = open(config(&path, false));
+    assert_eq!(next(&rx), Seen::Listening);
+    std::fs::rename(&d, &away).unwrap();
+    // Made again at its path: by this listener, binding again where its
+    // socket was, or here, whichever comes first.
+    let _ = std::fs::create_dir(&d);
+    let other = bind::publish(&path, true, false).unwrap();
+    assert_eq!(standing(&rx), Seen::Standing("displaced"));
+    bind::unpublish(&path, other.identity);
+    drop(other);
+    assert_eq!(standing(&rx), Seen::Standing("holding"));
+    listener.close();
+    std::fs::remove_dir_all(&d).unwrap();
+    std::fs::remove_dir_all(&away).unwrap();
+}

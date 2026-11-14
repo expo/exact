@@ -249,7 +249,7 @@ fn interpolation_refuses_expansion_past_the_vms_string_cap() {
     assert!(
         matches!(
             error,
-            exact_runner::RunnerError::Trap(exact_runner::vm::Trap::StringTooLong { .. })
+            exact_runner::RunnerError::Evaluation { ref error, .. } if matches!(**error, exact_runner::RunnerError::Trap(exact_runner::vm::Trap::StringTooLong { .. }))
         ),
         "{error:?}"
     );

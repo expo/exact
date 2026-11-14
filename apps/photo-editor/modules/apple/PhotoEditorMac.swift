@@ -149,8 +149,10 @@ final class PhotoCanvas: NSView, NSGestureRecognizerDelegate {
             cropStart = edit.crop
             dragRaw = edit.offset
         }
+        // A crop drag is a gesture like the others: no pinch, rotation or
+        // wheel that ends under it settles the edit, and its own end settles it.
         if !grip.isEmpty {
-            guard g.state == .changed || g.state == .began else { grip = []; onEdit?(edit); return }
+            guard track(g.state) else { grip = []; return settle() }
             let t = g.translation(in: self)
             edit.crop = grip.moved(cropStart, by: CGPoint(x: t.x / max(stage.width, 1), y: t.y / max(stage.height, 1)))
             return

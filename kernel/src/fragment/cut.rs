@@ -5,8 +5,8 @@
 //! perfect; violating `orphans`/`widows`; violating `break-*: avoid`. When
 //! the next line or box would cross the column's end, the walk breaks at the
 //! latest candidate of the best appeal seen since the column began; a forced
-//! break ends the column wherever it is. Every column takes at least one line
-//! or box, so the walk always makes progress.
+//! break ends the column wherever it is. Every column consumes box height
+//! or takes at least one line or box, so the walk always makes progress.
 
 use super::build::{self, Flow, Para};
 use super::{Column, Columns, Fragment, FragmentRefusal, Placement};
@@ -54,6 +54,9 @@ const EPSILON: f32 = 0.01;
 pub(super) struct Walk {
     /// Where each column starts, and the flow-thread y it shows at its top.
     pub starts: Vec<(Pos, f32)>,
+    /// Extra line placement for the paragraph continued at each start.
+    /// Box height consumption stays in `starts`, independently of its lines.
+    pub text_shifts: Vec<f32>,
     /// The least addition to the column height that would let some column
     /// end later than it does; `None` when none would (forced breaks).
     pub shortage: Option<f32>,
@@ -124,11 +127,19 @@ impl<'a> Cutter<'a> {
         self.flow.paras[para]
             .lines
             .as_deref()
-            .filter(|l| l.len() > 1)
+            .filter(|l| !l.is_empty())
     }
 
     pub(super) fn units(&self, atom: usize) -> usize {
-        self.lines_of(atom).map_or(1, <[f32]>::len)
+        self.lines_of(atom).map_or(1, |lines| {
+            let a = &self.flow.atoms[atom];
+            let p = &self.flow.paras[a.para.unwrap()];
+            lines.len()
+                + usize::from(
+                    p.line_offset > 0.0
+                        && a.bottom > p.content_top + lines[lines.len() - 1] + EPSILON,
+                )
+        })
     }
 
     fn unit(&self, pos: Pos) -> (f32, f32) {
@@ -136,12 +147,15 @@ impl<'a> Cutter<'a> {
         match self.lines_of(pos.atom) {
             Some(lines) => {
                 let top = atom.para.map_or(0.0, |p| self.flow.paras[p].content_top);
+                if pos.line == lines.len() {
+                    return (top + lines[lines.len() - 1], atom.bottom);
+                }
                 let start = if pos.line == 0 {
                     atom.top
                 } else {
                     top + lines[pos.line - 1]
                 };
-                let end = if pos.line + 1 == lines.len() {
+                let end = if pos.line + 1 == self.units(pos.atom) {
                     atom.bottom
                 } else {
                     top + lines[pos.line]
@@ -150,6 +164,47 @@ impl<'a> Cutter<'a> {
             }
             None => (atom.top, atom.bottom),
         }
+    }
+
+    fn placed_unit(&self, pos: Pos, first: Pos, shift: f32) -> (f32, f32) {
+        let (top, bottom) = self.unit(pos);
+        if pos.atom != first.atom || shift == 0.0 {
+            return (top, bottom);
+        }
+        let atom = &self.flow.atoms[pos.atom];
+        let end = atom.para.and_then(|p| {
+            self.lines_of(pos.atom)
+                .and_then(|lines| lines.get(pos.line))
+                .map(|line| self.flow.paras[p].content_top + line)
+        });
+        (
+            top + shift,
+            end.map_or(bottom, |end| (end + shift).max(bottom)),
+        )
+    }
+
+    fn restart(&self, pos: Pos, restart: f32, limit: f32) -> ((Pos, f32), f32) {
+        let Some(p) = self.flow.atoms[pos.atom].para.map(|p| &self.flow.paras[p]) else {
+            return ((pos, restart), 0.0);
+        };
+        if p.line_offset == 0.0 || self.lines_of(pos.atom).is_none() {
+            return ((pos, restart), 0.0);
+        }
+        // Consume the column's unused height only while the remaining
+        // lines still fit in the box, including at a class C break, which
+        // consumes leading placement before any line has been taken.
+        let lines = self.lines_of(pos.atom).unwrap();
+        let taken = pos.line.checked_sub(1).map_or(0.0, |i| lines[i]);
+        let remaining = lines[lines.len() - 1] - taken;
+        let consumed = restart
+            .max(limit)
+            .min(self.flow.atoms[pos.atom].bottom - remaining);
+        let line_top = if pos.line == 0 {
+            p.content_top
+        } else {
+            self.unit(pos).0
+        };
+        ((pos, consumed), (consumed - line_top).max(0.0))
     }
 
     fn next(&self, pos: Pos) -> Option<Pos> {
@@ -180,7 +235,14 @@ impl<'a> Cutter<'a> {
             };
         }
         let p: &Para = &self.flow.paras[atom.para.expect("a line is a paragraph's")];
-        let total = self.units(pos.atom) as u32;
+        let total = self.lines_of(pos.atom).unwrap().len() as u32;
+        if pos.line as u32 == total {
+            return (
+                if p.avoid { AVOID } else { PERFECT },
+                false,
+                self.unit(pos).0,
+            );
+        }
         let before = pos.line as u32;
         let here = if first.atom == pos.atom {
             before - first.line as u32
@@ -209,15 +271,20 @@ impl<'a> Cutter<'a> {
             return out;
         }
         let mut start = (Pos { atom: 0, line: 0 }, self.top);
+        let mut text_shift = 0.0;
         loop {
             out.starts.push(start);
+            out.text_shifts.push(text_shift);
             let (first, s) = start;
             let limit = s + h;
             let mut best: Option<(u8, Pos, f32)> = None;
             let mut pos = first;
             let next = loop {
                 if pos != first {
-                    let (appeal, forced, restart) = self.candidate(pos, first);
+                    let (appeal, forced, mut restart) = self.candidate(pos, first);
+                    if pos.atom == first.atom && pos.line > 0 {
+                        restart += text_shift;
+                    }
                     if forced {
                         break Some((pos, restart));
                     }
@@ -225,7 +292,28 @@ impl<'a> Cutter<'a> {
                         best = Some((appeal, pos, restart));
                     }
                 }
-                let (_, bottom) = self.unit(pos);
+                if pos.line == 0 && h > EPSILON {
+                    if let Some(p) = self.flow.atoms[pos.atom].para.map(|p| &self.flow.paras[p]) {
+                        if p.line_offset > 0.0
+                            && self.arena.style(p.slot).display != crate::Display::Grid
+                            && p.content_top
+                                + if pos.atom == first.atom {
+                                    text_shift
+                                } else {
+                                    0.0
+                                }
+                                > s + EPSILON
+                        {
+                            let appeal = if p.avoid { AVOID } else { PERFECT };
+                            if best.is_none_or(|b| appeal >= b.0) {
+                                // Class C: the box can consume its leading
+                                // placement before its anonymous item breaks.
+                                best = Some((appeal, pos, limit));
+                            }
+                        }
+                    }
+                }
+                let (_, bottom) = self.placed_unit(pos, first, text_shift);
                 if bottom > limit + EPSILON {
                     let atom = &self.flow.atoms[pos.atom];
                     if let (Some(para), 0, None) = (
@@ -275,8 +363,11 @@ impl<'a> Cutter<'a> {
                 // Walked again, with more paragraphs' lines.
                 Some(n) if n == start => {
                     out.starts.pop();
+                    out.text_shifts.pop();
                 }
-                Some(n) => start = n,
+                Some((pos, restart)) => {
+                    (start, text_shift) = self.restart(pos, restart, limit);
+                }
                 None => return out,
             }
         }
@@ -397,14 +488,15 @@ pub(crate) fn container(
     let s = arena.style(slot);
     let l = tree.layout(node);
     let (p, b) = (l.padding, l.border);
-    let (x0, y0) = (p.left + b.left, p.top + b.top);
+    let rtl = arena.computed_style(slot, StyleMask::INHERITED).direction == Direction::Rtl;
+    let gutter_left = if rtl { l.scrollbar_size.width } else { 0.0 };
+    let (x0, y0) = (p.left + b.left + gutter_left, p.top + b.top);
     // The block axis outside the content box: padding, borders and a bottom gutter
     let inset_v = p.top + p.bottom + b.top + b.bottom + l.scrollbar_size.height;
     let u = (l.size.width - p.left - p.right - b.left - b.right - l.scrollbar_size.width).max(0.0);
     let (n, w) = m.columns(u);
     let n = n as usize;
     let gap = m.gap;
-    let rtl = arena.computed_style(slot, StyleMask::INHERITED).direction == Direction::Rtl;
     let left = |k: usize| {
         let at = k as f32 * (w + gap);
         if rtl {
@@ -504,7 +596,8 @@ pub(crate) fn container(
         &walk,
         Geometry {
             x0,
-            y0: y0 + align,
+            y0,
+            align,
             w,
             h,
             pitch,
@@ -539,7 +632,11 @@ fn tallest_column(cutter: &Cutter<'_>, walk: &Walk) -> f32 {
         let mut pos = walk.starts[k].0;
         let mut bottom = s;
         loop {
-            bottom = bottom.max(cutter.unit(pos).1);
+            bottom = bottom.max(
+                cutter
+                    .placed_unit(pos, walk.starts[k].0, walk.text_shifts[k])
+                    .1,
+            );
             match cutter.next(pos) {
                 Some(n) if Some(n) != end => pos = n,
                 _ => break,
@@ -569,6 +666,7 @@ fn align(v: AlignContent, free: f32) -> f32 {
 struct Geometry<'a> {
     x0: f32,
     y0: f32,
+    align: f32,
     w: f32,
     h: f32,
     /// The column height the walk broke at, which an absolutely positioned
@@ -610,7 +708,8 @@ fn publish(
     };
     let flow = &cutter.flow;
     let cols = walk.starts.len();
-    let shift = |k: usize| ((g.left)(k), g.y0 - walk.starts[k].1);
+    let aligned_y = g.y0 + g.align;
+    let shift = |k: usize| ((g.left)(k), aligned_y - walk.starts[k].1);
     let mut right = 0f32;
     let mut bottom = 0f32;
     let mut leftmost = 0f32;
@@ -622,7 +721,7 @@ fn publish(
     for k in 0..cols.max(g.n) {
         let column = Column {
             x: g.x0 + (g.left)(k),
-            y: g.y0,
+            y: aligned_y,
             width: g.w,
             height: g.h,
             holds: k < cols,
@@ -635,16 +734,16 @@ fn publish(
     cut.columns.gap = g.gap;
     // Each paragraph's line range in column `k`.
     let range = |atom: usize, k: usize| -> (u32, u32) {
-        let total = cutter.units(atom);
-        if total <= 1 {
+        let total = cutter.lines_of(atom).map_or(0, <[f32]>::len);
+        if total == 0 {
             return (0, 0);
         }
         let start = match walk.starts[k].0 {
-            p if p.atom == atom => p.line,
+            p if p.atom == atom => p.line.min(total),
             _ => 0,
         };
         let end = match walk.starts.get(k + 1) {
-            Some((p, _)) if p.atom == atom => p.line,
+            Some((p, _)) if p.atom == atom => p.line.min(total),
             _ => total,
         };
         (start as u32, end as u32)
@@ -655,7 +754,7 @@ fn publish(
                 let (dx, dy) = shift(k);
                 Fragment {
                     x: g.x0 + (g.left)(k),
-                    y: g.y0,
+                    y: aligned_y,
                     width: g.w,
                     height: g.h,
                     lines: range(0, k),
@@ -667,13 +766,21 @@ fn publish(
         cut.fragments.push((slot, frags));
     }
     for b in &flow.boxes {
-        let cf = Cutter::column_of(
-            walk,
-            Pos {
-                atom: b.first,
-                line: 0,
-            },
-        );
+        let first = Pos {
+            atom: b.first,
+            line: 0,
+        };
+        let mut cf = walk
+            .starts
+            .iter()
+            .position(|(p, _)| *p == first)
+            .unwrap_or_else(|| Cutter::column_of(walk, first));
+        if flow.atoms[b.first]
+            .para
+            .is_some_and(|p| flow.paras[p].line_offset > 0.0)
+        {
+            cf = cf.min(walk.starts.partition_point(|(_, s)| *s <= b.top).max(1) - 1);
+        }
         let last = Pos {
             atom: b.last,
             line: cutter.units(b.last) - 1,
@@ -717,7 +824,15 @@ fn publish(
                     height: h,
                     lines: para.map_or((0, 0), |_| range(b.first, k)),
                     dx: b.x + dx - ux,
-                    dy: b.top + dy - uy,
+                    dy: b.top + dy - uy
+                        + para.map_or(0.0, |p| {
+                            flow.paras[p].line_offset
+                                + if walk.starts[k].0.atom == b.first {
+                                    walk.text_shifts[k]
+                                } else {
+                                    0.0
+                                }
+                        }),
                 }
             })
             .collect();
@@ -732,17 +847,24 @@ fn publish(
         cut.fragments.push((b.slot, frags));
     }
     // D10.4: an absolutely positioned box takes the column holding its own
-    // flow-thread top, past the content's last column too.
+    // flow-thread top, past the content's last column too. Chrome adds the
+    // columns' alignment to that top first, and places the box as far below
+    // its column's top as the sum lies past the column's start, so
+    // `align-content: end` can carry a box several columns on. With
+    // `column-fill: auto` at a definite height, Chrome's columns are the
+    // content box, and the alignment moves the content inside them.
+    let column_top = if g.pitch > g.h { g.y0 } else { aligned_y };
     for a in &flow.absolutes {
         let (dx, dy) = if a.in_flow && cols > 0 {
-            let mut k = walk.starts.partition_point(|(_, s)| *s <= a.top).max(1) - 1;
+            let top = a.top + g.align;
+            let mut k = walk.starts.partition_point(|(_, s)| *s <= top).max(1) - 1;
             let mut s = walk.starts[k].1;
-            if k + 1 == cols && g.pitch > 0.0 && a.top >= s + g.pitch {
-                let more = ((a.top - s) / g.pitch).floor();
+            if k + 1 == cols && g.pitch > 0.0 && top >= s + g.pitch {
+                let more = ((top - s) / g.pitch).floor();
                 k += more as usize;
                 s += more * g.pitch;
             }
-            ((g.left)(k), g.y0 - s)
+            ((g.left)(k), column_top + g.align - s)
         } else {
             (0.0, 0.0)
         };
@@ -752,7 +874,7 @@ fn publish(
         }
         // Its column is part of the overflow too, as in Chrome.
         if a.in_flow && cols > 0 {
-            extend(g.x0 + dx, g.y0, g.w, g.pitch);
+            extend(g.x0 + dx, column_top, g.w, g.pitch);
         }
         cut.placements
             .push((a.slot, Placement { dx, dy, size: None }));

@@ -5,6 +5,15 @@
 use super::{Color, ColorValue};
 use crate::gradient::ColorText;
 
+#[cfg(target_arch = "wasm32")]
+static LINKED: std::sync::OnceLock<fn(&str) -> Option<SymbolPalette>> = std::sync::OnceLock::new();
+
+/// Link the palette grammar on wasm (LLP 1047 D2). Native hosts parse directly.
+pub fn link() {
+    #[cfg(target_arch = "wasm32")]
+    let _ = LINKED.set(SymbolPalette::grammar);
+}
+
 /// `-exact-symbol-palette`: `none`, or one to three colours for a symbol drawn
 /// with `-exact-symbol-rendering: palette`.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -13,6 +22,13 @@ pub struct SymbolPalette(pub Vec<ColorValue>);
 impl SymbolPalette {
     /// The row's parse: `none` or one to three colours.
     pub fn parse(css: &str) -> Option<Self> {
+        #[cfg(target_arch = "wasm32")]
+        return LINKED.get().and_then(|parse| parse(css));
+        #[cfg(not(target_arch = "wasm32"))]
+        Self::grammar(css)
+    }
+
+    fn grammar(css: &str) -> Option<Self> {
         let css = css.trim();
         if css.eq_ignore_ascii_case("none") {
             return Some(Self(Vec::new()));

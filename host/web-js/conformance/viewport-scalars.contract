@@ -1,0 +1,15 @@
+// linux: layout
+component ViewportScalars
+  state wide = false
+  action flip
+    wide = not wide
+  view
+    column font-size="5vw" gap="2vh" testId="root"
+      view testId="inherited" width="2em" height="1em" background-color="#aaaaaa"
+      row testId="gaps" gap=(wide ? "3vmin" : "2vmax") border-width="1vw" border-style="solid"
+        view width=30 height=20 background-color="#bbbbbb"
+        view testId="after-gap" width=30 height=20 background-color="#cccccc"
+      view testId="bound" font-size=(wide ? "4dvw" : "3svh") width="2em" height="1em" background-color="#dddddd"
+        view testId="em-child" font-size="2em" width="1em" height="1em"
+      text "viewport" testId="spacing" font-size="2lvh" letter-spacing=(wide ? "0.5svw" : "1dvw") line-height="4vh" text-indent="1vw"
+      button "Flip" testId="flip" press=flip font-size=16

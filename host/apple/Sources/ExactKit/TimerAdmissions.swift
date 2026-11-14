@@ -199,7 +199,7 @@ final class TimerAdmissions {
 
 #if canImport(UIKit)
 // Observe touches without recognizing, delaying, cancelling or preventing gestures
-private final class TimerScrollTouch: UIGestureRecognizer, UIGestureRecognizerDelegate {
+class TimerScrollTouch: UIGestureRecognizer, UIGestureRecognizerDelegate {
     private var touches: Set<ObjectIdentifier> = []
     private let changed: () -> Void
     var held: Bool { !touches.isEmpty }
@@ -217,7 +217,11 @@ private final class TimerScrollTouch: UIGestureRecognizer, UIGestureRecognizerDe
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) { finish(touches) }
     private func finish(_ touches: Set<UITouch>) {
         for touch in touches { self.touches.remove(ObjectIdentifier(touch)) }
-        if self.touches.isEmpty { DispatchQueue.main.async { [weak self] in self?.changed() } }
+        if self.touches.isEmpty {
+            // finish the sequence so uikit can reset recognizers after a system gesture cancels it.
+            state = .failed
+            DispatchQueue.main.async { [weak self] in self?.changed() }
+        }
     }
     override func reset() { super.reset(); touches.removeAll(); DispatchQueue.main.async { [weak self] in self?.changed() } }
 }

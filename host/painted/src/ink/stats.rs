@@ -70,11 +70,11 @@ pub struct Statistics {
     pub paths: Stats,
     /// Gradient stop rows, independent of their placement.
     pub ramps: Stats,
-    /// Viewport targets used this frame and retained at the pool's high-water mark.
+    /// Offscreen targets reserved this frame.
     pub layers: usize,
-    /// Number of retained viewport targets.
+    /// Number of retained offscreen targets.
     pub layer_targets: usize,
-    /// Retained viewport-target storage, excluding the final readback target.
+    /// Retained offscreen storage, excluding the final readback target.
     pub layer_bytes: u64,
 }
 

@@ -43,10 +43,11 @@ impl NodeInst {
                 if first {
                     trapped.push(b.0);
                     u.notes.push(format!(
-                        "view {} (site {}): {} trapped Trap({trap:?}); unset",
+                        "view {} (site {}): {} trapped Trap({trap:?}){}; unset",
                         self.view,
                         self.node.0,
-                        row_name(&binding)
+                        row_name(&binding),
+                        trap.bound()
                     ));
                 }
                 Ok(Evaluated::Trapped { first })
@@ -81,7 +82,7 @@ impl NodeInst {
 
 /// A binding's row as the journal names it: a prop's name, a style's CSS
 /// property.
-fn row_name(binding: &BindingsRow) -> String {
+pub(super) fn row_name(binding: &BindingsRow) -> String {
     match binding.kind {
         BindingKind::Prop => exact_kernel::PropId::from_wire(binding.id)
             .map_or_else(|| format!("prop {}", binding.id), |p| p.name().to_string()),
@@ -89,5 +90,38 @@ fn row_name(binding: &BindingsRow) -> String {
             || format!("style {}", binding.id),
             |s| s.name().replace('_', "-"),
         ),
+    }
+}
+
+impl Update<'_> {
+    pub(super) fn eval_named(
+        &mut self,
+        code: exact_plan::Code,
+        frames: &[Frame],
+        label: impl FnOnce() -> String,
+    ) -> Result<Value, InstanceError> {
+        self.eval(code, frames).map_err(|trap| match trap {
+            trap @ Trap::Pending { .. } => InstanceError::Trap(trap),
+            trap => InstanceError::Evaluation {
+                trap,
+                evaluation: label(),
+                view: None,
+            },
+        })
+    }
+}
+
+impl Update<'_> {
+    pub(super) fn eval_list(
+        &mut self,
+        binding: &BindingsRow,
+        frames: &[Frame],
+        view: ViewId,
+        site: NodesId,
+    ) -> Result<Value, InstanceError> {
+        self.eval_named(binding.expr, frames, || {
+            format!("list option {}", row_name(binding))
+        })
+        .map_err(|e| e.at_view(view, site))
     }
 }

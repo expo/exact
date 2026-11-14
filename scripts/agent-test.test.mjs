@@ -90,7 +90,12 @@ test "reload is observed"
   const server = createServer((req, res) => serveBuildTree(dist, req, res));
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   try {
-    const r = await runTests({ host: 'web', file, app: 'caltrain', url: `http://127.0.0.1:${server.address().port}/` });
+    // Each step is said before it runs and each result as it lands, in order (agent.mjs prints them as they come).
+    const heard = [];
+    const r = await runTests({ host: 'web', file, app: 'caltrain', url: `http://127.0.0.1:${server.address().port}/`,
+      atLine: ({ index, line, last, op }) => heard.push(`${index} ${line}/${last} ${op}`), atResult: (t) => heard.push(`= ${t.name}`) });
+    expect(heard).toEqual(['0 14/16 tap', '0 15/16 type', '0 16/16 clock', '= the three observations', '1 18/18 type', '= a fresh history', '2 20/21 tap', '2 21/21 reload', '= reload is observed']);
+    expect(heard.filter(h => h.startsWith('= ')).length).toBe(r.results.length);
     expect([r.passed, r.failed]).toEqual([1, 2]);
     const failures = r.results[0].failures.join('\n');
     expect(failures).toContain('PROPERTY "ready stays" is false on web');

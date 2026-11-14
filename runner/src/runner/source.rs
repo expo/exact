@@ -143,9 +143,13 @@ impl Native {
                 .ok()
                 .and_then(|v| {
                     Some(format!(
-                        "{}.{}",
+                        "{}.{}{}",
                         v.get("extension")?.as_str()?,
-                        v.get("sync")?.as_str()?
+                        v.get("sync")?.as_str()?,
+                        v["owner"]
+                            .as_str()
+                            .map(|s| format!("#{s}"))
+                            .unwrap_or_default()
                     ))
                 });
             let Some(key) = named else { return call(body) };
@@ -661,6 +665,26 @@ data_source! {
     /// nothing. Taken after each answer and reply, where the logs are.
     fn take_aborted(&mut self) -> Vec<u64> {
         Vec::new()
+    }
+
+    /// Resume one untargeted tool invocation by the request the runner holds.
+    fn parse_tool(
+        &mut self,
+        fetch: Option<u64>,
+        continuation: Option<u64>,
+        store: &mut Store,
+        source: &str,
+        args: &[Value],
+        outcome: Outcome,
+    ) -> Result<Answer, DataError> {
+        let _ = (fetch, continuation);
+        self.parse(store, source, args, outcome)
+    }
+
+    /// The module owning `source`; an empty name selects background work.
+    fn module_identity(&self, source: &str) -> Option<super::ModuleIdentity> {
+        let _ = source;
+        None
     }
 
     /// The host's wake, for a source that hears an abort off the host's

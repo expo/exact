@@ -17,7 +17,7 @@ enum FrameHealthReport {
     static let columns = ["sequence", "capture", "generation", "age_us", "flags", "target_offset_us", "period_us", "requested_period_us",
         "gap_us", "callback_us", "before_gap_us", "before_callback_us", "after_offset_us", "after_gap_us", "after_callback_us",
         "owner_queued_offset_us", "owner_began_offset_us", "owner_finished_offset_us", "main_landed_offset_us",
-        "apply_began_offset_us", "apply_finished_offset_us", "work_target_offset_us", "operations"]
+        "apply_began_offset_us", "apply_finished_offset_us", "work_target_offset_us", "operations", "frame_start_offset_us"]
     /// The screen's frames have no frame times and none of Exact's owner or apply boundaries, so their rows leave out
     /// those columns, which they would fill with zeros and nulls, and give each late frame's work split instead
     /// (`FrameHealth.split`)
@@ -71,7 +71,7 @@ enum FrameHealthReport {
                 hasWork ? stored(work.began_us) : NSNull(),
                 hasWork ? stored(work.finished_us) : NSNull(),
                 hasWork ? stored(work.target_us) : NSNull(),
-                hasWork ? work.operations as Any : NSNull()]
+                hasWork ? work.operations as Any : NSNull(), stored(event.frame_start_us)]
             if health.screenFrames {
                 // Its work split, where the screen measured it
                 let split = health.splits.last { $0.at == event.at_ns }

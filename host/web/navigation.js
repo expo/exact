@@ -15,5 +15,5 @@ export { storeInPage, pageStore } from "./navigation/store.js";
 export { valuedControl, settleValue, typedControl, textField, sourceField, editMenu, fieldSelection, settleRadios, setFieldSelection, setFieldRangeText, controlEvent } from "./navigation/controls.js";
 export { grantOrigins } from "./navigation/grant-origins.js";
 export { isCloudMetadata, isLocalNetwork } from "./grant-admission.js";
-export { socketProtocols, createGrantSet, grantError, rawGrantText, hasGrant, sameGrantDeclaration, scopedGrantSet, unionGrantSets, admittingGrant, admitsNetwork, admitsSecret, coversPath } from "./grant-admission.js";
+export { socketProtocols, createGrantSet, grantError, trimGrant, grantWords, rawGrantText, hasGrant, sameGrantDeclaration, scopedGrantSet, unionGrantSets, admittingGrant, admitsNetwork, admitsSecret, coversPath } from "./grant-admission.js";
 export { textSource, textPosition, onSelection } from "./navigation/selection.js";

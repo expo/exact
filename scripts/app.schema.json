@@ -301,7 +301,7 @@
     },
     "link": {
       "type": "array",
-      "items": { "enum": ["markdown", "motion", "collections", "drag", "surfaces", "router", "format", "materials", "backdrop", "share", "documents", "picker", "timelines", "text_transform", "effects", "animations", "gradients", "grid", "geometry", "segments", "dataset", "tabs", "grouped_lists", "io", "transitions", "media_picker", "auth_session", "numerals", "dates", "sqlite", "tips"] },
+      "items": { "enum": ["markdown", "motion", "collections", "drag", "surfaces", "router", "format", "materials", "backdrop", "share", "documents", "picker", "timelines", "text_transform", "effects", "animations", "gradients", "grid", "geometry", "segments", "dataset", "tabs", "grouped_lists", "io", "transitions", "media_picker", "auth_session", "numerals", "dates", "sqlite", "tips", "shadows", "corners", "rotate", "text_stroke", "symbol_palette"] },
       "uniqueItems": true,
       "description": "Capabilities a native production build links before any plan uses them (LLP 1047 D8; LLP 1047.001), so a later bundle may: an archive otherwise links what its plan uses (plus `auth_session` from `auth.session` grants and `sqlite` from `sqlite.open` grants) and nothing else, and a bundle that needs more is a new binary. Linking sqlite without sqlite.open only adds unused code: an update that adds the grant changes the compatibility identity and requires a new binary even when sqlite was linked. Development links every capability but `media_picker` and `auth_session`, which it links as production would (LLP 1047.001.000 F). Names are the runner's (`exact_runner::Capability::name`)."
     },
@@ -643,7 +643,7 @@
       "description": "The Web App Manifest's share target: this app in other apps' share sheets (LLP 1133.024 D1). A share arrives as one location, `action` with the shared members under the names `params` gives them; files by a token that `sharedFiles(entry, name)` reads. The Apple bake derives a share extension, Android intent filters; the published web member is always GET with the text members only.",
       "required": ["action", "params"],
       "properties": {
-        "action": { "type": "string", "pattern": "^/", "description": "A path one of the app's routes matches." },
+        "action": { "type": "string", "pattern": "^/", "description": "A path one of the app's routes matches, as the router matches a location: `/share/` matches no route `/share`." },
         "method": { "enum": ["GET", "POST"] },
         "enctype": { "enum": ["application/x-www-form-urlencoded", "multipart/form-data"] },
         "params": {
@@ -743,6 +743,16 @@
           "description": "iOS: `minimumOS` (default 17.0), `deviceFamily` (iphone, ipad), and the keys below.",
           "type": "object",
           "properties": {
+            "infoPlist": {
+              "description": "No keys are admitted. Each refusal gives tested grant advice, points to the bundle metadata reference for a derived key, or asks for a feedback note naming a key Exact does not write.",
+              "type": "object",
+              "additionalProperties": false
+            },
+            "entitlements": {
+              "description": "No keys are admitted. Each refusal gives tested grant advice, points to the bundle metadata reference for a derived key, or asks for a feedback note naming a key Exact does not write.",
+              "type": "object",
+              "additionalProperties": false
+            },
             "resources": {
               "description": "Resource trees a data module reads through `bundle:/` (LLP 1133.007 D6), on iOS, iPadOS and tvOS: copied, modes kept, into the bundle's `ExactResources/` folder before it is signed, which then holds them and nothing else. Read only, through `fs.read bundle:/<to>` (`fs.read bundle:/Resources/data-files`), the line the Mac's `host.macos.resources` takes for the same `to`. A tree holds no links and no Mach-O code; changing it requires a new binary, never an update.",
               "type": "array",
@@ -905,6 +915,16 @@
           "description": "macOS: `minimumOS` (default 14.0), the first window's size, and the keys below.",
           "type": "object",
           "properties": {
+            "infoPlist": {
+              "description": "No keys are admitted. Each refusal gives tested grant advice, points to the bundle metadata reference for a derived key, or asks for a feedback note naming a key Exact does not write.",
+              "type": "object",
+              "additionalProperties": false
+            },
+            "entitlements": {
+              "description": "No keys are admitted. Each refusal gives tested grant advice, points to the bundle metadata reference for a derived key, or asks for a feedback note naming a key Exact does not write.",
+              "type": "object",
+              "additionalProperties": false
+            },
             "presenter": {
               "enum": ["native", "painted"],
               "description": "Absent: native. Painted builds the app’s <macos-crate>-painted binary as a benchmark carrier; distribution is refused until LLP 1149’s accessibility gate."

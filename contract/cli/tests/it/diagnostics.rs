@@ -1453,7 +1453,7 @@ fn refusals_from_the_app_diaries_name_the_fix() {
     says(
         "component App\n  state s = \"ab\"\n  view\n    text len(s).toString()\n",
         "type-refused-idiom",
-        "write `x.length`, of text or of a list",
+        "`len` is not in Contract: write `x.length`, of text or of a list",
     );
     // A switch's value pattern in `match`, inline, in a view and in an action.
     let not_a_switch = |found: &str| {

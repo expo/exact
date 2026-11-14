@@ -1,4 +1,4 @@
-//! Viewport targets reused after the frame has consumed their composites.
+//! Offscreen targets reserved per frame and reused after GPU completion.
 //! @ref LLP 1149 D2.5, D11.
 use crate::counters::{self, Counter};
 use crate::device::{Device, Result};
@@ -84,6 +84,7 @@ impl Pool {
         let observing = counters::enabled();
         let completed = device.completed()?;
         let mut available = None;
+        let mut resizable = None;
         let mut blocked = false;
         for i in self.used..self.targets.len() {
             if self.targets[i].2 == size {
@@ -95,6 +96,8 @@ impl Pool {
                     blocked = true;
                     counters::add(Counter::TargetCandidatesBlocked, 1);
                 }
+            } else if resizable.is_none() && device.last_use(self.targets[i].0)? <= completed {
+                resizable = Some(i);
             }
         }
         if let Some(i) = available {
@@ -103,13 +106,20 @@ impl Pool {
             if blocked {
                 counters::add(Counter::TargetBlocked, 1);
             }
-            self.targets
-                .push((device.create_target(size[0], size[1])?, self.frame, size));
+            if let Some(i) = resizable {
+                let target = device.resize_target(self.targets[i].0, size[0], size[1])?;
+                self.targets[i] = (target, self.frame, size);
+                self.targets.swap(self.used, i);
+                counters::add(Counter::TargetsRetired, 1);
+            } else {
+                self.targets
+                    .push((device.create_target(size[0], size[1])?, self.frame, size));
+                let last = self.targets.len() - 1;
+                self.targets.swap(self.used, last);
+            }
             if observing {
                 counters::add(Counter::TargetsAllocated, 1);
             }
-            let last = self.targets.len() - 1;
-            self.targets.swap(self.used, last);
         }
         self.targets[self.used].1 = self.frame;
         let target = self.targets[self.used].0;

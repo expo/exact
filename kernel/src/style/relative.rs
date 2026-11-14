@@ -1,16 +1,17 @@
-//! CSS's font-relative lengths, `rem` and `em` (CSS Values 4 §6.1), a
+//! CSS's font-relative and viewport lengths (CSS Values 4 §6.1), a
 //! platform text style as a `font-size` (`-exact-title1`, LLP 1115 D3), and
 //! the hairline, one device pixel (`-exact-hairline`, LLP 1115.000 D10.3).
 //!
 //! A row authored as `1.5rem` or `0.8em` keeps what was written here, beside
 //! the row, and the row itself always holds the pixels it resolves to — what
 //! CSS calls the computed value. Layout, measurement and native paint read
-//! those pixels. Live web CSS keeps authored `em` and writes `rem` as pixels;
-//! the JS target's CSS keeps both (`exact_web::css::css_text_relative`). SVG
+//! those pixels. Live web CSS keeps authored `em` and viewport units and writes
+//! `rem` as pixels; the JS target's CSS keeps all three
+//! (`exact_web::css::css_text_relative`). SVG
 //! geometry attributes on both targets keep authored `em` and `rem` for the
 //! browser to resolve. The kernel resolves relative rows at the end of a
 //! commit only when their inputs change: style, ancestry, inherited or control
-//! font, root font size, or display scale. Parents resolve before children
+//! font, root font size, display scale, or viewport basis. Parents resolve before children
 //! ([`crate::txn`]).
 //! `rem` resolves against the root font size the host sets
 //! ([`crate::Kernel::set_root_font_size`]), `em` against the element's own
@@ -30,14 +31,18 @@ use crate::generated::{StyleCodec, StyleId, StyleProps};
 use crate::style::calc::nonnegative_row;
 use crate::style::StyleValue;
 
+pub(crate) mod wire;
+
 /// CSS's initial root font size: `medium`, 16 px.
 pub const MEDIUM: f32 = 16.0;
 
-/// Which font size a relative length multiplies.
+/// The basis a relative length multiplies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Unit {
     /// The root element's font size.
     Rem,
+    /// One percent of a viewport dimension (CSS Values 4 §6.1.2).
+    Viewport(crate::ViewportUnit),
     /// The element's font size (for `font-size`, the parent's).
     Em,
     /// A platform text style's size at the root font size, by its id in
@@ -60,10 +65,11 @@ pub enum Unit {
 impl Unit {
     /// The pixels one of this unit is, given the root's and the
     /// reference (the parent's or the element's) font size, and the pixels
-    /// one device pixel is ([`device_pixel`]).
-    pub fn basis(self, root: f32, reference: f32, device: f32) -> f32 {
+    /// one device pixel is ([`device_pixel`]), and the viewport environment.
+    pub fn basis(self, root: f32, reference: f32, device: f32, env: &crate::Env) -> f32 {
         match self {
             Unit::Rem => root,
+            Unit::Viewport(unit) => unit.basis(env) / 100.0,
             Unit::Em => reference,
             Unit::TextStyle(id) => text_style_size(id, root),
             Unit::Hairline => device,
@@ -77,7 +83,7 @@ impl Unit {
     /// A capped text style as the web writes it: the style's `rem` at CSS's
     /// `medium`, held to the cap by the browser's `min()`.
     pub fn capped_css(self, n: f32) -> String {
-        let rem = self.basis(MEDIUM, MEDIUM, 1.0) / MEDIUM;
+        let rem = self.basis(MEDIUM, MEDIUM, 1.0, &crate::Env::default()) / MEDIUM;
         format!(
             "min({}rem, {}px)",
             exact_num::Shortest(f64::from(rem)),
@@ -87,10 +93,10 @@ impl Unit {
 
     /// The pixels `n` of this unit is: `n` times [`Unit::basis`], or for a
     /// capped text style, the style's size held to `n`.
-    pub fn px(self, n: f32, root: f32, reference: f32, device: f32) -> f32 {
+    pub fn px(self, n: f32, root: f32, reference: f32, device: f32, env: &crate::Env) -> f32 {
         match self {
-            Unit::TextStyleAtMost(_) => self.basis(root, reference, device).min(n),
-            _ => n * self.basis(root, reference, device),
+            Unit::TextStyleAtMost(_) => self.basis(root, reference, device, env).min(n),
+            _ => n * self.basis(root, reference, device, env),
         }
     }
 }
@@ -211,8 +217,8 @@ fn ramp(sizes: &[f32], root: f32) -> f32 {
     sizes[i - 1] + (sizes[i] - sizes[i - 1]) * t
 }
 
-/// The rows of one style authored in `rem`/`em`, by row, with the factor
-/// written. Empty — no allocation — for every style that uses neither.
+/// The rows of one style authored as relative lengths, with the factor written.
+/// Empty — no allocation — for every style that uses none.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Relative(Vec<(StyleId, Unit, f32)>);
 
@@ -270,6 +276,7 @@ impl Relative {
             out.extend_from_slice(&row.bit().to_le_bytes());
             match unit {
                 Unit::Rem => out.push(0),
+                Unit::Viewport(unit) => out.extend_from_slice(&[6, *unit as u8]),
                 Unit::Em => out.push(1),
                 Unit::TextStyle(id) => out.extend_from_slice(&[2, *id]),
                 Unit::Hairline => out.push(3),
@@ -281,7 +288,7 @@ impl Relative {
     }
 }
 
-/// Whether CSS admits a length on this row, and so `rem` and `em`: every
+/// Whether CSS admits a length on this row: every
 /// dimension row, `line-height`, and the pixel rows below. Which of them
 /// refuse a negative length is [`nonnegative_row`]'s to say.
 pub fn admits_relative(id: StyleId) -> bool {
@@ -313,8 +320,7 @@ pub(crate) fn pixels_only(id: StyleId) -> bool {
     )
 }
 
-/// `<number>rem` or `<number>em`, by CSS's number grammar, or `None` when
-/// the text is neither.
+/// A font-relative or viewport length, a text style, or a named platform length.
 pub fn parse(text: &str) -> Option<(Unit, f32)> {
     if let Some(id) = text_style(text) {
         return Some((Unit::TextStyle(id), 1.0));
@@ -326,6 +332,9 @@ pub fn parse(text: &str) -> Option<(Unit, f32)> {
         return Some((unit, 1.0));
     }
     let t = text.trim_matches(['\t', '\n', '\u{c}', '\r', ' ']);
+    if let Some(crate::Dimension::Viewport(unit, n)) = super::viewport::parse(t) {
+        return Some((Unit::Viewport(unit), n));
+    }
     let suffix = t.get(t.len().saturating_sub(3)..)?;
     let (unit, number) = if suffix.eq_ignore_ascii_case("rem") {
         (Unit::Rem, &t[..t.len() - 3])
@@ -381,13 +390,16 @@ pub(crate) fn of(id: StyleId, value: &StyleValue) -> Result<Option<(Unit, f32)>,
             expected: "a size of text: `-exact-hairline` is a width",
         });
     }
+    if matches!(unit, Unit::Viewport(_)) && id.codec() == StyleCodec::Dimension {
+        return Ok(None);
+    }
     if !admits_relative(id) {
         return Err(StyleValueError::WrongKind {
             style: id,
             expected: if pixels_only(id) {
-                "px: `rem` and `em` are not built on this row"
+                "px: relative units are not built on this row"
             } else {
-                "no length: `rem` and `em` are lengths"
+                "no length: relative units are lengths"
             },
         });
     }
@@ -453,9 +465,8 @@ fn unitless_zero(id: StyleId, value: &StyleValue) -> Option<StyleValue<'static>>
 
 type PreparedLength = (Option<(Unit, f32)>, Option<StyleValue<'static>>);
 
-/// Convert the one length spelling `value` can contain. The accepted
-/// units have disjoint last bytes, after CSS whitespace. Keep the original
-/// value for each parser so its grammar and refusal stay unchanged.
+/// Dispatch a length by its final byte, after CSS whitespace. Viewport units
+/// share final bytes with cell and pixel lengths, so those try both parsers.
 pub(crate) fn prepare(id: StyleId, value: &StyleValue) -> Result<PreparedLength, StyleValueError> {
     // A text style is a keyword, so no last byte tells it: every name and
     // alias begins `-` (LLP 1115 D3), which only a negative length shares.
@@ -479,21 +490,35 @@ pub(crate) fn prepare(id: StyleId, value: &StyleValue) -> Result<PreparedLength,
         _ => None,
     };
     match last {
-        Some(b'm' | b'M') => {
+        Some(b'm' | b'M' | b'w' | b'W' | b'n' | b'N') => {
             let relative = of(id, value)?;
             Ok((relative, relative.map(|r| provisional(id, r))))
         }
-        Some(b'h' | b'H') => Ok((None, super::cells::of(id, value)?)),
-        Some(b'x' | b'X') => Ok((None, pixels_text(id, value)?)),
+        Some(b'h' | b'H') => {
+            let relative = of(id, value)?;
+            let converted = match relative {
+                Some(r) => Some(provisional(id, r)),
+                None => super::cells::of(id, value)?,
+            };
+            Ok((relative, converted))
+        }
+        Some(b'x' | b'X') => {
+            let relative = of(id, value)?;
+            let converted = match relative {
+                Some(r) => Some(provisional(id, r)),
+                None => pixels_text(id, value)?,
+            };
+            Ok((relative, converted))
+        }
         Some(b'0'..=b'9' | b'.') => Ok((None, unitless_zero(id, value))),
         _ => Ok((None, None)),
     }
 }
 
 /// What the row holds until the kernel resolves it: the length at CSS's
-/// initial font size, in the form the row's codec reads as pixels.
+/// initial font size and an unset viewport, in the form the row's codec reads as pixels.
 pub(crate) fn provisional(id: StyleId, (unit, n): (Unit, f32)) -> StyleValue<'static> {
-    pixels(id, unit.px(n, MEDIUM, MEDIUM, 1.0))
+    pixels(id, unit.px(n, MEDIUM, MEDIUM, 1.0, &crate::Env::default()))
 }
 
 fn pixels(id: StyleId, px: f32) -> StyleValue<'static> {
@@ -546,7 +571,11 @@ mod tests {
         let (unit, n) = parse("min(-exact-subheadline, 31px)").unwrap();
         for root in [17.0, 23.0, 53.0] {
             let style = text_style_size(id, root);
-            assert_eq!(unit.px(n, root, 0.0, 1.0), style.min(31.0), "at {root}");
+            assert_eq!(
+                unit.px(n, root, 0.0, 1.0, &crate::Env::default()),
+                style.min(31.0),
+                "at {root}"
+            );
         }
         assert!(text_style_size(id, 53.0) > 31.0, "the cap holds at AX5");
         assert!(
@@ -579,13 +608,13 @@ mod tests {
             (13.0, 14.55),
         ] {
             assert!(
-                (unit.basis(root, 99.0, 1.0) - px).abs() < 0.01,
+                (unit.basis(root, 99.0, 1.0, &crate::Env::default()) - px).abs() < 0.01,
                 "{root}: {}",
-                unit.basis(root, 99.0, 1.0)
+                unit.basis(root, 99.0, 1.0, &crate::Env::default())
             );
         }
         assert!(
-            (unit.basis(18.0, 0.0, 1.0) - 20.335).abs() < 0.01,
+            (unit.basis(18.0, 0.0, 1.0, &crate::Env::default()) - 20.335).abs() < 0.01,
             "between two bodies it interpolates"
         );
         assert!(of(
@@ -703,6 +732,33 @@ mod tests {
         assert_eq!(parse("1e1em"), Some((Unit::Em, 10.0)));
         for refused in ["rem", "em", "-em", "1 rem", "1px", "1", "1.rem", "1remx"] {
             assert_eq!(parse(refused), None, "{refused}");
+        }
+    }
+
+    #[test]
+    fn viewport_units_use_css_numbers_and_the_rows_length_domain() {
+        for unit in crate::ViewportUnit::ALL {
+            let text = format!(" +1e1{} ", unit.name().to_ascii_uppercase());
+            assert_eq!(parse(&text), Some((Unit::Viewport(unit), 10.0)));
+            for id in [StyleId::FontSize, StyleId::RowGap, StyleId::BorderWidthTop] {
+                assert!(of(id, &StyleValue::Text(format!("-1{}", unit.name()).into())).is_err());
+            }
+            assert!(of(
+                StyleId::LetterSpacing,
+                &StyleValue::Text(format!("-1{}", unit.name()).into())
+            )
+            .is_ok());
+        }
+        for text in [
+            "vw",
+            "1 vw",
+            "1.vw",
+            "1e39vh",
+            "NaNvh",
+            "infinityvw",
+            "1vwh",
+        ] {
+            assert_eq!(parse(text), None, "{text}");
         }
     }
 

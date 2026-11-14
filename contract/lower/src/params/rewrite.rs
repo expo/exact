@@ -457,8 +457,10 @@ pub fn reached(root: &Component, params: &[ParamToken]) -> Vec<LowerError> {
         })
     });
     let mut out = Vec::new();
+    // A whole token, not a prefix: `…Button.color` is not `…Button.colorActive`.
+    let names = |text: &str, p: &ParamToken| param_words(text).any(|w| w == p.token);
     for (text, span) in found {
-        if let Some(p) = params.iter().find(|p| text.contains(&p.token)) {
+        for p in params.iter().filter(|p| names(&text, p)) {
             out.push(LowerError {
                 id: "tamber-param-scope",
                 message: format!("param `{}` reaches a place no row takes its value from (a text's content, an attribute that is no row, a function's argument or a condition), through an argument that passed it: pass it only to a prop the component writes a row's value with", p.full),
@@ -471,7 +473,7 @@ pub fn reached(root: &Component, params: &[ParamToken]) -> Vec<LowerError> {
     rest.view.clear();
     rest.params = Default::default();
     let rest = format!("{rest:?}");
-    for p in params.iter().filter(|p| rest.contains(&p.token)) {
+    for p in params.iter().filter(|p| names(&rest, p)) {
         out.push(LowerError {
             id: "tamber-param-scope",
             message: format!("param `{}` reaches a state, a derive or an action, through an argument that passed it: pass it only to a prop the component writes a row's value with", p.full),
@@ -479,6 +481,12 @@ pub fn reached(root: &Component, params: &[ParamToken]) -> Vec<LowerError> {
         });
     }
     out
+}
+
+/// The param tokens `text` writes, each a whole word.
+fn param_words(text: &str) -> impl Iterator<Item = &str> {
+    text.split(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_')))
+        .filter(|w| w.starts_with(PREFIX))
 }
 
 /// A refusal of a param named where no component owns it.
@@ -795,12 +803,7 @@ pub fn unused(file: &File) -> Vec<LowerError> {
                 });
             }
         }
-        let words = |text: &str| -> Vec<String> {
-            text.split(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_')))
-                .filter(|w| w.starts_with(PREFIX))
-                .map(str::to_string)
-                .collect()
-        };
+        let words = |text: &str| -> Vec<String> { param_words(text).map(str::to_string).collect() };
         loop {
             let more: Vec<String> = c
                 .params

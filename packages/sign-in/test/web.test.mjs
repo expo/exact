@@ -23,7 +23,7 @@ test('Apple agent defaults offer only built identity requests', () => {
     const apple = { ...substitute.default.providers.apple, ...providers.apple };
     const google = { ...substitute.default.providers.google, ...providers.google };
     expect(google).toEqual({ active: false, passive: false, withPublicKey: false });
-    expect(apple).toEqual({ active: target === 'ios', passive: target === 'ios', withPublicKey: false });
+    expect(apple).toEqual({ active: target === 'ios', passive: target === 'ios', withPublicKey: target === 'ios' });
   }
 });
 

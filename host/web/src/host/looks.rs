@@ -28,7 +28,10 @@ pub fn declarations(
 pub fn rules(at: &str, looks: &[(u8, String)]) -> String {
     let mut out = String::new();
     for (state, css) in looks {
-        let mut rows: String = (css.split_terminator(';'))
+        let (shadow, own): (Vec<_>, Vec<_>) = css
+            .split_terminator(';')
+            .partition(|row| row.trim_start().starts_with("box-shadow:"));
+        let mut rows: String = own.into_iter()
             .map(|row| match row.strip_prefix("scale:") {
                 Some(scale) => format!("--exact-scale:{scale}!important;scale:calc(var(--exact-scale,1) * var(--exact-press-factor,1))!important;"),
                 None => format!("{row}!important;"),
@@ -41,6 +44,19 @@ pub fn rules(at: &str, looks: &[(u8, String)]) -> String {
             rows.push_str("--exact-hover-wash:none!important;--exact-hover-dim:1!important;");
         }
         holding(&mut out, *state, at, &rows, str::to_string);
+        if !shadow.is_empty() {
+            // A grouped section owns the state, including hover over its
+            // header, but casts on the card. `each` may wrap the section.
+            let section =
+                ":where(:is([data-liststyle],[data-liststyle]>[data-exact-list-item])>section)";
+            let rows = shadow
+                .iter()
+                .map(|row| format!("{row}!important;"))
+                .collect::<String>();
+            holding(&mut out, *state, at, &rows, |owner| {
+                format!("{owner}:not({section}),{owner}{section}>div")
+            });
+        }
     }
     out
 }

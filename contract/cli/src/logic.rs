@@ -103,11 +103,133 @@ pub fn native_storage_constructor(
     if !linked && required.has(exact_runner::Capability::Sqlite) {
         return Err("Unlinked(\"sqlite\")".into());
     }
+    if linked {
+        if let Some(refused) = shell_without_sqlite() {
+            return Err(refused);
+        }
+    }
     Ok(if linked {
         format!("{{ #[cfg(not(target_arch = \"wasm32\"))] ibex2_sqlite::link(); {constructor} }}")
     } else {
         constructor.to_owned()
     })
+}
+
+/// The build script's own crate, when the entry it generates calls `ibex2_sqlite::link()` and the crate depends on a
+/// native host but names no `ibex2-sqlite`: an app crate written before native apps selected SQLite (2099b23460)
+/// declares only its host. rustc would refuse the entry with E0433 and Cargo's hint to `cargo add` a crates.io crate,
+/// where the fix is the SDK's vendored one (expo/exact-build#147). Only from a build script (`CARGO_CFG_TARGET_ARCH`
+/// is a build script's) for a native target. A crate without a host (a render crate) writes the entry but never
+/// compiles it, so it is left alone. A host is found where `exact.mjs update` looks for one
+/// (`game/update-manifests.mjs`, `nativeHosts`), so the update the message names adds the line.
+fn shell_without_sqlite() -> Option<String> {
+    let arch = std::env::var("CARGO_CFG_TARGET_ARCH").ok()?;
+    if arch == "wasm32" {
+        return None;
+    }
+    let manifest =
+        std::path::Path::new(&std::env::var_os("CARGO_MANIFEST_DIR")?).join("Cargo.toml");
+    let text = std::fs::read_to_string(&manifest).ok()?;
+    lacks_sqlite(&text).then(|| sqlite_refusal(&manifest))
+}
+
+/// The host crates `exact.mjs update` adds `ibex2-sqlite` beside (`game/update-manifests.mjs`).
+const NATIVE_HOSTS: [&str; 6] = [
+    "exact-apple",
+    "exact-apple-update",
+    "exact-linux",
+    "exact-painted",
+    "exact-linux-update",
+    "exact-windows",
+];
+
+/// Whether a manifest declares a native host as a dependency and names no `ibex2-sqlite`. A host counts only as a
+/// key or `package` in `[dependencies]` or a `[target.….dependencies]` table, the tables `exact.mjs update` edits.
+/// SQLite counts anywhere outside a comment, as `ibex2-sqlite` or as the `ibex2_sqlite` the entry names (a renamed or
+/// inherited key), so a crate that may have it is left to Cargo. The scan reads one line at a time, so a manifest
+/// with a multi-line string, whose lines it cannot tell from declarations, or an escape (`\\`), which may spell a key
+/// it does not decode, is left to Cargo too.
+fn lacks_sqlite(manifest: &str) -> bool {
+    if manifest.contains("\"\"\"") || manifest.contains("'''") || manifest.contains('\\') {
+        return false;
+    }
+    let mut host = false;
+    let mut sqlite = false;
+    let mut table = None::<bool>; // Some(true): a dependency table; Some(false): one dependency's own table.
+    for line in manifest.lines().map(uncommented) {
+        sqlite |= line
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+            .any(|w| w.replace('-', "_") == "ibex2_sqlite");
+        if let Some(header) = line.strip_prefix('[') {
+            let header = header.trim_matches(|c| c == '[' || c == ']' || c == ' ');
+            let (path, name) = match header.rsplit_once("dependencies") {
+                Some((before, after))
+                    if before.is_empty()
+                        || before.starts_with("target.") && before.ends_with('.') =>
+                {
+                    (true, after.strip_prefix('.'))
+                }
+                _ => (false, None),
+            };
+            table = path.then_some(name.is_none());
+            host |= name.is_some_and(is_host);
+        } else if let Some((key, value)) = line.split_once('=') {
+            let key = key
+                .trim()
+                .split('.')
+                .next()
+                .unwrap_or("")
+                .trim_matches(|c| c == '"' || c == '\'');
+            host |= match table {
+                Some(true) => is_host(key) || package(value).is_some_and(is_host),
+                Some(false) => {
+                    key == "package"
+                        && is_host(value.trim().trim_matches(|c| c == '"' || c == '\''))
+                }
+                None => false,
+            };
+        }
+    }
+    host && !sqlite
+}
+
+fn is_host(name: &str) -> bool {
+    NATIVE_HOSTS.contains(&name)
+}
+
+/// The `package = "…"` an inline dependency table renames.
+fn package(value: &str) -> Option<&str> {
+    let (_, rest) = value.split_once("package")?;
+    let rest = rest.trim_start().strip_prefix('=')?.trim_start();
+    let quote = rest.chars().next().filter(|c| *c == '"' || *c == '\'')?;
+    rest[1..].split(quote).next()
+}
+
+/// A manifest line without its comment: from the first `#` outside a quoted string.
+fn uncommented(line: &str) -> &str {
+    let mut quote = None;
+    for (i, c) in line.char_indices() {
+        match (quote, c) {
+            (None, '#') => return line[..i].trim(),
+            (None, '"' | '\'') => quote = Some(c),
+            (Some(q), _) if c == q => quote = None,
+            _ => {}
+        }
+    }
+    line.trim()
+}
+
+fn sqlite_refusal(manifest: &std::path::Path) -> String {
+    let vendored = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../vendor/ibex/crates/ibex2-sqlite");
+    let vendored = vendored.canonicalize().unwrap_or(vendored);
+    format!(
+        "{}: this native app crate's entry links SQLite storage (ibex2_sqlite::link) but the crate does not depend on ibex2-sqlite. \
+         Run `bun exact.mjs update` in the app, which adds it beside the host crate, or add under [dependencies]: \
+         ibex2-sqlite = {{ path = '{}' }}. Not `cargo add`: the crate is Exact's vendored copy.",
+        manifest.display(),
+        vendored.display()
+    )
 }
 
 /// A Linux app's whole `entry.rs`: [`rust_entry`], its `launch_parts()`, its
@@ -345,6 +467,11 @@ pub fn web_linked(plan: &exact_plan::Plan, inputs: &serde_json::Value) -> String
             | Capability::Animations
             | Capability::Gradients
             | Capability::Grid
+            | Capability::Shadows
+            | Capability::Corners
+            | Capability::Rotate
+            | Capability::TextStroke
+            | Capability::SymbolPalette
             | Capability::Geometry
             | Capability::Segments
             | Capability::Dataset
@@ -416,6 +543,65 @@ mod tests {
         assert!(super::rust_entry("Data", "data()", "off", &inputs)
             .unwrap()
             .contains("ibex2_sqlite::link();"));
+    }
+
+    #[test]
+    fn a_native_crate_without_ibex2_sqlite_is_named_with_the_fix() {
+        // expo/exact-build#147: an outside app's apple crate from before SQLite was selected.
+        let before = "[package]\nname = \"notes-apple\"\n\n[dependencies]\n# ibex2-sqlite comes later\nexact-apple = { path = \"../exact2/host/apple\" }\n";
+        assert!(super::lacks_sqlite(before));
+        // A render crate writes a native entry it never compiles (apps/expose/linux), and a renamed host still counts.
+        let render = "[dependencies]\nexact-js = { path = \"../../../js\" }\nexact-render = { path = \"../../../host/render\" }\n";
+        assert!(!super::lacks_sqlite(render));
+        assert!(super::lacks_sqlite(
+            "[dependencies]\nhost = { package = \"exact-linux\", path = \"x\" }\n"
+        ));
+        assert!(!super::lacks_sqlite(
+            "[dependencies]\n# exact-apple = { path = \"x\" }\n"
+        ));
+        // A host only in a comment, another field or a table `exact.mjs update` does not edit is no host.
+        for not_host in [
+            "[package]\ndescription = \"beside exact-apple\"\n[dependencies]\nexact-render = { path = \"x\" } # with exact-apple\n",
+            "[dev-dependencies]\nexact-apple = { path = \"x\" }\n",
+            "[build-dependencies]\nexact-linux = { path = \"x\" }\n",
+            "[package.metadata]\nexample = \"\"\"\n[dependencies.exact-apple]\n\"\"\"\n",
+            // TOML decodes this key to `ibex2-sqlite`.
+            "[dependencies]\nexact-apple = { path = \"x\" }\n\"ibex2\\u002dsqlite\".workspace = true\n",
+        ] {
+            assert!(!super::lacks_sqlite(not_host), "{not_host}");
+        }
+        for host in [
+            "[dependencies.exact-apple]\npath = \"x\"\n",
+            "[target.'cfg(target_os = \"ios\")'.dependencies]\nexact-apple.workspace = true\n",
+            "[dependencies.host]\npackage = \"exact-windows\"\npath = \"x\"\n",
+        ] {
+            assert!(super::lacks_sqlite(host), "{host}");
+        }
+        for named in [
+            "ibex2-sqlite = { path = \"../exact2/vendor/ibex/crates/ibex2-sqlite\" }",
+            "ibex2-sqlite.workspace = true",
+            "[dependencies.ibex2-sqlite]",
+            "sql = { package = \"ibex2-sqlite\", path = \"x\" }",
+            // The workspace root renames it to the name the entry uses.
+            "ibex2_sqlite.workspace = true",
+        ] {
+            assert!(
+                !super::lacks_sqlite(&format!("{before}{named}\n")),
+                "{named}"
+            );
+        }
+        let refused = super::sqlite_refusal(std::path::Path::new("/app/apple/Cargo.toml"));
+        assert!(refused.starts_with("/app/apple/Cargo.toml: "), "{refused}");
+        assert!(
+            refused.contains("bun exact.mjs update")
+                && refused.contains("vendor/ibex/crates/ibex2-sqlite'"),
+            "{refused}"
+        );
+        // A test is no build script: the entry is unchanged there.
+        assert!(
+            super::shell_without_sqlite().is_none()
+                || std::env::var_os("CARGO_CFG_TARGET_ARCH").is_some()
+        );
     }
 
     /// The entry gives a data source the manifest's app id, which a source

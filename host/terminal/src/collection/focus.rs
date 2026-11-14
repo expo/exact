@@ -65,7 +65,7 @@ impl<D: DataSource> Host<D> {
         for index in candidates {
             match entries[index] {
                 Entry::Control(view) => {
-                    if self.kernel().node(view).is_some() {
+                    if self.input_eligible(view) {
                         return Some(view);
                     }
                 }
@@ -149,7 +149,7 @@ impl<D: DataSource> Host<D> {
         if self.collections.cursors.is_empty() {
             return false;
         }
-        let settling = self.collections.settling;
+        let (before, settling) = (self.focus, self.collections.settling);
         self.collections.settling = true;
         let roots = match self.layers.last() {
             Some((top, ..)) => vec![*top],
@@ -163,6 +163,7 @@ impl<D: DataSource> Host<D> {
         }
         self.collections.settling = settling;
         self.settle_collections();
-        true
+        // Unmoved, the key is the document order's (`step_focus`).
+        self.focus != before
     }
 }

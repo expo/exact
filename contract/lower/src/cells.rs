@@ -30,14 +30,17 @@
 use contract_syntax::{Attr, Expr, Node};
 
 fn literal<'a>(attrs: &'a [Attr], name: &str) -> Option<Option<&'a str>> {
-    attrs
-        .iter()
-        .rev()
-        .find(|a| a.name == name)
-        .map(|a| match &a.value {
+    attrs.iter().rev().find(|a| a.name == name).map(|a| {
+        // A component argument ascribed to an enum is its string.
+        let mut value = &a.value;
+        while let Expr::Typed(inner, _, _) = value {
+            value = inner;
+        }
+        match value {
             Expr::Str(s, _) => Some(s.as_str()),
             _ => None,
-        })
+        }
+    })
 }
 
 /// Whether any node a list holds directly, through the regions that only

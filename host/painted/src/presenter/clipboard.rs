@@ -75,6 +75,7 @@ impl<D: DataSource> Presenter<D> {
         } else {
             String::new()
         };
+        let from = self.commands.len();
         let mut at = Some(id);
         while let Some(view) = at {
             if self.host.runner().handlers_of(view).contains(&kind) {
@@ -91,9 +92,7 @@ impl<D: DataSource> Presenter<D> {
             }
             at = self.host.kernel().node(view).and_then(|n| n.parent);
         }
-        let queued = self.commands.len();
-        self.commands.retain(|c| c.name != "preventDefault");
-        if queued != self.commands.len()
+        if self.prevented_since(from)
             || self.focus != Some(id)
             || self
                 .host
@@ -288,13 +287,15 @@ mod tests {
         for attributes in ["", "readonly=true"] {
             let (mut p, id, _) = fixture("", attributes);
             let value = "first line\nsecond 🦀 line";
-            p.field_edit(
+            let seeded = p.apply_field_edit(
                 id,
                 value.into(),
                 FieldSelection::at_end(value),
                 "seed".into(),
                 0.,
+                Default::default(),
             );
+            assert!(seeded.is_none(), "{seeded:?}");
             p.hardware_key("ControlLeft", "Control", true, false);
             p.hardware_key("Home", "Home", true, false);
             p.hardware_key("Home", "Home", false, false);

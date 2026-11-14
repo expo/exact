@@ -78,7 +78,7 @@ class ScrollingTest {
     @Test fun aTouchsAnswerTellsEachScrollersSnap() {
         val f = Fixture(1)
         f.down()
-        val module = IntArray(8)
+        val module = IntArray(10)
         // Sideways, mandatory: a 200 snapport, two areas, the second an `always` one; nothing up and down.
         val snap = intArrayOf(1 or 4, 200f.toBits(), 2, 0, 0, 0, 300f.toBits(), 300f.toBits(), 1, 0, 0)
         f.under(f.reply(0) + module + snap)

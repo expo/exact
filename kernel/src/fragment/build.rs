@@ -38,8 +38,10 @@ pub(super) struct Atom {
 #[derive(Debug, Clone)]
 pub(super) struct Para {
     pub slot: u32,
-    /// Where line boxes start: the paragraph's content top.
+    /// Where its first line box starts in the flow thread.
     pub content_top: f32,
+    /// Placement of the anonymous text item within its content box.
+    pub line_offset: f32,
     /// Its content width, the offer its lines were measured at.
     pub width: f32,
     pub orphans: u32,
@@ -139,6 +141,7 @@ pub(super) fn text(
         paras: vec![Para {
             slot,
             content_top,
+            line_offset: 0.0,
             width,
             orphans: u32::from(s.orphans.max(1)),
             widows: u32::from(s.widows.max(1)),
@@ -156,7 +159,9 @@ impl Builder<'_> {
     fn visit(&mut self, slot: u32, px: f32, py: f32, point_avoid: bool, inside_avoid: bool) {
         let arena = self.arena;
         let s = arena.style(slot);
-        if s.display == Display::None || arena.is_inline_run(slot) {
+        // A popover laid out in the viewport (`Blocks::holds`) is no part of
+        // the flow, and the columns place it nowhere.
+        if s.display == Display::None || arena.is_inline_run(slot) || arena.blocks.holds(slot) {
             return;
         }
         let Some(node) = arena.taffy(slot) else {
@@ -165,15 +170,7 @@ impl Builder<'_> {
         let l = self.tree.layout(node);
         let (x, top) = (px + l.location.x, py + l.location.y);
         let bottom = top + l.size.height;
-        // A popover lays out absolute too, out of the columns' flow (`style::top_layer`).
-        if crate::style::top_layer::layout_position(arena, slot) == PositionType::Absolute {
-            let in_flow = self.containing_block_in_flow(slot);
-            self.flow.absolutes.push(Absolute {
-                slot,
-                x,
-                top,
-                in_flow,
-            });
+        if self.absolute(slot, x, top) {
             return;
         }
         let first = self.flow.atoms.len();
@@ -207,10 +204,15 @@ impl Builder<'_> {
                     - l.padding.right
                     - l.border.left
                     - l.border.right;
+                let (width, line_offset) = self.tree.text_item(node).map_or_else(
+                    || (width, crate::layout::text_item::from_layout(arena, slot, l)),
+                    |item| (item.width, item.y),
+                );
                 let para = self.flow.paras.len();
                 self.flow.paras.push(Para {
                     slot,
-                    content_top: top + inset_top,
+                    content_top: top + inset_top + line_offset,
+                    line_offset,
                     width,
                     orphans: u32::from(s.orphans.max(1)),
                     widows: u32::from(s.widows.max(1)),
@@ -231,6 +233,9 @@ impl Builder<'_> {
                     point_avoid,
                     refusal.map(|r| (slot, r)),
                 );
+                if !super::is_multicol(s) {
+                    self.collect_absolutes(slot, x, top);
+                }
             }
         }
         let atoms = self.flow.atoms.len();
@@ -259,6 +264,66 @@ impl Builder<'_> {
                 last: atoms - 1,
             });
         }
+    }
+
+    // Whether `slot` is absolutely positioned, recorded as one if so.
+    fn absolute(&mut self, slot: u32, x: f32, top: f32) -> bool {
+        if crate::style::top_layer::layout_position(self.arena, slot) != PositionType::Absolute {
+            return false;
+        }
+        self.flow.absolutes.push(Absolute {
+            slot,
+            x,
+            top,
+            in_flow: self.containing_block_in_flow(slot),
+        });
+        true
+    }
+
+    // The absolutely positioned boxes under a monolithic box, each placed as
+    // one in the flow is, unless its containing block is, or is inside, a box
+    // Chrome keeps whole too: Chrome lays it out in that box, so it moves
+    // with the box. A nested multi-column container places its own.
+    fn collect_absolutes(&mut self, parent: u32, px: f32, py: f32) {
+        let arena = self.arena;
+        for &slot in arena.children(parent) {
+            let s = arena.style(slot);
+            if s.display == Display::None || arena.is_inline_run(slot) || arena.blocks.holds(slot) {
+                continue;
+            }
+            let Some(node) = arena.taffy(slot) else {
+                continue;
+            };
+            let l = self.tree.layout(node);
+            let (x, top) = (px + l.location.x, py + l.location.y);
+            if crate::style::top_layer::layout_position(arena, slot) == PositionType::Absolute {
+                if !self.held_whole(slot) {
+                    self.absolute(slot, x, top);
+                }
+            } else if !super::is_multicol(s) {
+                self.collect_absolutes(slot, x, top);
+            }
+        }
+    }
+
+    // Whether `slot`'s containing block is, or is inside, a box below the
+    // container that Chrome keeps whole (`Kind::Monolithic(None)`).
+    fn held_whole(&self, slot: u32) -> bool {
+        let arena = self.arena;
+        let mut at = arena.parent(slot);
+        let mut in_block = false;
+        while let Some(s) = at {
+            if s == self.container {
+                return false;
+            }
+            in_block = in_block
+                || crate::style::top_layer::layout_position(arena, s) != PositionType::Static;
+            if in_block && matches!(super::kind(arena, s), Kind::Monolithic(None)) {
+                return true;
+            }
+            at = arena.parent(s);
+        }
+        false
     }
 
     fn push(

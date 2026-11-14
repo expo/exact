@@ -33,8 +33,8 @@ pub const GPU_MODULE_ABI: u32 = 1;
 /// The separately linked Rust data-source wire ABI, as the seam declares it:
 /// admitted secret names before the store snapshot (LLP 1048.000 D9), two-way
 /// sockets (LLP 1016.003), cache-mode tag 12 (LLP 1162 D4), stream
-/// protocol names (LLP 1016.000), preload-name tag 13 (LLP 1162.000 D1) and
-/// prefetch tag 14 (D5).
+/// protocol names (LLP 1016.000), preload-name tag 13 (LLP 1162.000 D1),
+/// prefetch tag 14 (D5) and held-mark tag 15 (LLP 1016.000 D9).
 pub(crate) const RUST_ABI: u32 = exact_logic_abi::ABI;
 /// The data-module runtime a TypeScript bundle may rely on in the binary's
 /// own prelude (`js/src/prelude.js`, compiled into the host): moved when the
@@ -219,7 +219,7 @@ impl Compat {
 /// The compatibility id of the app at `app_dir` built for `platform`
 /// (`ios`, `macos`, `linux`, `web`) and `target` (the triple), with the
 /// data crate's grants when the caller has a `DataSource` to ask (the bake
-/// does; `exact-bake compat` on the command line does not).
+/// does; command-line callers can supply the declarations from its receipt).
 pub fn compatibility_id(
     app_dir: &Path,
     platform: &str,

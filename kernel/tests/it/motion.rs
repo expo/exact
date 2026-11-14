@@ -523,6 +523,120 @@ fn a_style_change_transitions_under_the_row_and_the_clock_seeks() {
 }
 
 #[test]
+fn clearing_transition_keeps_coverage_but_none_or_another_property_cancels() {
+    for curve in ["opacity 1s linear", "opacity -exact-spring()"] {
+        for next in [None, Some("none"), Some("scale 1s"), Some("all 0s")] {
+            let (mut kernel, mut engine, node) =
+                boot(Transitions::parse(curve).unwrap().0.remove(0));
+            let receipt = kernel
+                .apply(
+                    0,
+                    2,
+                    &[Op::SetStyle {
+                        id: 1,
+                        patch: opacity(0.0),
+                    }],
+                )
+                .unwrap();
+            kernel.motion_sync(&receipt).apply(&mut engine).unwrap();
+            engine.advance(0.1).unwrap();
+            engine.frame();
+            let end = engine.settle_time();
+            let change = match next {
+                Some(text) => Op::SetStyle {
+                    id: 1,
+                    patch: style(|s| {
+                        s.transition = Transitions::parse(text).unwrap();
+                        s.mask.set(StyleId::Transition);
+                    }),
+                },
+                None => {
+                    let mut mask = exact_kernel::StyleMask::EMPTY;
+                    mask.set(StyleId::Transition);
+                    Op::ClearStyle {
+                        id: 1,
+                        mask,
+                        written: false,
+                    }
+                }
+            };
+            let receipt = kernel.apply(0, 3, &[change]).unwrap();
+            kernel.motion_sync(&receipt).apply(&mut engine).unwrap();
+            let covered = next.is_none() || next == Some("all 0s");
+            assert_eq!(
+                engine.is_active(node, Property::Opacity),
+                covered,
+                "{curve} → {next:?}"
+            );
+            assert_eq!(engine.settle_time(), if covered { end } else { None });
+            if !covered {
+                assert_eq!(engine.value(node, Property::Opacity), Some(Value::ZERO));
+            }
+        }
+    }
+}
+
+#[test]
+fn clearing_a_path_transition_keeps_all_coverage_at_an_unchanged_target() {
+    let mut kernel = Kernel::with_monospace();
+    let path = |value: &str| Op::SetProp {
+        id: 2,
+        prop: PropId::D,
+        value: PropValue::Str(value.into()),
+    };
+    let receipt = kernel
+        .apply(
+            0,
+            1,
+            &[
+                Op::CreateView {
+                    id: 1,
+                    node_type: NodeType::Svg,
+                },
+                Op::CreateView {
+                    id: 2,
+                    node_type: NodeType::SvgPath,
+                },
+                Op::SetChildren {
+                    id: 1,
+                    children: vec![2],
+                },
+                Op::SetStyle {
+                    id: 2,
+                    patch: transition(Transitions::parse("d 1s linear").unwrap().0.remove(0)),
+                },
+                path("M0 0L10 10"),
+                Op::AttachRoot { id: 1 },
+            ],
+        )
+        .unwrap();
+    let mut engine = Engine::new();
+    kernel.motion_sync(&receipt).apply(&mut engine).unwrap();
+    let receipt = kernel.apply(0, 2, &[path("M0 0L20 20")]).unwrap();
+    kernel.motion_sync(&receipt).apply(&mut engine).unwrap();
+    engine.advance(0.1).unwrap();
+    let node = motion_node(kernel.node(2).unwrap().key);
+    let shown = engine.presented_path(node);
+    let mut mask = exact_kernel::StyleMask::EMPTY;
+    mask.set(StyleId::Transition);
+    let receipt = kernel
+        .apply(
+            0,
+            3,
+            &[Op::ClearStyle {
+                id: 2,
+                mask,
+                written: false,
+            }],
+        )
+        .unwrap();
+    kernel.motion_sync(&receipt).apply(&mut engine).unwrap();
+    assert!(engine.is_active(node, Property::D));
+    assert_eq!(engine.settle_time(), Some(1.0));
+    assert_eq!(engine.presented_path(node), shown);
+}
+
+#[test]
 fn a_node_without_a_row_changes_immediately() {
     let mut kernel = Kernel::with_monospace();
     let mut engine = Engine::new();

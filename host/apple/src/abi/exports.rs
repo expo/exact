@@ -67,16 +67,19 @@ macro_rules! host {
         /// Number of definitions in the launch marks.
         #[no_mangle]
         pub extern "C" fn exact_preloads_count() -> u32 {
+            if EXACT_LINKS.io.is_none() { return 0; }
             $crate::launch_preloads::current().map_or(0, |p| p.count() as u32)
         }
         /// One definition's monotonic seconds and first carrying commit.
         #[no_mangle]
         pub extern "C" fn exact_preloads_mark(index: u32) -> $crate::launch_preloads::LaunchMark {
+            if EXACT_LINKS.io.is_none() { return Default::default(); }
             $crate::launch_preloads::current().and_then(|p| p.mark(index as usize)).map_or_else(Default::default, |(_, m)| m)
         }
         /// Copy a definition's name; returns the full UTF-8 byte count.
         #[no_mangle]
         pub extern "C" fn exact_preloads_name(index: u32, out: *mut u8, capacity: usize) -> usize {
+            if EXACT_LINKS.io.is_none() { return 0; }
             $crate::launch_preloads::copy_name(index as usize, out, capacity)
         }
         $crate::pan_velocity_exports!();
@@ -419,6 +422,12 @@ macro_rules! host {
         #[no_mangle]
         pub extern "C" fn exact_request_active(rt: u32, ticket: u64) -> u8 {
             $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| u8::from(b.request_active(ticket)), |_| 0)
+        }
+
+        /// Mark an owned pixel copy before the presenter starts encoding it.
+        #[no_mangle]
+        pub extern "C" fn exact_canvas_snapshotted(rt: u32, ticket: u64) -> u8 {
+            $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| u8::from(b.canvas_snapshotted(ticket)), |_| 0)
         }
 
         /// Complete presenter-owned surface work; the input is bytes or a failure message.
@@ -977,6 +986,13 @@ macro_rules! host {
         #[no_mangle]
         pub extern "C" fn exact_canvas_display(rt: u32, scale: f64, memory: f64) -> u32 {
             $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.canvas_display(scale, memory), |n| n)
+        }
+
+        /// A Canvas 2D image handle the presenter let go (LLP 1056 D9): the
+        /// handle is the input buffer's first `len` bytes.
+        #[no_mangle]
+        pub extern "C" fn exact_canvas_image_released(rt: u32, len: usize) {
+            $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.canvas_image_released(len), |_| ())
         }
 
         /// A 2D canvas's replay is behind (`held` 1) or caught up (0): a

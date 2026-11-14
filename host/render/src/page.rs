@@ -495,7 +495,10 @@ pub(crate) fn body_after_boot_js(
         &rendered.checkpoint,
         checkpoints,
     );
-    out.push_str(&crate::direct::close_after_boot(close, boot.is_some()));
+    out.push_str(&crate::direct::close_after_boot(
+        close,
+        boot.map(|boot| boot.to(&document.controls)),
+    ));
     out
 }
 
@@ -1097,6 +1100,7 @@ mod tests {
                 keyframes: String::new(),
                 scroll_document: true,
                 hero_image: None,
+                controls: Vec::new(),
             },
             head: String::new(),
             checkpoint: "{}".into(),
@@ -1106,6 +1110,7 @@ mod tests {
             activate: exact_plan::ActivatePolicy::Inferred,
             wake: String::new(),
             runtime_form: false,
+            drew: false,
         };
         let js = Js::of(shell).unwrap();
         let head = head_js(shell, &js, "en", "ltr", true, false);
@@ -1177,6 +1182,7 @@ mod tests {
                     keyframes: String::new(),
                     scroll_document: false,
                     hero_image: None,
+                    controls: Vec::new(),
                 },
                 head: String::new(),
                 checkpoint: "{}".into(),
@@ -1186,6 +1192,7 @@ mod tests {
                 activate: exact_plan::ActivatePolicy::Inferred,
                 wake: String::new(),
                 runtime_form: false,
+                drew: false,
             };
             let page = head_js(&shell, &js, "en", "ltr", false, false)
                 + &body_js(&shell, &js, &rendered, false, false, None);

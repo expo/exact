@@ -278,6 +278,34 @@ mod tests {
     }
 }
 
+// Loaded modules need separate identities even when their world counters start alike.
+fn namespace() -> &'static str {
+    static NAMESPACE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    NAMESPACE.get_or_init(|| {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            use std::hash::BuildHasher;
+            let random = std::collections::hash_map::RandomState::new();
+            format!("{:016x}{:016x}", random.hash_one(0u8), random.hash_one(1u8))
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let mut random = [0; 16];
+            web_sys::window()
+                .expect("WorldSurface requires window")
+                .crypto()
+                .expect("WorldSurface requires crypto")
+                .get_random_values_with_u8_array(&mut random)
+                .expect("world incarnation randomness");
+            format!("{:032x}", u128::from_le_bytes(random))
+        }
+    })
+}
+
+pub(crate) fn measure_spans<G: exact_game::Game>(sim: &mut exact_game::Sim<G>, reset: bool) {
+    sim.measure_spans(clock_ms, reset, namespace());
+}
+
 // One monotonic host domain for engine spans, including wasm (std::Instant is unavailable there).
 pub(crate) fn clock_ms() -> f64 {
     #[cfg(target_arch = "wasm32")]
@@ -295,7 +323,7 @@ pub(crate) fn clock_ms() -> f64 {
 pub(crate) struct PerfRequest {
     pub perf_reset: bool,
     pub perf: bool,
-    pub span_since: Option<u64>,
+    pub span_since: Option<exact_game::diagnostics::SpanCursor>,
     pub trace_export: bool,
 }
 impl PerfRequest {
@@ -310,9 +338,9 @@ impl PerfRequest {
                 "perf" => q.perf.read(&mut r)?,
                 "trace_export" => q.trace_export.read(&mut r)?,
                 "span_since" => {
-                    let mut n = 0u64;
-                    n.read(&mut r)?;
-                    q.span_since = Some(n);
+                    let mut cursor = exact_game::diagnostics::SpanCursor::default();
+                    cursor.read(&mut r)?;
+                    q.span_since = Some(cursor);
                 }
                 _ => r.skip()?,
             }

@@ -205,13 +205,19 @@ The title-bar area is
 of the title bar beside the window's controls. On the Mac, under `viewport-fit="cover"`,
 it is AppKit's title bar less the traffic lights and their margins (`78 0 822×32` in a
 900-point window with a left-to-right title bar, `0 0 822×32` with a right-to-left one);
-all zero in full screen and while a toolbar fills the title bar (an
-app with routes has one, LLP 1115.002 D2). An app without routes whose manifest's
-`display_override` puts `window-controls-overlay` first gets the platform's tall title row,
-an empty unified toolbar over the page, whatever its `viewport-fit`, and the area is that
-row's beside the traffic lights; `exactViewport().displayMode` is then
-`window-controls-overlay`. Chrome gives the same names to the installed app. Everywhere
-else it is undefined, as in a browser tab: `env(titlebar-area-height, 0px)` takes its
+all zero in full screen and while the session's toolbar fills the title bar. Once
+navigation history retains a toolbar, it stays (LLP 1115.000, retention as built).
+In a single-location app, a root header can bring a toolbar before history retains
+one; it goes away when that header hides or its route says `navigationBar="none"`.
+With no stack, or before any route has shown a bar while every mounted route says
+`navigationBar="none"`, navigation brings no toolbar. An authored toolbar or sidebar
+can still supply one.
+If the manifest's
+`display_override` puts `window-controls-overlay` first, a window with no toolbar of
+the session's own gets the platform's tall title row: an empty unified toolbar over
+the page, whatever its `viewport-fit`. The area is that row beside the traffic lights,
+and `exactViewport().displayMode` is `window-controls-overlay`. Chrome gives the same
+names to the installed app. Everywhere else it is undefined, as in a browser tab: `env(titlebar-area-height, 0px)` takes its
 fallback, and without one the row takes its initial value.
 
 `-exact-fit="shrink"` on a `text` (CSS has no such property; LLP 1116.001 D1.4) draws
@@ -747,7 +753,7 @@ step          = "tap" "midi" STRING ( HEX { HEX } | "clock" NUMBER NUMBER ) NL
               | "tap" STRING "drag" ( "to" STRING [ "at" NUMBER NUMBER ]
                   | [ "-" ] NUMBER [ "-" ] NUMBER )
                   { ( "press" | "over" | "hold" ) NUMBER
-                  | "from" NUMBER NUMBER | "mouse" }
+                  | "from" NUMBER NUMBER | "mouse" | "into" "keyboard" }
                   [ "during" { STRING } ] NL
               | "type" STRING ( STRING [ "append" ]
                   | "key" STRING [ "down" | "up" | "for" NUMBER ]
@@ -1108,7 +1114,7 @@ says. Every roster function has a row and an example, and each example written
 | --- | --- | --- |
 | `performanceNow()` | Milliseconds on the runner's clock since this launch of the app (it restarts at 0 on every launch; the driver's clock under the agent, from 0), as the web's `performance.now()`, not `Date.now()`: the date is `time.epochAtZero + performanceNow()`, with `resource time = exactTime() as shape T` declared, and that sum is what anything stored or sent takes ([timer recipe](recipes/timer-that-survives-relaunch.md)). `now()` is refused (`type-now-renamed`, LLP 1109 D1) with both repairs. A read does not schedule a render, and a derive that reads it is not read again as time passes (when it is depends on the host's clock), so a value that follows the clock comes from a timer: keep the time in state that a `task … every` action writes | `performanceNow() - startedAt`, in a timer's action, is the milliseconds since `startedAt` |
 | `formatTime(ms, offsetMinutes, "short")` | String; fixed offset east of UTC, in the [format locale](#formatting-by-locale) (`exactTime().utcOffset` is the zone's offset now, answered again when it changes) | `formatTime(1790000000000, 0, "short")` is `"2:13 PM"` |
-| `formatDate(ms, offsetMinutes, "medium" or "month-year" or "iso")` | String; format is a literal choice, not an expression containing `or`. `"iso"` is `YYYY-MM-DD`: the date at that wall time, which is `toISOString`'s date part at a whole-minute offset (a fractional offset's sub-millisecond wall time is not clipped again, as no style's is) (LLP 1102 §3.4); every style prints `""` outside years 1–9999 | `formatDate(1790000000000, 0, "medium")` is `"Sep 21, 2026"` |
+| `formatDate(msOrDayKey, offsetMinutes, "medium" or "month-year" or "iso")` | String; format is a literal choice, not an expression containing `or`. A number is epoch milliseconds shifted by the offset; `"iso"` is the date at that wall time, `toISOString`'s date part at a whole-minute offset (a fractional offset's sub-millisecond wall time is not clipped again) (LLP 1102 §3.4). A string must be exactly `YYYY-MM-DD` in ASCII digits and a real Gregorian date in years 0001–9999; it keeps its calendar day regardless of the offset. Every style prints `""` for invalid input, years outside 1–9999, or a non-finite offset or one outside ±1080 minutes ([dates recipe](recipes/dates-and-days.md)) | `formatDate("2026-10-16", 0, "medium")` is `"Oct 16, 2026"` in en-US |
 | `formatDay(then, now, offsetMinutes, "day" or "day-time" or "list")` | String; `then`'s day named from `now`'s, both at the one offset (its calendar days, so a DST change between them is not applied), in the [format locale](#formatting-by-locale) (LLP 1116.020 D8); in en-US: `"day"` is `Today`, `Yesterday`, `Tomorrow`, else `formatDate`'s `"medium"`; `"day-time"` adds ` at ` and `formatTime`'s time (`Today at 4:42 PM`, `Oct 11, 2026 at 4:42 PM`); `"list"` is Mail's and Notes' list label: the time today, `Yesterday`, the weekday two to six days back, else `10/11/26` (a later day too). Pure: `now` is the app's ticked clock ([dates recipe](recipes/dates-and-days.md)); `""` when either instant is outside years 1–9999 | `formatDay(1790000000000, 1790000000000 + 86400000, 0, "day")` is `"Yesterday"` |
 | `formatNumber(n, "compact")` | String; admitted deterministic compact format (`1.2K`) | `formatNumber(1249, "compact")` is `"1.2K"` |
 | `formatNumber(n, "decimal")`, `formatNumber(n, "percent")`, `formatNumber(n, "currency", "USD")` | String; `Intl.NumberFormat`'s deterministic forms in the [format locale](#formatting-by-locale) (LLP 1116 D8), in en-US: `"decimal"` is grouped with at most three fraction digits (`1,234.567`), `"percent"` multiplies by 100 with none (`0.256` is `26%`), `"currency"` takes an ISO 4217 code literal and prints its symbol and fraction digits (`$1,481.47`, `-$5.00`, `¥1,235`, `CHF 5.00`; the codes are USD, EUR, GBP, JPY, CNY, INR, CAD, AUD, NZD, HKD, SGD, CHF, SEK, NOK, DKK, PLN, MXN, BRL, KRW, ZAR, TWD, ILS, PHP and VND). Each rounds the value's shortest decimal digits half away from zero, as `Intl` does (`1.005` is `$1.01`, where `toFixed` says `1.00`), and signs a negative zero (`-0`); `NaN` and the infinities print `""`. The code is written with `"currency"` only (`type-format-style`) | `formatNumber(1481.47, "currency", "USD")` is `"$1,481.47"` |
@@ -1547,7 +1553,10 @@ wrapping follow the reader's platform and viewport at runtime. Preparing readers
 makes no network requests.
 
 - `text note.body markup="markdown"` is the reader: headings, lists, quotes,
-  code and links painted as one node, on every host.
+  code and links painted as one node, on every host. Its dialect (LLP 1045 D2)
+  has no setext headings, indented code, reference links or HTML, and a list
+  item holds one paragraph and its nested lists: an indented code block is
+  drawn as a paragraph, and an item's second paragraph at the left margin.
 - `textarea id="editor" value=draft input=edit markup="markdown"` is the editor:
   on the web, Markdown shown as it reads, with the syntax hidden away from the
   caret; on macOS and iOS, the platform's text view with the syntax dimmed and

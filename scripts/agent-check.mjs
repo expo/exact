@@ -38,11 +38,12 @@ function pixel(png, scale, x, y) {
   return [png.data[i], png.data[i + 1], png.data[i + 2]];
 }
 
-/** What a text stands on: the commonest of its box's four corners (a glyph rarely reaches one), or null where they disagree (an image). */
+/** What a text stands on: the commonest of its box's four corners (a glyph rarely reaches one), or null where they disagree (an image).
+ *  A corner the host says another view is drawn over (`drawnOver`) is not read. */
 function backdrop(png, scale, it) {
   const inset = Math.min(1.5, it.w / 4, it.h / 4);
   const corners = [[it.x + inset, it.y + inset], [it.x + it.w - inset, it.y + inset], [it.x + inset, it.y + it.h - inset], [it.x + it.w - inset, it.y + it.h - inset]]
-    .map(([x, y]) => pixel(png, scale, x, y)).filter(Boolean);
+    .map(([x, y], k) => (it.drawnOver?.includes(k) ? null : pixel(png, scale, x, y))).filter(Boolean);
   let best = null, count = 0;
   for (const c of corners) { const n = corners.filter((d) => near(c, d, 12)).length; if (n > count || (n === count && best && ratio(c, it.fg) > ratio(best, it.fg))) { best = c; count = n; } }
   return count >= 2 ? best : null;

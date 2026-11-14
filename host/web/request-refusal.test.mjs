@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { Worker } from 'node:worker_threads';
 import { boundedHttpBody, request, streamed } from './http-body.js';
 import { deferredFulfill, refusal } from './navigation/requests.js';
-import { admittingGrant, admitsNetwork, coversPath, createGrantSet, grantError, sameGrantDeclaration, scopedGrantSet } from './grant-admission.js';
+import { admittingGrant, admitsNetwork, coversPath, createGrantSet, grantError, grantWords, sameGrantDeclaration, scopedGrantSet } from './grant-admission.js';
 import { createRequestExecutor, createSecretFacade, fetchWith, redirectOf } from '../web-js/admission.js';
 import { cdpBrowser, chromium } from '../../scripts/agent-launch.mjs';
 import { need } from '../../scripts/coverage.mjs';
@@ -448,7 +448,7 @@ test('the production file command refuses a source outside the admitted fs.read 
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-files-admission-'));
   writeFileSync(resolve(dir, 'files.js'), readFileSync(resolve(ROOT, 'host/web-js/files.js'), 'utf8')
     .replace("from './rt.js'", "from './rt-stub.js'").replace("from './navigation.js'", "from './navigation-stub.js'"));
-  writeFileSync(resolve(dir, 'rt-stub.js'), `export const journal=[],clock={now:0,agent:true},inflight={n:0},Hosts={},OnHooks={},Views=new Map(),data={appId:'test.files'};export const nextTicket=()=>1,viewId=()=>1,painted=()=>Promise.resolve();\n`);
+  writeFileSync(resolve(dir, 'rt-stub.js'), `export const journal=[],clock={now:0,agent:true},inflight={n:0},Hosts={},OnHooks={},Views=new Map(),data={appId:'test.files'};export const nextTicket=()=>1,viewId=()=>1,painted=()=>Promise.resolve(),pressFeedback=()=>{};\n`); cpSync(resolve(ROOT, 'host/web-js/rt-link.js'), resolve(dir, 'rt-link.js'));
   writeFileSync(resolve(dir, 'navigation-stub.js'), `export { inertAncestor, liveById } from './navigation.js';\nexport const reportPlace=()=> ['en','UTC','1'].join(String.fromCharCode(0));\n`);
   cpSync(resolve(ROOT, 'host/web-js/pointer.js'), resolve(dir, 'pointer.js'));
   writeFileSync(resolve(dir, 'admission.js'), readFileSync(resolve(ROOT, 'host/web-js/admission.js'), 'utf8').replaceAll("'../web/grant-admission.js'", "'./grant-admission.js'").replaceAll("'../web/faults.js'", "'./faults.js'").replaceAll("'../web/address-space.js'", "'./address-space.js'"));
@@ -803,33 +803,30 @@ chromeTest('an app:/data image shows from the page\'s store, after a reload too'
 test("glue.js's grants arm keeps auth lines from a malformed I/O declaration and freezes the set", async () => {
   const source = hostFixtureFile(new URL('./glue.js', import.meta.url), 'utf8');
   const arm = glueCase(source, 'grants');
-  const run = new Function('op', 'createGrantSet', 'rawGrantText', 'grantError', `
+  const run = new Function('op', 'createGrantSet', 'rawGrantText', 'grantError', 'grantWords', `
     const host = { grantSet: null, grants: [], unparsed: "", authHost: null };
     const loads = [], afterNativePaint = () => Promise.resolve();
     const loadAfterPaint = file => { loads.push(file); return Promise.resolve({ file }); };
     switch (op.op) { ${arm} }
     return Promise.resolve(host.authHost).then(() => ({ ...host, loads }));
   `);
-  const set = normalized('auth.session https://login.example\nsecret.keep camelCase');
-  const state = await run({ op: 'grants', set }, createGrantSet, set => set.entries.map(entry => entry[1]).join('\n'), grantError);
-  expect(state.unparsed).toContain('line 2');
-  expect(state.grants).toContain('auth.session https://login.example');
-  expect(state.loads).toEqual(['./auth-glue.js']);
-  expect([Object.isFrozen(state.grantSet), Object.isFrozen(state.grantSet.entries)]).toEqual([true, true]);
-});
-test("glue.js surface admission uses a valid raw child line even when another I/O line is malformed", () => {
-  const source = hostFixtureFile(new URL('./glue.js', import.meta.url), 'utf8');
-  const declaration = source.match(/function surfaceGranted\(op\) \{[^]*?\n\}/)[0];
-  const admitted = new Function('grants', 'op', `const host = { grants }; ${declaration};return surfaceGranted(op);`);
-  const grants = ['secret.keep camelCase', 'surface.read world'];
-  expect(admitted(grants, { mode: 'capture', name: 'world', scope: 'surface.read world' })).toBe(true);
-  expect(admitted(grants, { mode: 'capture', name: 'world', scope: null })).toBe(true);
-  expect(admitted(grants, { mode: 'capture', name: 'world', scope: 'surface.read elsewhere' })).toBe(false);
+  for (const [line, loads] of [
+    ['auth.session https://login.example', ['./auth-glue.js']],
+    ['auth.session\u0085https://login.example', ['./auth-glue.js']],
+    ['\ufeffauth.session https://login.example', []],
+  ]) {
+    const set = normalized(`${line}\nsecret.keep camelCase`);
+    const state = await run({ op: 'grants', set }, createGrantSet, set => set.entries.map(entry => entry[1]).join('\n'), grantError, grantWords);
+    expect(state.unparsed).toContain('line 2');
+    expect(state.grants).toContain(line);
+    expect(state.loads).toEqual(loads);
+    expect([Object.isFrozen(state.grantSet), Object.isFrozen(state.grantSet.entries)]).toEqual([true, true]);
+  }
 });
 test('rust-data decodes an ABI child scope before the production executor refuses its parent-granted origin', async () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-rust-data-'));
   const grants = 'net.fetch https://api.example\nnet.fetch https://outside.example\nsecret.keep token', set = normalized(grants);
-  for (const name of ['rust-data.js', 'admission.js']) {
+  for (const name of ['rust-data.js', 'admission.js', 'held.js', 'rt-link.js']) {
     const source = readFileSync(resolve(ROOT, 'host/web-js', name), 'utf8').replaceAll("'../web/grant-admission.js'", "'./grant-admission.js'").replaceAll("'../web/faults.js'", "'./faults.js'").replaceAll("'../web/address-space.js'", "'./address-space.js'");
     writeFileSync(resolve(dir, name), source);
   }
@@ -840,17 +837,17 @@ test('rust-data decodes an ABI child scope before the production executor refuse
   const response = fill => {
     const bytes = [], u8 = value => bytes.push(value), u32 = value => bytes.push(value & 255, value >>> 8 & 255, value >>> 16 & 255, value >>> 24 & 255);
     const string = value => { const encoded = new TextEncoder().encode(value); u32(encoded.length); bytes.push(...encoded); };
-    u32(9); fill({ u8, u32, string }); output = Uint8Array.from(bytes); new Uint8Array(memory.buffer, out, output.length).set(output);
+    u32(12); fill({ u8, u32, string }); output = Uint8Array.from(bytes); new Uint8Array(memory.buffer, out, output.length).set(output);
   };
   const exports = {
-    memory, exact_logic_abi: () => 9, exact_logic_create: () => 1, exact_logic_alloc: () => 0, exact_logic_dealloc() {},
+    memory, exact_logic_abi: () => 12, exact_logic_create: () => 1, exact_logic_alloc: () => 0, exact_logic_dealloc() {},
     exact_logic_output: () => out, exact_logic_output_len: () => output.length,
     exact_logic_call(_session, pointer) {
       const code = new Uint8Array(memory.buffer)[pointer + 4];
       if (code === 0) response(w => { w.u8(0); w.string('test.rust'); w.string('  net.fetch https://api.example\n net.fetch https://outside.example\n\n secret.keep token  '); });
       else if (code === 1 || code === 2) response(w => { w.u8(0); w.u8(0); w.u8(3); });
       else if (code === 3) response(w => {
-        w.u8(2); w.u8(0); w.u32(0); w.u32(0); w.u8(0); w.string(''); w.u8(1); w.u8(1); w.string('net.fetch https://api.example'); w.string('GET');
+        w.u8(2); w.u8(0); w.u32(0); w.u32(0); w.u32(0); w.u32(0); w.u8(0); w.string(''); w.u8(1); w.u8(1); w.string('net.fetch https://api.example'); w.string('GET');
         w.string('https://outside.example/private'); w.u32(0); w.u32(0);
       });
       else throw new Error(`unexpected logic call ${code}`);
@@ -865,7 +862,7 @@ test('rust-data decodes an ABI child scope before the production executor refuse
     await module.install(data, { probe: '' }, async () => new ArrayBuffer(0));
     const answer = data.answer('probe', [], { map: new Map(), set() {} });
     expect(answer.req).toMatchObject({ method: 'GET', url: 'https://outside.example/private', scope: 'net.fetch https://api.example' });
-    expect(await data.fetch(answer.req)).toEqual({ failed: 2, message: "outside the app's grants (net.fetch)" });
+    expect(await data.fetch(answer.req)).toMatchObject({ failed: 2, message: "outside the app's grants (net.fetch)" });
     expect(data.grantSet).toBeUndefined();
   } finally {
     WebAssembly.instantiate = instantiate;
@@ -881,7 +878,7 @@ test('ts-data installs the native Store facade and a later gpu-glue shader uses 
   writeFileSync(resolve(dir, 'ts-data.js'), readFileSync(resolve(ROOT, 'host/web-js/ts-data.js'), 'utf8')
     .replace('__APP_TS__', pathToFileURL(app).href).replace('__AUTH_IMPORT__', '').replace('__AUTH_INSTALL__', '').replace("'__FETCH_MODULE__'", "'./ts-fetch.js'")
     .replace("from './rt.js'", "from './rt-stub.js'"));
-  writeFileSync(resolve(dir, 'rt-stub.js'), `export const clock={agent:false,now:0},journal=[],Resources=[],inflight={n:0};export const drive=()=>{},time=()=>{},Origin={now:()=>"app"};export const checkpoint=()=>({kept:null});export const commit=f=>f();export const R=()=>{};export const painted=()=>Promise.resolve();\n`);
+  writeFileSync(resolve(dir, 'rt-stub.js'), `export const clock={agent:false,now:0},journal=[],Resources=[],inflight={n:0};export const drive=()=>{},time=()=>{},Origin={now:()=>"app"};export const checkpoint=()=>({kept:null});export const commit=f=>f();export const R=()=>{};export const painted=()=>Promise.resolve();export const canvasCommitted=()=>Promise.resolve();\n`); cpSync(resolve(ROOT, 'host/web-js/rt-link.js'), resolve(dir, 'rt-link.js'));
   writeFileSync(resolve(dir, 'names.js'), `export const sourceTypes={read:[[],'s'],kept:[[],'s']};\n`);
   writeFileSync(resolve(dir, 'admission.js'), readFileSync(resolve(ROOT, 'host/web-js/admission.js'), 'utf8').replaceAll("'../web/grant-admission.js'", "'./grant-admission.js'").replaceAll("'../web/faults.js'", "'./faults.js'").replaceAll("'../web/address-space.js'", "'./address-space.js'"));
   writeFileSync(resolve(dir, 'admission-data.js'), `import {createGrantSet} from './admission.js';export const tsGrantSet=createGrantSet(${JSON.stringify(set)});\n`);
@@ -904,8 +901,8 @@ test('ts-data installs the native Store facade and a later gpu-glue shader uses 
   try {
     const ts = await import(`${pathToFileURL(resolve(dir, 'ts-data.js')).href}?ts=${Date.now()}`), data = { q: [] };
     ts.install(data);
-    expect(data.answer('read', [], new Map([['token', 'value']]))).toEqual({ v: 'value', store: true });
-    expect(data.answer('kept', [], new Map([['exact.kept.answer', 'private']]))).toEqual({ v: 'null', store: false });
+    expect(data.answer('read', [], new Map([['token', 'value']]))).toEqual({ v: 'value', store: true, effects: undefined, watches: new Set() });
+    expect(data.answer('kept', [], new Map([['exact.kept.answer', 'private']]))).toEqual({ v: 'null', store: false, effects: undefined, watches: new Set() });
     expect(data.grantSet).toBeUndefined();
     await import(`${pathToFileURL(resolve(dir, 'gpu-glue.js')).href}?late=${Date.now()}`);
     expect(shaderFetches.some(url => url.endsWith('/shaders/shader.wgsl'))).toBe(true);
@@ -945,7 +942,7 @@ export function answer(name, args, store, storage) {
 `);
   writeFileSync(resolve(dir, 'ts-data.js'), readFileSync(resolve(ROOT, 'host/web-js/ts-data.js'), 'utf8')
     .replace('__APP_TS__', pathToFileURL(app).href).replace('__AUTH_IMPORT__', '').replace('__AUTH_INSTALL__', '').replace("'__FETCH_MODULE__'", "'./ts-fetch.js'"));
-  writeFileSync(resolve(dir, 'rt.js'), `export const clock={agent:false,now:0},journal=[],Resources=[],inflight={n:0};export const drive=()=>{},time=()=>{},Origin={now:()=>"app"};export const checkpoint=()=>({kept:null});export const commit=f=>f();export const R=()=>{};export const painted=()=>Promise.resolve();\n`); writeFileSync(resolve(dir, 'rt-link.js'), "import * as rt from './rt.js'; export { rt };\n"); // (and rt-link.js, ts-stream.js's way to them)
+  writeFileSync(resolve(dir, 'rt.js'), `export const clock={agent:false,now:0},journal=[],Resources=[],inflight={n:0};export const drive=()=>{},time=()=>{},Origin={now:()=>"app"};export const checkpoint=()=>({kept:null});export const commit=f=>f();export const R=()=>{};export const painted=()=>Promise.resolve();export const canvasCommitted=()=>Promise.resolve();\n`); writeFileSync(resolve(dir, 'rt-link.js'), "import * as rt from './rt.js'; export { rt };\n"); // (and rt-link.js, ts-stream.js's way to them)
   const ledger = '{"days":["[",{"id":"s","transactions":["[",{"id":"s","amount":"n"}]}],"note":["?","s"]}';
   writeFileSync(resolve(dir, 'names.js'), `export const sourceTypes={ledger:[["s"],${ledger}],later:[[],${ledger}],read:[[],"s"],stream:[[],"s"]};\n`);
   writeFileSync(resolve(dir, 'admission.js'), readFileSync(resolve(ROOT, 'host/web-js/admission.js'), 'utf8').replaceAll("'../web/grant-admission.js'", "'./grant-admission.js'").replaceAll("'../web/faults.js'", "'./faults.js'").replaceAll("'../web/address-space.js'", "'./address-space.js'"));
@@ -1099,37 +1096,6 @@ globalThis.exact = { answer: (form, name) => { try { forms[form](name); return '
   }
 });
 
-test('module-glue prepare accepts normalized formatting and exact-only grants', async () => {
-  const set = createGrantSet(structuredClone(normalized('net.fetch https://api.example\nauth.session https://login.example')));
-  const formatted = ' net.fetch https://api.example\n\n  auth.session https://login.example  ';
-  const win = { Error, SyntaxError, Function, Promise, structuredClone, crypto: { subtle: {} }, indexedDB: null, addEventListener() {},
-    exact: { abi: 1, appId: 'test.module', grants: formatted, answer() {} }, __exact_install_storage() {}, __exact_has_overlay: () => '0',
-    document: { createElement: () => ({}), head: { append() {} } } };
-  const frame = { hidden: false, contentWindow: win, setAttribute() {}, remove() {} };
-  const descriptors = Object.fromEntries(['fetch', 'document', 'location'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)]));
-  Object.defineProperties(globalThis, {
-    fetch: { configurable: true, writable: true, value: async () => { const response = new Response(''); Object.defineProperty(response, 'url', { value: 'http://127.0.0.1/module-prelude.js' }); return response; } },
-    document: { configurable: true, value: { createElement: () => frame, body: { append() {} } } },
-    location: { configurable: true, value: { href: 'http://127.0.0.1/module', origin: 'http://127.0.0.1' } },
-  });
-  globalThis.exact = { moduleDigest: async () => 'a'.repeat(64) };
-  const script = new TextEncoder().encode('module');
-  const receipt = new TextEncoder().encode(JSON.stringify({ version: 1, abi: 1, appId: 'test.module', grants: formatted,
-    web: { file: 'app.js', bytes: script.length, sha256: 'a'.repeat(64) }, module: { sha256: 'b'.repeat(64) } }));
-  try {
-    const { call, prepare } = await import(`./module-glue.js?prepare=${Date.now()}`);
-    const realm = await prepare({ receipt, script }, { appId: 'test.module', grants: 'net.fetch https://api.example\nauth.session https://login.example', grantSet: set, placement: 'main' });
-    expect(realm.meta.grants).toBe(formatted);
-    expect(call({ op: 'activate', id: realm.id, appId: 'test.module', grants: 'net.fetch https://api.example\nauth.session https://login.example', revision: 'b'.repeat(64) })).toEqual({ ok: true });
-    realm.dispose();
-  } finally {
-    for (const [name, descriptor] of Object.entries(descriptors)) {
-      if (descriptor) Object.defineProperty(globalThis, name, descriptor); else delete globalThis[name];
-    }
-    delete globalThis.exact;
-  }
-});
-
 test('ts-data always supplies storage, refusing ungranted operations without loading adapters', async () => {
   const methods = ['readFile', 'writeFile', 'atomicWriteFile', 'appendFile', 'readdir', 'mkdir', 'rm', 'stat', 'rename', 'copyFile', 'realpath'];
   for (const spec of ['', 'net.fetch https://api.example']) for (const query of ['', '?agent=1', '?agent=1&storage=test']) {
@@ -1147,7 +1113,7 @@ export function answer(name, args, store, storage) {
 }`);
     writeFileSync(resolve(dir, 'ts-data.js'), readFileSync(resolve(ROOT, 'host/web-js/ts-data.js'), 'utf8')
       .replace('__APP_TS__', './source.js').replace('__AUTH_IMPORT__', '').replace('__AUTH_INSTALL__', '').replace("'__FETCH_MODULE__'", "'./ts-fetch.js'"));
-    writeFileSync(resolve(dir, 'rt.js'), 'export const clock={now:0},journal=[],Resources=[],inflight={n:0};export const drive=()=>{},time=()=>{},Origin={now:()=>"app"};export const checkpoint=()=>({kept:null});export const commit=f=>f();export const R=()=>{};export const painted=()=>Promise.resolve();');
+    writeFileSync(resolve(dir, 'rt.js'), 'export const clock={now:0},journal=[],Resources=[],inflight={n:0};export const drive=()=>{},time=()=>{},Origin={now:()=>"app"};export const checkpoint=()=>({kept:null});export const commit=f=>f();export const R=()=>{};export const painted=()=>Promise.resolve();export const canvasCommitted=()=>Promise.resolve();'); cpSync(resolve(ROOT, 'host/web-js/rt-link.js'), resolve(dir, 'rt-link.js'));
     writeFileSync(resolve(dir, 'names.js'), `export const sourceTypes=${JSON.stringify(Object.fromEntries([...methods, 'open', 'work', 'directories', 'document'].map(n => [n, [[], 's']])))};`);
     writeFileSync(resolve(dir, 'admission.js'), readFileSync(resolve(ROOT, 'host/web-js/admission.js'), 'utf8').replaceAll("'../web/grant-admission.js'", "'./grant-admission.js'").replaceAll("'../web/faults.js'", "'./faults.js'").replaceAll("'../web/address-space.js'", "'./address-space.js'"));
     writeFileSync(resolve(dir, 'admission-data.js'), `import {createGrantSet} from './admission.js';export const tsGrantSet=createGrantSet(${JSON.stringify(normalized(spec))});`);

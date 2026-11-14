@@ -52,8 +52,14 @@ impl Device for Delayed {
     fn generate_mips(&mut self, _: TextureId) -> Result<Submission> {
         Ok(self.submitted)
     }
-    fn resize_target(&mut self, id: TextureId, _: u32, _: u32) -> Result<TextureId> {
-        Ok(id)
+    fn resize_target(&mut self, id: TextureId, width: u32, height: u32) -> Result<TextureId> {
+        assert!(
+            self.textures[&id] <= self.done,
+            "resized an in-flight target"
+        );
+        let next = self.create_target(width, height)?;
+        self.retire_texture(id)?;
+        Ok(next)
     }
     fn copy_region(
         &mut self,
@@ -161,6 +167,34 @@ fn a_delayed_device_keeps_pool_targets_and_atlas_uploads_separate() {
     d.done = d.submitted;
     d.completed().unwrap();
     assert!(!d.textures.contains_key(&first));
+}
+
+#[test]
+fn pool_resizes_only_completed_unreserved_targets_and_prefers_exact_sizes() {
+    let mut d = Delayed::default();
+    let mut pool = Pool::default();
+    pool.begin(&mut d, [32, 32]).unwrap();
+    let first = pool.take_sized(&mut d, [8, 8]).unwrap();
+    let second = pool.take_sized(&mut d, [16, 16]).unwrap();
+    assert_ne!(first, second, "this frame still reserves the first target");
+    d.render(&Frame::default(), first, None).unwrap();
+
+    pool.begin(&mut d, [32, 32]).unwrap();
+    assert_eq!(pool.take_sized(&mut d, [16, 16]).unwrap(), second);
+    let third = pool.take_sized(&mut d, [24, 24]).unwrap();
+    assert_ne!(third, first, "the first target is still in flight");
+    assert_ne!(third, second, "this frame reserves the second target");
+    assert!(d.retired.is_empty());
+
+    d.done = d.submitted;
+    pool.begin(&mut d, [32, 32]).unwrap();
+    assert_eq!(pool.take_sized(&mut d, [24, 24]).unwrap(), third);
+    let resized = pool.take_sized(&mut d, [12, 12]).unwrap();
+    assert!(![first, second, third].contains(&resized));
+    assert_eq!(d.retired, [(second, Submission(0))]);
+    assert_eq!(pool.take_sized(&mut d, [8, 8]).unwrap(), first);
+    assert_eq!(pool.retained(), 3);
+    assert_eq!(pool.bytes(), (24 * 24 + 12 * 12 + 8 * 8) * 4);
 }
 
 #[test]

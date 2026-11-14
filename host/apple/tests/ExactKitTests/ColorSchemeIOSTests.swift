@@ -68,6 +68,148 @@ final class ColorSchemeIOSTests: XCTestCase {
         XCTAssertEqual(material.traitCollection.userInterfaceStyle, .light)
     }
 
+    func testADeferredFixedSubtreeIsReportedWithTheSessionsScheme() throws {
+        let session = ExactApp.shared.makeSession(label: "color-scheme-deferred-ios")
+        defer { session.destroy() }
+        XCTAssertNil(session.boot(size: CGSize(width: 390, height: 844)).error)
+        let p = session.presenter
+        let parent = NodeView(id: 99_998, kind: "view", presenter: p)
+        p.views[parent.id] = parent
+        p.root.addSubview(parent)
+        parent.applyStyle(["color_scheme": "light"])
+        let native = NodeView(id: 99_997, kind: "view", presenter: p)
+        p.views[native.id] = native
+        p.root.addSubview(native)
+        native.traitOverrides.userInterfaceStyle = .light
+        XCTAssertEqual(native.overrideUserInterfaceStyle, .light)
+        native.updateTraitsIfNeeded()
+        p.apply(wireBatch([
+            ["op": "create", "id": 99_999, "kind": "view", "style": ["background_color": [[255.0, 255.0, 255.0, 255.0], [0.0, 0.0, 0.0, 255.0]]]],
+            ["op": "frame", "id": 99_999, "x": 0.0, "y": 0.0, "w": 10.0, "h": 10.0],
+            ["op": "children", "id": Int(parent.id), "ids": [99_999]],
+        ]))
+        XCTAssertTrue(p.flats.isFlat(99_999))
+        session.noteAppearance(parent)
+        session.noteAppearance(99_999, dark: false)
+        session.noteAppearance(native)
+        XCTAssertTrue(session.unreported.contains(parent.id))
+        XCTAssertTrue(session.unreported.contains(99_999))
+        XCTAssertTrue(session.unreported.contains(native.id))
+        session.scheme(dark: true)
+        XCTAssertEqual(session.viewDark[parent.id], false, "the authored scheme is already settled")
+        XCTAssertEqual(session.viewDark[99_999], false, "the leaf paints in its host's authored scheme")
+        XCTAssertEqual(session.viewDark[native.id], false, "a native override is reported at boot")
+        XCTAssertFalse(session.unreported.contains(parent.id))
+        XCTAssertFalse(session.unreported.contains(99_999))
+        XCTAssertFalse(session.unreported.contains(native.id))
+    }
+
+    @MainActor
+    func testADeferredNativeOverrideIsReportedAfterAFlipFollowingStartup() throws {
+        try assertDeferredOverrideIsReported(.view)
+    }
+
+    /// A controller's override reaches its view through the controller: the
+    /// view's own override stays unspecified.
+    @MainActor
+    func testADeferredChildControllerOverrideIsReportedAfterAFlip() throws {
+        try assertDeferredOverrideIsReported(.childController)
+    }
+
+    /// A presented controller's view sits outside the session's view, under
+    /// the window.
+    @MainActor
+    func testADeferredPresentedControllerOverrideIsReportedAfterAFlip() throws {
+        try assertDeferredOverrideIsReported(.presentedController)
+    }
+
+    private enum NativePin { case view, childController, presentedController }
+
+    /// A route pinned light by `pin` is restyled after the window flips dark
+    /// and before the session hears it, after startup has reported light.
+    @MainActor
+    private func assertDeferredOverrideIsReported(_ pin: NativePin) throws {
+        let session = ExactApp.shared.makeSession(label: "native-scheme-flip")
+        self.session = session
+        let view = ExactView(session: session)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
+        self.window = window
+        window.overrideUserInterfaceStyle = .light
+        let host = UIViewController()
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        host.view.addSubview(view)
+        view.frame = host.view.bounds
+        view.layoutIfNeeded()
+        waitForActivation(session)
+        XCTAssertEqual(session.schemeDark, false)
+        let p = session.presenter
+        p.apply(wireBatch([
+            ["op": "create", "id": 99_997, "kind": "view", "props": ["testId": "native-sheet"]],
+            ["op": "create", "id": 99_998, "kind": "view", "props": ["testId": "native-child"]],
+            ["op": "create", "id": 99_999, "kind": "view", "style": ["background_color": [[255, 255, 255, 255], [0, 0, 0, 255]]]],
+            ["op": "frame", "id": 99_999, "x": 0, "y": 0, "w": 10, "h": 10],
+            ["op": "children", "id": 99_997, "ids": [99_998, 99_999]],
+        ]))
+        let native = try XCTUnwrap(p.views[99_997])
+        let pinned: AnyObject
+        switch pin {
+        case .view:
+            p.root.addSubview(native)
+            pinned = native
+        case .childController:
+            let route = UIViewController()
+            host.addChild(route)
+            p.root.addSubview(route.view)
+            route.didMove(toParent: host)
+            route.view.addSubview(native)
+            pinned = route
+        case .presentedController:
+            let route = UIViewController()
+            route.modalPresentationStyle = .overFullScreen
+            // Set at once; the bundle has no scene to complete it in.
+            host.present(route, animated: false)
+            XCTAssertIdentical(host.presentedViewController, route)
+            addTeardownBlock { host.dismiss(animated: false) }
+            route.view.addSubview(native)
+            pinned = route
+        }
+        func setPin(_ style: UIUserInterfaceStyle) {
+            if let v = pinned as? UIView { v.overrideUserInterfaceStyle = style; v.updateTraitsIfNeeded() }
+            if let c = pinned as? UIViewController { c.overrideUserInterfaceStyle = style; c.updateTraitsIfNeeded() }
+        }
+        setPin(.light)
+        XCTAssertTrue(p.flats.isFlat(99_999))
+        window.overrideUserInterfaceStyle = .dark
+        window.updateTraitsIfNeeded()
+        XCTAssertEqual(view.traitCollection.userInterfaceStyle, .dark, "the session's view follows the window")
+        XCTAssertFalse(native.drawsDark)
+        XCTAssertFalse(try XCTUnwrap(p.views[99_998]).drawsDark)
+        XCTAssertEqual(p.flats.appearance(of: 99_999), false)
+        // Reproduce a restyle between the window's flip and the session's
+        // scheme report, after startup has already reported light.
+        session.scheme(dark: false)
+        for id: UInt32 in [99_997, 99_998, 99_999] {
+            session.noteAppearance(id, dark: false)
+            XCTAssertTrue(session.unreported.contains(id))
+        }
+        session.scheme(dark: true)
+        for id: UInt32 in [99_997, 99_998, 99_999] {
+            XCTAssertEqual(session.viewDark[id], false, "the settled native override reaches paint motion")
+            XCTAssertFalse(session.unreported.contains(id))
+            session.noteAppearance(id, dark: false)
+            XCTAssertEqual(session.viewDark[id], false, "a subsequent settled callback keeps the override")
+        }
+        // Without a scene the presentation never completes, and the
+        // presented controller does not inherit the presenting one's dark.
+        if pin == .presentedController { return }
+        setPin(.unspecified)
+        session.reportColors()
+        for id: UInt32 in [99_997, 99_998, 99_999] {
+            XCTAssertNil(session.viewDark[id], "removing the override restores inheritance")
+        }
+    }
+
     /// A chain of node views carrying one scheme, in a window, each with a
     /// plain view below it that records every appearance it is given.
     @MainActor

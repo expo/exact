@@ -232,7 +232,7 @@ component App
       for e in stack(nav) key=e.id
         column navigationKey=`${e.id}`
           if e.name == "item"
-            image "/__test-slow.png" id="first" width=10 height=10 display="block"
+            image "/__test-slow.png" id="first" width=100 display="block"
 ROWS0            box id="moves" height=100
 ROWS20            box id="other" height=100
 ROWS40"##

@@ -357,7 +357,11 @@ extension Agent {
         var clip: [[String: Any]] = []
         for (n, kind) in clippers.reversed() {
             clip.append(["id": Int(n.id), "kind": kind])
-            if host.window != nil, !host.convert(host.bounds, to: nil).intersects(n.convert(n.bounds, to: nil)) { clipped = true }
+            if host.window != nil {
+                let intersects = kind == "overflow" ? n.overflowClipIntersects(host.convert(host.bounds, to: n))
+                    : host.convert(host.bounds, to: nil).intersects(n.convert(n.bounds, to: nil))
+                if !intersects { clipped = true }
+            }
         }
         node["scroll"] = scroll
         node["clip"] = clip
@@ -1445,7 +1449,8 @@ extension NSWindow.Level {
     /// its pictures are of this window alone (`CGWindowListCreateImage`), with
     /// canvas readbacks composited in place of Metal layers in either occlusion state,
     /// and page visibility is the driver's (`PageFacts.hidden`). A live frame
-    /// observation (`liveFrames`) lifts it while it records.
+    /// observation (`liveFrames`) lifts it while it records, and an iframe
+    /// guest, whose WebKit page is not on that clock, while the session holds one.
     public static let agentBehind = NSWindow.Level(rawValue: NSWindow.Level.normal.rawValue - 1)
 }
 

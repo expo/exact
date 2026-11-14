@@ -79,7 +79,7 @@ pub fn typescript_exporting(
     let mutation_sources: BTreeSet<_> = plan
         .actions
         .iter()
-        .flat_map(|action| exact_runner::vm::instructions(plan.code(action.body)))
+        .flat_map(|action| exact_runner::vm::instructions(plan.read_code(plan.code(action.body)).0))
         .flatten()
         .filter(|instruction| instruction.op == Opcode::Send)
         .map(|instruction| plan.str(StrId(instruction.args[1] as u32)))
@@ -155,6 +155,8 @@ pub fn typescript_exporting(
            function openAuthSession(url: string, options: { callback: string; state: string; ephemeral?: boolean; message?: string }): Promise<string>;\n\
            /** This carrier's auth callback, known before PAR (LLP 1069.006 D2). */\n\
            function authCallback(): string;\n\
+           /** The kept bitmap of the one mounted 2D canvas of `surface`, what its host has drawn, written as a straight-alpha sRGB PNG at device pixels to the `app:/` file `path` under `fs.write` (LLP 1056 D9). Rejects with a DOMException: `NotFoundError` (none mounted), `InvalidStateError` (several, or its size refused), `IndexSizeError` (no bitmap), `QuotaExceededError` (over 8192² px), `NotSupportedError` (`display-p3` or `float16`, or a host that cannot), `NotAllowedError` (the path), `EncodingError`. */\n\
+           function captureCanvas(surface: string, path: string): Promise<{ readonly path: string; readonly width: number; readonly height: number; readonly scale: number }>;\n\
          }\n\
          export interface NativeModule { readonly available: boolean; call(request: Record<string, unknown>): Record<string, unknown>; later(request: Record<string, unknown>): Promise<Record<string, unknown>>; watch(topic: string): void }\n\
          /** A resource-owned WebSocket, for TypeScript on the web JS target and native hosts (LLP 1016.000 D7). Methods are synchronous-mutation-only; refresh or disposal invalidates it. */\n\
@@ -201,7 +203,51 @@ pub fn typescript_exporting(
     // Canvas types describe the data seam even when `draw` is exported from
     // another module; no producer needs to inspect app.ts to include them (LLP 1056 D1).
     out.push_str(include_str!("../../../canvas/types.d.ts"));
+    language_model_tools(plan, &mut out);
     Ok(out)
+}
+
+fn language_model_tools(plan: &Plan, out: &mut String) {
+    let mut tools = Vec::new();
+    for module in &plan.modules {
+        let sub: serde_json::Value =
+            serde_json::from_str(plan.str(module.substitute)).unwrap_or_default();
+        for tool in sub["toolInputs"].as_array().into_iter().flatten() {
+            if !tools.contains(tool) {
+                tools.push(tool.clone());
+            }
+        }
+    }
+    writeln!(
+        out,
+        "\nexport type LanguageModelToolSchemas = {};",
+        serde_json::to_string(&tools).unwrap()
+    )
+    .unwrap();
+    out.push_str(concat!(
+        "type SchemaInput<S, D = S extends { $defs: infer Defs } ? Defs : {}> =\n",
+        "    S extends { $ref: `#/$defs/${infer N}` } ? N extends keyof D ? SchemaInput<D[N], D> : any\n",
+        "  : S extends { enum: readonly (infer E)[] } ? E\n",
+        "  : S extends { type: 'string' } ? string\n",
+        "  : S extends { type: 'number' | 'integer' } ? number\n",
+        "  : S extends { type: 'boolean' } ? boolean\n",
+        "  : S extends { type: 'array'; items: infer I } ? SchemaInput<I, D>[]\n",
+        "  : S extends { type: 'array' } ? unknown[]\n",
+        "  : S extends { type: 'object'; properties: infer P }\n",
+        "    ? { [K in keyof P as K extends SchemaRequired<S> ? K : never]: SchemaInput<P[K], D> }\n",
+        "      & { [K in keyof P as K extends SchemaRequired<S> ? never : K]?: SchemaInput<P[K], D> }\n",
+        "  : S extends { type: 'object' } ? Record<string, unknown>\n",
+        "  : any;\n",
+        "type SchemaRequired<S> = S extends { required: readonly (infer K)[] } ? K : never;\n",
+        "type ToolHandler<T> = T extends { inputSchema: infer S } ? (args: SchemaInput<S>, store: Store, storage: Storage) => unknown : never;\n",
+        "type EveryHandler<H> = (H extends unknown ? (handler: H) => void : never) extends (handler: infer I) => void ? I : never;\n",
+        "/** Handlers receive the model's input object, then the data module's store and storage. */\n",
+        "export type LanguageModelToolHandlers<T extends readonly { name: string; inputSchema: unknown }[]> = {\n",
+        "  [N in T[number]['name']]: EveryHandler<ToolHandler<Extract<T[number], { name: N }>>>;\n",
+        "};\n",
+        "/** The handlers named by literal language-model tools in Contract. */\n",
+        "export type LanguageModelTools = LanguageModelToolHandlers<LanguageModelToolSchemas>;\n",
+    ));
 }
 
 /// The `exports` lines of the design of the app whose `app.contract` is

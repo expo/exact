@@ -8,6 +8,7 @@
 #if os(macOS)
 import AppKit
 import XCTest
+import ExactCore
 @testable import ExactKit
 
 final class RowReuseMacTests: XCTestCase {
@@ -170,6 +171,45 @@ final class RowReuseMacTests: XCTestCase {
         }
     }
 
+    /// A row rebound to another item writes its wrapper's key and place in
+    /// the set and its row's test id. None of them changes what those boxes
+    /// paint, so neither is invalidated for them; a prop that paints is, and
+    /// a prop that goes is taken for one that may have painted.
+    func testARowsKeyAndTestIdRedrawNothingAndAPaintingPropDoes() throws {
+        let f = try TableFixture(count: 200, table: true, source: Self.source(count: 200))
+        fixtures.append(f)
+        let wrapper = try XCTUnwrap(f.mounted[3]), row = try f.node("row-3")
+        func invalidated(_ v: NodeView) -> Bool { v.needsDisplay || v.layer?.needsDisplay() == true }
+        func settled() { f.window.displayIfNeeded(); CATransaction.flush() }
+        settled()
+        XCTAssertFalse(invalidated(wrapper) || invalidated(row), "nothing is waiting to draw")
+        wrapper.applyProps(set: ["listItemKey": "k900", "accessibilityPosInSet": "901", "accessibilitySetSize": "200"], clear: [])
+        row.applyProps(set: ["testId": "row-900"], clear: [])
+        XCTAssertFalse(invalidated(wrapper), "a new key and place in the set paint nothing")
+        XCTAssertFalse(invalidated(row), "a new test id paints nothing")
+        row.applyProps(set: ["testId": "row-901", "accessibilityLabel": "Item 901"], clear: [])
+        XCTAssertTrue(invalidated(row), "with a prop that may paint, the box is drawn again")
+        settled()
+        row.applyProps(set: [:], clear: ["accessibilityLabel"])
+        XCTAssertTrue(invalidated(row), "a prop that goes may have painted")
+        XCTAssertFalse(NodeView.paints(set: ["testId": "row-902"], clear: []))
+    }
+
+    /// A batch that only says where lists stand (a report's answer that
+    /// moved no view, half a fling's batches) skips the passes over the
+    /// views; one that carries anything else of the page's does not.
+    func testABatchOfListSnapshotsAloneIsTheListsAlone() {
+        func batch(_ ops: [BatchOp], error: String? = nil) -> Batch { Batch(ops: ops, timers: false, motion: false, clock: nil, error: error) }
+        let snapshot = BatchOp(op: .collections)
+        XCTAssertTrue(Presenter.onlySnapshots(batch([snapshot])))
+        XCTAssertTrue(Presenter.onlySnapshots(batch([snapshot, snapshot])))
+        XCTAssertFalse(Presenter.onlySnapshots(batch([])), "an empty batch is not one")
+        XCTAssertFalse(Presenter.onlySnapshots(batch([snapshot, BatchOp(op: .props, nodeID: 3)])))
+        XCTAssertFalse(Presenter.onlySnapshots(batch([snapshot], error: "refused")), "an error is said")
+        var held = batch([snapshot]); held.wakelock = true
+        XCTAssertFalse(Presenter.onlySnapshots(held), "a wake lock is taken")
+    }
+
     /// A focused row is pinned: it stays mounted with its item and its
     /// focus wherever the list scrolls, and is never rebound.
     func testAFocusedRowKeepsItsItemAndItsFocus() throws {
@@ -192,7 +232,7 @@ final class RowReuseMacTests: XCTestCase {
     /// picture. A rebound image of another source shows the new one.
     func testAFloatingImagesWindowClosesWhenItsRowIsRebound() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("row-reuse-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("assets"), withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         for (name, color) in [("even.png", NSColor.systemRed), ("odd.png", NSColor.systemBlue)] {
             let rep = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 8, pixelsHigh: 8, bitsPerSample: 8, samplesPerPixel: 4,
@@ -201,13 +241,13 @@ final class RowReuseMacTests: XCTestCase {
             NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
             color.setFill(); NSRect(x: 0, y: 0, width: 8, height: 8).fill()
             NSGraphicsContext.restoreGraphicsState()
-            try XCTUnwrap(rep.representation(using: .png, properties: [:])).write(to: root.appendingPathComponent(name))
+            try XCTUnwrap(rep.representation(using: .png, properties: [:])).write(to: root.appendingPathComponent("assets").appendingPathComponent(name))
         }
         let previous = ExactApp.shared.assetRoot
         ExactApp.shared.assetRoot = root
         defer { ExactApp.shared.assetRoot = previous }
         let source = Self.source(count: 2_000).replacingOccurrences(
-            of: #"image (r % 2 == 0 ? "symbol:star" : "symbol:heart")"#, with: #"image (r % 2 == 0 ? "even.png" : "odd.png")"#)
+            of: #"image (r % 2 == 0 ? "symbol:star" : "symbol:heart")"#, with: #"image (r % 2 == 0 ? "assets/even.png" : "assets/odd.png")"#)
         let f = try TableFixture(count: 2_000, table: false, source: source)
         fixtures.append(f)
         func spin(_ note: String, _ done: () -> Bool) {
@@ -222,7 +262,7 @@ final class RowReuseMacTests: XCTestCase {
         for y in stride(from: CGFloat(300), through: 4_000, by: 337) { f.scroll(to: y) }
         XCTAssertTrue(f.presenter.views[row.id] === row && f.item(row) != 4, "item 4's row was rebound to item \(f.item(row))")
         XCTAssertFalse(PictureInPictureHost.floating.contains { $0.node === picture }, "the old item's window closed with its image")
-        let item = f.item(row), wanted = item % 2 == 0 ? "even.png" : "odd.png"
+        let item = f.item(row), wanted = item % 2 == 0 ? "assets/even.png" : "assets/odd.png"
         XCTAssertEqual(picture.imageSource, wanted)
         spin("the new item's picture loads") { picture.raster != nil }
     }

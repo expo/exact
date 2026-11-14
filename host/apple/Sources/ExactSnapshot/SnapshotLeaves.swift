@@ -31,32 +31,68 @@ struct SnapshotTextView: View {
             let frames = node.lines.map { line in
                 CGRect(x: box.minX + line.origin.x, y: box.minY + line.origin.y - line.ascent, width: max(0, line.width), height: line.ascent + line.descent)
             }
+            let groups = opacityGroups()
+            groupView(0, groups: groups, frames: frames)
+        }
+    }
+
+    private struct Group {
+        var alpha = 1.0
+        var runs: Set<Int> = []
+        var children: [Int] = []
+    }
+
+    private func opacityGroups() -> [Group] {
+        var groups = [Group()], byId: [UInt32: Int] = [:]
+        for (index, run) in node.runs.enumerated() {
+            var owner = 0
+            for step in run.opacityGroups {
+                let child: Int
+                if let found = byId[step.box] { child = found }
+                else {
+                    child = groups.count
+                    groups.append(Group(alpha: step.alpha))
+                    byId[step.box] = child
+                    groups[owner].children.append(child)
+                }
+                owner = child
+            }
+            groups[owner].runs.insert(index)
+        }
+        return groups
+    }
+
+    private func groupView(_ index: Int, groups: [Group], frames: [CGRect]) -> AnyView {
+        let group = groups[index]
+        return AnyView(ZStack(alignment: .topLeading) {
             FrameLayout(frames: frames, size: node.frame.size) {
                 ForEach(Array(node.lines.enumerated()), id: \.offset) { _, line in
-                    text(line)
-                        .lineLimit(1)
-                        .fixedSize()
-                        .widgetAccentable()
+                    text(line, selected: group.runs).lineLimit(1).fixedSize().widgetAccentable()
                 }
             }
-        }
+            ForEach(group.children, id: \.self) { child in
+                groupView(child, groups: groups, frames: frames)
+            }
+        }.compositingGroup().opacity(group.alpha))
     }
 
     /// The line's runs, each in the font the kernel measured it in and its
     /// own colour or the paragraph's, concatenated into one `Text`. The
     /// text is WP1's `Line.text`: a clamped line's cut and "…" come from
     /// there. A run's background and `href` are refused by the profile.
-    private func text(_ line: HeadlessSession.Line) -> Text {
+    private func text(_ line: HeadlessSession.Line, selected: Set<Int>) -> Text {
         let dark = scheme == .dark
         let ink = SnapshotColor.style(SnapshotStyle(node).color("text_color"), dark: dark, context: .ink) ?? AnyShapeStyle(.primary)
         let segments = line.segments.isEmpty ? [HeadlessSession.Segment(run: 0, text: line.text)] : line.segments
         return segments.reduce(Text(verbatim: "")) { whole, segment in
             guard segment.run < node.runs.count else { return whole + Text(verbatim: segment.text) }
             let run = node.runs[segment.run]
-            let part = Text(verbatim: segment.text)
-                .font(Font(run.font))
-                .foregroundStyle(SnapshotColor.style(ColorRow(run.color), dark: dark, context: .ink) ?? ink)
-            return whole + SnapshotTextPaint.styled(part, run: run, node: node)
+            // Every group lays out the whole line; another group's runs keep
+            // their metrics and paint nothing.
+            let shown = selected.contains(segment.run) && !run.hidden
+            let part = Text(verbatim: segment.text).font(Font(run.font))
+                .foregroundStyle(shown ? (SnapshotColor.style(ColorRow(run.color), dark: dark, context: .ink) ?? ink) : AnyShapeStyle(Color.clear))
+            return whole + SnapshotTextPaint.styled(part, run: run, node: node, paints: shown)
         }
     }
 }
@@ -68,9 +104,11 @@ package enum SnapshotTextPaint {
     package static func decoration(_ run: HeadlessSession.Run, node: HeadlessSession.Node) -> String {
         [node.style["text_decoration_line"]?.string ?? "", run.decoration].filter { !$0.isEmpty }.joined(separator: " ")
     }
-    static func styled(_ text: Text, run: HeadlessSession.Run, node: HeadlessSession.Node) -> Text {
+    /// Without `paints`, only the tracking, which moves the text after it.
+    static func styled(_ text: Text, run: HeadlessSession.Run, node: HeadlessSession.Node, paints: Bool = true) -> Text {
         var part = text
         if run.letterSpacing != 0 { part = part.tracking(run.letterSpacing) }
+        guard paints else { return part }
         let decoration = decoration(run, node: node)
         if decoration.contains("underline") { part = part.underline() }
         if decoration.contains("line-through") { part = part.strikethrough() }
@@ -370,8 +408,10 @@ public final class SnapshotRasters {
     package var keptKeys: [String] { lock.lock(); defer { lock.unlock() }; return kept.map(\.key) }
 
     public func decode(_ source: String?, roots: [URL], appGroup: URL?, appID: String?, box: CGSize, fit: String, scale: CGFloat) -> Decoded? {
-        guard let source, !source.isEmpty, let url = Self.resolve(source, roots: roots, appGroup: appGroup, appID: appID) else { return nil }
-        return decode(url, box: box, fit: fit, scale: scale)
+        guard let source, !source.isEmpty, let input = Self.input(source, roots: roots, appGroup: appGroup, appID: appID),
+              let provider = FileImageSource.provider(input.file),
+              let imageSource = CGImageSourceCreateWithDataProvider(provider, nil) else { return nil }
+        return decode(imageSource, key: input.url.path, box: box, fit: fit, scale: scale)
     }
 
     /// The decode a box needs: its own pixels for `fill`, `contain` and
@@ -379,8 +419,13 @@ public final class SnapshotRasters {
     /// dimension fills the box, which is the window shown; either scaled
     /// down to the pixel budget's area.
     public func decode(_ url: URL, box: CGSize, fit: String, scale: CGFloat) -> Decoded? {
+        guard let imageSource = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        return decode(imageSource, key: url.path, box: box, fit: fit, scale: scale)
+    }
+
+    private func decode(_ imageSource: CGImageSource, key: String, box: CGSize, fit: String, scale: CGFloat) -> Decoded? {
         let pixels = CGSize(width: box.width * scale, height: box.height * scale)
-        guard let natural = Self.natural(url), natural.width > 0, natural.height > 0 else { return nil }
+        guard let natural = Self.natural(imageSource), natural.width > 0, natural.height > 0 else { return nil }
         var size: CGSize
         if fit == "cover" {
             let cover = max(pixels.width / natural.width, pixels.height / natural.height)
@@ -395,15 +440,14 @@ public final class SnapshotRasters {
             let factor = (CGFloat(pixelBudget) / area).squareRoot()
             size = CGSize(width: size.width * factor, height: size.height * factor)
         }
-        return decode(url, longest: Int(max(1, max(size.width, size.height).rounded(.up))), natural: natural)
+        return decode(imageSource, key: key, longest: Int(max(1, max(size.width, size.height).rounded(.up))), natural: natural)
     }
 
-    private func decode(_ url: URL, longest: Int, natural: CGSize) -> Decoded? {
-        let key = "\(url.path)|\(longest)"
+    private func decode(_ imageSource: CGImageSource, key: String, longest: Int, natural: CGSize) -> Decoded? {
+        let key = "\(key)|\(longest)"
         lock.lock()
         if let hit = kept.first(where: { $0.key == key }) { lock.unlock(); return hit.value }
         lock.unlock()
-        guard let imageSource = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
@@ -426,8 +470,12 @@ public final class SnapshotRasters {
 
     /// The image's pixel size, upright (EXIF orientations 5–8 swap the sides).
     public static func natural(_ url: URL) -> CGSize? {
-        guard let imageSource = CGImageSourceCreateWithURL(url as CFURL, nil),
-              let properties = CGImageSourceCopyPropertiesAtIndex(imageSource, 0, nil) as? [CFString: Any],
+        guard let imageSource = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        return natural(imageSource)
+    }
+
+    private static func natural(_ imageSource: CGImageSource) -> CGSize? {
+        guard let properties = CGImageSourceCopyPropertiesAtIndex(imageSource, 0, nil) as? [CFString: Any],
               let width = (properties[kCGImagePropertyPixelWidth] as? NSNumber)?.doubleValue,
               let height = (properties[kCGImagePropertyPixelHeight] as? NSNumber)?.doubleValue else { return nil }
         let orientation = (properties[kCGImagePropertyOrientation] as? NSNumber)?.intValue ?? 1
@@ -438,19 +486,23 @@ public final class SnapshotRasters {
     /// `app:/tmp/…` under the app's directories in the group container,
     /// laid out as the app lays them out (`picker::app_dirs`), so a widget
     /// reads the file the app wrote; any other name under one of the bundle
-    /// roots; `..` and a root alone are refused, and the resolved path must
-    /// stay under its root.
-    public static func resolve(_ source: String, roots: [URL], appGroup: URL?, appID: String?) -> URL? {
+    /// roots. An app file opens through no symbolic link; `..` and a root
+    /// alone are refused. The descriptor survives replacement of its name.
+    public static func open(_ source: String, roots: [URL], appGroup: URL?, appID: String?) -> FileHandle? {
+        input(source, roots: roots, appGroup: appGroup, appID: appID)?.file
+    }
+
+    private static func input(_ source: String, roots: [URL], appGroup: URL?, appID: String?) -> (url: URL, file: FileHandle)? {
         if source.hasPrefix("app:/") {
             let parts = source.dropFirst(5).split(separator: "/", omittingEmptySubsequences: false).map(String.init)
             guard let appGroup, let appID, parts.count >= 2, let root = appRoots(group: appGroup, appID: appID)[parts[0]],
-                  !parts.dropFirst().contains(where: { $0.isEmpty || $0 == "." || $0 == ".." }) else { return nil }
-            return confined(parts.dropFirst().reduce(root) { $0.appending(path: $1) }, under: root)
+                  let file = AppFileWalk.open(root, Array(parts.dropFirst())) else { return nil }
+            return (parts.dropFirst().reduce(root) { $0.appending(path: $1) }, file)
         }
         for root in roots {
             let candidate: URL = source.hasPrefix("/") ? URL(fileURLWithPath: source)
                 : root.appending(path: source.hasPrefix("assets/") ? source : "assets/" + source)
-            if let url = confined(candidate, under: root) { return url }
+            if let url = confined(candidate, under: root), let file = try? FileHandle(forReadingFrom: url) { return (url, file) }
         }
         return nil
     }

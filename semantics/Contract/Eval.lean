@@ -112,6 +112,12 @@ def formatting (tables : Format.Tables) (f : String) (args : List Value) : Resul
   | "formatDate", [.num e, .num o, .str "medium", .str ""] => .ok (.str (Format.formatDate e o false))
   | "formatDate", [.num e, .num o, .str "month-year", .str ""] => .ok (.str (Format.formatDate e o true))
   | "formatDate", [.num e, .num o, .str "iso", .str ""] => .ok (.str (Format.formatIsoDate e o))
+  | "formatDate", [.str k, .num o, .str "medium", .str ""] =>
+    .ok (.str ((Format.dayKeyWall k o).elim "" (Format.formatDate · 0 false)))
+  | "formatDate", [.str k, .num o, .str "month-year", .str ""] =>
+    .ok (.str ((Format.dayKeyWall k o).elim "" (Format.formatDate · 0 true)))
+  | "formatDate", [.str k, .num o, .str "iso", .str ""] =>
+    .ok (.str ((Format.dayKeyWall k o).elim "" (Format.formatIsoDate · 0)))
   -- LLP 1116.020 D8: a day's label, relative to the `now` the app passes.
   | "formatDay", [.num t, .num n, .num o, .str "day", .str ""] => .ok (.str (Format.formatDay t n o "day"))
   | "formatDay", [.num t, .num n, .num o, .str "day-time", .str ""] => .ok (.str (Format.formatDay t n o "day-time"))
@@ -131,6 +137,12 @@ def formatting (tables : Format.Tables) (f : String) (args : List Value) : Resul
     inLocale tables loc fun r _ => .some ((Format.wallMs e o).elim "" (Format.dateIn r · 12 13))
   | "formatDate", [.num e, .num o, .str "iso", .str loc] =>
     inLocale tables loc fun _ _ => .some (Format.formatIsoDate e o)
+  | "formatDate", [.str k, .num o, .str "medium", .str loc] =>
+    inLocale tables loc fun r _ => .some ((Format.dayKeyWall k o).elim "" (Format.dateIn r · 10 11))
+  | "formatDate", [.str k, .num o, .str "month-year", .str loc] =>
+    inLocale tables loc fun r _ => .some ((Format.dayKeyWall k o).elim "" (Format.dateIn r · 12 13))
+  | "formatDate", [.str k, .num o, .str "iso", .str loc] =>
+    inLocale tables loc fun _ _ => .some ((Format.dayKeyWall k o).elim "" (Format.formatIsoDate · 0))
   | "formatDay", [.num t, .num n, .num o, .str mode, .str loc] =>
     if mode = "day" ∨ mode = "day-time" ∨ mode = "list" then
       inLocale tables loc fun r c => .some (Format.dayIn r c t n o mode)

@@ -119,6 +119,28 @@ fn an_app_file_iframe_keeps_its_source_for_the_file_loader() {
     assert!(!js.contains("about:blank"), "{js}");
 }
 
+/// @ref LLP 1047.002 D1 — iframes.js (an iframe's guest origin, sources and app
+/// files) is linked only by a plan with an iframe, a repeated one included.
+#[test]
+fn iframes_link_only_where_a_plan_has_an_iframe() {
+    let emitted = |view: &str| {
+        let source = format!(
+            "component App\n  state url = \"https://example.com\"\n  view\n    column\n{view}"
+        );
+        crate::emit::emit(&contract::compile(&source).unwrap(), false, false)
+            .unwrap()
+            .js
+    };
+    for view in [
+        "      iframe src=url\n",
+        "      for u in [url] key=u\n        iframe src=u sandbox=\"allow-scripts\"\n",
+    ] {
+        assert!(emitted(view).contains("import\"./iframes.js\";"), "{view}");
+    }
+    let js = emitted("      link href=url\n        text \"Go\"\n");
+    assert!(!js.contains("iframes.js"), "{js}");
+}
+
 /// LLP 1055 D4: the SVG namespace follows the node type, so a module's custom
 /// element named `felt-…` is HTML and the glue attaches its factory.
 #[test]
@@ -1440,5 +1462,32 @@ fn delivery_version_fields_are_emitted_for_baked_and_unbaked_plans() {
     for plan in [plan.clone(), contract::bake(plan, Answers).unwrap()] {
         let js = crate::emit::emit(&plan, false, false).unwrap().js;
         assert!(js.contains(r#"["version","buildNumber"]"#), "{js}");
+    }
+}
+
+#[test]
+fn a_record_field_named_proto_is_an_own_descriptor_field() {
+    let mut b = exact_plan::builder::PlanBuilder::new(0, 0);
+    let s = b.primitive(exact_plan::TypeKind::String);
+    let inner = b.record("Inner", &[("__proto__", s)]);
+    let record = b.record("Row", &[("__proto__", s), ("label", s), ("inner", inner)]);
+    let plan = b.finish().unwrap();
+    for descriptor in [
+        crate::emit::type_json(&plan, record),
+        crate::emit::surface_type_json(&plan, record),
+    ] {
+        let script = format!(
+            "const t={descriptor},keys=JSON.stringify([Object.keys(t),Object.keys(t.inner)]);
+             if(keys!=='[[\"__proto__\",\"label\",\"inner\"],[\"__proto__\"]]')throw Error(keys);"
+        );
+        let out = std::process::Command::new("bun")
+            .args(["--eval", &script])
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
     }
 }

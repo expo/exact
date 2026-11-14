@@ -57,23 +57,24 @@ import { documentTypes, exportedTypes, importedTypes, openingLinks, webPageTypes
 import { appClip, associatedDomains as claimedDomains, appleExecutableName, HOST_DEV, PINNED_RUST, checkModuleRoster, moduleDirectory, copyShaders, appleCargoClaims, awaitBuildOutput, cargoLibraryTarget, claimBuildOutput, appSourceKey, bakeOutput, buildBake, contractLast, bakeTarget, developmentBuildEnv, developmentURLScheme, gpuModules, hermesBundle, injectedProfiles, resolveApp, verifyBakeFiles } from '../../scripts/app.mjs';
 import { copyStaticTreeIfPresent, listAssets } from '../web/serve.mjs';
 import { startSweep } from '../../scripts/sweep.mjs';
+import { thinTextures } from '../../scripts/texture-families.mjs';
 import { bundleShaderLibraries } from './shader-libraries.mjs';
 import { appleBuildRefusal, guardFlags, reportBuilt } from '../../scripts/help.mjs';
 import { appleImplementations } from '../../js/bake/src/typescript.mjs';
 import { composedModule, moduleSeam, systemFrameworks } from './compose.mjs';
 import { associatedDomains, entitlementValue, grantEntitlements, macSigning, merchantEntitlement, signInEntitlement } from './presence.mjs';
 import { writeDataKeys } from './data-keys.mjs';
-import { backgroundKeys, declaredOrigin, interfaceStyle, localNetworking, memoryEntitlements, modulePlist, nfcKeys, startLocation, storeKeys, transportSecurity, updateActivation, withPackageKeys } from './plist.mjs';
+import { backgroundKeys, firstFrameKeys, declaredOrigin, interfaceStyle, localNetworking, memoryEntitlements, modulePlist, nfcKeys, startLocation, storeKeys, transportSecurity, updateActivation, withPackageKeys } from './plist.mjs';
 import { compileFixtures, iosTestRuns, macTests, onlyClasses } from './xctest.mjs';
 import { APPLE_STATIC_TREES, appIcon, appleRefusals, buildInfo, iosAssets, appleAssets, appleAssetCatalogInventory, copyNativeResources, signingOrder, helperEntitlements, plistFile, wrapFramework, signedGpuProduct, assertArchiveFrameworks } from './assets.mjs';
-import { auditLaunchParts, launchModules, launchServices, serviceArgs, writeLaunchParts } from './launch-parts.mjs';
+import { auditLaunchParts, launchModules, launchPartsObjects, launchServices, serviceArgs, writeLaunchParts } from './launch-parts.mjs';
 import { keptModules } from './modules.mjs';
 import { appleLinkArgs, embedLibrary, prepareLibrary } from '../../scripts/package-libraries.mjs';
 import { quiet, quietFor } from './quiet.mjs';
 import { keptCrates } from './crates.mjs';
 import { appleCargo } from '../../scripts/cargo-check.mjs';
 import { linkedPlanArgs, placeLinkedPlan } from '../../scripts/linked-plan.mjs';
-import { appleDeadStrip, stripForDistribution, stripProductionExecutable, appleComposition, appleProduction, appleLaunchFrameworks, appleLaunchLinkArgs, assertCapabilityFrameworks, assertLinkedSdk, compiledTargets, deploymentTargets, iosSimulatorTarget, linksByPlan } from './link.mjs';
+import { appleDeadStrip, recordMinimumOS, stripForDistribution, stripProductionExecutable, appleComposition, appleProduction, appleLaunchFrameworks, appleLaunchLinkArgs, assertCapabilityFrameworks, assertLinkedSdk, compiledTargets, deploymentTargets, iosSimulatorTarget, linksByPlan } from './link.mjs';
 export { appIcon, appleEmbedOnly, iosAssets, documentTypes, exportedTypes, importedTypes, stripForDistribution, stripProductionExecutable };
 import { runMac, IPAD_ORIENTATIONS, orientationKeys, allows, chooseSimulator, deviceLaunchArgs, developmentLaunchEnvironment, identity, installedBuild, macIdentity, phone, replacedNote, profile, showSimulator, simulator, simulators, useXcode, appleEmbedOnly, appleSdkName, compilesSwiftHost, xcodeRefusal } from './devices.mjs';
 import { fileURLToPath } from 'node:url';
@@ -164,7 +165,7 @@ export function appleArtifacts(app, { destination = 'macos', composition, trust 
   const namespace = resolve(owner, destination, target, composition, trust);
   // `product` is the Swift package's; `executable`, what it is linked to, is the app's name, as Xcode's (a sample host keeps its own).
   const product = destination === 'macos' ? (host ? 'ExactHostMac' : 'ExactMac') : (host ? 'ExactHostIOS' : 'ExactIOS');
-  const executable = host ? product : appleExecutableName(app);
+  const executable = host ? product : appleExecutableName(app, destination !== 'macos');
   const products = resolve(namespace, host ? 'host' : 'standalone');
   // The Swift host is the same code for every app, so its compile is shared:
   // one SwiftPM scratch per destination, deployment target and trust, whatever
@@ -272,7 +273,7 @@ export function copyAppleStaticTrees(source, target, trees = APPLE_STATIC_TREES.
 }
 
 /** Install the assembled bundle on the simulator, saying a development build put over another kind (`replacedNote`) unless the caller kept that one (`said`). */
-export function install(dev, bundle, app, host = false, said = false, executable = host ? 'ExactHostIOS' : appleExecutableName(app)) {
+export function install(dev, bundle, app, host = false, said = false, executable = host ? 'ExactHostIOS' : appleExecutableName(app, true)) {
   if (!bundle || !existsSync(bundle)) throw new Error('build the selected app with --ios first');
   assertAppleIdentity(app, resolve(bundle, executable));
   const replaced = !host && !said && bundle.includes('/development/') ? installedBuild(dev.udid, app.id) : null, r = read('xcrun', ['simctl', 'install', dev.udid, bundle]);
@@ -402,7 +403,7 @@ export const bundleVersion = () => ({
 });
 
 /** The iOS `Info.plist` from the manifest (LLP 1030 D2: one declaration; `build.mjs` consumes what it generates). The dev client's local-networking permission is `host.ios.localNetworking` (a string: the prompt); the store-required version numbers are counters bake owns, not authored. */
-export const infoPlist = (app, device = false, { executable = appleExecutableName(app), id = app.id, name = app.displayName, development = null, icon = {}, distribution = null, distributed = false, reach = null, tv = false, clip = false } = {}) => {
+export const infoPlist = (app, device = false, { executable = appleExecutableName(app, true), id = app.id, name = app.displayName, development = null, icon = {}, distribution = null, distributed = false, reach = null, tv = false, clip = false } = {}) => {
   const ios = app.manifest.host?.ios ?? {};
   // tvOS reuses the manifest's iOS section; Apple TV is device family 3.
   const families = tv ? [3] : (ios.deviceFamily ?? ['iphone', 'ipad']).map((f) => (f === 'ipad' ? 2 : 1));
@@ -713,6 +714,8 @@ async function main(args, lockHeld = false) {
   // A development archive (--development) ships no dSYM, so SwiftPM writes no debug info for dsymutil to gather (~5 s).
   const swiftArgs = ['build', '-c', swiftWhole ? 'release' : 'debug', '--scratch-path', swiftBuildRoot, ...(swiftWhole ? [] : ['-Xswiftc', '-O', ...appleDeadStrip]), ...(args.includes('--development') ? ['-debug-info-format', 'none'] : []),
     ...(production && optimize === 'size' ? ['-Xswiftc', '-Osize', '-Xswiftc', '-Xfrontend', '-Xswiftc', '-internalize-at-link'] : [])], executableLink = [];
+  // The app's own `minimumOS` when the compiles are the floor's: recorded in each product after its link (recordMinimumOS).
+  let recordedMinimum = null;
   if (ios) {
     swiftArgs.push(
       '--triple', iosTripleFor(app, device, tv, compiled.ios),
@@ -731,12 +734,11 @@ async function main(args, lockHeld = false) {
     // `designRequiresCompatibility`: the link records the iOS 18 SDK (macOS's
     // case below says why); this later `-platform_version` wins.
     if (designCompatible(app, 'ios')) swiftArgs.push('-Xlinker', '-platform_version', '-Xlinker', destination, '-Xlinker', targets.ios, '-Xlinker', COMPATIBLE_SDK.ios);
-    // Compiled for the floor (`compiledTargets`), the executable still links for the app's `minimumOS`, which this
-    // later `-platform_version` records. Only the products' links take it, so the compiles stay every app's.
-    else if (compiled.ios !== targets.ios) executableLink.push('-Xlinker', '-platform_version', '-Xlinker', destination, '-Xlinker', targets.ios, '-Xlinker', read('xcrun', ['--sdk', sdkName, '--show-sdk-version']).stdout.trim());
-    // A development device archive ships no dSYM. Its debug map names the object files it was linked from, under the
-    // app's build directory, whose path holds the app's id; relative to that directory, the executable names no app.
-    if (device && args.includes('--development')) executableLink.push('-Xlinker', '-oso_prefix', '-Xlinker', `${appleArtifacts(app, { destination }).owner}/`);
+    // Compiled for the floor (`compiledTargets`), the executable still records the app's `minimumOS`: written into its
+    // LC_BUILD_VERSION once it is linked (recordMinimumOS). As a `-platform_version` among the products' link flags it
+    // made SwiftPM compile the whole host again whenever the minimum differed from the last build's (~33 s on a Linux
+    // builder, expo/exact-build#176), so every product links with every app's arguments.
+    else if (compiled.ios !== targets.ios) recordedMinimum = targets.ios;
   } else {
     // The same `--sysroot` on macOS: clang reads no SDK version from it, so the link recorded
     // the deployment target as the SDK (`sdk 14.0`), and AppKit, which keys its macOS 26 design
@@ -759,6 +761,9 @@ async function main(args, lockHeld = false) {
     ...(tv ? { TVOS_DEPLOYMENT_TARGET: compiled.ios } : ios ? { IPHONEOS_DEPLOYMENT_TARGET: compiled.ios } : { MACOSX_DEPLOYMENT_TARGET: targets.macos }),
     // Package.swift's `platforms` entry, which is what SwiftPM compiles each target for (not --triple's OS version).
     ...(ios || tv ? { EXACT_IOS_DEPLOYMENT: compiled.ios } : {}),
+    // Under the native build system the launch modules and ExactIOS compile at the app's minimum (Package.swift), so
+    // the host shares the floor's compile (compiledTargets). Empty elsewhere, so a value left in the shell never applies.
+    EXACT_LAUNCH_PARTS_TARGET: launchPartsDir && (ios || tv) && process.platform === 'linux' ? iosTripleFor(app, device, tv) : '',
     EXACT_LIB_DIR: libDir,
     EXACT_LIB: crate.replace(/-/g, '_'),
     EXACT_APP_COMPOSITION: composition,
@@ -888,6 +893,7 @@ async function main(args, lockHeld = false) {
     }
     bakedPlan = readFileSync(resolve(cargoEnv.EXACT_BAKE_OUTPUT, `${ios ? 'ios' : 'macos'}-${target}.plan`));
     copyAppleStaticTrees(app.dir, capture, [['assets', 'assets'], ['deck', 'deck']]);
+    thinTextures(capture, buildReceipt.compat.inputs.textureFamily); // the one family the bake's roster kept, if it thinned
     copyAppleStaticTrees(resolve(cargoEnv.EXACT_BAKE_OUTPUT, `${ios ? 'ios' : 'macos'}-${target}.entries`), capture, [['plans', 'plans'], ['typescript', 'typescript'], ['activities', 'activities']]);
     copyShaders(app, resolve(capture, 'shaders'));
     // The MSL development runs recorded, compiled for this SDK (shader-libraries.mjs).
@@ -983,12 +989,16 @@ async function main(args, lockHeld = false) {
   // the scratch is taken before it is linked and kept until the products link, and the app takes its own copy.
   const waitForSwift = () => awaitBuildOutput(app, paths.swiftLock, (owner) => console.log(`host/apple: waiting for the Swift build of ${owner} in ${swiftBuildRoot.replace(root + '/', '')}`));
   const widgetClaim = widgets ? waitForSwift() : null;
-  const core = widgets ? sharedWidgetCore({ app, prepared: widgetCore, libDir, crate, env, runApple, linkedPlan, library }) : null;
-  const shared = core && { ...core, framework: placeCoreFramework(core.framework, resolve(binDir, 'ExactCore.framework'), app, ios ? 'ios' : 'macos') };
+  // An iOS development core links reserved room and this app's plan is fitted into its copy (#477); a shipped one has none.
+  const reserve = ios && !production && !distribution && linkedPlan ? linkedPlan.dir : null, core = widgets ? sharedWidgetCore({ app, prepared: widgetCore, libDir, crate, env, runApple, linkedPlan, library, reserve: !!reserve }) : null;
+  const shared = core && { ...core, framework: placeCoreFramework(core.framework, resolve(binDir, 'ExactCore.framework'), app, ios ? 'ios' : 'macos', reserve) };
   if (shared) env.EXACT_CORE_FRAMEWORK = relative(pkg, shared.xcframework);
   // A Clip's executable name may also be its parent's or a sample host's.
   const clipBin = simulatorClip ? resolve(mkdtempSync(resolve(binDir, '.clip-')), simulatorClip.executable) : null;
-  const intents = tv || !packaged.has('intents') ? null : buildIntents({ app, compat: bakedCompat, directory: resolve(linkRoot, 'intents'), sdkName, sdk, triple: moduleTripleFor(app, ios, device, tv), platform: ios ? 'ios' : 'macos', deployment: ios ? targets.ios : targets.macos, swiftc, runApple });
+  // Its object is linked into the products, so it compiles for their link target: the floor when the app's own minimum is
+  // written after the link (`recordedMinimum`), or `ld` refuses an object newer than the link. Its generated code needs
+  // only iOS 17 (intents.mjs `floor`); the metadata still reads the app's minimum.
+  const intents = tv || !packaged.has('intents') ? null : buildIntents({ app, compat: bakedCompat, directory: resolve(linkRoot, 'intents'), sdkName, sdk, triple: moduleTripleFor(app, ios, device, tv, recordedMinimum ? compiled : targets), platform: ios ? 'ios' : 'macos', deployment: ios ? targets.ios : targets.macos, swiftc, runApple });
   // The shared scratch links one app at a time: another app's build of this
   // destination waits here (seconds once ExactKit is compiled), and the
   // executable is in this build's private stage before the claim is let go.
@@ -1174,7 +1184,7 @@ async function main(args, lockHeld = false) {
     return arm(moduleArgs(on, [...target, probeMain], built, true, variant, variant === true ? simulatorArch : macArch, packagesIn, true).filter(a => a !== '-emit-library'), [...moduleSources, ...packageSources, probeMain], built, frameworkStamp(true, variant, variant === true ? simulatorArch : macArch) + packageStamp, true, true);
   };
   const firstRoute = routes.find(r => !r.lacking); if (firstRoute && !firstRoute.placed) try { firstRoute.placed = compileProbe(firstRoute); } catch (e) { firstRoute.placed = () => { throw e; }; }
-  const serviceDylibs = launchServices(launchModules(app.dir, app.manifest), webBuildDir); for (const svc of serviceDylibs) arms.push(arm(['--sdk', sdkName, 'swiftc', '-module-cache-path', resolve(packagesRoot, 'modules-module-cache'), ...serviceArgs(svc), ...(ios ? ['-target', device ? 'arm64-apple-ios17.0' : tv ? iosTripleFor(app, false, true) : iosTriple, '-sdk', sdk] : macTarget)], svc.sources, svc.built, '', true));
+  const serviceDylibs = launchServices(launchModules(app.dir, app.manifest), webBuildDir); for (const svc of serviceDylibs) arms.push(arm(['--sdk', sdkName, 'swiftc', '-module-cache-path', resolve(packagesRoot, 'modules-module-cache'), ...serviceArgs(svc), ...(ios ? ['-target', iosTripleFor(app, device, tv, compiled.ios), '-sdk', sdk] : macTarget)], svc.sources, svc.built, '', true));
   await hostCompile?.done({ repeated: true });
   // The early build stands when it succeeded and the bake came out as it was expected to.
   const linkedEarly = early ? await early.step.done({ repeated: true }) && expected.capture === libDir && expected.composition === composition && expected.scratch === paths.scratch : false;
@@ -1228,6 +1238,12 @@ async function main(args, lockHeld = false) {
       writeFileSync(linked, from);
       const executable = p === 'ExactClip' ? clipBin : resolve(binDir, p === product ? paths.executable : p);
       copyFileSync(resolve(swiftBinDir, p), executable);
+      if (recordedMinimum) recordMinimumOS(executable, recordedMinimum);
+      // A development device archive ships no dSYM, and its debug map (the stabs naming each object it was linked
+      // from) holds paths under the app's build directory, which name the app. They go after the link: a per-app
+      // -oso_prefix in the link made SwiftPM compile the scratch again for every app (expo/exact-build#177).
+      const debugMap = device && args.includes('--development') ? read('strip', ['-S', executable]) : null;
+      if (debugMap && debugMap.status !== 0) throw new Error(`host/apple: strip -S ${executable} failed: ${debugMap.stderr || debugMap.error?.message || debugMap.status}`);
       assertAppleIdentity(app, executable, bakedCompat.id, shared && resolve(shared.framework, 'ExactCore'));
       assertLinkedSdk(executable, designCompatible(app, ios ? 'ios' : 'macos') ? COMPATIBLE_SDK[ios ? 'ios' : 'macos'] : read('xcrun', ['--sdk', sdkName, '--show-sdk-version']).stdout.trim());
       // ExactNumerals uses SwiftUI only on iOS/tvOS; the Mac has no linked numerals presenter.
@@ -1236,7 +1252,7 @@ async function main(args, lockHeld = false) {
       stripped = stripProductionExecutable(executable, { production, ipa });
       if (stripped && !ipa) console.log(`host/apple: symbols: ${p === 'ExactClip' ? resolve(paths.products, relative(binDir, stripped.dsym)) : p === product ? resolve(paths.products, basename(stripped.dsym)) : `${basename(stripped.dsym)}, beside the host product`} (${(stripped.saved / 1048576).toFixed(1)} MB off the executable)`);
     }
-    if (launchPartsDir) { auditLaunchParts(resolve(swiftBinDir, 'ExactLaunchParts.o'), launchModules(app.dir, app.manifest), read); }
+    if (launchPartsDir) { auditLaunchParts(launchPartsObjects(swiftBinDir), launchModules(app.dir, app.manifest), read); }
   } finally { releaseSwift(); }
   const tSwift = Date.now(); buildStep('arms');
   for (const placed of arms) await placed();
@@ -1271,8 +1287,7 @@ async function main(args, lockHeld = false) {
     if (roster) {
       provided = Object.keys(roster).filter(key => key.includes('-')); // its tags: beside them, `hatches`, `extensions` and `facts`, which no tag can be
       // LLP 1024 D3's first-frame tags, which the host reads before it loads the module.
-      const firstFrame = provided.filter(tag => roster[tag].firstFrame === true);
-      if (firstFrame.length && !tv) rosterKeys = { ExactFirstFrameModules: firstFrame };
+      rosterKeys = firstFrameKeys(roster, tv);
     } else if (routes.length) {
       const why = `host/apple: cannot qualify ${app.id}'s ${tv ? 'tvOS' : ios ? 'iOS' : 'macOS'} native-module roster.\n${causes.map(c => `  ${c}`).join('\n')}\n${noSimulator ? 'Install an iOS Simulator runtime (xcodebuild -downloadPlatform iOS), or add an iPhone simulator in Xcode' : 'Give each xcframework a slice for one route, or fix the failure a route names'}, and rebuild.${logs.length ? `\nLogs: ${logs.join(', ')}` : ''}`;
       const qualification = process.platform === 'linux' && existsSync(resolve(linkRoot, 'native-probes.json')) ? `\nOn Linux, set EXACT_NATIVE_ROSTERS to a simulator qualification for the compiled probe listed in ${resolve(linkRoot, 'native-probes.json')} (README.md).` : '';

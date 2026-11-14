@@ -49,6 +49,13 @@ class AgeRangeTest {
         shadowOf(Looper.getMainLooper()).idle()
     }
 
+    /** LLP 1133.028 D8: a gate that is not a whole age from 0 to 150 refuses TypeError, as on Apple. */
+    @Test fun aGateOutsideTheAgesIsRefused() {
+        for ((gate, refused) in listOf(13.0 to false, 150.0 to false, 18.5 to true, -1.0 to true, 151.0 to true, 1e20 to true)) {
+            assertEquals("$gate", refused, AgeRangeModule.refused(JSONArray().put(gate)) != null)
+        }
+    }
+
     /** LLP 1133.028 D10: a second request waits for the first and is then asked of Play, as on Apple. */
     @Test fun aSecondRequestWaitsForTheFirstThenIsAskedOfPlay() {
         Exact.reader = WeakReference(Robolectric.buildActivity(ExactActivity::class.java).get())

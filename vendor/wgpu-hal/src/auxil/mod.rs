@@ -7,6 +7,10 @@ pub(super) mod dxgi;
 #[cfg(all(native, feature = "renderdoc"))]
 pub(super) mod renderdoc;
 
+// EXACT (EXACT-PATCHES.md, 17): built where its tests run, too.
+#[cfg(any(dx12, test))]
+pub(crate) mod shared_registration;
+
 pub mod db {
     pub mod amd {
         /// cbindgen:ignore

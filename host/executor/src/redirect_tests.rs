@@ -332,6 +332,7 @@ fn late_redirect_metrics_keep_the_lane_that_sent_the_hop() {
 
 #[test]
 fn every_file_redirect_end_is_released_even_after_the_answer() {
+    let _turn = crate::tests::one_at_a_time();
     use super::super::tests::body_to::Files;
     let files = Files::new();
     let server = Server::default();

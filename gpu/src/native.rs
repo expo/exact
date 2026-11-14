@@ -856,6 +856,14 @@ macro_rules! module {
         #[no_mangle]
         pub extern "C" fn gpu_unpublished(id: u32) -> u32 { u32::from($crate::native::unpublished(id)) }
 
+        /// The module's shader roster as JSON in the output buffer. Needs no device.
+        #[no_mangle]
+        pub extern "C" fn gpu_shader_names() -> u32 {
+            let names = $registry.shaders.iter().map(|(name, _)| (*name).to_string()).collect::<Vec<_>>();
+            let text = $crate::json::strings(&names);
+            EXACT_GPU_OUT.with(|b| { *b.borrow_mut() = text.into_bytes(); b.borrow().len() as u32 })
+        }
+
         /// Clear the previous complete shader namespace after app acceptance.
         #[no_mangle]
         pub extern "C" fn gpu_shaders_clear() { $crate::shaders::clear_shaders(); }

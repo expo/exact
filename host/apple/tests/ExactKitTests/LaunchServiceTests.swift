@@ -7,6 +7,51 @@ import UIKit
 
 final class LaunchServiceTests: XCTestCase {
     #if os(iOS)
+    func testAnEarlyWorldPresentationIsKeptUntilTheTreePresents() throws {
+        let launch = ExactLaunch()
+        let session = ExactApp.shared.makeSession(label: "early-world-presentation")
+        defer { launch.link?.invalidate(); session.destroy() }
+        launch.delegateInit()
+        launch.didFinishLaunching()
+        launch.bootEntered(session)
+        launch.treeApplied(session, path: "/")
+        // The GPU's completed drawable can be reported before UIKit draws the root.
+        launch.worldPresented()
+        XCTAssertNil(launch.marks[.world])
+        launch.drawn(session)
+        launch.link?.isPaused = true
+        let commit = try XCTUnwrap(launch.marks[.commit])
+        launch.frame(Vsync(at: commit, interval: 1.0 / 60))
+        let present = try XCTUnwrap(launch.marks[.present])
+        XCTAssertEqual(launch.marks[.world], present)
+        launch.worldPresented()
+        XCTAssertEqual(launch.marks[.world], present, "later frames keep the first mark")
+    }
+
+    func testAWorldPresentationAfterFirstPixelKeepsItsOwnTime() throws {
+        let launch = ExactLaunch()
+        let session = ExactApp.shared.makeSession(label: "late-world-presentation")
+        defer { launch.link?.invalidate(); session.destroy() }
+        launch.delegateInit()
+        launch.didFinishLaunching()
+        launch.bootEntered(session)
+        launch.treeApplied(session, path: "/")
+        launch.drawn(session)
+        launch.link?.isPaused = true
+        let commit = try XCTUnwrap(launch.marks[.commit])
+        launch.frame(Vsync(at: commit, interval: 1.0 / 60))
+        let present = try XCTUnwrap(launch.marks[.present])
+        waitFor("the first-pixel timestamp to pass") { CACurrentMediaTime() > present }
+        let before = CACurrentMediaTime()
+        launch.worldPresented()
+        let world = try XCTUnwrap(launch.marks[.world])
+        XCTAssertGreaterThan(world, present)
+        XCTAssertGreaterThanOrEqual(world, before)
+        XCTAssertLessThanOrEqual(world, CACurrentMediaTime())
+        launch.worldPresented()
+        XCTAssertEqual(launch.marks[.world], world, "later frames keep the first mark")
+    }
+
     func testAnInterruptedCommitKeepsWatchingUntilItsPresentation() {
         let launch = ExactLaunch()
         let session = ExactApp.shared.makeSession(label: "interrupted-launch")
@@ -36,6 +81,22 @@ final class LaunchServiceTests: XCTestCase {
         XCTAssertEqual(launch.candidate, candidate, "work that changed nothing does not move the candidate")
         launch.frame(Vsync(at: candidate, interval: 1.0 / 60))
         XCTAssertEqual(launch.ttiOutcome, "settled")
+        XCTAssertEqual(launch.marks[.interactive], candidate)
+    }
+
+    func testAnInertOrientationRequestKeepsTheSettledVsync() throws {
+        let (launch, session, candidate) = try settlingLaunch("settled-orientation")
+        var batch = wireBatch([])
+        batch.orientation = .init()
+        batch.orientation?.types = 1
+        session.applyUnlessEmpty(batch)
+        launch.applied(session, batch)
+        launch.workEnded(session)
+        waitForMainQueue("the evaluation after the orientation request")
+        XCTAssertEqual(session.presenter.orientationLock.mask, 0)
+        XCTAssertFalse(session.presenter.orientationLock.locked)
+        XCTAssertEqual(launch.candidate, candidate)
+        launch.frame(Vsync(at: candidate, interval: 1.0 / 60))
         XCTAssertEqual(launch.marks[.interactive], candidate)
     }
 

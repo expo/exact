@@ -44,14 +44,26 @@ struct Sample {
 #[allow(non_snake_case)]
 #[derive(Default, crate::Data)]
 struct Report {
+    incarnation: String,
+    generation: u64,
+    spanTicks: u64,
     tickMs: Distribution,
     spans: Vec<Sample>,
+}
+impl Report {
+    fn cursor(&self, ticks: u64) -> SpanCursor {
+        SpanCursor {
+            incarnation: self.incarnation.clone(),
+            generation: self.generation,
+            ticks,
+        }
+    }
 }
 #[test]
 fn spans_are_exclusive_aggregate_per_tick_and_never_change_saves_or_hashes() {
     let mut off = Sim::<Nested>::new(()).unwrap();
     let mut on = Sim::<Nested>::new(()).unwrap();
-    on.measure_spans(now, false);
+    on.measure_spans(now, false, "test");
     for sim in [&mut off, &mut on] {
         sim.advance(0., Clock::Seekable);
         sim.advance(50., Clock::Seekable);
@@ -71,9 +83,11 @@ fn spans_are_exclusive_aggregate_per_tick_and_never_change_saves_or_hashes() {
         report.tickMs.mean
     );
     assert_eq!(report.tickMs.mean, 10.);
-    let delta: Report = crate::json::from_str(&on.spans_json(Some(2))).unwrap();
+    let delta: Report = crate::json::from_str(&on.spans_json(Some(report.cursor(2)))).unwrap();
     assert_eq!(delta.spans[0].count, 1);
-    assert!(on.spans_json(Some(4)).contains("counters went back"));
+    assert!(on
+        .spans_json(Some(report.cursor(4)))
+        .contains("counters went back"));
     assert_eq!(find("inner").p95, 4.);
 }
 
@@ -117,7 +131,7 @@ fn hundred_thousand_entity_query_span() {
             sim.advance(0., Clock::Live);
             let mut minimum = f64::INFINITY;
             for trial in 1..=5 {
-                sim.measure_spans(clock, true);
+                sim.measure_spans(clock, true, "test");
                 sim.advance(trial as f64 * 17., Clock::Live);
                 let text = sim.spans_json(None);
                 let report: Report = crate::json::from_str(&text).unwrap();
@@ -149,7 +163,7 @@ fn hundred_thousand_entity_query_span() {
 #[test]
 fn ten_seconds_of_tick_spans_are_joined_to_submitted_frames() {
     let mut sim = Sim::<Nested>::new(()).unwrap();
-    sim.measure_spans(now, true);
+    sim.measure_spans(now, true, "test");
     sim.advance(0., Clock::Seekable);
     for tick in 1..=600 {
         sim.advance(tick as f64 * 1000. / 60. + 0.001, Clock::Seekable);
@@ -204,17 +218,20 @@ fn ten_seconds_of_tick_spans_are_joined_to_submitted_frames() {
 #[test]
 fn a_difference_from_zero_refuses_when_its_prefix_has_expired() {
     let mut sim = Sim::<Nested>::new(()).unwrap();
-    sim.measure_spans(now, true);
+    sim.measure_spans(now, true, "test");
+    let start: Report = crate::json::from_str(&sim.spans_json(None)).unwrap();
     sim.advance(0., Clock::Seekable);
     sim.advance(300_000., Clock::Seekable);
-    assert!(sim.spans_json(Some(0)).contains("window expired"));
+    assert!(sim
+        .spans_json(Some(start.cursor(0)))
+        .contains("window expired"));
     assert!(!sim.spans_json(None).contains("error"));
 }
 
 #[test]
 fn remainder_uses_its_name_and_difference_statistics_exclude_the_prefix() {
     let mut s = Spans::default();
-    s.arm(now, true);
+    s.arm(now, true, "test");
     s.row("first", Location::caller());
     s.rows.swap(0, 1);
     s.begin(1);
@@ -223,7 +240,12 @@ fn remainder_uses_its_name_and_difference_statistics_exclude_the_prefix() {
     s.begin(2);
     add(2.);
     s.end();
-    let report: Report = crate::json::from_str(&s.json(Some(1))).unwrap();
+    let report: Report = crate::json::from_str(&s.json(Some(SpanCursor {
+        incarnation: s.incarnation.clone(),
+        generation: s.generation,
+        ticks: 1,
+    })))
+    .unwrap();
     assert_eq!(report.tickMs.p50, 2.);
     let other = report
         .spans
@@ -235,4 +257,49 @@ fn remainder_uses_its_name_and_difference_statistics_exclude_the_prefix() {
         report.spans.iter().find(|r| r.name == "first").unwrap().p50,
         0.
     );
+}
+
+#[test]
+fn span_cursors_distinguish_worlds_restores_and_recordings_with_equal_counters() {
+    let read =
+        |sim: &Sim<Nested>| -> Report { crate::json::from_str(&sim.spans_json(None)).unwrap() };
+    let mut sim = Sim::<Nested>::new(()).unwrap();
+    sim.measure_spans(now, false, "test");
+    let saved = sim.save().unwrap();
+    let first = read(&sim);
+    assert_eq!(first.spanTicks, 0);
+    sim.measure_spans(now, false, "test");
+    assert_eq!(read(&sim).generation, first.generation);
+    assert!(!sim.spans_json(Some(first.cursor(0))).contains("error"));
+
+    sim.measure_spans(now, true, "test");
+    let reset = read(&sim);
+    assert_eq!(reset.spanTicks, first.spanTicks);
+    assert_eq!(reset.incarnation, first.incarnation);
+    assert_ne!(reset.generation, first.generation);
+    assert!(sim
+        .spans_json(Some(first.cursor(0)))
+        .contains("recording generation"));
+    assert_eq!(sim.save().unwrap(), saved);
+
+    sim.restore(&saved).unwrap();
+    sim.measure_spans(now, false, "test");
+    let restored = read(&sim);
+    assert_eq!(restored.spanTicks, first.spanTicks);
+    assert_eq!(restored.generation, first.generation);
+    assert_ne!(restored.incarnation, first.incarnation);
+    assert!(sim
+        .spans_json(Some(first.cursor(0)))
+        .contains("world incarnation"));
+    assert_eq!(sim.save().unwrap(), saved);
+
+    let mut remounted = Sim::<Nested>::new(()).unwrap();
+    remounted.measure_spans(now, false, "test");
+    let mounted = read(&remounted);
+    assert_eq!(mounted.spanTicks, first.spanTicks);
+    assert_eq!(mounted.generation, first.generation);
+    assert_ne!(mounted.incarnation, first.incarnation);
+    assert!(remounted
+        .spans_json(Some(first.cursor(0)))
+        .contains("world incarnation"));
 }

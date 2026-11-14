@@ -1,13 +1,14 @@
 //! `exact-bake compat <app-dir> --platform <p> [--target <triple>] [--json]`
 //! — the compatibility id (LLP 1030 D3a) the bake writes beside the plan,
 //! and with `--json` the inputs it digests, for reading why two differ.
+//! `--grants` and `--rust-grants` supply a fresh bake's source declarations.
 //! `exact-bake graph <app.plan> <compat.json> <target>` — the plan's
 //! requirement graph against those compatibility inputs (`scripts/push.mjs`).
 
 use std::process::ExitCode;
 
 const USAGE: &str = "usage:
-  exact-bake compat <app-dir> --platform <ios|macos|linux|web> [--target <triple>] [--json]
+  exact-bake compat <app-dir> --platform <ios|macos|linux|web> [--target <triple>] [--grants <text>] [--rust-grants <text>] [--json]
   exact-bake graph <app.plan> <compat.json> <target>";
 
 fn main() -> ExitCode {
@@ -30,6 +31,8 @@ struct CompatOptions<'a> {
     dir: &'a str,
     platform: &'a str,
     target: Option<&'a str>,
+    grants: Option<&'a str>,
+    rust_grants: Option<&'a str>,
     json: bool,
 }
 
@@ -39,6 +42,7 @@ fn compat_options(args: &[String]) -> Option<CompatOptions<'_>> {
         return None;
     }
     let (mut platform, mut target, mut json) = (None, None, false);
+    let (mut grants, mut rust_grants) = (None, None);
     let mut flags = flags.iter();
     while let Some(flag) = flags.next() {
         match flag.as_str() {
@@ -57,24 +61,36 @@ fn compat_options(args: &[String]) -> Option<CompatOptions<'_>> {
                 target = Some(value);
             }
             "--json" if !json => json = true,
+            "--grants" if grants.is_none() => {
+                grants = Some(flags.next()?.as_str()).filter(|v| !v.starts_with("--"));
+                grants?;
+            }
+            "--rust-grants" if rust_grants.is_none() => {
+                rust_grants = Some(flags.next()?.as_str()).filter(|v| !v.starts_with("--"));
+                rust_grants?;
+            }
             _ => return None,
         }
+    }
+    if rust_grants.is_some() && grants.is_none() {
+        return None;
     }
     Some(CompatOptions {
         dir,
         platform: platform?,
         target,
+        grants,
+        rust_grants,
         json,
     })
 }
 
 /// `exact-bake compat <app-dir> --platform <p> [--target <triple>] [--json]`:
 /// the compatibility id of the app built for that platform — the id alone,
-/// or with `--json` the id and every input it digests. The grants are the
-/// data crate's to declare and cannot be asked here without linking it;
-/// the bake, which links it, passes them (`build.rs` of each host crate).
+/// or with `--json` the id and every input it digests. Callers can supply
+/// source grants from a completed bake without linking the native host.
 fn compat(args: &[String]) -> ExitCode {
-    const USAGE: &str = "usage: exact-bake compat <app-dir> --platform <ios|macos|linux|web> [--target <triple>] [--json]";
+    const USAGE: &str = "usage: exact-bake compat <app-dir> --platform <ios|macos|linux|web> [--target <triple>] [--grants <text>] [--rust-grants <text>] [--json]";
     if matches!(args, [flag] if flag == "--help" || flag == "-h") {
         println!("{USAGE}");
         return ExitCode::SUCCESS;
@@ -83,6 +99,8 @@ fn compat(args: &[String]) -> ExitCode {
         dir,
         platform,
         target,
+        grants,
+        rust_grants,
         json,
     }) = compat_options(args)
     else {
@@ -93,8 +111,9 @@ fn compat(args: &[String]) -> ExitCode {
         .map(str::to_owned)
         .unwrap_or_else(|| format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS));
     let app_dir = std::path::Path::new(dir);
-    let result = contract::Manifest::read(app_dir)
-        .and_then(|m| exact_bake::compatibility_id(app_dir, platform, &target, &m, None));
+    let result = contract::Manifest::read(app_dir).and_then(|m| {
+        exact_bake::compatibility_id_sources(app_dir, platform, &target, &m, grants, rust_grants)
+    });
     match result {
         Ok(c) => {
             if json {

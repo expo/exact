@@ -2,7 +2,7 @@
 // targets it compiles and links for, and the SDK its executable records, with the
 // device launch link of LLP 1047.001.001.
 import { spawnSync } from './toolchain.mjs';
-import { readFileSync, mkdirSync, rmSync, cpSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, rmSync, cpSync, statSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 
 /** Save a distributed image's symbols before removing its local symbol table.
@@ -47,6 +47,13 @@ export function iosSimulatorTarget(arch = process.env.EXACT_IOS_SIM_ARCH ?? (pro
   return { target: cpu === 'arm64' ? 'aarch64-apple-ios-sim' : 'x86_64-apple-ios', triple: `${cpu}-apple-ios17.0-simulator` };
 }
 
+/** A dotted version as major.minor, with a patch only when it is not 0: `18` and `18.0.0` are `18.0`. One spelling
+ * per version keeps the Swift scratch and triple, which these name, shared between apps that write it differently. */
+const majorMinor = version => {
+  const parts = String(version).trim().split('.');
+  while (parts.length > 2 && Number(parts.at(-1)) === 0) parts.pop();
+  return parts.length === 1 ? `${parts[0]}.0` : parts.join('.');
+};
 const newer = (a, b) => (a.split('.').map(Number).reduce((x, n, i) => x || n - (b.split('.').map(Number)[i] ?? 0), 0) > 0 ? a : b);
 /** The deployment targets an app builds for: its manifest's `minimumOS`, never
  * below the host's own floor (Package.swift's). They are what its Info.plist
@@ -55,8 +62,8 @@ const newer = (a, b) => (a.split('.').map(Number).reduce((x, n, i) => x || n - (
  * time); `compiledTargets` is what the rest compiles for. */
 export function deploymentTargets(app) {
   return {
-    ios: newer(String(app.manifest.host?.ios?.minimumOS ?? '17.0'), '17.0'),
-    macos: newer(String(app.manifest.host?.macos?.minimumOS ?? '14.0'), '14.0'),
+    ios: newer(majorMinor(app.manifest.host?.ios?.minimumOS ?? '17.0'), '17.0'),
+    macos: newer(majorMinor(app.manifest.host?.macos?.minimumOS ?? '14.0'), '14.0'),
   };
 }
 /** The deployment targets the SDK's units compile for: its Rust and C (the
@@ -66,11 +73,16 @@ export function deploymentTargets(app) {
  * compile of each, which a minimum of its own compiled cold (about 440 s).
  * Code built for 17.0 runs on every later iOS, and the app installs only where
  * its Info.plist says. Rust and C check no availability as they compile, so the
- * app's crate loses nothing at the floor. An app with `launch` modules keeps
- * its own minimum: their Swift compiles inside the host's package
- * (`ExactLaunchParts`), where Swift checks availability. */
-export const compiledTargets = (app, trust = process.env.EXACT_UPDATE_TRUST ?? 'development') =>
-  trust === 'production' || app.manifest.launch?.length ? deploymentTargets(app) : { ...deploymentTargets(app), ios: '17.0' };
+ * app's crate loses nothing at the floor. An app's `launch` modules compile
+ * inside the host's package (`ExactLaunchParts`), where Swift checks
+ * availability. Under SwiftPM's native build system (the Linux cross build,
+ * toolchain.mjs) they and the executable that imports them take the app's own
+ * triple by a target flag of their own (Package.swift's
+ * `EXACT_LAUNCH_PARTS_TARGET`), and the rest keeps the floor. Swift Build (a
+ * Mac) puts its generated `-target` after a target's flags, so there the whole
+ * package compiles at the app's minimum. */
+export const compiledTargets = (app, trust = process.env.EXACT_UPDATE_TRUST ?? 'development', platform = process.platform) =>
+  trust === 'production' || app.manifest.launch?.length && platform !== 'linux' ? deploymentTargets(app) : { ...deploymentTargets(app), ios: '17.0' };
 
 /** The capabilities with a Swift half, by name, and the product of
  * `Package.swift` (its `capabilities` table) each is. */
@@ -153,9 +165,8 @@ export function dylibInstallNames(executable) {
 }
 
 /** Load commands bounded by their own slice, so build checks need no host's Mach-O tools. */
-function machoCommands(executable) {
-  let bytes;
-  try { bytes = readFileSync(executable); } catch (e) { throw new Error(`host/apple: cannot read ${executable}: ${e.message}`); }
+function machoCommands(executable, bytes = null) {
+  if (!bytes) try { bytes = readFileSync(executable); } catch (e) { throw new Error(`host/apple: cannot read ${executable}: ${e.message}`); }
   const invalid = () => { throw new Error(`host/apple: ${basename(executable)} has an invalid 64-bit Mach-O`); };
   const slice = (at, size) => {
     if (!Number.isSafeInteger(at) || !Number.isSafeInteger(size) || at < 0 || size < 32 || at + size > bytes.length) invalid();
@@ -203,6 +214,22 @@ export function assertCapabilityFrameworks(executable, products, allowedFramewor
  * and plan restarts). */
 export function linksByPlan(production, args) {
   return production || (args.includes('--link') && args[args.indexOf('--link') + 1] === 'plan');
+}
+
+/** Write the app's `minimumOS` into every slice's `LC_BUILD_VERSION` (its `minos`), after a link for the SDK's floor
+ * (`compiledTargets`). Passing it to SwiftPM as a `-platform_version` link flag instead made SwiftPM compile the whole
+ * Swift host again for every app whose minimum differed from the previous build's (about 33 s, expo/exact-build#176);
+ * the compiles are the floor's either way, and the linker records nothing else from it. */
+export function recordMinimumOS(executable, version) {
+  const [major, minor = 0, patch = 0] = String(version).split('.').map(Number);
+  if (![major, minor, patch].every(n => Number.isInteger(n) && n >= 0 && n < 256) || major > 65535) throw new Error(`host/apple: ${version} is not a minimum OS version`);
+  const bytes = readFileSync(executable);
+  for (const commands of machoCommands(executable, bytes)) {
+    const versions = commands.filter(({ cmd }) => cmd === 0x32);
+    if (versions.length !== 1 || versions[0].bytes.length < 24) throw new Error(`host/apple: ${basename(executable)} has no single LC_BUILD_VERSION to record minimumOS ${version} in`);
+    versions[0].bytes.writeUInt32LE((major << 16 | minor << 8 | patch) >>> 0, 12);
+  }
+  writeFileSync(executable, bytes);
 }
 
 /** The SDK the linker recorded in an executable (`LC_BUILD_VERSION`) is the

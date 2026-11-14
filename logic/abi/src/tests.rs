@@ -43,7 +43,7 @@ fn a_module_store_obeys_the_hosts_scope_in_answers_and_parses() {
         );
         for outcome in [None, Some(Outcome::Storage(vec![]))] {
             module
-                .dispatch(&call_request(&store, "scope", &[], outcome.as_ref()).unwrap())
+                .dispatch(&call_request(None, &store, "scope", &[], outcome.as_ref()).unwrap())
                 .unwrap();
             assert_eq!(
                 call_reply(module.output(), &mut store).unwrap(),
@@ -57,6 +57,62 @@ fn a_module_store_obeys_the_hosts_scope_in_answers_and_parses() {
             assert_eq!(store.take_writes().len(), if granted { 2 } else { 0 });
         }
     }
+}
+
+/// What an answer watched, drew and persisted under a lease crosses the
+/// seam to the host's store, as an embedded source's store records it: its
+/// topics, its draws of randomness, and each write's `durable`.
+#[test]
+fn topics_entropy_and_durable_writes_reach_the_host_store() {
+    struct Effects;
+    impl DataSource for Effects {
+        fn grants(&self) -> &str {
+            "secret.keep token\nsecret.keep lease"
+        }
+        fn query(&mut self, _: &str, _: &[Value]) -> Result<Value, DataError> {
+            unreachable!()
+        }
+        fn answer(&mut self, store: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
+            store.observe_topic("contacts");
+            store.observe_topic("calendar");
+            store.observe_entropy();
+            store.set_durable("lease", "held")?;
+            store.forget_durable("token")?;
+            store.set("token", "plain")?;
+            Ok(Answer::Now(Value::Unit))
+        }
+    }
+    let mut module = Session::new(Effects);
+    let mut store = Store::new(
+        "secret.keep token\nsecret.keep lease",
+        [("token".into(), b"old".to_vec())],
+    );
+    module
+        .dispatch(&call_request(None, &store, "effects", &[], None).unwrap())
+        .unwrap();
+    assert_eq!(
+        call_reply(module.output(), &mut store).unwrap(),
+        Answer::Now(Value::Unit)
+    );
+    assert_eq!(store.take_topics(), ["contacts", "calendar"]);
+    assert_eq!(store.entropy_draws(), 1);
+    let writes: Vec<_> = (store.take_writes().into_iter())
+        .map(|w| {
+            (
+                w.name,
+                w.value.map(|v| String::from_utf8(v).unwrap()),
+                w.durable,
+            )
+        })
+        .collect();
+    assert_eq!(
+        writes,
+        [
+            ("lease".into(), Some("held".into()), true),
+            ("token".into(), None, true),
+            ("token".into(), Some("plain".into()), false),
+        ]
+    );
 }
 
 struct Fixture(u32);
@@ -100,6 +156,10 @@ impl DataSource for Fixture {
                 Ok(Answer::Later(request))
             }
             "surface-capture" => Ok(Answer::Later(Request::capture_surface("world"))),
+            "canvas-capture" => Ok(Answer::Later(Request::capture_canvas(
+                "sketch",
+                "app:/tmp/sketch.png",
+            ))),
             "surface-restore" => Ok(Answer::Later(Request::restore_surface(
                 "world",
                 vec![0, 128, 255],
@@ -151,12 +211,16 @@ fn surface_requests_and_outcomes_round_trip_without_becoming_storage_or_http() {
     for (source, expected) in [
         ("surface-capture", Request::capture_surface("world")),
         (
+            "canvas-capture",
+            Request::capture_canvas("sketch", "app:/tmp/sketch.png"),
+        ),
+        (
             "surface-restore",
             Request::restore_surface("world", vec![0, 128, 255]),
         ),
     ] {
         module
-            .dispatch(&call_request(&store, source, &[], None).unwrap())
+            .dispatch(&call_request(None, &store, source, &[], None).unwrap())
             .unwrap();
         let Answer::Later(request) = call_reply(module.output(), &mut store).unwrap() else {
             panic!("expected surface request")
@@ -177,7 +241,7 @@ fn surface_requests_and_outcomes_round_trip_without_becoming_storage_or_http() {
         (Outcome::Surface(SurfaceOutcome::Restored), Value::Unit),
     ] {
         module
-            .dispatch(&call_request(&store, "surface-capture", &[], Some(&outcome)).unwrap())
+            .dispatch(&call_request(None, &store, "surface-capture", &[], Some(&outcome)).unwrap())
             .unwrap();
         assert_eq!(
             call_reply(module.output(), &mut store).unwrap(),
@@ -196,7 +260,7 @@ fn portable_storage_and_empty_scopes_round_trip_without_becoming_http() {
         ("storage-scoped", Some("fs.read app:/data/note")),
     ] {
         module
-            .dispatch(&call_request(&store, source, &[], None).unwrap())
+            .dispatch(&call_request(None, &store, source, &[], None).unwrap())
             .unwrap();
         let Answer::Later(request) = call_reply(module.output(), &mut store).unwrap() else {
             panic!("expected storage request")
@@ -210,7 +274,7 @@ fn portable_storage_and_empty_scopes_round_trip_without_becoming_http() {
     }
     let outcome = Outcome::Storage(vec![0, 128, 255]);
     module
-        .dispatch(&call_request(&store, "storage", &[], Some(&outcome)).unwrap())
+        .dispatch(&call_request(None, &store, "storage", &[], Some(&outcome)).unwrap())
         .unwrap();
     assert_eq!(
         call_reply(module.output(), &mut store).unwrap(),
@@ -314,6 +378,7 @@ fn storage_unknown_tags_truncation_and_oversize_are_refused_before_effects() {
     let oversized = vec![0; MAX_MESSAGE + 1];
     assert!(module.dispatch(&oversized).is_err());
     assert!(call_request(
+        None,
         &Store::default(),
         "storage",
         &[],
@@ -334,6 +399,8 @@ fn storage_unknown_tags_truncation_and_oversize_are_refused_before_effects() {
 fn reserved_store_writes_are_refused_before_any_other_write_is_applied() {
     let mut encoded = header(2);
     encoded.u8(1);
+    encoded.u32(0);
+    encoded.u32(0);
     encoded.u32(2);
     for (name, value) in [("token", "first"), ("exact.kept.hidden", "not allowed")] {
         encoded.string(name);
@@ -357,7 +424,7 @@ fn preserves_session_store_read_marker_and_write_order() {
             ("exact.kept.hidden".into(), "private".into()),
         ],
     );
-    let input = call_request(&store, "answer", &[], None).unwrap();
+    let input = call_request(None, &store, "answer", &[], None).unwrap();
     assert!(!input.windows(7).any(|x| x == b"private"));
     module.dispatch(&input).unwrap();
     assert_eq!(
@@ -374,7 +441,7 @@ fn preserves_session_store_read_marker_and_write_order() {
         [Some(&b"first"[..]), None, Some(&b"last"[..])]
     );
     module
-        .dispatch(&call_request(&store, "answer", &[], None).unwrap())
+        .dispatch(&call_request(None, &store, "answer", &[], None).unwrap())
         .unwrap();
     assert_eq!(
         call_reply(module.output(), &mut store).unwrap(),
@@ -387,7 +454,7 @@ fn request_outcome_and_continuation_refusal_cross_the_seam() {
     let mut module = Session::new(Fixture(0));
     let mut store = Store::new("secret.keep token", []);
     module
-        .dispatch(&call_request(&store, "network", &[], None).unwrap())
+        .dispatch(&call_request(None, &store, "network", &[], None).unwrap())
         .unwrap();
     assert_eq!(
         call_reply(module.output(), &mut store).unwrap(),
@@ -410,12 +477,12 @@ fn request_outcome_and_continuation_refusal_cross_the_seam() {
             Err(DataError::Unavailable("refused".into()))
         };
         module
-            .dispatch(&call_request(&store, "network", &[], Some(&outcome)).unwrap())
+            .dispatch(&call_request(None, &store, "network", &[], Some(&outcome)).unwrap())
             .unwrap();
         assert_eq!(call_reply(module.output(), &mut store), expected);
     }
     module
-        .dispatch(&call_request(&store, "continuation", &[], None).unwrap())
+        .dispatch(&call_request(None, &store, "continuation", &[], None).unwrap())
         .unwrap();
     assert!(
         matches!(call_reply(module.output(),&mut store),Err(DataError::Unavailable(s)) if s.contains("continuations"))
@@ -427,7 +494,7 @@ fn malformed_reply_cannot_partially_write_the_host_store() {
     let mut module = Session::new(Fixture(0));
     let mut store = Store::new("secret.keep token", []);
     module
-        .dispatch(&call_request(&store, "answer", &[], None).unwrap())
+        .dispatch(&call_request(None, &store, "answer", &[], None).unwrap())
         .unwrap();
     let mut reply = module.output().to_vec();
     reply.push(0);
@@ -516,23 +583,138 @@ fn a_body_to_a_file_is_refused_at_the_module_seam() {
     ));
 }
 
-/// A held mark (LLP 1016.000 D9) has no encoding at the seam: refused, never
-/// silently turned into a request a clock waits on.
 #[test]
-fn a_held_request_is_refused_at_the_module_seam() {
-    let mut encoded = Writer::default();
+fn a_held_request_crosses_the_module_seam() {
+    let url = "https://example.test/changes";
+    for mut request in [
+        Request::get(url),
+        Request::post_json(url, "body"),
+        Request::get(url).independent_http(4096),
+        Request {
+            stream: true,
+            ..Request::get(url).independent_http(4096)
+        },
+        Request {
+            stream: true,
+            ..Request::get(url)
+                .independent_http(4096)
+                .long_poll("since", "seq")
+        },
+        Request::socket("wss://example.test/changes")
+            .protocols(["chat.v1"])
+            .unwrap(),
+    ] {
+        request.grants = Some("net.fetch https://example.test".into());
+        request
+            .headers
+            .push(("Authorization".into(), "Bearer token".into()));
+        for held in [false, true] {
+            request.held = held;
+            for cache in [CacheMode::Unspecified, CacheMode::Reload] {
+                if request.socket && cache != CacheMode::Unspecified {
+                    continue;
+                }
+                request.cache = cache;
+                let mut encoded = Writer::default();
+                encode_result(&mut encoded, Ok(Answer::Later(request.clone())));
+                let bytes = encoded.into_vec();
+                assert_eq!(bytes[0] == 15, held);
+                let mut reader = Reader::new(&bytes);
+                let Ok(Answer::Later(decoded)) = read_result(&mut reader).unwrap() else {
+                    panic!("an HTTP request");
+                };
+                assert_eq!(decoded, request);
+                assert_eq!(decoded.is_held(), held && !request.stream);
+                assert_eq!(decoded.has_effects(), request.method == "POST" && !held);
+                end(&reader).unwrap();
+            }
+        }
+    }
+    // The held mark wraps prefetch and preload, which wrap the cache mode.
+    for prefetch in [false, true] {
+        for named in [false, true] {
+            let mut request = Request::get(url).held().cache(CacheMode::ForceCache);
+            if prefetch {
+                request = request.prefetch();
+            }
+            if named {
+                request = request.preload("feed").unwrap();
+            }
+            let mut encoded = Writer::default();
+            encode_result(&mut encoded, Ok(Answer::Later(request.clone())));
+            let bytes = encoded.into_vec();
+            assert_eq!(bytes[0], 15);
+            let mut reader = Reader::new(&bytes);
+            assert_eq!(
+                read_result(&mut reader).unwrap(),
+                Ok(Answer::Later(request))
+            );
+            end(&reader).unwrap();
+        }
+    }
+}
+
+#[test]
+fn invalid_held_results_are_refused_before_effects() {
+    let prefix = || {
+        let mut w = header(2);
+        w.u8(1);
+        w.u32(0); // topics
+        w.u32(0); // draws of randomness
+        w.u32(1);
+        w.string("token");
+        w.u8(1);
+        w.string("private");
+        w.u32(0); // socket operations
+        w.u8(0);
+        w.string("");
+        w
+    };
+    let check = |data: &[u8]| {
+        let mut store = Store::new("secret.keep token", []);
+        assert!(call_reply(data, &mut store).is_err());
+        assert!(store.take_writes().is_empty());
+        assert_eq!(store.reads(), 0);
+    };
+    let mut w = prefix();
+    let offset = w.len();
     encode_result(
-        &mut encoded,
+        &mut w,
         Ok(Answer::Later(
-            Request::get("https://example.test/changes").held(),
+            Request::get("https://example.test")
+                .held()
+                .cache(CacheMode::Reload),
         )),
     );
-    let bytes = encoded.into_vec();
-    let mut reader = Reader::new(&bytes);
-    assert!(matches!(
-        read_result(&mut reader).unwrap(),
-        Err(DataError::Unavailable(s)) if s == "a held request cannot cross the Rust module seam yet"
-    ));
+    let mut data = w.into_vec();
+    for len in 0..data.len() {
+        check(&data[..len]);
+    }
+    let mut store = Store::new("secret.keep token", []);
+    assert!(matches!(call_reply(&data, &mut store), Ok(Answer::Later(r)) if r.is_held()));
+    assert_eq!(store.get("token"), Some("private"));
+    data[offset] = 255;
+    check(&data);
+    for tag in [0, 2, 3, 4, 5, 7, 8, 15, 255] {
+        let mut w = prefix();
+        w.u8(15);
+        w.u8(tag);
+        check(&w.into_vec());
+    }
+    for request in [
+        Request::get("https://example.test").held().timeout(1000),
+        Request::get("https://example.test")
+            .held()
+            .idle_timeout(1000),
+        Request::storage(vec![]).held(),
+    ] {
+        let mut w = Writer::default();
+        encode_result(&mut w, Ok(Answer::Later(request)));
+        assert!(matches!(
+            read_result(&mut Reader::new(&w.into_vec())),
+            Ok(Err(DataError::Unavailable(_)))
+        ));
+    }
 }
 
 /// A source that draws one surface, `dot`, translating once per draw: the
@@ -656,14 +838,17 @@ fn web_wire_enum_strings_cross_calls_and_nested_overlay_replies() {
     for overlay in [false, true] {
         let js = r#"
 const src = await Bun.file(process.argv[1]).text();
-const api = new Function(src.replace(/^import .*;$/gm, '').replace(/^export /gm, '') + ';return {writer,encode};')();
+const api = new Function(src.replace(/^import [^;]*;.*$/gm, '').replace(/^export /gm, '') + ';return {writer,encode};')();
 const w = api.writer(), value = ['a|b', 'n🥳', ['a|b']];
 w.u32(Number(process.argv[3])); w.u8(process.argv[2] === 'true' ? 5 : 3); w.str('echo');
 w.u8(6); w.u32(2); api.encode(w, 'a|b', 's'); api.encode(w, value, '{s?s[s}');
 if (process.argv[2] === 'true') {
   api.encode(w, value, '{s?s[s}'); w.u32(1); w.u64(7); w.str('save'); w.str('save');
   w.u8(6); w.u32(1); api.encode(w, 'a|b', 's'); w.u8(1); api.encode(w, value, '{s?s[s}'); w.u8(1);
-} else { w.u32(0); w.u32(0); }
+} else {
+  // No target, secret names or store pairs; no socket call or open socket.
+  w.u8(0); w.u32(0); w.u32(0); w.u8(0); w.u32(0);
+}
 process.stdout.write(w.done());
 "#;
         let out = std::process::Command::new("bun")
@@ -745,7 +930,7 @@ fn a_locked_name_crosses_the_seam_as_occupancy_alone() {
         ],
     );
     let mut module = Session::new(Locked);
-    let input = call_request(&store, "read", &[], None).unwrap();
+    let input = call_request(None, &store, "read", &[], None).unwrap();
     assert!(!input.windows(6).any(|x| x == b"secret"));
     assert!(input.windows(6).any(|x| x == b"locked"));
     module.dispatch(&input).unwrap();
@@ -755,7 +940,7 @@ fn a_locked_name_crosses_the_seam_as_occupancy_alone() {
         "{refused}"
     );
     module
-        .dispatch(&call_request(&store, "write", &[], None).unwrap())
+        .dispatch(&call_request(None, &store, "write", &[], None).unwrap())
         .unwrap();
     assert_eq!(
         call_reply(module.output(), &mut store).unwrap(),
@@ -776,9 +961,9 @@ fn a_locked_name_crosses_the_seam_as_occupancy_alone() {
 
 #[test]
 fn cache_modes_cross_the_rust_module_seam() {
-    assert_eq!(ABI, 9);
+    assert_eq!(ABI, 12);
     let mut old = header(0).into_vec();
-    old[..4].copy_from_slice(&8u32.to_le_bytes());
+    old[..4].copy_from_slice(&(ABI - 1).to_le_bytes());
     assert!(matches!(reader(&old), Err(e) if e == "logic ABI version differs"));
     for word in [
         "unspecified",
@@ -830,6 +1015,48 @@ fn cache_modes_cross_the_rust_module_seam() {
                 Ok(Answer::Later(request))
             );
             end(&reader).unwrap();
+        }
+    }
+}
+
+#[test]
+fn invalid_call_targets_are_refused_before_dispatch() {
+    struct Uncalled;
+    impl DataSource for Uncalled {
+        fn query(&mut self, _: &str, _: &[Value]) -> Result<Value, DataError> {
+            panic!("invalid targets must not reach the source")
+        }
+    }
+    let mut module = Session::new(Uncalled);
+    let prefix = || {
+        let mut w = header(3);
+        w.string("read");
+        Value::list(vec![]).encode(&mut w);
+        w
+    };
+    for tag in [1, 2, 3, 255] {
+        let mut w = prefix();
+        w.u8(tag);
+        let bytes = w.into_vec();
+        assert!(module.dispatch(&bytes).is_err());
+    }
+    let mut w = prefix();
+    w.u8(255);
+    w.u32(0);
+    w.u32(0);
+    w.u8(0);
+    w.u32(0);
+    assert_eq!(
+        module.dispatch(&w.into_vec()),
+        Err("invalid call target tag".into())
+    );
+    if usize::BITS > 32 {
+        for target in [
+            Target::Resource(usize::MAX),
+            Target::Mutation(usize::MAX),
+            Target::Sent(usize::MAX, 1),
+        ] {
+            assert!(call_request(Some(target), &Store::default(), "read", &[], None).is_err());
         }
     }
 }

@@ -173,6 +173,26 @@ pub(super) fn inline_use(
     } else {
         0
     };
+    for prop in c
+        .props
+        .iter()
+        .chain(&c.injects)
+        .filter(|p| !p.ty.as_ref().is_some_and(is_action))
+    {
+        let expr = &child_subst[&prop.name];
+        if !matches!(
+            expr,
+            Expr::Ident(..) | Expr::Number(..) | Expr::Str(..) | Expr::Bool(..) | Expr::None(..)
+        ) {
+            ctx.thunks.push(Thunk {
+                name: format!("@argument:{}#{n}", prop.name),
+                expr: expr.clone(),
+                owner,
+                instance,
+                span: prop.span,
+            });
+        }
+    }
     let mut names: BTreeMap<String, String> = BTreeMap::new();
     for st in &c.states {
         names.insert(st.name.clone(), lifted(&st.name, n));
@@ -293,6 +313,13 @@ pub(super) fn inline_use(
             .collect()
     };
     for ((derive, _), expr) in derives.iter().zip(resolved) {
+        ctx.thunks.push(Thunk {
+            name: lifted(&derive.name, n),
+            expr: expr.clone(),
+            owner,
+            instance,
+            span: derive.span,
+        });
         child_subst.insert(derive.name.clone(), expr);
     }
     let mut child = Subst::new(&child_subst, records).with_value_only(&value_names);
@@ -370,8 +397,6 @@ pub(super) fn inline_use(
             instance,
         ));
     }
-    // Release per-use resolved expressions before expanding nested children.
-    drop(derives);
     if !children.is_empty() && !c.slot {
         ctx.refuse(
             "syntax-no-slot",
@@ -393,7 +418,10 @@ pub(super) fn inline_use(
         })
     });
     // Rename only the view: declarations were lifted above.
-    let renamed = rename_nodes(&c.view, &BTreeMap::new(), n, ctx.discarded_slots);
+    let mut renamed = rename_nodes(&c.view, &BTreeMap::new(), n, ctx.discarded_slots);
+    share_instance_props(c, &mut renamed, &child_subst, &derives, &value_names, ctx);
+    // Release per-use resolved expressions before expanding nested children.
+    drop(derives);
     let outer_fill = std::mem::replace(&mut ctx.fill, fill);
     let outer_instance = std::mem::replace(&mut ctx.instance, instance);
     // The child's `provide` section covers its whole view, after
@@ -412,6 +440,145 @@ pub(super) fn inline_use(
     ctx.fill = outer_fill;
     ctx.instance = outer_instance;
     body
+}
+
+/// Share the instance's repeated computed prop and inject reads in its
+/// renamed view (`share_view_props`). Out of line, so `inline_use`'s frame,
+/// which recursion repeats, holds none of this.
+#[inline(never)]
+fn share_instance_props(
+    c: &Component,
+    renamed: &mut [Node],
+    child_subst: &BTreeMap<String, Expr>,
+    derives: &[(&Binding, Expr)],
+    value_names: &BTreeSet<String>,
+    ctx: &Ctx<'_>,
+) {
+    let shared: BTreeSet<_> = c
+        .props
+        .iter()
+        .chain(&c.injects)
+        .filter(|p| !p.ty.as_ref().is_some_and(is_action))
+        .filter(|p| computed(&child_subst[&p.name]))
+        .filter(|p| !reads_clock(&child_subst[&p.name], ctx.file, &mut BTreeSet::new()))
+        .map(|p| p.name.clone())
+        .collect();
+    if shared.is_empty() {
+        return;
+    }
+    let derive_map = derives
+        .iter()
+        .map(|(d, e)| (d.name.clone(), e.clone()))
+        .collect();
+    let mut derive_subst = Subst::new(&derive_map, ctx.records).with_value_only(value_names);
+    let actions = c
+        .actions
+        .iter()
+        .map(|a| a.name.clone())
+        .chain(
+            c.props
+                .iter()
+                .chain(&c.injects)
+                .filter(|p| p.ty.as_ref().is_some_and(is_action))
+                .map(|p| p.name.clone()),
+        )
+        .collect();
+    share_view_props(renamed, &mut derive_subst, &shared, &actions, ctx.file);
+}
+
+fn computed(mut e: &Expr) -> bool {
+    while let Expr::Typed(inner, _, _) = e {
+        e = inner;
+    }
+    !matches!(
+        e,
+        Expr::Ident(..) | Expr::Number(..) | Expr::Str(..) | Expr::Bool(..) | Expr::None(_)
+    )
+}
+
+fn reads_clock(e: &Expr, file: &File, seen: &mut BTreeSet<String>) -> bool {
+    match e {
+        Expr::Call(name, _, _) if name == "performanceNow" => return true,
+        Expr::Call(name, _, _) => {
+            if seen.insert(format!("fn:{name}")) {
+                if let Some(f) = file.fns.iter().find(|f| &f.name == name) {
+                    if reads_clock(&f.body, file, seen) {
+                        return true;
+                    }
+                }
+            }
+        }
+        Expr::Ident(name, _) if seen.insert(format!("derive:{name}")) => {
+            if let Some(d) = file.components[0].derives.iter().find(|d| &d.name == name) {
+                if reads_clock(&d.expr, file, seen) {
+                    return true;
+                }
+            }
+        }
+        _ => {}
+    }
+    e.operands().any(|e| reads_clock(e, file, seen))
+}
+
+/// Sharing stays within one binding, and so within one evaluation: the plan
+/// has no value two bindings read, and only a binding's own refusal unsets
+/// it, where a region subject's fails the render. A forwarded argument is one
+/// expression wherever the callee reads it, its handlers included, so its
+/// `let` is evaluated with it. Handlers keep their event-time reads, and an
+/// action reference keeps the shape its callee calls.
+fn share_view_props(
+    nodes: &mut [Node],
+    derives: &mut Subst<'_, Expr>,
+    shared: &BTreeSet<String>,
+    actions: &BTreeSet<String>,
+    file: &File,
+) {
+    let names_action =
+        |e: &Expr| matches!(e, Expr::Ident(n, _) | Expr::Call(n, _, _) if actions.contains(n));
+    for node in nodes {
+        let mut share = |e: &Expr| derives::share_props(&subst_expr(e, derives), shared);
+        match node {
+            Node::Element {
+                tag,
+                positional,
+                attrs,
+                ..
+            } => {
+                for e in positional {
+                    *e = map_positional(tag, e, &mut share);
+                }
+                for attr in attrs {
+                    if names_action(&attr.value) {
+                        continue;
+                    }
+                    attr.value = map_attr_value(attr, &mut share);
+                }
+            }
+            Node::When { cond, .. } => *cond = share(cond),
+            Node::Each { list, key, .. } => {
+                *list = share(list);
+                *key = share(key);
+            }
+            Node::Match { subject, .. } => *subject = share(subject),
+            Node::Use { name, args, .. } => {
+                let callee = file.components.iter().find(|c| &c.name == name);
+                for arg in args {
+                    let value = callee.is_some_and(|c| {
+                        c.props
+                            .iter()
+                            .any(|p| p.name == arg.name && !p.ty.as_ref().is_some_and(is_action))
+                    });
+                    if value && !names_action(&arg.value) {
+                        arg.value = share(&arg.value);
+                    }
+                }
+            }
+            Node::Children { .. } => {}
+        }
+        for children in node.child_lists_mut() {
+            share_view_props(children, derives, shared, actions, file);
+        }
+    }
 }
 
 // The least fixed point matters for cycles: a slot reached again through a

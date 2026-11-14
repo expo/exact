@@ -16,7 +16,8 @@
 //   `levels` holds the last `history` intervals, one entry per interval since
 //   the last answer, however many polls were skipped.
 // - `<audio-waveform>` (D13) draws a track's level each animation frame from
-//   a meter of its own, so no level crosses into Contract.
+//   a meter of its own, so no level crosses into Contract. A bar's height is
+//   the level in decibels, as a recorder's meter shows it (`WaveformBars`).
 // - Under the agent (§10) no browser API is used: the level is the synthetic
 //   signal on the session clock, and a stopped recorder's file is WAV, 16-bit
 //   PCM, of a tone that follows the signal, answered as `audio/wav`.
@@ -205,6 +206,11 @@ export function implementation({ changed, agent, now, log, tracks, files }) {
   }
   /** Every interval since the last answer, as levels (D1). */
   function read(m) {
+    advance(m);
+    return { audioLevel: m.last, totalAudioEnergy: m.energy, totalSamplesDuration: m.duration, levels: m.levels.slice() };
+  }
+  /** The levels of the intervals since the meter last advanced, kept in its history. */
+  function advance(m) {
     const t = now(), steps = Math.floor((t - m.at) / m.interval);
     let fresh = [];
     if (steps > 0) {
@@ -228,7 +234,7 @@ export function implementation({ changed, agent, now, log, tracks, files }) {
     // Appended without a spread, which passes each level as an argument and fails past the engine's limit.
     m.levels = m.levels.concat(fresh.slice(-m.history));
     if (m.levels.length > m.history) m.levels.splice(0, m.levels.length - m.history);
-    return { audioLevel: m.last, totalAudioEnergy: m.energy, totalSamplesDuration: m.duration, levels: m.levels.slice() };
+    return fresh;
   }
 
   return {
@@ -293,11 +299,12 @@ export function implementation({ changed, agent, now, log, tracks, files }) {
       const m = meter({ track: args.track, interval: args.interval ?? null, history: args.history ?? null });
       return m.error ? m : read(m);
     },
-    /** The waveform view's own meter of `track` (D13): its levels, the last `fit`, at each frame. */
+    /** The waveform view's own meter of `track` (D13): its bars, advanced to the session's time at each frame. */
     waveform(track) {
-      const m = meter({ track, interval: STEP, history: 1000, view: ++views });
-      if (m.error) return { error: m.error, levels: () => [], stop() {} };
-      return { levels: fit => read(m).levels.slice(-fit), stop: () => { m.stop(); meters.delete(m.key); } };
+      const m = meter({ track, interval: STEP, history: HISTORY, view: ++views });
+      if (m.error) return { error: m.error, stop() {} };
+      const bars = new WaveformBars(now());
+      return { bars: () => bars.advance(now(), advance(m)), stop: () => { m.stop(); meters.delete(m.key); } };
     },
     /** A level's argument group has no reader left: its meter goes (D10 item 12). */
     releaseArgs(name, args) {
@@ -319,6 +326,40 @@ export function implementation({ changed, agent, now, log, tracks, files }) {
 }
 
 // ---------------------------------------------------------------- the waveform (D13)
+/** A bar's height, 0 to 1, for a level (an interval's RMS, 0 to 1): its decibels over the last `FLOOR` dB below full
+ * scale, as a recorder's meter reads (AVAudioRecorder's `averagePower` is in dBFS). Speech at an RMS near 0.03 is
+ * −30 dBFS, two fifths of the height, where the linear level drew it a thirtieth. */
+export const waveformHeight = level => level > 0 ? Math.min(1, Math.max(0, (20 * Math.log10(level) - FLOOR) / -FLOOR)) : 0;
+/** A meter's ballistics: a bar rises to a louder level within the step and falls back over a few, so a syllable's end
+ * tapers rather than flickering. Each the share of the way a step of `STEP` ms goes, from its time constant. */
+const ATTACK = 1 - Math.exp(-STEP / 20), RELEASE = 1 - Math.exp(-STEP / 120);
+/** Levels at most this many steps behind the time are drawn at once rather than kept in step. */
+const LAG = 4;
+
+/** What `<audio-waveform>` draws: one bar a `STEP` of the session's time, newest last, each the height of a level as
+ * the meter's ballistics carry it, and how far the newest bar has moved on from its place (`phase`, 0 to 1), so the
+ * bars scroll with time between steps. Levels that arrive together (a native tap delivers 100 ms of audio at once) are
+ * queued and drawn a step apart; when none has arrived by its step the bars wait at a full step. The same on every
+ * host, so the agent's synthetic signal draws the same bars. */
+export class WaveformBars {
+  constructor(start) { this.at = start; this.bars = []; this.queue = []; this.shown = 0; this.phase = 0; }
+  /** Take `levels`, the meter's since the last frame, and move to `now`. */
+  advance(now, levels) {
+    for (const level of levels) this.queue.push(waveformHeight(level));
+    while (now - this.at >= STEP && this.queue.length) { this.take(); this.at += STEP; }
+    while (this.queue.length > LAG) this.take();
+    if (now - this.at > STEP) this.at = now - STEP;
+    this.phase = Math.min(1, Math.max(0, (now - this.at) / STEP));
+    return this;
+  }
+  take() {
+    const target = this.queue.shift();
+    this.shown += (target - this.shown) * (target > this.shown ? ATTACK : RELEASE);
+    this.bars.push(this.shown);
+    if (this.bars.length > HISTORY) this.bars.splice(0, this.bars.length - HISTORY);
+  }
+}
+
 /** `<audio-waveform track=…>`: the track's levels as bars, newest at the right, drawn each animation frame from a
  * meter of its own below the runner, so no level crosses into Contract. A reader of the track, never a start: an idle
  * track draws silence. Its colour is `tint=`, else the element's `color`. */
@@ -342,23 +383,25 @@ class Waveform {
     this.track = props.track ?? '';
     this.meter = this.track ? this.implementation.waveform(this.track) : null;
     this.bars = [];
+    this.phase = 0;
   }
   draw() {
     const c = this.canvas, scale = devicePixelRatio || 1, w = c.clientWidth, h = c.clientHeight;
     if (!w || !h) return;
     if (c.width !== Math.round(w * scale) || c.height !== Math.round(h * scale)) { c.width = Math.round(w * scale); c.height = Math.round(h * scale); }
-    const fit = Math.max(0, Math.floor((w + GAP) / (BAR + GAP)));
-    if (this.meter && !this.meter.error) this.bars = this.meter.levels(fit);
+    // One bar more than fits: the oldest slides out at the left as the bars scroll.
+    const fit = Math.max(0, Math.floor((w + GAP) / (BAR + GAP))) + 1;
+    if (this.meter && !this.meter.error) ({ bars: this.bars, phase: this.phase } = this.meter.bars());
     const g = c.getContext('2d');
     g.setTransform(scale, 0, 0, scale, 0, 0);
     g.clearRect(0, 0, w, h);
     g.fillStyle = this.color || getComputedStyle(this.element).color;
     this.bars.slice(-fit).forEach((level, i, shown) => {
-      const x = w - (shown.length - i) * (BAR + GAP) + GAP, half = Math.max(1, level * (h / 2 - 2));
+      const x = w - (shown.length - i + this.phase) * (BAR + GAP) + GAP, half = Math.max(1, level * (h / 2 - 2));
       g.fillRect(x, h / 2 - half, BAR, half * 2);
     });
   }
   destroy() { this.gone = true; cancelAnimationFrame(this.raf); this.meter?.stop(); this.canvas.remove(); }
 }
-const BAR = 3, GAP = 2;
+const BAR = 3, GAP = 2, FLOOR = -50, HISTORY = 1000;
 export const roster = { 'audio-waveform': { view: Waveform } };

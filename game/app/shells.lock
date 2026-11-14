@@ -499,6 +499,7 @@ dependencies = [
  "exact-num",
  "exact-plan",
  "exact-route",
+ "exact-svg-file",
  "exact-tamber",
  "icu_locale",
  "serde_json",
@@ -1140,6 +1141,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "exact-game-apple"
+version = "0.1.0"
+dependencies = [
+ "exact-apple",
+ "exact-logic",
+ "exact-runner",
+ "ibex2-sqlite",
+ "serde_json",
+]
+
+[[package]]
 name = "exact-game-audio"
 version = "0.1.0"
 dependencies = [
@@ -1199,6 +1211,7 @@ dependencies = [
  "exact-data-host",
  "exact-game",
  "exact-game-app",
+ "exact-game-apple",
  "exact-game-audio",
  "exact-game-bake",
  "exact-game-derive",

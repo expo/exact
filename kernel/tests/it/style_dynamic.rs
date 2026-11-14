@@ -6,6 +6,63 @@ use exact_kernel::{
 };
 
 #[test]
+fn auto_z_index_round_trips_separately_from_every_integer() {
+    use exact_kernel::{export, wire, Kernel, NodeType, Op};
+    let mut style = StyleProps::default();
+    assert_eq!(style.z_index, None);
+    for (value, expected) in [
+        (StyleValue::Auto, None),
+        (StyleValue::Number(0.0), Some(0)),
+        (StyleValue::Text("auto".into()), None),
+        (StyleValue::Number(f64::from(i32::MIN)), Some(i32::MIN)),
+        (StyleValue::Text(" AUTO ".into()), None),
+        (StyleValue::Number(f64::from(i32::MAX)), Some(i32::MAX)),
+        (StyleValue::Text("-2".into()), Some(-2)),
+    ] {
+        style.set_dynamic(StyleId::ZIndex, &value).unwrap();
+        assert_eq!(style.z_index, expected);
+        assert_eq!(
+            style.get(StyleId::ZIndex),
+            expected.map_or(RowValue::Enum("auto"), |n| RowValue::Number(f64::from(n)))
+        );
+        let ops = [
+            Op::CreateView {
+                id: 1,
+                node_type: NodeType::View,
+            },
+            Op::SetStyle {
+                id: 1,
+                patch: Box::new(style.clone()),
+            },
+            Op::AttachRoot { id: 1 },
+        ];
+        let bytes = wire::frame::encode(1, 0, &ops);
+        assert_eq!(wire::frame::decode(&bytes).unwrap().ops, ops);
+        let mut kernel = Kernel::with_monospace();
+        kernel.apply(0, 1, &ops).unwrap();
+        let snapshot = export::decode(&kernel.export(None).unwrap()).unwrap();
+        assert_eq!(snapshot.styles[0].z_index, expected);
+        assert!(snapshot.styles[0].mask.has(StyleId::ZIndex));
+    }
+    let before = style.clone();
+    for value in [
+        StyleValue::Number(0.5),
+        StyleValue::Number(f64::from(i32::MAX) + 1.0),
+        StyleValue::Number(f64::NAN),
+        StyleValue::Text("0.5".into()),
+        StyleValue::Text("none".into()),
+    ] {
+        assert!(style.set_dynamic(StyleId::ZIndex, &value).is_err());
+        assert_eq!(style, before);
+    }
+    let mut reader = wire::codec::Reader::new(&[2]);
+    assert_eq!(
+        reader.auto_i32(),
+        Err(exact_kernel::DecodeError::BadAutoI32(2))
+    );
+}
+
+#[test]
 fn scroll_padding_and_svg_radii_refuse_negative_literals_atomically() {
     for id in [
         StyleId::ScrollPaddingTop,
@@ -352,7 +409,7 @@ fn every_dynamic_codec_fills_its_row_and_marks_the_mask() {
     assert_eq!(s.height, Dimension::Auto);
     assert_eq!(s.flex_grow, 1.0);
     assert_eq!(s.font_weight, 700);
-    assert_eq!(s.z_index, -2);
+    assert_eq!(s.z_index, Some(-2));
     assert_eq!(
         s.background_color,
         Some(ColorValue::Fixed(Color::rgba(255, 0, 0, 128)))

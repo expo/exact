@@ -1,0 +1,15 @@
+[package]
+name = "canvas-gallery-data"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+test = false
+bench = false
+
+[dependencies]
+exact-data = { path = "../../../data" }
+exact-plan = { path = "../../../plan" }
+exact-runner = { path = "../../../runner" }

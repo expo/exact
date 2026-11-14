@@ -91,6 +91,19 @@ impl Module {
             retired.join();
         }
     }
+
+    /// The web's unload: the module dropped as native unload drops it, the
+    /// open frame's drawables before their surfaces ([`Drop`]), then its
+    /// device destroyed, which frees the browser's GPU memory at once
+    /// rather than when the device is collected.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn unload(mut self) {
+        let gpu = self.gpu.take();
+        drop(self);
+        if let Some(gpu) = gpu {
+            gpu.device.destroy();
+        }
+    }
 }
 
 impl Drop for Module {

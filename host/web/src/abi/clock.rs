@@ -6,6 +6,22 @@ use super::Bridge;
 use exact_runner::DataSource;
 
 impl<D: DataSource> Bridge<D> {
+    /// The browser copied a completed drawing before asynchronous PNG encoding.
+    pub fn canvas_snapshotted(&mut self, ticket: u64) -> bool {
+        self.host
+            .as_mut()
+            .is_some_and(|h| h.canvas_snapshotted(ticket))
+    }
+
+    /// The page applied the requesting commit's layout and drawing.
+    pub fn canvas_capture_ready(&mut self, ticket: u64) -> u32 {
+        let out = self.host.as_mut().map_or_else(
+            || crate::batch::Batch::new().finish(None, false, 0.0, Some("not booted")),
+            |host| host.canvas_capture_ready(ticket),
+        );
+        self.emit(out)
+    }
+
     /// Move the clock: `mode` 0 fires every timer due (the wall clock), 1
     /// stops after a timer that sends (the agent's jump), 2 lands only the
     /// `then`s already armed, the clock unmoved (an agent's input's end).

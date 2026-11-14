@@ -549,7 +549,7 @@ component CompletionStorm
       else
         column testId="away-screen" padding=20 gap=8 background-color="#ffffff" border-radius=12 flex-shrink=0
           text "Result views unmounted" font-size=20
-          text "Root request arguments are explicitly disabled. Late replies are forgotten, not cancelled on the wire. Start to remount with a fresh wave." font-size=13
+          text "Root request arguments are explicitly disabled and held reads are aborted. Start to remount with a fresh wave; old replies cannot populate it." font-size=13
 
 component Lane
   props

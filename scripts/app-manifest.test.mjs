@@ -5,6 +5,38 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 
+test('Apple metadata dictionaries refuse every key together with grant or generic advice', async () => {
+  const { readManifest } = await import('./app.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'manifest-apple-metadata-'));
+  const save = host => writeFileSync(resolve(dir, 'app.json'), JSON.stringify({
+    name: 'Metadata', app: { id: 'dev.exact.metadata', name: 'Metadata' }, host,
+  }));
+  try {
+    save({ ios: { infoPlist: { NSPhotoLibraryAddUsageDescription: 'Save a photo', VendorKey: true },
+      entitlements: { 'aps-environment': 'development', 'com.apple.developer.applesignin': ['Default'], 'vendor.claim': true } },
+      macos: { infoPlist: { NSMicrophoneUsageDescription: 'Record', LSUIElement: true }, entitlements: { 'com.apple.security.device.audio-input': true, 'com.apple.developer.aps-environment': 'development' } } });
+    assert.throws(() => readManifest(dir, 'metadata'), error => {
+      for (const text of [
+        'host.ios.infoPlist.NSPhotoLibraryAddUsageDescription: refused; write `device.photos-add purpose.<key>`',
+        'host.ios.entitlements.aps-environment: refused; write `device.push` beside `device.notifications purpose.<key>`',
+        'com.apple.developer.applesignin: refused; write `auth.apple <client id>`',
+        'host.macos.infoPlist.NSMicrophoneUsageDescription: refused; write `device.microphone purpose.<key>`',
+        'LSUIElement: refused; Exact writes this key itself from its declarations',
+        'host.macos.entitlements.com.apple.security.device.audio-input: refused; Exact writes this key itself from its declarations',
+        'host.macos.entitlements.com.apple.developer.aps-environment: refused; Exact writes this key itself from its declarations',
+        'feedback note', 'VendorKey', 'vendor.claim',
+      ]) assert.ok(error.message.includes(text), text + '\n' + error.message);
+      return true;
+    });
+    for (const value of [null, [], true, 'key']) {
+      save({ ios: { infoPlist: value, entitlements: value }, macos: { infoPlist: value, entitlements: value } });
+      assert.throws(() => readManifest(dir, 'metadata'), /expected object/);
+    }
+    save({ ios: { infoPlist: {}, entitlements: {} }, macos: { infoPlist: {}, entitlements: {} } });
+    assert.deepEqual(readManifest(dir, 'metadata').host.ios.infoPlist, {});
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('a widget declares fixed enum configuration choices', async () => {
   const { readManifest } = await import('./app.mjs');
   const dir = mkdtempSync(resolve(tmpdir(), 'widget-configuration-'));
@@ -719,6 +751,40 @@ test('preload admits the entry shape and refuses malformed names, fields and bou
     ]) assert.throws(() => read(value), error => error.message.includes(`preload.${field}:`));
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+// A deploy captures the app and the checkout keeping their relative places, so a generated workspace that named the
+// checkout absolutely (an app under another top folder than the checkout's) led its capture back to the live tree.
+test('a generated workspace names the checkout relatively, and is rewritten when the app moves', async () => {
+  const { ensureShells } = await import('./app-shells.mjs');
+  const { existsSync, mkdirSync, readFileSync, realpathSync, renameSync } = await import('node:fs');
+  const { dirname, isAbsolute } = await import('node:path');
+  const parent = realpathSync(mkdtempSync(resolve(tmpdir(), 'manifest-relative-shell-')));
+  const manifest = { name: 'Rel', app: { id: 'test.relative', name: 'Rel' }, host: { linux: {} }, deploy: { store: { web: '0', linux: '0' } } };
+  // Each path the workspace and its Linux crate name, resolved where Cargo reads it.
+  const paths = (dir) => {
+    const shells = resolve(dir, '.exact/shells');
+    const named = [[shells, 'Cargo.toml'], [resolve(shells, 'linux'), 'Cargo.toml']].flatMap(([at, file]) =>
+      [...readFileSync(resolve(at, file), 'utf8').matchAll(/path = "([^"]+)"/g)].map((m) => [at, m[1]]));
+    assert.ok(named.length > 0);
+    for (const [at, path] of named) {
+      assert.ok(!isAbsolute(path), path);
+      assert.ok(existsSync(resolve(at, path)), path);
+    }
+    return named.map(([, path]) => path);
+  };
+  try {
+    const first = resolve(parent, 'one');
+    mkdirSync(first);
+    writeFileSync(resolve(first, 'app.json'), JSON.stringify(manifest));
+    ensureShells(first, manifest, 'rel');
+    const before = paths(first);
+    const moved = resolve(parent, 'deeper/two');
+    mkdirSync(dirname(moved));
+    renameSync(first, moved);
+    assert.equal(ensureShells(moved, manifest, 'rel').wrote, true);
+    assert.notDeepEqual(paths(moved), before);
+  } finally { rmSync(parent, { recursive: true, force: true }); }
+}, 60000);
 
 test('adding and removing preload regenerates native shells with the baked accessor', async () => {
   const { ensureShells } = await import('./app-shells.mjs');

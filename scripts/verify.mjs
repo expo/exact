@@ -47,9 +47,10 @@ import { createRequire } from 'node:module';
 import { availableParallelism, loadavg, networkInterfaces } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { findings as feelFindings, summary as feelSummary } from '../host/apple/feel/analyze.mjs';
-import { compilerWarnings, information, shippedHost, windowsWindow } from './app-cli.mjs';
+import { compilerWarnings, information, oneScheme, shippedHost, windowsWindow } from './app-cli.mjs';
 import { guardFlags } from './help.mjs';
 import { holderOf, takePort } from './port-lock.mjs';
+import { alive, ancestors, commandLine } from './processes.mjs';
 import { backendOriginSelection, privateNetwork, selectBackendOrigin } from '../js/bake/src/typescript.mjs';
 import { contractVerify, semanticsSummary } from './verify-semantics.mjs';
 import { byRule, groups, ruleOf, largeRemedy, iosNavigationContent, iosTabBar } from './verify-findings.mjs';
@@ -57,6 +58,7 @@ import { cargoDiagnosticFilter } from './cargo-check.mjs';
 export { byRule, groups, ruleOf, largeRemedy };
 
 import { inlineSettings } from '../js/bake/src/__exact_env.mjs';
+import { importsOf, readsDB, serverModules } from './app-imports.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 /** The web's two widths: a phone's, and a desktop window's. */
@@ -77,18 +79,6 @@ const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 const LOCAL = /\bhttps?:\/\/(?:127\.0\.0\.1|localhost|\[::1\]):\d{2,5}(?:\/[\w\-./]*)?/, LOCAL_SOCKET = new RegExp(LOCAL.source.replace('https?', 'wss?'));
 const readIn = (dir, path) => { try { return readFileSync(resolve(dir, path), 'utf8'); } catch { return null; } };
 
-/** The modules of the app's own that `path` imports (`from './x'`, `import './x'`, `import('./x')`, `require('./x')`),
- * as paths in `dir` that exist: `./x` is x, x.ts, x.js, x.mjs or x/index.ts. */
-function importsOf(dir, path) {
-  const found = [], base = resolve(dir, path, '..');
-  for (const [, spec] of (readIn(dir, path) ?? '').matchAll(/(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\(\s*)['"](\.{1,2}\/[^'"]+)['"]/g)) {
-    const at = resolve(base, spec);
-    const file = [at, `${at}.ts`, `${at}.js`, `${at}.mjs`, `${at}/index.ts`].find((p) => readIn(dir, p) != null);
-    if (file && !relative(dir, file).startsWith('..')) found.push(relative(dir, file));
-  }
-  return found;
-}
-
 /** Whether `origin` is served from this machine: a loopback address, or a private-network one that names
  *  one of this machine's interfaces (a phone's development build reaches the checkout's fixture there). */
 export function onThisMachine(origin) {
@@ -101,24 +91,33 @@ export function onThisMachine(origin) {
 function builtSettings(dir, env, code = readIn(dir, 'app.ts')) {
   try { const { code: built, record } = inlineSettings(code, dir, createRequire(import.meta.url)('rolldown/utils').parseSync, env); return { code: built, values: Object.fromEntries(Object.entries(record).map(([name, s]) => [name, s.value])) }; } catch { return { code, values: {} }; }
 }
-/** The server URL the data module calls: the first local one (`http://127.0.0.1:8787`, localhost; with none, a socket's origin, `ws://…`, is its
- * server's) in app.ts as built (a setting's value, not a default it overrides), else in a module of its own it imports (`./api`'s `API`); else null. */
-export function serverUrl(dir, env = process.env) {
-  const texts = [builtSettings(dir, env).code, ...importsOf(dir, 'app.ts').map((p) => readIn(dir, p))], at = (re) => texts.map((t) => t?.match(re)?.[0]).find(Boolean);
-  return (at(LOCAL) ?? at(LOCAL_SOCKET))?.replace(/\/$/, '').replace(/^ws/, 'http') ?? null;
+/** `text` with its comments blanked, so a URL a comment names is not taken for one the code calls; as written when
+ * it does not parse. */
+function uncommented(text, path) {
+  if (!text) return text;
+  try {
+    const parsed = createRequire(import.meta.url)('rolldown/utils').parseSync(path, text);
+    if (parsed.errors?.length) return text;
+    for (const c of [...parsed.comments].reverse()) text = text.slice(0, c.start) + ' '.repeat(c.end - c.start) + text.slice(c.end);
+    return text;
+  } catch { return text; }
 }
+/** The server URL the data module calls: a setting's value that is a local URL (`http://127.0.0.1:8787`, localhost), as the
+ * build inlines it; else the first local one in app.ts's code (not its comments), else in a module of its own it imports
+ * (`./api`'s `API`); with no http one, a socket's origin (`ws://…`) is its server's. Null with none. */
+export function serverUrl(dir, env = process.env) { return serverChoice(dir, env).url; }
 
-/** Whether `entry`, or a module of the app's own it imports (a root shim that only imports the backend), reads the
- * database's path from `DB`: `process.env.DB`, `Bun.env.DB`, `env["DB"]`, `const { DB } = process.env`, and a server in
- * another language's (`os.environ["DB"]`, `os.getenv("DB")`, `ENV["DB"]`, Go's `os.Getenv("DB")`). */
-const READS_DB = /\benv\??\.DB\b|\benv\[\s*['"]DB['"]\s*\]|\{[^}]*\bDB\b[^}]*\}\s*=\s*[\w.]*\benv\b|\b(?:environ|ENV)\s*\[\s*['"]DB['"]|\b(?:environ\.get|[Gg]etenv)\(\s*['"]DB['"]/;
-function readsDB(dir, entry) {
-  const seen = new Set([entry]);
-  for (const path of seen) {
-    if (READS_DB.test(readIn(dir, path) ?? '')) return true;
-    for (const next of importsOf(dir, path)) if (seen.size < 40) seen.add(next);
-  }
-  return false;
+/** `serverUrl`'s answer as `{ url, note }`: `note` says which origin it took and why when the code names more than one. */
+export function serverChoice(dir, env = process.env) {
+  const { code, values } = builtSettings(dir, env);
+  const texts = [['app.ts', uncommented(code, 'app.ts')], ...importsOf(dir, 'app.ts').map((p) => [p, uncommented(readIn(dir, p), p)])];
+  const all = (re) => texts.flatMap(([path, t]) => [...(t ?? '').matchAll(new RegExp(re.source, 'g'))].map((m) => ({ path, url: m[0] })));
+  const found = [...all(LOCAL), ...all(LOCAL_SOCKET)].map((f) => ({ ...f, url: f.url.replace(/\/$/, '').replace(/^ws/, 'http') }));
+  const setting = Object.entries(values).map(([name, value]) => ({ name, url: String(value).match(LOCAL)?.[0] ?? String(value).match(LOCAL_SOCKET)?.[0] })).find((s) => s.url);
+  const url = setting ? setting.url.replace(/\/$/, '').replace(/^ws/, 'http') : found[0]?.url ?? null;
+  const origins = [...new Set([...(setting ? [url] : []), ...found.map((f) => f.url)].map((u) => new URL(u).origin))];
+  const why = setting ? `the value of ${setting.name}` : `the first in ${found[0]?.path}'s code`;
+  return { url, note: url && origins.length > 1 ? `the app's code names ${origins.join(', ')}: the server is started at ${url}, ${why}` : null };
 }
 
 /** The app's own server, the `rest` pattern's shape: an entry Bun runs (app.json's `commands.server`, as
@@ -145,7 +144,7 @@ export function appServer(dir, env = process.env) {
   const fixture = /(^|[/\\])fixtures?[/\\]/.test(entry);
   const selected = fixture ? backendOriginSelection(dir, env) : null;
   const local = selected && onThisMachine(selected.origin);
-  const url = selected ? local ? selected.origin : null : serverUrl(dir, env);
+  const chosen = selected ? null : serverChoice(dir, env), url = selected ? local ? selected.origin : null : chosen.url;
   const why = !url ? `${entry} is left alone: app.ts calls no local URL (http://127.0.0.1:<port>), so where the app reaches it is unknown` : null;
   const refusal = url && database && command && !named
     ? `app.json's commands.server (${command.join(' ')}) names no file of the app to read, so whether it opens its database at the path DB names cannot be told: name its entry file in the command, or say it keeps none in app.json: "server": { "database": false }`
@@ -154,7 +153,7 @@ export function appServer(dir, env = process.env) {
     : null;
   const port = url ? Number(new URL(url).port || (new URL(url).protocol === 'https:' ? 443 : 80)) : null;
   if (selected && local) { const at = serverArgs.indexOf('--port'); if (at >= 0) serverArgs[at + 1] = String(port); }
-  return { entry, args: entry === named ? serverArgs : [], database, url, port, why, refusal, settings: builtSettings(dir, env).values, ...(fixture ? { fixture: true } : {}), ...(command ? { command } : {}) };
+  return { entry, args: entry === named ? serverArgs : [], database, url, port, why, refusal, settings: builtSettings(dir, env).values, ...(chosen?.note ? { note: chosen.note } : {}), ...(fixture ? { fixture: true } : {}), ...(command ? { command } : {}) };
 }
 
 // app.ts's settings as `appServer` read them: a server importing it (site's) listens where it looked, as Bun's .env loading may not.
@@ -164,17 +163,24 @@ function serverEnv(server, db) {
   return env;
 }
 
-const serverRun = (server, name) => `${(server.command ?? ['bun', server.entry, ...server.args]).join(' ')} at ${server.url}, ${server.database ? `on an empty database (.exact/${name}/db.sqlite, removed after)` : 'without a database'}`;
+const serverRun = (server, name) => `${(server.command ?? ['bun', server.entry, ...server.args]).join(' ')} at ${server.url}, ${server.database ? `on an empty database (.exact/${name}/db.sqlite, removed after)` : 'without a database'}${server.note ? `; ${server.note}` : ''}`;
 
 /** Whether anything answers HTTP at `url` (any status). */
 export const answering = (url) => fetch(url, { signal: AbortSignal.timeout(1000) }).then(() => true, () => false);
 
+/** The process listening on `server.port`, when the system says: its `pid`, and `holder`, " already answers (pid …:
+ * <command>)" to follow the URL. */
+function portHolder(server) {
+  const pid = spawnSync('lsof', ['-nP', `-iTCP:${server.port}`, '-sTCP:LISTEN', '-Fp'], { encoding: 'utf8' }).stdout?.match(/^p(\d+)/m)?.[1];
+  const command = pid ? commandLine(pid).slice(0, 60) : '';
+  return { pid, holder: ` already answers${pid ? ` (pid ${pid}${command ? `: ${command}` : ''})` : ''}` };
+}
+
 /** The one line a server's URL already answering gets: who holds the port, when the system says, and what to do. A
  * server this did not start is never stopped, nor written to. */
 export function heldLine(server) {
-  const pid = spawnSync('lsof', ['-nP', `-iTCP:${server.port}`, '-sTCP:LISTEN', '-Fp'], { encoding: 'utf8' }).stdout?.match(/^p(\d+)/m)?.[1];
-  const command = pid ? commandLine(pid).slice(0, 60) : '';
-  return `${server.url} already answers${pid ? ` (pid ${pid}${command ? `: ${command}` : ''})` : ''}, and the tests would ${server.database ? "write into that server's database" : 'change that server\'s state'}: stop it (${pid ? `kill ${pid}` : 'Ctrl-C where it runs'}) and run this again, which starts ${server.entry} itself${server.database ? ' on an empty one' : ''}`;
+  const { pid, holder } = portHolder(server);
+  return `${server.url}${holder}, and the tests would ${server.database ? "write into that server's database" : 'change that server\'s state'}: stop it (${pid ? `kill ${pid}` : 'Ctrl-C where it runs'}) and run this again, which starts ${server.entry} itself${server.database ? ' on an empty one' : ''}${server.note ? `; ${server.note}` : ''}`;
 }
 
 /** Keep the URL appServer accepted, including its path and explicit default port, for exact record comparisons. */
@@ -266,14 +272,9 @@ async function started(dir, server, name, forward, give) {
   return { stop, exited: () => child.exitCode, tail };
 }
 
-const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
-// A process's command line: `ps` has no Windows build, where CIM's Win32_Process reports it. Empty when neither answers.
-const commandLine = (pid) => (process.platform === 'win32'
-  ? spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `(Get-CimInstance Win32_Process -Filter 'ProcessId=${Number(pid)}').CommandLine`], { encoding: 'utf8' })
-  : spawnSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8' })).stdout?.trim() ?? '';
-
 /** The app's server for one `agent` drive (LLP 1116.008 D1): null when the app has none, or the URL it calls already answers
- * (the builder's own, or another drive's: used, said nothing of); else started where app.ts calls it, on a database of the
+ * (another drive's: used, said only when on another database; one no drive started, the builder's or another program's:
+ * used, and one line names its pid and command); else started where app.ts calls it, on a database of the
  * drive's own, `.exact/agent/<storage>/db.sqlite` kept for the `--storage` name so a second drive on it sees the first's data
  * (without one, an empty database removed after; `fresh`, a drive that starts its store empty, empties it first, and is
  * refused while another drive or the builder's server is using the app server), and one line says so. `{ stop() }` ends it. Drives that overlap share the
@@ -336,7 +337,7 @@ export async function driveServer(dir, storage, say = (line) => console.error(li
     // drive's lease given up, never the database deleted or kept as it was.
     const others = files('drive').filter(([file, pid]) => file !== mine && alive(pid)).map(([, pid]) => pid);
     if (fresh && (others.length || await answering(server.url))) {
-      await stop();
+      off(); rmSync(mine, { force: true });
       throw new Error(`agent: --storage ${storage} is to start empty, but ${others.length ? `another drive (pid ${others.join(', ')}) is using` : 'something already answers at'} ${server.url}, the app server${db ? ', on its database' : ''}: let it end, or name another store`);
     }
     if (await answering(server.url)) {
@@ -344,8 +345,10 @@ export async function driveServer(dir, storage, say = (line) => console.error(li
         await stop();
         throw new Error(`agent: ${server.url} answers, but its fixture does not belong to ${realpathSync(dir)}; use --backend http://127.0.0.1:<free-port> or PORT=<free-port> for this checkout`);
       }
-      const other = db && files('server').map(([file]) => { try { return JSON.parse(readIn(lease, file)).db; } catch { return null; } }).find((was) => was && was !== db);
-      if (other) say(`agent: ${server.entry} at ${server.url} is another drive's, on its database (${relative(dir, other)}); this drive uses it`);
+      const records = files('server').filter(([, pid]) => alive(pid)).map(([file]) => { try { return JSON.parse(readIn(lease, file)); } catch { return null; } }).filter((r) => r?.origin === server.url);
+      const other = db && records.map((r) => r.db).find((was) => was && was !== db);
+      if (!records.length) say(`agent: ${server.url}${portHolder(server).holder}, a server no drive started: this drive uses it and its data${server.database ? ', not a database of its own' : ''}; stop it to have the drive start ${server.entry} itself`);
+      else if (other) say(`agent: ${server.entry} at ${server.url} is another drive's, on its database (${relative(dir, other)}); this drive uses it`);
       return { stop };
     }
     if (db) mkdirSync(dirname(db), { recursive: true });
@@ -361,21 +364,9 @@ export async function driveServer(dir, storage, say = (line) => console.error(li
       await stop();
       throw new Error(`agent: ${server.url} answered before this checkout's fixture owned its port; choose another port with --backend or PORT`);
     }
-    say(`agent: started ${server.entry} at ${server.url} for this drive (${!db ? 'no database' : storage ? `database ${relative(dir, db)}, kept for --storage ${storage}` : 'an empty database'}); stopped after`);
+    say(`agent: started ${server.entry} at ${server.url} for this drive (${!db ? 'no database' : storage ? `database ${relative(dir, db)}, kept for --storage ${storage}` : 'an empty database'}); stopped after${server.note ? `; ${server.note}` : ''}`);
     return { stop };
   } finally { if (locked) rmSync(starting, { force: true }); }
-}
-
-/** This process's ancestors' pids, nearest first. */
-function ancestors() {
-  const out = [];
-  for (let pid = process.ppid; pid > 1 && out.length < 32;) {
-    out.push(String(pid));
-    const parent = Number(spawnSync('ps', ['-o', 'ppid=', '-p', String(pid)], { encoding: 'utf8' }).stdout?.trim());
-    if (!Number.isInteger(parent) || parent === pid) break;
-    pid = parent;
-  }
-  return out;
 }
 
 /** `fn` with the app's server running on an empty database, as verify runs it: its exit code, or 1 when the server cannot
@@ -960,13 +951,6 @@ export async function scrollKey(app, { udid, server = null } = {}) {
     probe: PROBE.map((p) => fileDigest(resolve(ROOT, p))) }));
 }
 
-/** A server's entry and the modules of the app's own it imports, transitively (at most 40). */
-function serverModules(dir, entry) {
-  const seen = new Set([entry]);
-  for (const path of seen) for (const next of importsOf(dir, path)) if (seen.size < 40) seen.add(next);
-  return seen;
-}
-
 /** Whether the measurement `last` (`{ key, load }`) stands for this run, whose key is `key` and whose load is `now`:
  * the same key, and timing judged then or not judgeable now either. */
 export const reusable = (last, key, now) => !!key && last?.key === key && (timingJudged(last.load) || !timingJudged(now));
@@ -1166,7 +1150,8 @@ export function report({ host, built, compiler = [], server, tested, checks, rel
   const warned = compiler.filter((w) => !information(w)), noted = compiler.filter(information);
   if (warned.length) {
     const lines = warned.map((w) => `  ${w}`);
-    out.push(`compiler: ${plural(warned.length, 'warning')}`, ...byRule(lines));
+    // The colours that stay one in dark mode, one line (`oneScheme`, LLP 1168.000 D7.2); the full list keeps each.
+    out.push(`compiler: ${plural(warned.length, 'warning')}`, ...byRule(oneScheme(warned).map((w) => `  ${w}`)));
     full.push(`compiler: ${plural(warned.length, 'warning')} (bun exact.mjs contract build app.contract quotes each line)`, ...lines);
     findings += warned.length; for (const w of warned) counted(ruleOf(w));
   }

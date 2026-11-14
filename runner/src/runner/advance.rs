@@ -6,6 +6,7 @@
 use super::*;
 
 mod data_timers;
+mod inputs;
 
 /// How the runner's clock moves: whether the host presents frames, and the
 /// host's live clock when one owns it (D1; none is a seek clock).
@@ -32,6 +33,8 @@ pub(super) struct Clock {
     arrived: bool,
     /// Answers waiting on their own timers (`data_timers.rs`)
     data: data_timers::DataTimers,
+    /// Inputs waiting on the work due by their arrival (`inputs.rs`)
+    held: std::collections::VecDeque<inputs::Held>,
 }
 
 impl<D: DataSource> Runner<D> {
@@ -52,33 +55,19 @@ impl<D: DataSource> Runner<D> {
     /// firing every timer due by then, so the action's `performanceNow()` — and a sound
     /// it schedules (LLP 1096 D3) — is the event's time, as on the JS
     /// target, not the last timer's. The commits in order, the event's last,
-    /// at `now_ms`; a timer's refusal rides along and the event still runs.
+    /// at `now_ms`; a timer's refusal rides along, the work due after it
+    /// goes on and the event still runs. When a change action yields for its
+    /// receipt (`needs_apply`), the event waits: the host applies the
+    /// receipts and advances again, and the event runs once what was due by
+    /// `now_ms` has (`inputs.rs`).
     pub fn dispatch_at(&mut self, view: ViewId, event: Event, now_ms: f64) -> Advanced {
-        let mut a = self.advance_timed(now_ms);
-        match self.dispatch(view, event) {
-            Ok(receipt) => a.receipts.push(Timed {
-                at_ms: now_ms.max(self.now_ms),
-                receipt,
-            }),
-            Err(e) => a.error = Some(e),
-        }
-        a.now_ms = self.now_ms;
-        a
+        self.hold_event(view, event, now_ms)
     }
 
-    /// Native Forward at the host's time. As with [`Runner::dispatch_at`],
-    /// a timer's refusal rides along and the input still runs.
+    /// Native Forward at the host's time, as [`Runner::dispatch_at`] runs
+    /// an event.
     pub fn host_forward_at(&mut self, root: ViewId, now_ms: f64) -> Advanced {
-        let mut a = self.advance_timed(now_ms);
-        match self.host_forward(root) {
-            Ok(receipt) => a.receipts.extend(receipt.map(|receipt| Timed {
-                at_ms: now_ms.max(self.now_ms),
-                receipt,
-            })),
-            Err(e) => a.error = Some(e),
-        }
-        a.now_ms = self.now_ms;
-        a
+        self.hold_forward(root, now_ms)
     }
 
     /// Move the clock to `now_ms`, firing every timer due, in order, each at
@@ -378,6 +367,35 @@ impl<D: DataSource> Runner<D> {
     /// before it, and what the wakes can deliver is delivered after. No
     /// timer fires while a wake runs unseen.
     fn advance_within(&mut self, now_ms: f64, until_request: bool, timers: bool) -> Advanced {
+        if self.clock.held.is_empty() {
+            return self.advance_due(now_ms, until_request, timers);
+        }
+        let mut a = self.run_held(now_ms, until_request, timers);
+        if a.error.is_some() || a.stopped_on_request || a.needs_apply {
+            return a;
+        }
+        // An input's receipt is applied before a change action it made due.
+        if !a.receipts.is_empty() && self.change_due_by(now_ms) {
+            a.needs_apply = true;
+            return a;
+        }
+        let rest = self.advance_due(now_ms, until_request, timers);
+        a.receipts.extend(rest.receipts);
+        a.now_ms = rest.now_ms;
+        a.error = rest.error;
+        a.stopped_on_request = rest.stopped_on_request;
+        a.needs_apply = rest.needs_apply;
+        a
+    }
+
+    /// Whether a change action is due by `now_ms`.
+    fn change_due_by(&self, now_ms: f64) -> bool {
+        (self.timers.iter().enumerate())
+            .any(|(i, t)| self.plan.timers[i].change && t.next_ms <= now_ms)
+    }
+
+    /// [`Self::advance_within`] with no input held.
+    fn advance_due(&mut self, now_ms: f64, until_request: bool, timers: bool) -> Advanced {
         if self.poisoned {
             return Advanced {
                 receipts: Vec::new(),
@@ -414,13 +432,7 @@ impl<D: DataSource> Runner<D> {
             a.error = error;
             return a;
         }
-        if !a.receipts.is_empty()
-            && self
-                .timers
-                .iter()
-                .enumerate()
-                .any(|(i, t)| self.plan.timers[i].change && t.next_ms <= now_ms)
-        {
+        if !a.receipts.is_empty() && self.change_due_by(now_ms) {
             a.needs_apply = true;
             return a;
         }

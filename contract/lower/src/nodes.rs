@@ -57,7 +57,9 @@ impl Lowerer<'_> {
         let button_context = grouped::button_context(attrs);
         let separated = grouped::row_separator(attrs);
         let acting = grouped::actions::said(attrs);
+        let shadow_part = grouped::shadow::part(attrs);
         let (mut sheet, unmarked) = grouped::split(attrs);
+        sheet.retain(|a| grouped::shadow::part(std::slice::from_ref(a)).is_none());
         let attrs = unmarked.as_ref().unwrap_or(attrs);
         // A `delete=` no list row expanded does nothing (`lower-delete-row`).
         let kept = swipe_rows::stray(attrs);
@@ -83,6 +85,9 @@ impl Lowerer<'_> {
             .collect();
         let styles = |name: &str| self.styles.get(name).map(Vec::as_slice);
         let (class_label, mut expanded) = crate::class::rows(attrs, &styles, &unwritten)?.unzip();
+        if let (Some(rows), Some(card)) = (&mut expanded, shadow_part) {
+            grouped::shadow::class_rows(rows, card);
+        }
         // The class's rows by their places: a rewrite below (an animation's
         // longhands composed, a grouped list's rows inserted) moves rows
         // across `class_len`, never their spans (LLP 1122 D6's address).
@@ -165,6 +170,9 @@ impl Lowerer<'_> {
         let timed = crate::motion::attrs(expanded, &crate::theme::motion_tokens());
         let expanded = timed.as_deref().unwrap_or(expanded);
         let composed = self.compose_animation(expanded)?;
+        if shadow_part == Some(false) {
+            grouped::shadow::check_animations(expanded, &self.keyframes)?;
+        }
         let expanded = composed.as_deref().unwrap_or(expanded);
         let in_svg = svg::in_svg(self.svg_depth > 0, parent_tag);
         let lengths = svg::coerce_lengths(tag, in_svg, expanded);

@@ -25,6 +25,7 @@ impl<D: DataSource> Presenter<D> {
         let region_error = self.poll_content_region().or(performance_error);
         self.executor.begin_pump();
         self.finish_portal_picks();
+        self.finish_file_imports();
         // Waiting admission can refuse without a completion to commit (LLP 1162 D1).
         if !self.host.has_ordered_request_refusals() {
             for (ticket, reason) in self.executor.resume_ordered() {
@@ -76,6 +77,10 @@ impl<D: DataSource> Presenter<D> {
                 self.run_dispatch(r, dispatch);
             }
         }
+        // A request the runner let go (newer arguments, a refresh, a target
+        // answered now) is never released; one it keeps for its effects is.
+        let runner = self.host.runner();
+        self.parked.retain(|_, r| runner.holds(r.ticket));
     }
 }
 

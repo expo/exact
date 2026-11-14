@@ -274,6 +274,37 @@ fn the_compiler_names_what_a_control_takes() {
     assert!(contract::compile(&app("input type=\"CHECKBOX\" checked=on change=set")).is_ok());
 }
 
+/// A prop read twice in one attribute is evaluated once, under a `let`
+/// around the attribute's choice; the choice is still the one the compiler
+/// classifies: a text field's kind, a style row's length or keyword, an
+/// enum prop's members.
+#[test]
+fn a_choice_reading_a_prop_twice_is_classified_as_the_choice() {
+    let app = |line: &str| {
+        format!(
+            "component App\n  state n = 1\n  view\n    Probe(shown=n > 0)\n\
+             component Probe\n  props\n    shown: bool\n  view\n    {line}\n\
+             component Kind\n  props\n    kind: enum<\"a\", \"b\">\n  view\n    text kind\n"
+        )
+    };
+    for line in [
+        "input type=(shown && shown ? \"text\" : \"password\")",
+        "row margin=(shown && shown ? 8 : \"auto\")",
+        "Kind(kind=(shown && shown ? \"a\" : \"b\"))",
+    ] {
+        if let Err(e) = contract::compile(&app(line)) {
+            panic!("{line}: {e}");
+        }
+    }
+    let e = contract::compile(&app("input type=(shown && shown ? \"text\" : \"submit\")"))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        e.contains("lower-input-type") && e.contains("non-text control"),
+        "{e}"
+    );
+}
+
 const RADIOS: &str = r#"component App
   state color = "red"
   state tries = 0

@@ -16,6 +16,9 @@ struct BadgeFace: Equatable {
     let corners: [CGSize]
     #if !os(macOS)
     private let darkScheme: Bool
+    /// The fill's and the ink's share of the tint where each is the tint (`AccentColor` 1,
+    /// `Highlight` 0.2), nil otherwise: the parts drawn in UIKit's grey while it dims tints.
+    let shares: [Double?]
     #endif
     init?(_ button: NodeView) {
         let kids = button.container.subviews.compactMap { $0 as? NodeView }
@@ -52,6 +55,7 @@ struct BadgeFace: Equatable {
         corners = box.cornerSizes(in: CGRect(x: 0, y: 0, width: size, height: size))
         #if !os(macOS)
         darkScheme = box.drawsDark
+        shares = [box.style["background_color"]?.tintAlpha, ink?.style[key]?.tintAlpha]
         #endif
     }
     // Joined by hand: interpolating an array goes through reflection, and
@@ -89,15 +93,23 @@ struct BadgeFace: Equatable {
         }
     }
     #else
-    var image: UIImage {
-        draw(darkScheme ? dark : light).withRenderingMode(.alwaysOriginal)
+    var image: UIImage { image(dimmed: false) }
+    /// The face drawn; `dimmed`, its tint parts in the grey UIKit dims a tint to, which an
+    /// original bitmap does not follow.
+    func image(dimmed: Bool) -> UIImage {
+        draw(darkScheme ? dark : light, dimmed: dimmed).withRenderingMode(.alwaysOriginal)
     }
-    private func draw(_ c: [[Double]]) -> UIImage {
+    private func draw(_ c: [[Double]], dimmed: Bool) -> UIImage {
         let rect = CGRect(x: 0, y: 0, width: size, height: size)
+        let colour = { (i: Int) -> UIColor in
+            let color = TextEngine.color(c[i])
+            guard dimmed, let share = shares[i] else { return color }
+            return color.dimmedTint(share: share)
+        }
         return UIGraphicsImageRenderer(size: rect.size).image { _ in
-            TextEngine.color(c[0]).setFill()
+            colour(0).setFill()
             UIBezierPath(cgPath: BorderPaint.roundedRect(rect, corners, shape: nil)).fill()
-            let ink = TextEngine.color(c[1])
+            let ink = colour(1)
             if let symbol, let glyph = FaceSymbol.image(symbol, points: size * 0.42, configuration: UIImage.SymbolConfiguration(pointSize: size * 0.42))?.withTintColor(ink, renderingMode: .alwaysOriginal) {
                 glyph.draw(at: CGPoint(x: (rect.width - glyph.size.width) / 2, y: (rect.height - glyph.size.height) / 2))
             } else {
@@ -111,3 +123,13 @@ struct BadgeFace: Equatable {
 
 }
 
+#if !os(macOS)
+extension UIColor {
+    /// The grey UIKit dims this tint to behind a modal (`tintAdjustmentMode = .dimmed`), at a tint
+    /// role's `share` of it (`Highlight` 0.2). UIKit chooses it, including for a node's own accent.
+    func dimmedTint(share: Double) -> UIColor {
+        let probe = UIView(); probe.tintColor = self; probe.tintAdjustmentMode = .dimmed
+        return share < 1 ? probe.tintColor.withAlphaComponent(share) : probe.tintColor
+    }
+}
+#endif

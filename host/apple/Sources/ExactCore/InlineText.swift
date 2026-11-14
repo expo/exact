@@ -19,7 +19,7 @@ package struct InlineText {
     package let handlers: Set<String>
     package let paints: Bool
     /// Its presented `opacity` times its enclosing runs': it has no layer,
-    /// so its paint is drawn at this alpha (CSS Color 3 §3.2).
+    /// so its paint group is composited at this alpha (CSS Color 3 §3.2).
     package let opacity: Double
     /// CSS `user-select: all` on the run: a selection that takes part of its
     /// text takes all of it (`TextSelection.atom`).
@@ -69,21 +69,42 @@ package struct InlineText {
         self.handlers = handlers; self.paints = paints; self.opacity = opacity
     }
 
+    package func opacityGroups(in byId: [UInt32: InlineText]) -> [InlineOpacity] {
+        var chain = [self], up = byId[parent]
+        while let run = up { chain.append(run); up = byId[run.parent] }
+        var previous = 1.0, groups: [InlineOpacity] = []
+        for run in chain.reversed() {
+            if previous > 0, run.opacity != previous {
+                groups.append(InlineOpacity(box: run.id, alpha: run.opacity / previous))
+            }
+            previous = run.opacity
+        }
+        return groups
+    }
+
     package var text: String { lightRun.text }
     /// A run with an `href`: the web's `<a>` in its paragraph.
     package var isLink: Bool { !(props["href"] ?? "").isEmpty }
 
 }
 
+public struct InlineOpacity: Hashable {
+    public var box: UInt32
+    public var alpha: Double
+    public init(box: UInt32, alpha: Double) { self.box = box; self.alpha = alpha }
+}
+
 /// A box with a background around a run's own (`Run.background`), which
 /// paints under it: its colour, node, `border-radius` and padding box's
 /// reach past its first and last characters, as the run's own fields.
 package struct OuterBackground: Hashable {
+    package var opacity: [InlineOpacity] = []
     package var color: [Double]
     package var box: UInt32
     package var radii: [InlineRadius]
     package var before: CGFloat, after: CGFloat
-    package init(color: [Double], box: UInt32, radii: [InlineRadius], before: CGFloat, after: CGFloat) {
+    package init(color: [Double], box: UInt32, radii: [InlineRadius], before: CGFloat, after: CGFloat, opacity: [InlineOpacity] = []) {
+        self.opacity = opacity
         self.color = color; self.box = box; self.radii = radii; self.before = before; self.after = after
     }
 }

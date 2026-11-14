@@ -255,16 +255,17 @@ function runtimeScope(node, parent, model) {
   return SCOPES.includes(node.type) || FUNCTIONS.includes(node.type) ? declares(node,true,model,parent) : null;
 }
 /** Visit executable syntax with what binds each name at run time (`runtimeScope`): `local.has(name)` is whether
- * an enclosing scope binds `name` there. */
+ * an enclosing scope binds `name` there; `local.scope(name)` identifies that scope. The visitor also receives
+ * the node's parent. */
 export function walkRuntime(ast, visit) {
-  const scopes=[], model=runtimeModel(ast), local={has:name=>scopes.some(s=>s.has(name))};
+  const scopes=[], model=runtimeModel(ast), local={has:name=>scopes.some(s=>s.has(name)), scope:name=>scopes.findLast(s=>s.has(name))};
   const walk=(node,parent)=>{
     if (!node || typeof node!=='object') return;
     if (Array.isArray(node)) { node.forEach(n=>walk(n,parent)); return; }
     if (node.declare || (node.type?.startsWith('TS') && !TS_CODE.includes(node.type))) return;
     const names=runtimeScope(node,parent,model);
     if (names) scopes.push(names);
-    visit(node,local);
+    visit(node,local,parent);
     for (const k in node) if (k!=='parent') walk(node[k],node);
     if (names) scopes.pop();
   };

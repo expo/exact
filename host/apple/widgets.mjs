@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { plistFile, wrapFramework, frameworkLayout, frameworkInstallName, singleFramework } from './assets.mjs';
 import { assertCapabilityFrameworks, stripProductionExecutable } from './link.mjs';
 import { linkedPlanArgs } from '../../scripts/linked-plan.mjs';
+import { fitLinkedSections, reserveLinkedPlan } from './sections.mjs';
 import { appleLinkArgs } from '../../scripts/package-libraries.mjs';
 import { constValueArgs, intentsMetadata } from './intents.mjs';
 import { appexArgs, keepMain, extensionModuleCache } from './extensions.mjs';
@@ -77,6 +78,19 @@ export function macWidgetSigning(app, identity, { distribution = false, log = co
   }
   return { team, profiles: macWidgetProfiles({ app, team, distribution, log, ...profiles }) };
 }
+/** Shared widget metadata on the owning app; signing supplies the group's and Keychain's identities. */
+export function widgetAppKeys(app, platform, { group, keychain, generation }) {
+  return { ExactAppGroup: group, ExactAppIdentifier: app.id,
+    ExactWidgetKinds: platformWidgetEntries(app, platform).map(entry => entry.kind),
+    ExactWidgetTypeScript: existsSync(resolve(app.dir, 'app.ts')), ExactWidgetGeneration: generation,
+    ...(platform === 'macos' ? { ExactWidgetRequiresSecrets: platformWidgetEntries(app, 'macos').filter(entry => entry.requiresSecrets).map(entry => entry.kind) } : {}),
+    ...(keychain ? { ExactKeychainAccessGroup: keychain } : {}) };
+}
+
+/** ExactWidgetSecretsAvailable is extension-only; ExactWidgetRequiresSecrets is copied from the app. */
+export const widgetExtensionKeys = appInfo => ({ ExactWidgetSecretsAvailable: !!appInfo.ExactKeychainAccessGroup,
+  ExactWidgetRequiresSecrets: appInfo.ExactWidgetRequiresSecrets ?? [] });
+
 /** `extra`: the app's own profile entitlements (presence.mjs `macProvisioning`), signed under the same profile. */
 export function macWidgetEntitlements({ app, team, profiles = null, extension = false, extra = {} }) {
   const id = extension ? widgetId(app) : app.id;
@@ -167,7 +181,14 @@ export function prepareWidgetCore({ directory, swiftBuildRoot, swiftArgs, swiftc
 export function dropLeftoverCore(bin) {
   for (const directory of [bin, resolve(bin, 'Modules')]) for (const name of ['ExactCore.swiftmodule', 'ExactCore.swiftdoc', 'ExactCore.abi.json', 'ExactCore.swiftsourceinfo', 'ExactCore.o']) rmSync(resolve(directory, name), { recursive: true, force: true });
 }
-export function sharedWidgetCore({ app, prepared, libDir, crate, env, runApple, linkedPlan = null, library = null }) {
+export function sharedWidgetCore({ app, prepared, libDir, crate, env, runApple, linkedPlan = null, library = null, reserve = false }) {
+  // `reserve`: the core links reserved room for the plan, keyed by its size (sections.mjs), and placeCoreFramework fits
+  // the app's plan into its own copy. A plan edit then neither relinks the core nor changes the framework every importer
+  // compiles against, which cost ~33 s of Swift per edit of an app with widgets (expo/exact#477).
+  if (reserve && linkedPlan) {
+    const dir = reserveLinkedPlan(linkedPlan.dir), sizes = ['app.plan', 'compat.json', 'app.hbc'].map(file => `${file}:${statSync(resolve(dir, file)).size}`);
+    linkedPlan = { dir, digest: createHash('sha256').update(sizes.join('\n')).digest('hex') };
+  }
   const { base, args, framework, xcframework, device, platform } = prepared;
   mkdirSync(base, { recursive: true });
   const coreEnv = { ...env, EXACT_WIDGET_CORE: '1' };
@@ -182,16 +203,34 @@ export function sharedWidgetCore({ app, prepared, libDir, crate, env, runApple, 
   const dylib = resolve(bin, 'libExactCore.dylib');
   const archive = resolve(libDir, `lib${crate.replaceAll('-', '_')}.a`);
   const digest = createHash('sha256').update(readFileSync(archive)).update(linkedPlan?.digest ?? '').update(library?.sha256 ?? '').digest('hex');
+  // SwiftPM compiles the whole scratch again when any argument in its plan changes, link arguments included, and the
+  // archive and plan sat under the app's own directory: every switch between two widget apps recompiled about 32 s
+  // of Swift (expo/exact-build#177). They are linked from fixed paths here instead, copied in when their bytes change.
+  // The archive's name is fixed too (Package.swift force-loads lib<EXACT_LIB>.a), since apps' crates differ.
+  const inputs = resolve(base, 'link-inputs'), stableArchive = resolve(inputs, 'libexact_widget_app.a'), stablePlan = linkedPlan && resolve(inputs, 'plan');
+  const placed = resolve(inputs, 'digest');
+  if (!existsSync(placed) || readFileSync(placed, 'utf8') !== digest || !existsSync(stableArchive)) {
+    rmSync(inputs, { recursive: true, force: true });
+    mkdirSync(inputs, { recursive: true });
+    copyFileSync(archive, stableArchive);
+    if (stablePlan) {
+      mkdirSync(stablePlan);
+      for (const file of ['app.plan', 'compat.json', 'app.hbc']) copyFileSync(resolve(linkedPlan.dir, file), resolve(stablePlan, file));
+    }
+    writeFileSync(placed, digest);
+  }
+  coreEnv.EXACT_LIB_DIR = inputs;
+  coreEnv.EXACT_LIB = 'exact_widget_app';
   // A package's framework (LLP 1154 D3), which the archive's shim calls, found beside this one in Frameworks.
   const linkLibrary = appleLinkArgs(library, platform !== 'macos', platform === 'macos' ? '@loader_path/../../..' : '@loader_path/..');
   const stamp = resolve(base, 'archive');
   // SwiftPM tracks neither an external archive nor the linked plan. Invalidate only its link;
   // the objects/module stay incremental, including on a kernel-only edit.
   if (!existsSync(stamp) || readFileSync(stamp, 'utf8') !== digest) rmSync(dylib, { force: true });
-  runApple('swift', [...args, ...linkLibrary, ...linkedPlanArgs(linkedPlan?.dir), '--product', 'ExactCore'], options);
+  runApple('swift', [...args, ...linkLibrary, ...linkedPlanArgs(stablePlan), '--product', 'ExactCore'], options);
   // Only the extension links the snapshot target. Keeping it out of the shared
   // runtime keeps SwiftUI and WidgetKit out of an ordinary app launch.
-  runApple('swift', [...args, ...linkedPlanArgs(linkedPlan?.dir), '--product', 'ExactSnapshot'], options);
+  runApple('swift', [...args, ...linkedPlanArgs(stablePlan), '--product', 'ExactSnapshot'], options);
   const changed = !existsSync(stamp) || readFileSync(stamp, 'utf8') !== digest || !existsSync(resolve(framework, 'ExactCore'));
   if (changed) {
     const layout = frameworkLayout(framework, 'ExactCore', platform === 'macos' ? 'MacOSX' : 'iPhoneOS');
@@ -234,12 +273,15 @@ export function sharedWidgetCore({ app, prepared, libDir, crate, env, runApple, 
 /** The shared framework's placeholder identifier; no bundle ships it. */
 const SHARED_CORE_ID = 'dev.exact.core.shared';
 /** `framework` (the shared ExactCore) copied to `to` for `app`, with the app's own bundle identifier. */
-export function placeCoreFramework(framework, to, app, platform = 'ios') {
+export function placeCoreFramework(framework, to, app, platform = 'ios', plan = null) {
   rmSync(to, { recursive: true, force: true });
   cpSync(framework, to, { recursive: true, verbatimSymlinks: true });
   const info = resolve(to, platform === 'macos' ? 'Resources/Info.plist' : 'Info.plist');
   writeFileSync(info, readFileSync(info, 'utf8').replace(`<string>${SHARED_CORE_ID}</string>`, `<string>${app.id}.runtime</string>`));
   if (!readFileSync(info, 'utf8').includes(`<string>${app.id}.runtime</string>`)) throw new Error(`host/apple: ${info} names no ExactCore identifier to replace`);
+  // A core linked with reserved room (sharedWidgetCore `reserve`) takes this app's plan, from its linked bake `plan`.
+  // Its UUID is renewed from the new bytes, so a module cache keyed by UUID never takes another plan's copy for this one.
+  if (plan) fitLinkedSections(resolve(to, 'ExactCore'), { plan: readFileSync(resolve(plan, 'app.plan')), compat: readFileSync(resolve(plan, 'compat.json')), bytecode: readFileSync(resolve(plan, 'app.hbc')) }, { renewUuid: true });
   return to;
 }
 /** `to` with `from`'s bytes and modification time, written only when the bytes differ. */
@@ -384,7 +426,7 @@ export function packageWidgets({ app, bundle, shared, directory, sdk, triple, de
   const entitlementPath = resolve(directory, 'widget-entitlements.plist');
   writeFileSync(entitlementPath, entitlements);
   writeFileSync(resolve(extensionContents, 'Info.plist'), plistFile({ CFBundleIdentifier: widgetId(app), CFBundleName: 'ExactWidgets', CFBundleDisplayName: app.displayName, CFBundleExecutable: 'ExactWidgets', CFBundlePackageType: 'XPC!', ...versions, ...(!mac ? { UIDeviceFamily: appInfo.UIDeviceFamily } : {}), ...capabilities,
-    CFBundleSupportedPlatforms: mac ? ['MacOSX'] : appInfo.CFBundleSupportedPlatforms, ...(appInfo.DTPlatformName ? { DTPlatformName: appInfo.DTPlatformName } : {}), ...(appInfo.NSAppTransportSecurity ? { NSAppTransportSecurity: appInfo.NSAppTransportSecurity } : {}), ExactAppGroup: appInfo.ExactAppGroup ?? widgetGroup(app), ExactAppIdentifier: appInfo.ExactAppIdentifier ?? app.id, ExactWidgetTypeScript: platform !== 'watchos' && existsSync(resolve(app.dir, 'app.ts')), ...(appInfo.ExactKeychainAccessGroup ? { ExactKeychainAccessGroup: appInfo.ExactKeychainAccessGroup } : {}), ...(mac ? { ExactWidgetSecretsAvailable: !!appInfo.ExactKeychainAccessGroup, ExactWidgetRequiresSecrets: appInfo.ExactWidgetRequiresSecrets ?? [] } : {}), ExactWidgetGeneration: appInfo.ExactWidgetGeneration, ...(typeof app.origin === 'string' ? { ExactLinkBase: app.origin } : {}),
+    CFBundleSupportedPlatforms: mac ? ['MacOSX'] : appInfo.CFBundleSupportedPlatforms, ...(appInfo.DTPlatformName ? { DTPlatformName: appInfo.DTPlatformName } : {}), ...(appInfo.NSAppTransportSecurity ? { NSAppTransportSecurity: appInfo.NSAppTransportSecurity } : {}), ExactAppGroup: appInfo.ExactAppGroup ?? widgetGroup(app), ExactAppIdentifier: appInfo.ExactAppIdentifier ?? app.id, ExactWidgetTypeScript: platform !== 'watchos' && existsSync(resolve(app.dir, 'app.ts')), ...(appInfo.ExactKeychainAccessGroup ? { ExactKeychainAccessGroup: appInfo.ExactKeychainAccessGroup } : {}), ...(mac ? widgetExtensionKeys(appInfo) : {}), ExactWidgetGeneration: appInfo.ExactWidgetGeneration, ...(typeof app.origin === 'string' ? { ExactLinkBase: app.origin } : {}),
     NSExtension: { NSExtensionPointIdentifier: 'com.apple.widgetkit-extension' } }));
   // A configured entry's intent reaches the Edit Widget sheet through the extension's App Intents metadata, which
   // Xcode's pass extracts from the module's constant values (`intents.mjs`).

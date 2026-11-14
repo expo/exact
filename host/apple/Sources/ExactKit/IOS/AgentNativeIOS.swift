@@ -144,6 +144,7 @@ extension Agent {
         // D4's `screen` space) and the scene's interface orientation: what a
         // real touch's aim is checked against (LLP 1080.000 D4).
         if let w = vp.window, let container = vp.superview {
+            reply["safeArea"] = ["bottom": Agent.r2(w.safeAreaInsets.bottom)]
             let screen = w.screen
             let origin = container.convert(presenter.pageFrame.origin, to: screen.coordinateSpace) // the page's area (LLP 1130)
             reply["screen"] = ["w": Agent.r2(screen.bounds.width), "h": Agent.r2(screen.bounds.height), "scale": Agent.r2(screen.scale),
@@ -383,7 +384,7 @@ extension Presenter {
         if !kernel.complete { report.incomplete("frames-cap") }
         if inFlight { report.incomplete("in-flight") }
         let kept = keptTrees()
-        let retiringRoots = modals.inspectionRetiring
+        let retiringRoots = modals.inspectionRetiring + (navigation.retiringRoots as [UIView])
         report.walked = roots.map(\.1)
         var seen: [UInt32: NodeView] = [:]
         var stack: [(UIView, NodeView?)] = roots.reversed().map { ($0.0, nil) }
@@ -422,7 +423,8 @@ extension Presenter {
                     }
                     if kept.parked.members.contains(ObjectIdentifier(n)) || kept.leaving.contains(ObjectIdentifier(n)) { continue }
                     // A retiring modal keeps its removed route on screen until
-                    // UIKit's dismissal ends (`ModalIOS.swift`): kept on purpose.
+                    // UIKit's dismissal ends, and a removed route its views until
+                    // UIKit's transition ends: kept on purpose.
                     if retiringRoots.contains(where: { n === $0 || n.isDescendant(of: $0) }) { continue }
                     // An unmapped node view is a leak wherever it hangs, an
                     // opaque controller interior included (D3: nodes there are matched).

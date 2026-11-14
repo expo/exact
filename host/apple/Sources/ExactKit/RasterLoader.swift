@@ -288,6 +288,8 @@ private final class RasterBackend: @unchecked Sendable {
         wake()
     }
     func decode(_ work: ExactRasterWork) {
+        // Pixels are made on a worker only: no pass on main, a mount pass included, decodes.
+        assert(!Thread.isMainThread, "a raster decode on the main thread")
         let charge = NativeRasterCharge(work.charge)
         lock.lock()
         let source = sources[work.source]?.value
@@ -315,13 +317,16 @@ private final class RasterBackend: @unchecked Sendable {
                 if let picture = input.decoded {
                     return try RasterImage.picture(picture, metadata: metadata, plan: plan, charge: charge, sourceOwner: source)
                 }
-                let bytes = try withExtendedLifetime(resolver) { try input.bytes() }
-                guard exact_raster_is_cancelled(work.permit) == 0 else { throw RasterFailure.decode }
-                #if DEBUG
-                lock.lock(); let decline = testDeclines > 0; testDeclines = max(0, testDeclines - 1); lock.unlock()
-                if decline { throw RasterFailure.decode }
-                #endif
-                return try RasterImage.decode(bytes, metadata: metadata, plan: plan, charge: charge, sourceOwner: source, url: input.url)
+                return try withExtendedLifetime(resolver) {
+                    try input.withBytes { bytes, file in
+                        guard exact_raster_is_cancelled(work.permit) == 0 else { throw RasterFailure.decode }
+                        #if DEBUG
+                        lock.lock(); let decline = testDeclines > 0; testDeclines = max(0, testDeclines - 1); lock.unlock()
+                        if decline { throw RasterFailure.decode }
+                        #endif
+                        return try RasterImage.decode(bytes, metadata: metadata, plan: plan, charge: charge, sourceOwner: source, file: file)
+                    }
+                }
             }
             let owner = UInt64(UInt(bitPattern: Unmanaged.passRetained(image).toOpaque()))
             _ = exact_raster_complete(work.permit, owner, { value in
@@ -347,7 +352,7 @@ private final class RasterBackend: @unchecked Sendable {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             lock.lock(); wakePending = false; let loader = self.loader; lock.unlock()
-            loader?.reconcile()
+            loader?.reconcile(.wake)
         }
     }
     func notifyBudgetChange() {
@@ -648,10 +653,31 @@ final class RasterLoader {
         }
         refused.removeValue(forKey: view.id)
         // Initial props run before Presenter registers the new view. Reconcile
-        // after the batch, when identity checks can distinguish it from removal.
-        if !paused { backend.wake() }
+        // after the batch, when identity checks can distinguish it from removal:
+        // at its end, before the transaction commits, so a picture the core
+        // already holds shows with its row (`mountPass`); and on the next turn,
+        // as before, for one that must still be read or decoded.
+        if !paused {
+            if let presenter = view.presenter, presenter.applying {
+                if mounting.isEmpty { presenter.afterBatch { [weak self] in self?.mountPass() } }
+                mounting.insert(view.id)
+            }
+            backend.wake()
+        }
         return true
     }
+    /// After a batch that mounted images: a reconcile of the views it loaded, whose
+    /// pictures go on their layers in the batch's transaction, the row and its
+    /// photo in one frame.
+    /// It only takes what the core holds ready: a request it makes is decoded
+    /// on a worker as any other, nothing here waits, and the sizes and events
+    /// it lands go out on the next main turn, as the asynchronous pass's do
+    /// (LLP 1011, "Events").
+    func mountPass() {
+        reconcile(.mount)
+    }
+    /// The views a batch under way asked to load: its mount pass's.
+    private var mounting = Set<UInt32>()
     func cancel(_ view: UInt32) {
         timings.retired(view)
         deferred.removeValue(forKey: view)
@@ -730,6 +756,19 @@ final class RasterLoader {
         interests.values.filter { i in !i.delivered && (i.failure == nil || i.held) && i.view.map(Self.mayShow) == true }.count
             + deferred.values.filter { $0.view.map(Self.mayShow) == true }.count
     }
+    /// A fragment follows its route's pictures until their first load or error,
+    /// including ones above the port. Resolution changes and parking keep that outcome.
+    /// A picture waiting to be on screen (parked, or a retry held off screen)
+    /// asks for nothing meanwhile, so it is not loading.
+    func loading(inside root: NodeView) -> Bool {
+        interests.values.contains { item in
+            guard let view = item.view, view.loadGeneration == item.generation else { return false }
+            return !item.announced && !item.parked && !(item.held && item.offscreen) && view.isDescendant(of: root)
+        } || deferred.values.contains { item in
+            guard let view = item.view, view.loadGeneration == item.generation else { return false }
+            return view.isDescendant(of: root)
+        }
+    }
     /// A loading image's box is on screen. An image sized on one axis
     /// (`width=96`, no height) has an empty box until its natural size
     /// lands, so an empty side counts as one point.
@@ -770,6 +809,7 @@ final class RasterLoader {
         guard interest.offeredPixel > 0 else { return }
         let metadata = backend.metadata(interest.source).0
         let pixel = requestedPixel(view, metadata)
+        if let rendering = view.style["image_rendering"]?.string, rendering != "auto", pixel != interest.offeredPixel { retry(view.id); return }
         // Avoid re-decoding for every one-pixel live resize or small rounding.
         if pixel > interest.offeredPixel * 5 / 4 || pixel * 5 / 4 < interest.offeredPixel { retry(view.id); return }
         // An SVG filling its box is drawn at the box's ratio: either axis past the band is another picture.
@@ -804,6 +844,9 @@ final class RasterLoader {
     /// fill the box, so the longer one overflows it), as a browser decodes
     /// for the size it paints. Before the metadata, the box's longest side.
     private func requestedPixel(_ view: NodeView, _ metadata: RasterMetadata?) -> Int {
+        if let rendering = view.style["image_rendering"]?.string, rendering != "auto", let metadata, !metadata.svg {
+            return max(metadata.sourceWidth, metadata.sourceHeight)
+        }
         #if os(macOS)
         let scale = view.pixelScale ?? 1
         #else
@@ -922,10 +965,22 @@ final class RasterLoader {
         return (anywhere || mayShow(view)) && RasterRetry.fills(view.convert(view.bounds, to: root), window: root.bounds)
     }
     private var nextWait = 0
-    func reconcile() {
+    /// Who asks for a pass. The wake (`RasterBackend.wake`) runs one on its own
+    /// main turn; a mount pass runs in a batch's epilogue, over the views that
+    /// batch loaded; a direct pass (a retry, a resize, a display change) may run
+    /// inside a batch or a layout. The wake and mount passes take a cache hit as
+    /// they ask for it; a direct pass leaves it to the wake, as before.
+    enum Pass { case wake, mount, direct }
+    func reconcile(_ pass: Pass = .direct) {
         #if DEBUG
         testReconciliations += 1
         #endif
+        // A mount pass takes its batch's views even when it then does nothing:
+        // left behind, they would keep every later batch from asking for one. A
+        // wake runs between batches, never inside one, so views still listed then
+        // are a pass that never came (an epilogue not run), and it lets them go.
+        let batch = pass == .mount ? mounting : []
+        if pass != .direct { mounting.removeAll() }
         guard !destroyed, !paused else { return }
         // Decoded pictures put on their layers: a late frame's `image` (LLP 1144 D2).
         let began = HostPhases.shared.begin(.image)
@@ -939,10 +994,13 @@ final class RasterLoader {
         // request let go of.
         var progress = false
         defer {
-            report(landed); Self.announce(settled)
-            #if DEBUG
-            testAnnounced = Array((testAnnounced + settled.map { ($0.view.id, $0.failure) }).suffix(64))
-            #endif
+            // A mount pass runs inside the batch's epilogue: what it landed is
+            // reported, and its `load`s sent, on the next turn.
+            if pass == .mount {
+                if !landed.isEmpty || !settled.isEmpty {
+                    DispatchQueue.main.async { [weak self, landed, settled] in self?.publish(landed, settled) }
+                }
+            } else { publish(landed, settled) }
             // The interests a full queue refused ask again on the next pass.
             // A decode landing wakes one, but the last may already have
             // landed, so a pass that made room wakes one itself.
@@ -954,7 +1012,20 @@ final class RasterLoader {
             if item.retrying || item.held || item.watching { unwatch(view.id, &item) }
             if !item.announced { item.announced = true; settled.append((view, item.generation, item.failure)) }
         }
-        for viewID in Array(interests.keys) {
+        // The picture the core holds ready for the item's request, on its view:
+        // false when there is none to take, the request not ready.
+        func take(_ viewID: UInt32, _ item: inout Interest, _ view: NodeView) -> Bool {
+            guard let lease = NativeRasterLease(exact_raster_take_ready(id, item.request)) else { return false }
+            item.delivered = true; item.declines = 0
+            if item.retrying || item.watching { unwatch(viewID, &item) }
+            timings.decoded(viewID) // if no frame saw it ready first (`sampleBlank`)
+            if let size = view.acceptRaster(lease, generation: item.generation) { landed.append((view, item.generation, size)); settle(&item, view) }
+            timings.delivered(viewID)
+            interests[viewID] = item
+            return true
+        }
+        let ids = pass == .mount ? batch.filter { interests[$0] != nil } : Array(interests.keys)
+        for viewID in ids {
             guard var item = interests[viewID], let view = item.view,
                   view.loadGeneration == item.generation, view.presenter?.views[viewID] === view else { cancel(viewID); continue }
             if item.parked {
@@ -978,13 +1049,8 @@ final class RasterLoader {
             }
             if item.request != 0 {
                 let state = exact_raster_status(id, item.request)
-                if state == 4, let lease = NativeRasterLease(exact_raster_take_ready(id, item.request)) {
-                    item.delivered = true; item.declines = 0; progress = true
-                    if item.retrying || item.watching { unwatch(viewID, &item) }
-                    timings.decoded(viewID) // if no frame saw it ready first (`sampleBlank`)
-                    if let size = view.acceptRaster(lease, generation: item.generation) { landed.append((view, item.generation, size)); settle(&item, view) }
-                    timings.delivered(viewID)
-                    interests[viewID] = item
+                if state == 4, take(viewID, &item, view) {
+                    progress = true
                 } else if state == 115, item.declines < Self.declineDelays.count,
                           let decode = item.decode, backend.declined(item.source, decode) {
                     // Cancelled now, so the core forgets the failed decode once
@@ -1113,9 +1179,13 @@ final class RasterLoader {
                 item.admissionDeferred = false
             }
             interests[viewID] = item
-            // A cache hit has no worker completion to wake delivery. Queue one
-            // coalesced UI turn, keeping intrinsic publication outside a batch.
-            if item.request != 0 && exact_raster_status(id, item.request) >= 4 { backend.wake() }
+            // A cache hit has no worker completion to wake delivery: the wake and
+            // mount passes take it now. A direct pass, which may run inside a batch
+            // or a layout, and any other settled state (a refusal) leave it to the
+            // next wake, as a worker's completion would.
+            guard item.request != 0 else { continue }
+            let state = exact_raster_status(id, item.request)
+            if state == 4, pass != .direct, take(viewID, &item, view) { progress = true } else if state >= 4 { backend.wake() }
         }
     }
     /// The view lets go of its picture and its request while off screen,
@@ -1265,6 +1335,15 @@ final class RasterLoader {
     /// turn reported and the batch that set the source, and only while the
     /// view still shows that load (`generation`; nil for a source refused
     /// before it had one).
+    /// The natural sizes a pass landed, then each source's first `load` or `error`.
+    private func publish(_ landed: [(view: NodeView, generation: Int, size: CGSize)], _ settled: [(view: NodeView, generation: Int?, failure: String?)]) {
+        report(landed); Self.announce(settled)
+        let presenter = landed.lazy.compactMap { $0.view.presenter }.first ?? settled.lazy.compactMap { $0.view.presenter }.first
+        presenter?.flushFragment()
+        #if DEBUG
+        testAnnounced = Array((testAnnounced + settled.map { ($0.view.id, $0.failure) }).suffix(64))
+        #endif
+    }
     private static func announce(_ events: [(view: NodeView, generation: Int?, failure: String?)]) {
         for (view, generation, failure) in events {
             DispatchQueue.main.async { [weak view] in
@@ -1277,7 +1356,8 @@ final class RasterLoader {
         }
     }
     private func report(_ landed: [(view: NodeView, generation: Int, size: CGSize)]) {
-        guard let presenter = landed.first?.view.presenter else { return }
+        // The first still shown: a view gone by a deferred report has no presenter.
+        guard let presenter = landed.lazy.compactMap({ $0.view.presenter }).first else { return }
         let sizes = landed.compactMap { item -> (UInt32, CGSize?)? in
             guard item.view.loadGeneration == item.generation, presenter.views[item.view.id] === item.view else { return nil }
             #if os(iOS) || os(tvOS)
@@ -1306,7 +1386,7 @@ final class RasterLoader {
     }
     func reset() {
         interests.removeAll(); deferred.removeAll(); refused.removeAll(); refusedPictures.removeAll(); deferredCursor = 0
-        parked.removeAll(); stopWatchingScrolls(); timings.reset()
+        parked.removeAll(); mounting.removeAll(); stopWatchingScrolls(); timings.reset()
         #if DEBUG
         testAnnounced.removeAll()
         #endif

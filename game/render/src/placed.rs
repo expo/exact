@@ -1,5 +1,5 @@
 //! Plane geometry and derived child placements, separate from saved game state.
-use crate::{quads, world::scene, FrameInput, RenderError};
+use crate::{quads, world::scene, world::ParentChanges, FrameInput, RenderError};
 #[cfg(test)]
 use exact_game::Transform;
 use exact_game::{Camera, CanvasChild, Parent, Placed, World};
@@ -32,6 +32,8 @@ pub(crate) struct Placements {
     claims: Vec<u16>,
     cameras: Vec<quads::Item<Camera>>,
     pub(crate) attachments: scene::Attachments,
+    /// Which chains a parent edit changed, for the attachments.
+    parents: ParentChanges,
     stamp: Option<(u64, u64, u64, u64)>,
 }
 impl Placements {
@@ -74,7 +76,14 @@ impl Placements {
     fn feed_with(
         &mut self,
         w: &World,
-        attachments: impl FnOnce(&mut scene::Attachments, &World, bool, bool, bool, bool),
+        attachments: impl FnOnce(
+            &mut scene::Attachments,
+            &World,
+            bool,
+            bool,
+            Option<&ParentChanges>,
+            bool,
+        ),
     ) -> Result<(), RenderError> {
         let next = (
             w.presentation_generation(),
@@ -107,14 +116,24 @@ impl Placements {
             self.stamp.is_some_and(|old| old.2 != next.2),
             false, // Visibility filters presentation, never camera selection.
         );
+        let parent_changed = self.stamp.is_some_and(|old| old.2 != next.2);
+        if initial {
+            self.parents.reset();
+        }
+        if initial || parent_changed {
+            self.parents.begin(w);
+        }
         attachments(
             &mut self.attachments,
             w,
             initial,
             self.stamp.is_none_or(|old| old.1 != next.1),
-            self.stamp.is_some_and(|old| old.2 != next.2),
+            parent_changed.then_some(&self.parents),
             initial || self.stamp.is_none_or(|old| old.3 != next.3),
         );
+        if initial || parent_changed {
+            self.parents.commit();
+        }
         self.stamp = Some(next);
         self.claims.clear();
         let mut items = self.items.iter_mut().peekable();

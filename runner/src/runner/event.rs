@@ -887,80 +887,6 @@ impl<D: DataSource> Runner<D> {
             .map_err(ActionBindingError::Dispatch)
     }
 
-    fn binding_projection(
-        &self,
-        code: Code,
-        frames: &[super::Frame],
-        string_bytes: &mut usize,
-    ) -> Result<BindingScalar, ActionBindingRefusal> {
-        use ActionBindingRefusal::{Limit, Unsupported};
-        if code.len > 128 {
-            return Err(Limit);
-        }
-        let mut r = crate::vm::instructions(self.plan.code(code)).peekable();
-        let first = binding_step(&mut r)?;
-        let op = first.op;
-        let mut value = match op {
-            Opcode::Number => Value::Number(first.number),
-            Opcode::Bool => Value::Bool(first.args[0] != 0),
-            Opcode::Unit => Value::Unit,
-            Opcode::Str => {
-                let id = exact_plan::StrId(first.args[0] as u32);
-                if binding_step(&mut r)?.op != Opcode::Return || r.peek().is_some() {
-                    return Err(Unsupported);
-                }
-                return BindingScalar::string(self.plan.str(id), string_bytes);
-            }
-            Opcode::LoadSlot => {
-                let id = first.args[0] as u32;
-                let row = self.plan.slots.get(id as usize).ok_or(Unsupported)?;
-                match self.plan.owner_region(row) {
-                    Some(owner) => super::Frame::row_of(frames, owner.0)
-                        .and_then(|slots| slots.borrow().get(&id).cloned())
-                        .ok_or(Unsupported)?,
-                    None => self.slots.get(id as usize).cloned().ok_or(Unsupported)?,
-                }
-            }
-            Opcode::LoadItem | Opcode::LoadBound => {
-                let depth = first.args[0] as usize;
-                let frame = frames
-                    .len()
-                    .checked_sub(depth + 1)
-                    .and_then(|i| frames.get(i))
-                    .ok_or(Unsupported)?;
-                (if op == Opcode::LoadItem {
-                    &frame.item
-                } else {
-                    &frame.bound
-                })
-                .clone()
-                .ok_or(Unsupported)?
-            }
-            _ => return Err(Unsupported),
-        };
-        let mut fields = 0;
-        loop {
-            let step = binding_step(&mut r)?;
-            match step.op {
-                Opcode::Return if r.peek().is_none() => {
-                    return BindingScalar::capture(&value, string_bytes)
-                }
-                Opcode::Field => {
-                    fields += 1;
-                    if fields > 8 {
-                        return Err(Limit);
-                    }
-                    let index = step.args[0] as usize;
-                    let Value::Record(record) = &value else {
-                        return Err(Unsupported);
-                    };
-                    value = record.get(index).cloned().ok_or(Unsupported)?;
-                }
-                _ => return Err(Unsupported),
-            }
-        }
-    }
-
     fn binding_action(
         &self,
         id: ActionsId,
@@ -1080,9 +1006,9 @@ impl<D: DataSource> Runner<D> {
             let action = handler.action;
             let _ = write!(what, " ({})", self.plan.str(self.plan.action(action).name));
             let mut args = Vec::new();
-            for a in handler.args.iter() {
+            for (k, a) in handler.args.iter().enumerate() {
                 let code = self.plan.arg(a).expr;
-                args.push(self.eval(code, &[], &frames)?);
+                args.push(self.eval_argument(code, &frames, (view, node, name, k))?);
             }
             let before = super::collection::EdgeState::capture(self, &frames);
             let receipt = self.run_action(action, args, &frames)?;
@@ -1381,7 +1307,7 @@ impl<D: DataSource> Runner<D> {
         };
         // A package view's declared event (`view_event.rs`).
         if let Event::Message(text) = &event {
-            if let Some(done) = self.view_event(node, text, &frames, what) {
+            if let Some(done) = self.view_event(view, node, text, &frames, what) {
                 return done;
             }
         }
@@ -1394,9 +1320,9 @@ impl<D: DataSource> Runner<D> {
             .cloned()
             .ok_or(RunnerError::NoHandler { view, event: name })?;
         let mut args = Vec::new();
-        for a in handler.args.iter() {
+        for (k, a) in handler.args.iter().enumerate() {
             let code = self.plan.arg(a).expr;
-            let value = match self.eval(code, &[], &frames) {
+            let value = match self.eval_argument(code, &frames, (view, node, name, k)) {
                 Ok(value) => value,
                 Err(error) => {
                     let name = self.plan.action(handler.action).name;
@@ -1496,3 +1422,5 @@ impl<D: DataSource> Runner<D> {
 
 #[cfg(test)]
 mod retained_binding_tests;
+
+mod projection;

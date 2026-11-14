@@ -74,16 +74,22 @@ pub fn handled(manifest: &Manifest) -> Vec<String> {
 
 /// Why the manifest's `share_target.action` cannot be delivered (LLP
 /// 1133.024 D1): a share arrives as that location, so its path must be one
-/// the app's routes match, as a route literal's must.
+/// the app's routes match, as a route literal's must, by the router's own
+/// rule. A browser navigates to the action as written (Web Share Target,
+/// "Handling incoming shares"), and the router matches a path with a trailing
+/// `/` to no pattern, so `/share/` is refused for a route `/share`, not
+/// rewritten.
 fn share_target_route(file: &File, manifest: &Manifest) -> Option<String> {
     let action = manifest.json.get("share_target")?.get("action")?.as_str()?;
-    let path: Vec<&str> = action
-        .split(['?', '#'])
-        .next()
-        .unwrap_or("")
-        .split('/')
-        .filter(|s| !s.is_empty())
-        .collect();
+    let table = file.routes.as_ref().map(contract_types::routes::table);
+    let matches = |location: &str| {
+        table
+            .as_ref()
+            .is_some_and(|t| t.matches_pattern(location).is_some())
+    };
+    if matches(action) {
+        return None;
+    }
     let patterns: Vec<&str> = file
         .routes
         .iter()
@@ -91,23 +97,19 @@ fn share_target_route(file: &File, manifest: &Manifest) -> Option<String> {
         .filter(|r| !r.notfound)
         .map(|r| r.pattern.as_str())
         .collect();
-    let matches = |pattern: &&str| {
-        let want: Vec<&str> = pattern.split('/').filter(|s| !s.is_empty()).collect();
-        want.len() == path.len()
-            && want
-                .iter()
-                .zip(&path)
-                .all(|(w, h)| w.starts_with(':') || w == h)
-    };
-    if patterns.iter().any(matches) {
-        return None;
-    }
     let routes = if patterns.is_empty() {
         "it declares none".to_owned()
     } else {
         patterns.join(", ")
     };
-    Some(format!("share_target.action `{action}` matches none of the app's routes ({routes}): a share arrives as that location"))
+    let path = action.split(['?', '#']).next().unwrap_or("");
+    let hint = match path.strip_suffix('/') {
+        Some(bare) if !bare.is_empty() && matches(bare) => {
+            format!("; a path ending in `/` matches no route, so write `{bare}`")
+        }
+        _ => String::new(),
+    };
+    Some(format!("share_target.action `{action}` matches none of the app's routes ({routes}): a share arrives as that location{hint}"))
 }
 
 /// Every file input's `accept` in `file` against the app at `app_root`

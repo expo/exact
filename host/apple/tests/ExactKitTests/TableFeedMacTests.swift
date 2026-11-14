@@ -245,6 +245,16 @@ final class TableFeedMacTests: XCTestCase {
         return (row, f.item(node), f.inDocument(node).minY - port.minY)
     }
 
+    /// The list's name is the table's, renamed by a batch that moves no row.
+    func testTheTableTakesTheListsNameWhenNoRowMoves() throws {
+        let f = try TableFixture(count: 200)
+        fixture = f
+        f.presenter.apply(wireBatch([["op": "props", "id": Int(f.list.id), "set": ["accessibilityLabel": "Notes"]]]))
+        XCTAssertEqual(f.table.accessibilityLabel(), "Notes")
+        f.presenter.apply(wireBatch([["op": "props", "id": Int(f.list.id), "set": ["accessibilityLabel": "Archive"]]]))
+        XCTAssertEqual(f.table.accessibilityLabel(), "Archive")
+    }
+
     func testARowIsAsTallAsLayoutMakesItAndStaysSoWhenItChanges() throws {
         let f = try TableFixture(count: 10_000)
         fixture = f

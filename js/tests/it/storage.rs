@@ -103,6 +103,18 @@ pub(crate) fn call(m: &mut Module, s: &mut Store, op: &str, value: &str) -> Stri
 }
 
 #[test]
+fn application_code_cannot_obtain_a_raw_storage_promise() {
+    let root = Root::new();
+    let mut module = root.module();
+    module.activate().unwrap();
+    let mut store = Store::new(GRANTS, []);
+    assert_eq!(
+        call(&mut module, &mut store, "storage-handoff", ""),
+        "private"
+    );
+}
+
+#[test]
 fn native_modules_are_deferred_retired_and_unavailable_to_validation() {
     struct Native {
         data: Option<PathBuf>,
@@ -325,6 +337,18 @@ fn storage_an_answer_does_not_await_still_lands() {
     );
     assert_eq!(call(&mut m, &mut s, "queued-sync", "third"), "answered");
     assert_eq!(call(&mut m, &mut s, "read-at", "queued/file"), "third");
+}
+
+/// A write queued behind another operation writes the bytes it was called
+/// with, though the app refills its buffer before the write runs, as the
+/// browser's filesystem does (host/web/storage-fs.js).
+#[test]
+fn a_queued_write_keeps_the_bytes_of_its_call() {
+    let root = Root::new();
+    let mut m = root.module();
+    m.activate().unwrap();
+    let mut s = Store::new(GRANTS, Vec::<(String, Vec<u8>)>::new());
+    assert_eq!(call(&mut m, &mut s, "reused-buffer", "AB"), "AB,B,AB");
 }
 
 /// An app that serializes its storage work through one promise chain starts the
@@ -1375,5 +1399,31 @@ fn bundled_sqlite_has_the_wal_page_size_fix() {
         rusqlite::version_number() >= 3_054_000,
         "{}",
         rusqlite::version()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn configuring_storage_refuses_a_symlink_root() {
+    let root = Root::new();
+    std::fs::create_dir_all(root.0.join("outside")).unwrap();
+    std::fs::write(root.0.join("outside/secret"), b"outside").unwrap();
+    std::os::unix::fs::symlink(root.0.join("outside"), root.0.join("data")).unwrap();
+    let mut module = Module::new(HBC.to_vec(), APP, GRANTS);
+    module
+        .configure_storage(
+            root.0.join("data"),
+            root.0.join("cache"),
+            root.0.join("tmp"),
+        )
+        .unwrap();
+    assert!(module.activate().is_err());
+    assert_eq!(
+        std::fs::read(root.0.join("outside/secret")).unwrap(),
+        b"outside"
+    );
+    assert_eq!(
+        std::fs::read_dir(root.0.join("outside")).unwrap().count(),
+        1
     );
 }

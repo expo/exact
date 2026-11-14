@@ -2,6 +2,7 @@
 //! Every texture family draws the same material within a measured tolerance:
 //! the baker's BC4/BC5/BC7 and ASTC payloads against its RGBA8 fallback, each
 //! requested by the surface under its family's file name and uploaded as is.
+use exact_game::asset::TextureFamily;
 use exact_game::*;
 use exact_game_render::{
     exact_gpu::{fixture, wgpu, Frame, Surface},
@@ -42,7 +43,10 @@ impl Game for Crate {
 /// The crate with its one image also sampled as normal, metallic-roughness and
 /// occlusion through separate glTF textures: BC7 sRGB, BC5, BC7 linear and BC4.
 fn baked() -> BTreeMap<String, Vec<u8>> {
-    let dir = std::env::temp_dir().join(format!("compressed-{}", std::process::id()));
+    // One directory a call: the tests bake at once.
+    static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let call = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("compressed-{}-{call}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let mut gltf: serde_json::Value =
         serde_json::from_str(include_str!("../../bake/tests/fixtures/crate.gltf")).unwrap();
@@ -66,12 +70,21 @@ fn baked() -> BTreeMap<String, Vec<u8>> {
     data
 }
 
+/// Every family the bake wrote, as the web serves them; `None` is this
+/// target's bundle's (`TextureFamily::BUNDLED`).
+const BOTH: &[TextureFamily] = &[TextureFamily::Bc, TextureFamily::Astc];
+
 fn draw(
     gpu: &exact_game_render::exact_gpu::Gpu,
     data: &BTreeMap<String, Vec<u8>>,
     features: wgpu::Features,
+    held: Option<&'static [TextureFamily]>,
 ) -> (fixture::Pixels, String, Vec<String>) {
-    let mut s = WorldSurface::<Crate, exact_game_render::ModelExecutor, true>::default();
+    let s = WorldSurface::<Crate, exact_game_render::ModelExecutor, true>::default();
+    let mut s = match held {
+        Some(held) => s.texture_families(held),
+        None => s,
+    };
     s.device_ready(features);
     s.bind(&[], None).unwrap();
     let mut fetched = Vec::new();
@@ -105,7 +118,7 @@ fn block_payloads_draw_the_rgba8_material_within_tolerance() {
         return;
     };
     let data = baked();
-    let (reference, state, fetched) = draw(&gpu, &data, wgpu::Features::empty());
+    let (reference, state, fetched) = draw(&gpu, &data, wgpu::Features::empty(), Some(BOTH));
     reference.save("compressed-rgba8");
     // The crate's planks (dark and light brown) cover a real share of the frame.
     let planks = reference.count(|p| p[0] > p[2] + 20 && p[1] > p[2]);
@@ -131,7 +144,7 @@ fn block_payloads_draw_the_rgba8_material_within_tolerance() {
             eprintln!("SKIP {family}: this device lacks {feature:?}");
             continue;
         }
-        let (image, state, fetched) = draw(&gpu, &data, feature);
+        let (image, state, fetched) = draw(&gpu, &data, feature, Some(BOTH));
         image.save(&format!("compressed-{family}"));
         assert!(state.contains(formats), "{family}: {state}");
         // The device fetched only its family's files, never the fallback.
@@ -158,4 +171,35 @@ fn block_payloads_draw_the_rgba8_material_within_tolerance() {
             "{family}: mean {mean}, max {worst}"
         );
     }
+}
+
+/// A surface fetches the family its target's bundle holds: a Mac's BC, an
+/// iPhone's ASTC even on a device that grants BC too (an M-series iPad).
+#[test]
+fn a_surface_fetches_its_bundles_family() {
+    let Some(gpu) = test_device::device_or_skip(fixture::device()) else {
+        return;
+    };
+    let granted = gpu.device.features()
+        & (wgpu::Features::TEXTURE_COMPRESSION_BC | wgpu::Features::TEXTURE_COMPRESSION_ASTC);
+    let (family, feature) = if cfg!(any(target_os = "ios", target_os = "tvos"))
+        || !cfg!(target_os = "macos") && !granted.contains(wgpu::Features::TEXTURE_COMPRESSION_BC)
+    {
+        ("astc", wgpu::Features::TEXTURE_COMPRESSION_ASTC)
+    } else {
+        ("bc", wgpu::Features::TEXTURE_COMPRESSION_BC)
+    };
+    if !granted.contains(feature) {
+        eprintln!("SKIP: this device lacks {feature:?}, which this target's bundle holds");
+        return;
+    }
+    let (_, state, fetched) = draw(&gpu, &baked(), granted, None);
+    let textures: Vec<_> = fetched.iter().filter(|f| f.ends_with(".tex")).collect();
+    assert_eq!(textures.len(), 4, "{fetched:?}");
+    assert!(
+        textures
+            .iter()
+            .all(|f| f.ends_with(&format!(".{family}.tex"))),
+        "{state} {fetched:?}"
+    );
 }

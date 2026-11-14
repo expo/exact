@@ -50,8 +50,9 @@ export function on(e, kind, f, bind) {
     };
   f = (...a) => {
     const to = wall && start ? Math.max(clock.now, performance.now() - start) : clock.now;
+    // A change action's receipt boundary yields (true): what is due after it runs before the event too.
     if (clock.timers.some(t => t.due <= to && !(wall && t.frame)) || Mutations.some(m => m.due <= to || m.next <= to))
-      advance(to, wall);
+      while (advance(to, wall) === true);
     if (!ends || (e.isConnected && !own?.gone)) return run(...a);
   };
   // A queued dialog close (or a scroll's end a due task's removal outlived) can outlive its arm, even while an exit
@@ -71,13 +72,14 @@ export function on(e, kind, f, bind) {
     });
     if (kind === 'message') return;
   }
-  if (e.localName === 'img' && (kind === 'load' || kind === 'error')) return imageEvent(e, kind, f, inflight);
   if (e.localName === 'iframe' && kind === 'error') return l(kind, ev => f(ev.detail ?? 'iframe did not load'));
   // picture-in-picture.js: the failure's reason
   return bind ? bind(e, kind, f, l) : l(kind, kind === 'pictureinpictureerror' ? ev => f(ev.detail) : () => f());
 }
 // Each event family's binder, passed to `on` by the generated module only where its plan binds that family
 // (emit.rs `binder`), so a plan carries only the families it hears; any other event is a plain listener.
+// An image's `load` and `error` (elements.js `imageEvent`); another element's are plain listeners.
+export const onImage = (e, kind, f, l) => (e.localName === 'img' ? imageEvent(e, kind, f, inflight) : l(kind, () => f()));
 // A link with a press is the app's navigation: the browser's is prevented. A modified or other-button click, a `target`
 // or `download`, is the browser's alone and the press does not run, with a router or without (`router`, input-glue.js).
 // a press action taking one more parameter hears the MouseEvent's modifiers (gallery F20) and point (LLP 1021 D2)

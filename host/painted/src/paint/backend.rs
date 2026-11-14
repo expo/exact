@@ -182,6 +182,25 @@ pub trait Backend {
     ) -> bool {
         false
     }
+    /// One outer `box-shadow`: through [`Self::blurred_shadow`] when it can
+    /// be blurred (`blurred`: its colour, sigma and shape) and the backend
+    /// draws it, else as `bands`' fills.
+    fn box_shadow(
+        &mut self,
+        blurred: Option<([u8; 4], f32, Shape)>,
+        outer: &Shape,
+        bands: &dyn Fn() -> Vec<border::BorderFill>,
+        ts: Transform,
+    ) {
+        if let Some((color, sigma, shape)) = blurred {
+            if self.blurred_shadow(&shape, color, sigma, outer, ts) {
+                return;
+            }
+        }
+        for band in bands() {
+            self.fill_border(&band, ts);
+        }
+    }
     /// Draw the glyphs `text` draws from here on through a Gaussian blur of
     /// `sigma` points, 0 none, where the backend blurs glyphs as it draws
     /// them (a numeric roll's, LLP 1077 D15); the rest draw them sharp.
@@ -198,6 +217,7 @@ pub trait Backend {
         clips: &[Shape],
         ts: Transform,
         tint: Option<[u8; 4]>,
+        rendering: exact_kernel::ImageRendering,
     );
     /// Whether this backend places a CPU island: the walk makes none it
     /// would not (a text stroke's band).
@@ -207,6 +227,12 @@ pub trait Backend {
     /// Draw through a row-major projective matrix until `plane_end`. A backend
     /// that declines leaves the painter to rasterize and warp the subtree.
     fn plane_begin(&mut self, _matrix: [f32; 9]) -> bool {
+        false
+    }
+    /// Whether [`Self::plane_begin`] draws through the matrices a walk
+    /// gives it: a tape recorded for this backend keeps a plane only then,
+    /// and the software warp otherwise.
+    fn supports_planes(&self) -> bool {
         false
     }
     /// End the innermost accepted projective matrix.

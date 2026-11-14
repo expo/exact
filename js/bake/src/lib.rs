@@ -1004,10 +1004,8 @@ fn digest(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
-/// Build `app.contract` plus `app.ts`, including app-local imports. The app
-/// exports `appId`, `grants`, and `answer`; the generated entry checks their
-/// types and supplies the executor ABI. No source or source-adjacent generated
-/// declaration is overwritten. This producer requires its host's lean Hermes.
+/// Bake `app.contract` and `app.ts` with app-local imports through the host's lean Hermes.
+/// Development or unset trust refreshes the editor declarations beside app.ts.
 pub fn bake(app: &Path, tools: &Tools) -> Result<Baked, String> {
     let stage = Scratch::new(&std::env::temp_dir())?;
     bake_in(
@@ -1026,6 +1024,47 @@ enum BakeMode<'a> {
     Development {
         compiler: Option<&'a mut resident::Compiler>,
     },
+}
+
+/// Brings `stage` from the capture `previous` names to `captured`: removes
+/// what left, writes what changed. `previous` names what the stage holds
+/// after each file's update, so a bake that fails partway leaves it true of
+/// the disk and the next one finishes the work rather than trusting it done.
+fn stage_capture(
+    stage: &Path,
+    previous: &mut BTreeMap<PathBuf, Vec<u8>>,
+    captured: &BTreeMap<PathBuf, Vec<u8>>,
+) -> Result<(), String> {
+    let gone: Vec<PathBuf> = previous
+        .keys()
+        .filter(|name| !captured.contains_key(*name))
+        .cloned()
+        .collect();
+    for name in gone {
+        let path = stage.join(&name);
+        match std::fs::remove_file(&path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.to_string()),
+            _ => {}
+        }
+        previous.remove(&name);
+        let mut parent = path.parent();
+        while let Some(directory) = parent.filter(|directory| *directory != stage) {
+            if std::fs::remove_dir(directory).is_err() {
+                break;
+            }
+            parent = directory.parent();
+        }
+    }
+    for (name, bytes) in captured {
+        let target = stage.join(name);
+        std::fs::create_dir_all(target.parent().unwrap()).map_err(|e| e.to_string())?;
+        if previous.get(name) != Some(bytes) {
+            previous.remove(name);
+            std::fs::write(target, bytes).map_err(|e| e.to_string())?;
+            previous.insert(name.clone(), bytes.clone());
+        }
+    }
+    Ok(())
 }
 
 fn bake_in(
@@ -1073,25 +1112,7 @@ fn bake_in(
     {
         return Err("__exact_* and app.js (the bundle) are reserved for the producer".into());
     }
-    for name in previous.keys().filter(|name| !captured.contains_key(*name)) {
-        let path = stage.join(name);
-        std::fs::remove_file(&path).map_err(|e| e.to_string())?;
-        let mut parent = path.parent();
-        while let Some(directory) = parent.filter(|directory| *directory != stage) {
-            if std::fs::remove_dir(directory).is_err() {
-                break;
-            }
-            parent = directory.parent();
-        }
-    }
-    for (name, bytes) in &captured {
-        let target = stage.join(name);
-        std::fs::create_dir_all(target.parent().unwrap()).map_err(|e| e.to_string())?;
-        if previous.get(name) != Some(bytes) {
-            std::fs::write(target, bytes).map_err(|e| e.to_string())?;
-        }
-    }
-    *previous = captured.clone();
+    stage_capture(stage, previous, &captured)?;
     // The Contract is compiled where it lives, as the web build compiles it
     // (LLP 1091 D10): its uses, packages and links resolve as they do for
     // every other reader, with no staged copy to tell apart from the
@@ -1148,12 +1169,15 @@ fn bake_in(
         &stage.join("__exact_canvas.d.ts"),
         RECORDER_TYPES.as_bytes(),
     )?;
-    write_changed(&stage.join(DECLARATIONS), declarations.as_bytes())?;
     // The composer's roster is available only in this bake. Publish its editor
     // declarations before checking app.ts, including when that check fails.
-    if development || composer.is_some() {
-        write_changed(&app.join(DECLARATIONS), declarations.as_bytes())?;
-    }
+    write_declarations(
+        &app,
+        stage,
+        &declarations,
+        development || composer.is_some(),
+        std::env::var("EXACT_UPDATE_TRUST").ok().as_deref(),
+    )?;
     // A development build's `local-network` lines admit loopback too (LLP 1133.036 D5), as
     // `developmentLocalNetwork` in typescript.mjs writes them for the web.
     let trust = std::env::var("EXACT_UPDATE_TRUST");
@@ -1330,6 +1354,22 @@ fn compile_bytecode(stage: &Path, hermesc: &Path) -> Result<(), String> {
         ],
         stage,
     )
+}
+
+fn write_declarations(
+    app: &Path,
+    stage: &Path,
+    declarations: &str,
+    development: bool,
+    trust: Option<&str>,
+) -> Result<(), String> {
+    write_changed(&stage.join(DECLARATIONS), declarations.as_bytes())?;
+    // The editor's copy is not a captured input. A one-shot native development
+    // build uses the production producer with development trust.
+    if development || trust.is_none_or(|trust| trust == "development") {
+        write_changed(&app.join(DECLARATIONS), declarations.as_bytes())?;
+    }
+    Ok(())
 }
 
 fn write_changed(path: &Path, bytes: &[u8]) -> Result<(), String> {

@@ -340,6 +340,17 @@ impl TextureFormat {
     }
 }
 impl TextureFamily {
+    /// The compressed families this target's native bundle holds, as
+    /// `scripts/texture-families.mjs` thins it: BC on a Mac, whose every GPU
+    /// reads it; ASTC on iOS and tvOS, whose every GPU reads it (an M-series
+    /// iPad reads BC too, but its bundle holds ASTC). Elsewhere both.
+    pub const BUNDLED: &'static [Self] = if cfg!(target_os = "macos") {
+        &[Self::Bc]
+    } else if cfg!(any(target_os = "ios", target_os = "tvos")) {
+        &[Self::Astc]
+    } else {
+        &[Self::Bc, Self::Astc]
+    };
     /// The family's name, as `state.world.gpu.textureFamily` reports it.
     pub fn label(self) -> &'static str {
         ["Rgba8", "Bc", "Astc"][self as usize]

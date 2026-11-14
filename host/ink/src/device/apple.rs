@@ -448,7 +448,7 @@ impl Retry {
     fn failed(&self) -> bool {
         let previous = self
             .failures
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |n| {
                 Some(n.saturating_add(1).min(2))
             })
             .unwrap();

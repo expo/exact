@@ -1,9 +1,9 @@
 // An app whose one resource asks a server that holds the request, as a long poll does (LLP 1016.000 D9),
 // and its server, for the hosts' held-request tests (host/web-js/held.test.mjs, host/apple/held.test.mjs):
-// `poll("held")` fetches `/changes` with `exactHeld: true`; `poll("plain")` the same unmarked. Once the
+// `poll("held")` marks `/changes` as held; `poll("plain")` asks the same unmarked. Once the
 // held reply lands, the answer fetches `/detail` (unmarked): its work after the held reply, which a clock
 // waits on again. A timer every 50 ms makes every jump cross timers.
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 export const CONTRACT = `component HeldTest
@@ -61,11 +61,46 @@ export function holdingServer({ detailDelay = 0, plainAfter = 3000, port = 0 } =
 }
 
 /** The app in a fresh directory under `root` (target/), asking `origin`. */
-export function heldApp(root, origin) {
+export function heldApp(root, origin, language = 'TypeScript') {
   const dir = mkdtempSync(resolve(root, 'target/held-test-'));
   writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Held Test', app: { id: 'test.held', name: 'Held Test' }, host: { web: {}, macos: {} } }));
   writeFileSync(resolve(dir, 'app.contract'), CONTRACT);
-  writeFileSync(resolve(dir, 'app.ts'), `export const appId = 'test.held';
+  if (language === 'Rust') {
+    mkdirSync(resolve(dir, 'data/src'), { recursive: true });
+    mkdirSync(resolve(dir, 'web'));
+    writeFileSync(resolve(dir, 'web/build.rs'), 'fn main() { contract::bake(plan, held_test_data::Held::default()); }\n');
+    writeFileSync(resolve(dir, 'data/Cargo.toml'), `[package]
+name = "held-test-data"
+version = "0.1.0"
+edition = "2021"
+[dependencies]
+exact-runner = { path = "${root}/runner" }
+[workspace]
+`);
+    writeFileSync(resolve(dir, 'data/src/lib.rs'), `use exact_runner::{Answer, DataError, DataSource, Outcome, Request, Store, Value};
+
+#[derive(Default)]
+pub struct Held { reply: String }
+impl DataSource for Held {
+    fn app_id(&self) -> &str { "test.held" }
+    fn grants(&self) -> &str { "net.fetch ${origin}" }
+    fn query(&mut self, _: &str, _: &[Value]) -> Result<Value, DataError> { Ok(Value::str("")) }
+    fn answer(&mut self, _: &mut Store, name: &str, args: &[Value]) -> Result<Answer, DataError> {
+        if name != "poll" { return Err(DataError::UnknownSource(name.into())); }
+        let mode = args[0].as_str().unwrap();
+        let request = Request::get(&format!("${origin}/changes?mode={mode}"));
+        Ok(Answer::Later(if mode == "held" { request.held() } else { request }))
+    }
+    fn parse(&mut self, _: &mut Store, _: &str, _: &[Value], outcome: Outcome) -> Result<Answer, DataError> {
+        let Outcome::Response(response) = outcome else { return Err(DataError::Unavailable(format!("{outcome:?}"))); };
+        let body = String::from_utf8(response.body).unwrap();
+        if body == "detail" { return Ok(Answer::Now(Value::str(&format!("{}|{body}", self.reply)))); }
+        self.reply = body;
+        Ok(Answer::Later(Request::get("${origin}/detail")))
+    }
+}
+`);
+  } else writeFileSync(resolve(dir, 'app.ts'), `export const appId = 'test.held';
 export const grants = ${JSON.stringify(`net.fetch ${origin}`)};
 export function answer(name: string, args: any): any {
   if (name !== 'poll') throw new Error('no source ' + name);

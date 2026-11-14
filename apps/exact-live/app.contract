@@ -155,7 +155,7 @@ shape JobLog
 
 component ExactLive
   resource viewport = exactViewport() as shape Viewport
-  resource theme = theme() as shape Theme
+  derive theme = Theme(page="-exact-background", card="-exact-secondary-background", edge="-exact-separator", ink="-exact-label", muted="-exact-secondary-label", wash="-exact-secondary-fill", accent="AccentColor")
   resource initial = gallery() as shape GalleryState
   mutation changed as shape GalleryState
   derive gallery = match changed { case some(value) => value, case none => initial }
@@ -446,7 +446,7 @@ component ExactLive
     theme
     k
   view
-    main testId="exact-live" width="100%" height="100%" min-height=0 display="flex" flex-direction="column" overflow="hidden" box-sizing="border-box" viewport-fit="cover" interactive-widget="resizes-content" padding-top="env(safe-area-inset-top)" padding-left="env(safe-area-inset-left)" padding-right="env(safe-area-inset-right)" padding-bottom="env(safe-area-inset-bottom)" background-color=theme.page color=theme.ink
+    main testId="exact-live" width="100%" height="100%" min-height=0 display="flex" flex-direction="column" overflow="hidden" box-sizing="border-box" viewport-fit="cover" interactive-widget="resizes-content" padding-top="env(safe-area-inset-top)" padding-left="env(safe-area-inset-left)" padding-right="env(safe-area-inset-right)" padding-bottom="env(safe-area-inset-bottom)" background-color=theme.page color=theme.ink accent-color="light-dark(#225b4c, #cce8d3)"
       column flex-shrink=0 padding=16 gap=12 border-bottom-width=1 border-color=theme.edge
         row align-items="center" gap=10
           text "exact / live" font-size=(22 * k) font-weight=700 letter-spacing=-0.8 color=theme.accent
@@ -459,7 +459,7 @@ component ExactLive
               text "Pause" font-size=(12 * k) color=theme.accent
           else
             button press=startLive testId="start-live" min-height=44 padding=10 border-width=0 border-radius=8 background-color=theme.accent
-              text "Go live" font-size=(12 * k) color=theme.page
+              text "Go live" font-size=(12 * k) color="light-dark(#ffffff, #000000)"
           button press=toggleInspector testId="toggle-load" aria-label="Workload controls" min-width=44 min-height=44 padding=10 border-width=0 border-radius=8 background-color=theme.card
             text "•••" color=theme.ink
         row align-items="center" gap=6
@@ -581,7 +581,7 @@ component LoadButton
     choose: action
   view
     button press=choose(n) padding=8 min-height=44 border-width=0 border-radius=6 background-color=(selected == n ? theme.accent : theme.card)
-      text label font-size=(12 * k) color=(selected == n ? theme.card : theme.ink)
+      text label font-size=(12 * k) color=(selected == n ? "light-dark(#ffffff, #000000)" : theme.ink)
 
 component RundownPanel
   inject
@@ -642,13 +642,13 @@ component CrewPanel
       list appearance="none" virtualized=true scrollFollowEnd=true testId="crew-transcript" flex=1 min-height=60 width="100%" overflow-x="hidden" overscroll-behavior="contain" background-color=theme.page
         for m in history.rows key=m.id
           column width="100%" box-sizing="border-box" padding-left=12 padding-right=12 padding-top=7 padding-bottom=7
-            box swiperight=reply(m.id) testId=`crew-swipe-${m.id}` touch-action="pan-y" retainFocus=true transition="translate -exact-spring(300, 30, 1)" width="100%" padding=0 border-width=0 background-color="#00000000" text-align="left"
+            box swiperight=reply(m.id) testId=`crew-swipe-${m.id}` touch-action="pan-y" retainFocus=true transition="translate -exact-spring(300, 30, 1)" width="100%" padding=0 border-width=0 background-color="transparent" text-align="left"
               column testId=`message-${m.id}` width="100%" align-items=(m.outgoing ? "flex-end" : "flex-start") gap=5
                 text m.sender font-size=(11 * k) font-weight=600 color=theme.muted
                 column max-width="95%" padding=11 gap=6 box-sizing="border-box" border-radius=10 background-color=(m.outgoing ? theme.wash : theme.card)
                   text m.body font-size=(14 * k) line-height=1.45 white-space="pre-wrap" color=theme.ink
                   text m.meta font-size=(10 * k) color=theme.muted
-            button tabindex=0 press=reply(m.id) retainFocus=true align-self="flex-end" padding=5 border-width=0 background-color="#00000000" aria-label=`Reply to ${m.sender}`
+            button tabindex=0 press=reply(m.id) retainFocus=true align-self="flex-end" padding=5 border-width=0 background-color="transparent" aria-label=`Reply to ${m.sender}`
               text "Reply" font-size=(10 * k) color=theme.accent
       column padding=12 gap=6 width="100%" box-sizing="border-box" flex-shrink=0
         if replying != ""
@@ -659,7 +659,7 @@ component CrewPanel
         row gap=8 align-items="center"
           input appearance="none" value=draft input=edit submit=post testId="crew-input" aria-label="Write a local crew note" placeholder="Leave a note for this scene…" flex=1 min-width=0 min-height=44 padding=10 border-width=1 border-color=theme.edge border-radius=8 background-color=theme.page color=theme.ink font-size=(14 * k)
           button press=post testId="send-note" padding=10 min-height=44 border-width=0 border-radius=8 background-color=theme.accent
-            text "Post" font-size=(12 * k) color=theme.card
+            text "Post" font-size=(12 * k) color="light-dark(#ffffff, #000000)"
         text "Device-local · latest note retained" font-size=(10 * k) color=theme.muted
         if tooLong
           text "Keep the note within512 characters. Your previous draft is retained." testId="draft-error" font-size=(11 * k) color=theme.accent
@@ -758,7 +758,7 @@ component Viewer
             text "2×" font-size=(12 * k) color=theme.ink
           button press=resetPhoto testId="viewer-reset" aria-label="Reset photo position and zoom" padding=8 border-width=0 border-radius=6 background-color=theme.card
             text "Center and fit" font-size=(12 * k) color=theme.ink
-        box testId="viewer-clip" width="100%" height=410 flex-shrink=0 position="relative" overflow="hidden" padding=0 border-width=0 box-sizing="border-box" border-radius=12 background-color="#172521"
+        box testId="viewer-clip" width="100%" height=410 flex-shrink=0 position="relative" overflow="hidden" padding=0 border-width=0 box-sizing="border-box" border-radius=12 background-color="-exact-tertiary-background"
           box id="viewer-transform" testId="viewer-transform" width="100%" height="100%" position="relative" padding=0 border-width=0 margin=0 box-sizing="border-box" translate=`${panX}px ${panY}px` scale=zoom transition="translate -exact-spring(300, 30, 1), scale -exact-spring(300, 30, 1)"
             image viewer.photo.asset aria-label=viewer.photo.alt position="absolute" left=0 top=0 width="100%" height="100%" object-fit="contain" testId="viewer-image"
             box transformDragFor="viewer-transform" transformgeometry=photoGeometry transformrelease=releasePhoto touch-action="none" position="absolute" left=0 top=0 width="100%" height="100%" testId="viewer-handle" aria-label=`Pan ${viewer.photo.title}`

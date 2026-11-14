@@ -27,11 +27,15 @@ use std::collections::{BTreeMap, BTreeSet};
 /// What names a body may read, from where it is compiled.
 #[derive(Clone, Default)]
 pub struct Scope {
+    /// JavaScript label, evaluated only in the trap catch; whether it poisons a tree update.
+    pub evaluation: Option<(String, bool)>,
     /// JavaScript getters for the enclosing region frames, innermost last:
     /// (item, index, bound).
     pub frames: Vec<Frame>,
     /// Whether this is an action body (writes and commands are allowed).
     pub action: bool,
+    /// A shared at-read body accepts its reader's budget.
+    pub unsettled: bool,
     /// The JavaScript object holding the row slots in force (LLP 1017 P4c:
     /// a slot owned by a `for` lives on its row), by slot index.
     pub rows: Option<String>,
@@ -144,10 +148,12 @@ fn metered(ins: &[Instruction]) -> bool {
 
 /// Whether `code` reads or writes a row slot.
 pub fn touches_rows(plan: &Plan, code: &[u8]) -> bool {
-    instructions(code).flatten().any(|i| {
-        matches!(i.op, Opcode::LoadSlot | Opcode::StoreSlot)
-            && plan.slots[i.args[0] as usize].owner.is_some()
-    })
+    exact_runner::vm::transitive_instructions(plan, code)
+        .flatten()
+        .any(|i| {
+            matches!(i.op, Opcode::LoadSlot | Opcode::StoreSlot)
+                && plan.slots[i.args[0] as usize].owner.is_some()
+        })
 }
 
 /// A JavaScript function expression for `code` (`() => …`, or `(p0, …) =>`
@@ -162,7 +168,14 @@ pub fn function(
     let ins: Vec<Instruction> = instructions(code)
         .collect::<Result<_, _>>()
         .map_err(|t| format!("malformed code: {t:?}"))?;
+    let before = uses.metered;
+    let loads = ins
+        .iter()
+        .filter(|i| i.op == Opcode::LoadDerive && plan.unsettled_body(i.args[0] as u32).is_some())
+        .count();
+    let shared = scope.unsettled || loads > 1 || loads != 0 && metered(&ins);
     let mut t = Translator {
+        shared,
         plan,
         scope,
         uses,
@@ -176,16 +189,24 @@ pub fn function(
     let body = t.range(&ins, 0, ins.len())?;
     let ps: Vec<String> = (0..params).map(|i| format!("p{i}")).collect();
     let head = format!("({})", ps.join(","));
-    if metered(&ins) {
-        // One call, one evaluation: its own steps from 0, whatever it reads.
+    if shared || metered(&ins) {
         let out = t.out.strip_suffix("return;").unwrap_or(&t.out);
         let ret = match body {
             Body::Expr(e) => format!("return {e};"),
             Body::Stmts => String::new(),
         };
-        return Ok(format!("{head}=>{{let $s=0;{}{out}{ret}}}", t.decls()));
+        let (head, init) = if scope.unsettled {
+            ("($budget)".to_string(), "")
+        } else if shared {
+            (head, "let $budget={s:0,n:0,d:0};")
+        } else {
+            (head, "let $s=0;")
+        };
+        let f = format!("{head}=>{{{init}{}{out}{ret}}}", t.decls());
+        return Ok(evaluated(f, scope, before, uses));
     }
-    Ok(wrap(&head, &t, body))
+    let f = wrap(&head, &t, body);
+    Ok(evaluated(f, scope, before, uses))
 }
 
 /// `code` as one JavaScript expression evaluated where it is written: the
@@ -198,10 +219,42 @@ pub fn expression(
     uses: &mut Uses,
 ) -> Result<String, String> {
     let f = function(plan, code, scope, 0, uses)?;
-    Ok(match f.strip_prefix("()=>") {
+    Ok(called_expression(f))
+}
+
+pub fn called_expression(f: String) -> String {
+    match f.strip_prefix("()=>") {
         Some(e) if !e.starts_with('{') => e.to_string(),
         _ => format!("({f})()"),
-    })
+    }
+}
+
+pub fn evaluated(f: String, scope: &Scope, before: usize, uses: &mut Uses) -> String {
+    let Some((label, instance)) = &scope.evaluation else {
+        return f;
+    };
+    if uses.metered == before {
+        return f;
+    }
+    let guard = uses.budget("$E");
+    let (head, body) = f.split_once("=>").expect("function");
+    let body = if body.starts_with('{') {
+        body[1..body.len() - 1].to_string()
+    } else {
+        format!("return {body};")
+    };
+    format!(
+        "{head}=>{{try{{{body}}}catch($e){{{guard}($e,{label},{});}}}}",
+        *instance as u8
+    )
+}
+
+/// A scope whose label is only constructed if this evaluation traps.
+pub fn evaluation(scope: &Scope, label: String, instance: bool) -> Scope {
+    Scope {
+        evaluation: Some((serde_json::to_string(&label).unwrap(), instance)),
+        ..scope.clone()
+    }
 }
 
 fn wrap(head: &str, t: &Translator<'_>, body: Body) -> String {
@@ -230,6 +283,7 @@ enum Body {
 }
 
 struct Translator<'a> {
+    shared: bool,
     plan: &'a Plan,
     scope: &'a Scope,
     uses: &'a mut Uses,
@@ -406,7 +460,19 @@ impl Translator<'_> {
                         self.push(format!("s_{}()", x.args[0]))
                     }
                 }
-                Opcode::LoadDerive => self.push(format!("d_{}()", x.args[0])),
+                Opcode::LoadDerive => {
+                    if self.plan.unsettled_body(x.args[0] as u32).is_some() {
+                        self.uses.budget("$enter");
+                        self.push(format!(
+                            "d_{}({},{})",
+                            x.args[0],
+                            if self.shared { "$budget" } else { "undefined" },
+                            x.pc
+                        ));
+                    } else {
+                        self.push(format!("d_{}()", x.args[0]));
+                    }
+                }
                 Opcode::LoadResource => self.push(format!("r_{}()", x.args[0])),
                 Opcode::LoadParam => self.push(format!("p{}", x.args[0])),
                 Opcode::LoadItem | Opcode::LoadIndex | Opcode::LoadBound => {
@@ -493,8 +559,9 @@ impl Translator<'_> {
                             }
                         }
                         self.out.push_str(&format!(
-                            "if(($s+={list}.length)>65536){t}(\"IterationLimit\",{pc});{list}={join}({list},{sep},{pc});",
-                            pc = x.pc
+                            "if(({steps}+={list}.length)>65536){t}(\"IterationLimit\",{pc});{list}={join}({list},{sep},{pc});",
+                            pc = x.pc,
+                            steps = if self.shared { "$budget.s" } else { "$s" }
                         ));
                         self.push(list);
                     } else if stepped(f as u64) {
@@ -515,10 +582,11 @@ impl Translator<'_> {
                             self.uses.budget(&format!("x_{}", f.name())),
                         );
                         self.out.push_str(&format!(
-                            "{r}={name}({},$s,{pc});$s+={st};",
+                            "{r}={name}({},{steps},{pc});{steps}+={st};",
                             regs.join(","),
                             r = regs[0],
-                            pc = x.pc
+                            pc = x.pc,
+                            steps = if self.shared { "$budget.s" } else { "$s" }
                         ));
                         self.push(regs[0].clone());
                     } else if checked(f) {
@@ -575,6 +643,7 @@ impl Translator<'_> {
                     }
                     let base = self.locals;
                     let mut inner = Translator {
+                        shared: self.shared,
                         plan: self.plan,
                         scope: self.scope,
                         uses: self.uses,
@@ -756,7 +825,8 @@ impl Translator<'_> {
         let add = format!(
             "if(typeof $v===\"string\"){{$c++;$b+=$e?{u}($v):3*$v.length}}else if(typeof $v===\"object\"&&$v!==null){{$c+={p}($v,$e);$b+={eb}}}else $c++;if($c>16777216||$b>67108864&&($e||($e=1,$b={q}($o,{kept}))>67108864)){t}(\"ValueTooLarge\",{pc})"
         );
-        let step = format!("if(++$s>65536){t}(\"IterationLimit\",{pc});");
+        let steps = if self.shared { "$budget.s" } else { "$s" };
+        let step = format!("if(++{steps}>65536){t}(\"IterationLimit\",{pc});");
         let each = if map {
             format!("const $v=$f($a[$k],$k);$o[$k]=$v;{add}")
         } else {

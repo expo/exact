@@ -1,6 +1,6 @@
-use exact_kernel::Kernel;
+use exact_kernel::{Kernel, ViewId};
 use exact_plan::Value;
-use exact_runner::Runner;
+use exact_runner::{Advanced, Event, Runner, RunnerError};
 
 fn boot(source: &str) -> Runner<()> {
     Runner::boot(
@@ -161,6 +161,7 @@ fn change_tasks_require_keys_and_reject_direct_and_indirect_cycles() {
         SOURCE.replace("key=input", "key=value").replace("seen = input", "input = input + 1").replace("  view\n", "  resource value = read(input) as shape number\n  view\n"),
         SOURCE.replace("key=input", "key=pending(saved)").replace("seen = input", "send saved = save()").replace("  view\n", "  mutation saved as shape number\n  view\n"),
         SOURCE.replace("seen = input", "send saved = save()").replace("  view\n", "  mutation saved as shape number then back\n  action back\n    input = input + 1\n  view\n"),
+        SOURCE.replace("key=input", "key=pending(saved)").replace("seen = input", "saved = none").replace("  view\n", "  mutation saved as shape number\n  view\n"),
         SOURCE.replace("seen = input", "mutate()").replace(
             "  view\n",
             "  action mutate\n    input = input + 1\n  view\n",
@@ -171,4 +172,144 @@ fn change_tasks_require_keys_and_reject_direct_and_indirect_cycles() {
             .to_string()
             .contains("analyze-change-cycle"));
     }
+}
+
+#[test]
+fn clearing_a_mutation_result_does_not_follow_its_then_action() {
+    let source = SOURCE.replace("seen = input", "saved = none").replace(
+        "  view\n",
+        "  mutation saved as shape number then back\n  action back\n    input = input + 1\n  view\n",
+    );
+    let mut r = boot(&source);
+    assert_eq!(r.land_then().receipts.len(), 1);
+    assert_eq!(r.slot("input"), Some(&Value::Number(1.0)));
+    assert_eq!(r.slot("fired"), Some(&Value::Number(1.0)));
+    assert_eq!(r.timer_due_ms(), None);
+}
+
+const INPUT: &str = r#"component App
+  state seed = 1
+  state other = 1
+  state shown = true
+  state changes = ""
+  state timerSeen = -1
+  state eventSeen = -1
+  state eventAt = -1
+  action changed
+    changes = `${changes}a`
+  action otherChanged
+    changes = `${changes}b`
+  action timed
+    timerSeen = performanceNow()
+  action tapped
+    eventSeen = timerSeen
+    eventAt = performanceNow()
+  task changeSeed key=seed
+    change(changed)
+  task changeOther key=other
+    change(otherChanged)
+  task timer mount
+    after(50, timed)
+  view
+    column
+      if shown
+        button "Tap" testId="tap" press=tapped
+"#;
+
+fn view(r: &Runner<()>, test_id: &str) -> ViewId {
+    let key = r.kernel().find_first_by_test_id(test_id).unwrap();
+    r.kernel().node_by_key(key).unwrap().id
+}
+
+/// The host's part after a batch that needs applying: apply it (here,
+/// nothing to apply) and advance again toward the same time.
+fn resume(r: &mut Runner<()>, mut a: Advanced, now_ms: f64) -> (usize, Advanced) {
+    let mut yields = 0;
+    while a.needs_apply {
+        yields += 1;
+        assert_eq!(r.timer_due_ms().map(|due| due <= now_ms), Some(true));
+        a = r.advance_timed(now_ms);
+    }
+    (yields, a)
+}
+
+/// An input behind due change actions waits for each one's receipt, then the
+/// timer due before it, and runs at its own time last.
+#[test]
+fn an_input_waits_for_the_change_actions_and_timers_due_before_it() {
+    let mut r = boot(INPUT);
+    let tap = view(&r, "tap");
+    let first = r.dispatch_at(tap, Event::Press, 100.0);
+    assert!(
+        first.needs_apply && first.error.is_none(),
+        "{:?}",
+        first.error
+    );
+    assert_eq!(r.slot("eventSeen"), Some(&Value::Number(-1.0)), "held");
+    let (yields, last) = resume(&mut r, first, 100.0);
+    assert!(yields >= 1 && last.error.is_none(), "{:?}", last.error);
+    assert_eq!(r.slot("changes"), Some(&Value::str("ab")));
+    assert_eq!(r.slot("timerSeen"), Some(&Value::Number(50.0)));
+    assert_eq!(
+        r.slot("eventSeen"),
+        Some(&Value::Number(50.0)),
+        "after the timer"
+    );
+    assert_eq!(
+        r.slot("eventAt"),
+        Some(&Value::Number(100.0)),
+        "at its arrival"
+    );
+    assert_eq!(last.receipts.last().map(|t| t.at_ms), Some(100.0));
+    assert_eq!(r.timer_due_ms(), None);
+}
+
+/// A change action that removes the input's target refuses the input when
+/// it runs; the change's commit stands.
+#[test]
+fn an_input_whose_target_a_change_action_removed_is_refused() {
+    let mut r = boot(&INPUT.replace(
+        "    changes = `${changes}a`\n",
+        "    changes = `${changes}a`\n    shown = false\n",
+    ));
+    let tap = view(&r, "tap");
+    let first = r.dispatch_at(tap, Event::Press, 100.0);
+    let (_, last) = resume(&mut r, first, 100.0);
+    assert!(
+        matches!(last.error, Some(RunnerError::UnknownView(v)) if v == tap),
+        "{:?}",
+        last.error
+    );
+    assert_eq!(r.slot("shown"), Some(&Value::Bool(false)));
+    assert_eq!(r.slot("eventSeen"), Some(&Value::Number(-1.0)));
+    assert_eq!(r.timer_due_ms(), None, "nothing is held");
+}
+
+/// A timer refused before an input rides along: the work due after it still
+/// runs, and the input observes its own arrival.
+#[test]
+fn an_input_after_a_refused_timer_runs_at_its_arrival() {
+    let source = INPUT
+        .replace("  task changeSeed key=seed\n    change(changed)\n", "")
+        .replace(
+            "  task changeOther key=other\n    change(otherChanged)\n",
+            "",
+        )
+        .replace(
+            "  action timed\n",
+            "  action broken\n    seed = 1 / 0\n  action timed\n",
+        )
+        .replace(
+            "  task timer mount\n",
+            "  task early mount\n    after(10, broken)\n  task timer mount\n",
+        );
+    let mut r = boot(&source);
+    let tap = view(&r, "tap");
+    let a = r.dispatch_at(tap, Event::Press, 100.0);
+    assert!(!a.needs_apply);
+    assert!(a.error.is_some(), "the timer's refusal rides along");
+    assert_eq!(r.slot("timerSeen"), Some(&Value::Number(50.0)));
+    assert_eq!(r.slot("eventSeen"), Some(&Value::Number(50.0)));
+    assert_eq!(r.slot("eventAt"), Some(&Value::Number(100.0)));
+    assert_eq!(r.now_ms(), 100.0);
 }

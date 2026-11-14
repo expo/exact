@@ -1,4 +1,4 @@
-use Page, Link, Nav from "./shapes.contract"
+use Page, Link, Nav, Crumb from "./shapes.contract"
 use Blocks, tabShown from "./blocks.contract"
 use Rail, PageActions from "./toc.contract"
 use Footer from "./footer.contract"
@@ -46,6 +46,32 @@ component Helpful
         text (voted == "yes" ? "Thanks for the feedback." : "Sorry about that.") font-size="var(--text-sm)" color="var(--color-text-secondary)" testId="helpful-thanks"
         link href=href testId="helpful-issue"
           text "Tell us what to improve" font-size="var(--text-sm)" color="var(--color-text-default)" text-decoration="underline"
+
+style CrumbText
+  font-size="var(--text-xs)" line-height=1.6 color="var(--color-text-secondary)" white-space="nowrap"
+
+style CurrentCrumb
+  font-size="var(--text-xs)" font-weight=500 line-height=1.6 color="var(--color-text-default)" padding="2px 6px"
+
+component Breadcrumbs
+  props
+    crumbs: Crumb[]
+    title: string
+  view
+    nav aria-label="Breadcrumb" margin="0 0 12px -6px" testId="breadcrumbs"
+      row flex-wrap="wrap" align-items="center" row-gap=4
+        for c in crumbs key=c.title
+          if c.href != ""
+            link href=c.href padding="2px 6px" border-radius=4 testId=`crumb-${c.title}`
+              row align-items="center" gap=4
+                if c.icon != ""
+                  image c.icon aria-hidden=true width=12 height=12 color="var(--color-icon-default)"
+                text c.title class=CrumbText
+          else
+            view padding="2px 6px" testId=`crumb-${c.title}`
+              text c.title class=CrumbText
+          image "symbol:icon.chevronright" aria-hidden=true width=12 height=12 color="var(--color-text-tertiary)"
+        text title class=CurrentCrumb testId="crumb-current"
 
 component NotFound
   props
@@ -137,8 +163,8 @@ component Article
               row gap=8 align-items="center" margin-bottom=20 padding="8px 12px" border-radius="var(--radius-lg)" background-color="var(--color-background-element)" testId="redirected"
                 image "symbol:info" aria-hidden=true font-size="var(--text-sm)" color="var(--color-icon-default)"
                 text `You were redirected from ${from}.` font-size="var(--text-sm)" color="var(--color-text-secondary)"
-            if page.section != ""
-              text page.section class=Eyebrow
+            if page.crumbs.length > 0
+              Breadcrumbs(crumbs=page.crumbs, title=page.title)
             h1 class=Title
               text page.title
             if page.subtitle != ""

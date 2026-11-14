@@ -415,3 +415,210 @@ fn soft_hyphen_paints_real_dash_beside_hole() {
     );
     assert!((first.line_w - first.glyphs.iter().map(|g| g.w).sum::<f32>()).abs() < 0.01);
 }
+
+#[test]
+fn justified_fragments_fill_intervals_except_paragraph_end_and_hard_breaks() {
+    let mut engine = TextEngine::new();
+    for direction in [exact_kernel::Direction::Ltr, exact_kernel::Direction::Rtl] {
+        let mut s = spec(&"one two three four five six seven eight nine ten ".repeat(8));
+        s.align = TextAlign::Justify;
+        s.direction = direction;
+        let p = engine.paragraph_flow(&s, 440., &circle(220.), None);
+        let mut slots = Vec::new();
+        let mut filled = 0;
+        for (f, line) in p.fragments().iter().zip(p.layout_runs()) {
+            exact_textflow::intervals(
+                &circle(220.),
+                f.y,
+                f.y + p.flow_line_height(),
+                440.,
+                16. * exact_textflow::MIN_FRAGMENT_EM,
+                &mut slots,
+            );
+            let slot = slots
+                .iter()
+                .find(|slot| f.x >= slot.0 && f.x < slot.1)
+                .unwrap();
+            let spaces = line
+                .glyphs
+                .iter()
+                .filter(|g| s.runs[0].text.get(g.start as usize..g.end as usize) == Some(" "))
+                .count();
+            if f.line < p.fragments().last().unwrap().line && spaces > 0 {
+                assert!((f.x - slot.0).abs() < 0.01);
+                assert!((f.width - (slot.1 - slot.0)).abs() < 0.01, "{f:?} {slot:?}");
+                let right = line.glyphs.iter().map(|g| g.x + g.w).fold(f.x, f32::max);
+                assert!((right - slot.1).abs() < 0.01, "{right} {slot:?}");
+                filled += 1;
+            }
+        }
+        assert!(filled > 8);
+        let last = p.fragments().last().unwrap();
+        assert!(last.width < 440.);
+        if direction == exact_kernel::Direction::Rtl {
+            assert!((last.x + last.width - 440.).abs() < 0.01);
+        }
+    }
+    let mut s = spec("one two\nthree four\nfive six");
+    s.white_space = exact_kernel::WhiteSpace::PreWrap;
+    s.runs[0].text = "one two\nthree four\nfive six".into();
+    s.align = TextAlign::Justify;
+    let p = engine.paragraph_flow(&s, 440., &circle(220.), None);
+    assert!(p.fragments().iter().all(|f| f.width < 150.));
+}
+
+#[test]
+fn split_ending_bands_keep_every_fragment_at_start() {
+    let mut engine = TextEngine::new();
+    let shapes = [FlowShape::RoundRect {
+        x: 110.,
+        y: 0.,
+        width: 80.,
+        height: 24.,
+        radius: 0.,
+    }];
+    for direction in [exact_kernel::Direction::Ltr, exact_kernel::Direction::Rtl] {
+        for (text, clamp) in [
+            ("one two three four", 0),
+            ("one two three four\nfive six seven eight", 0),
+            ("one two three four five six seven eight nine ten", 1),
+        ] {
+            let mut s = spec("");
+            s.runs[0].text = text.into();
+            s.white_space = exact_kernel::WhiteSpace::PreWrap;
+            s.direction = direction;
+            s.line_clamp = clamp;
+            s.align = if direction == exact_kernel::Direction::Rtl {
+                TextAlign::Right
+            } else {
+                TextAlign::Left
+            };
+            let start = engine.paragraph_flow(&s, 300., &shapes, None);
+            let endings: Vec<_> = start.fragments().iter().filter(|f| f.line == 0).collect();
+            assert_eq!(endings.len(), 2, "{direction:?} {text} {endings:?}");
+            assert!(text[..endings[0].end].contains(' '));
+            s.align = TextAlign::Justify;
+            let justified = engine.paragraph_flow(&s, 300., &shapes, None);
+            for ((expected, actual), (start_run, justified_run)) in start
+                .fragments()
+                .iter()
+                .zip(justified.fragments())
+                .zip(start.layout_runs().zip(justified.layout_runs()))
+                .take(2)
+            {
+                assert_eq!(actual, expected, "{direction:?} {text}");
+                assert_eq!(start_run.glyphs.len(), justified_run.glyphs.len());
+                for (a, b) in start_run.glyphs.iter().zip(justified_run.glyphs.iter()) {
+                    assert_eq!((a.x, a.w), (b.x, b.w));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn pre_line_justifies_soft_wraps_after_unicode_break_characters() {
+    let mut engine = TextEngine::new();
+    let shapes = [FlowShape::RoundRect {
+        x: 110.,
+        y: 0.,
+        width: 70.,
+        height: 48.,
+        radius: 0.,
+    }];
+    for ch in ['\u{2028}', '\n', '\r', '\u{85}', '\u{c}', '\u{2029}'] {
+        let mut s = spec("");
+        s.white_space = exact_kernel::WhiteSpace::PreLine;
+        s.runs[0].text = format!("one two{ch}ABCDEFGHIJKLMN");
+        s.align = TextAlign::Left;
+        let start = engine.paragraph_flow(&s, 180., &shapes, None);
+        let first = &start.fragments()[0];
+        assert_eq!(first.end, "one two".len() + ch.len_utf8());
+        assert!(first.width < 110.);
+        s.align = TextAlign::Justify;
+        let justified = engine.paragraph_flow(&s, 180., &shapes, None);
+        let actual = &justified.fragments()[0];
+        assert_eq!((actual.start, actual.end), (first.start, first.end));
+        let expected = if ch == '\n' { first.width } else { 110. };
+        assert!((actual.width - expected).abs() < 0.01, "{ch:?}: {actual:?}");
+        let ink_end = justified
+            .layout_runs()
+            .next()
+            .unwrap()
+            .glyphs
+            .iter()
+            .map(|g| g.x + g.w)
+            .fold(0., f32::max);
+        assert!((ink_end - expected).abs() < 0.01, "{ch:?}: {ink_end}");
+    }
+}
+
+#[test]
+fn logical_flow_alignment_uses_the_paragraph_direction() {
+    let mut engine = TextEngine::new();
+    let shapes = [FlowShape::RoundRect {
+        x: 140.,
+        y: 0.,
+        width: 80.,
+        height: 48.,
+        radius: 0.,
+    }];
+    for direction in [exact_kernel::Direction::Ltr, exact_kernel::Direction::Rtl] {
+        for align in [TextAlign::Start, TextAlign::End] {
+            let mut s = spec("שלום עולם");
+            s.direction = direction;
+            s.align = align.physical(direction);
+            let physical = engine.paragraph_flow(&s, 360., &shapes, None);
+            assert_eq!(physical.fragments().len(), 1);
+            s.align = align;
+            let logical = engine.paragraph_flow(&s, 360., &shapes, None);
+            assert_eq!(
+                logical.fragments(),
+                physical.fragments(),
+                "{direction:?} {align:?}"
+            );
+            for (a, b) in logical.layout_runs().zip(physical.layout_runs()) {
+                for (a, b) in a.glyphs.iter().zip(b.glyphs.iter()) {
+                    assert_eq!((a.x, a.w), (b.x, b.w));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn collapsed_break_controls_keep_adjacent_spaces() {
+    // Under `normal` a form feed, NEL, U+2028 or U+2029 is zero-width text:
+    // the spaces beside it do not collapse into it.
+    let mut engine = TextEngine::new();
+    let p = engine.paragraph_flow(&spec("A B"), 440., &circle(220.), None);
+    let space: f32 = p.layout_runs().next().unwrap().glyphs[1].w;
+    assert!(space > 1.);
+    for ch in ['\u{2028}', '\u{85}', '\u{c}', '\u{2029}'] {
+        for (text, spaces) in [
+            (format!("A{ch} B"), 1.),
+            (format!("A {ch}B"), 1.),
+            (format!("A {ch} B"), 2.),
+            (format!("{ch} B"), 1.),
+        ] {
+            let p = engine.paragraph_flow(&spec(&text), 440., &circle(220.), None);
+            let f = &p.fragments()[0];
+            assert_eq!(f.end, text.len(), "{text:?}");
+            let line = p.layout_runs().next().unwrap();
+            let painted: f32 = line.glyphs.iter().map(|g| g.w).sum();
+            assert!(
+                (painted - f.width).abs() < 0.01,
+                "{text:?}: {painted} {f:?}"
+            );
+            let ink = |s: &str| {
+                line.glyphs
+                    .iter()
+                    .find(|g| &text[g.start as usize..g.end as usize] == s)
+                    .copied()
+            };
+            let b = ink("B").unwrap();
+            let gap = b.x - ink("A").map_or(0., |a| a.x + a.w);
+            assert!((gap - spaces * space).abs() < 0.01, "{text:?}: {gap}");
+        }
+    }
+}

@@ -294,7 +294,7 @@ impl<D: DataSource> Runner<D> {
                 let mut progress = false;
                 let mut all = true;
                 for i in 0..self.plan.derives.len() {
-                    if derives[i].is_some() {
+                    if self.plan.derives[i].unsettled || derives[i].is_some() {
                         continue;
                     }
                     // Unchanged inputs, unchanged value: no evaluation.
@@ -378,7 +378,11 @@ impl<D: DataSource> Runner<D> {
                             progress = true;
                         }
                         Err(Trap::Pending { .. }) => all = false,
-                        Err(t) => return Err(t.into()),
+                        Err(t) => {
+                            return Err(RunnerError::from(t).evaluated(|| {
+                                format!("derive {:?}", self.plan.str(self.plan.derives[i].name))
+                            }))
+                        }
                     }
                 }
                 for i in 0..self.resources.len() {
@@ -488,12 +492,12 @@ impl<D: DataSource> Runner<D> {
                                 ),
                             };
                             match self.elements(i, &env) {
-                                Ok(elements) => elements?,
-                                Err(Trap::Pending { .. }) => {
+                                Ok(elements) => elements,
+                                Err(RunnerError::Trap(Trap::Pending { .. })) => {
                                     all = false;
                                     continue;
                                 }
-                                Err(t) => return Err(t.into()),
+                                Err(error) => return Err(error),
                             }
                         };
                         let (order, gone, added) = self.join(i, elements);
@@ -579,17 +583,33 @@ impl<D: DataSource> Runner<D> {
                                     all = false;
                                     continue;
                                 }
-                                Err(t) => return Err(t.into()),
+                                Err(t) => {
+                                    return Err(RunnerError::from(t).evaluated(|| {
+                                        let name = self.plan.str(self.resource_row(i).name);
+                                        format!("resource {name:?} gate")
+                                    }))
+                                }
                             }
                         }
                     };
                     if !open {
                         // Idle: a request in flight is let go when this
                         // settlement stands, except an upload's, which goes on;
-                        // the value stays and stops being an answer.
+                        // the value stays and stops being an answer. A refresh
+                        // or a store change asks nothing of it and is not
+                        // remembered: waking asks it anyway (LLP 1161.002 D2).
+                        force.retain(|f| *f != i);
+                        self.reconciling.retain(|r| *r != i);
                         let upload = self.uploading(i);
                         if !upload {
-                            effects[i] = RequestEffect::Answered;
+                            // An earlier pass's `Later` was never handed out.
+                            if let RequestEffect::Later { requests, .. } =
+                                std::mem::replace(&mut effects[i], RequestEffect::Answered)
+                            {
+                                for request in &requests {
+                                    self.discard_request(request);
+                                }
+                            }
                             pending_res[i] = false;
                             self.resources[i].failed_args = None;
                         }
@@ -656,7 +676,7 @@ impl<D: DataSource> Runner<D> {
                         .filter(|_| self.member(i).is_none() && !waking)
                         .filter(|_| self.unchanged(&self.sites.deps().resource_args[i], &now))
                         .map(|s| s.resource_args[i].clone());
-                    for a in row.args.iter().filter(|_| kept_args.is_none()) {
+                    for (k, a) in row.args.iter().filter(|_| kept_args.is_none()).enumerate() {
                         let code = self.plan.arg(a).expr;
                         let result = {
                             let env = Env {
@@ -699,7 +719,15 @@ impl<D: DataSource> Runner<D> {
                                 pending = true;
                                 break;
                             }
-                            Err(t) => return Err(t.into()),
+                            Err(t) => {
+                                return Err(RunnerError::from(t).evaluated(|| {
+                                    format!(
+                                        "resource {:?} argument {}",
+                                        self.plan.str(row.name),
+                                        k + 1
+                                    )
+                                }))
+                            }
                         }
                     }
                     if pending {
@@ -727,17 +755,6 @@ impl<D: DataSource> Runner<D> {
                     // resource query, including through derives. Such a
                     // resource is device data just like a direct reader.
                     self.resources[i].store_reader |= store_dependent;
-                    // Whether a store change asks it again follows what its
-                    // arguments' readers read as they stand now, so it is
-                    // checked here even when cached arguments skipped their
-                    // evaluation: an upstream answer can start reading the
-                    // store and give the same value.
-                    if self.resources[i].store_reader
-                        && !self.resources[i].contents_reader
-                        && self.args_read_contents(i)
-                    {
-                        self.resources[i].contents_reader = true;
-                    }
                     let forced = force.contains(&i);
                     let refreshed = forced || refreshing.contains(&i);
                     self.forget_refused(i, &args);
@@ -1327,13 +1344,14 @@ impl<D: DataSource> Runner<D> {
             // A resource later in plan order may have written after an
             // earlier reader settled. Repeat against the tentative states;
             // the writer's state already carries the new revision, so it
-            // does not refresh itself.
+            // does not refresh itself, and a reader asleep behind a closed
+            // gate asks nothing (LLP 1161.002 D2).
             let stale_store_reader = states.iter().enumerate().any(|(i, state)| {
                 self.asks_on_store_change(i)
                     && !self.asks_again_after_reply(i)
                     && state
                         .as_ref()
-                        .is_none_or(|state| state.store_revision != revision)
+                        .is_none_or(|state| !state.asleep && state.store_revision != revision)
             });
             if stale_store_reader {
                 continue;

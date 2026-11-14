@@ -36,10 +36,20 @@ pub(crate) enum Outcome {
     Refused(String),
 }
 
-/// Picks the portal has answered, for the presenter to take on its next
-/// turn: the element, the picker, and the outcome.
-pub(crate) type Inbox =
-    std::sync::Arc<std::sync::Mutex<Vec<(exact_kernel::ViewId, Kind, Outcome)>>>;
+/// The portal's picks: those still wanted, and those answered for the
+/// presenter to take on its next turn.
+pub(crate) type Inbox = std::sync::Arc<std::sync::Mutex<Asks>>;
+
+#[derive(Default)]
+pub(crate) struct Asks {
+    /// Each pick still wanted, by its number, and the element it is for. A
+    /// pick whose element is made again (a renewed list row) leaves it, so
+    /// its answer reaches no other element of that id.
+    pub(crate) wanted: Vec<(u64, exact_kernel::ViewId)>,
+    pub(crate) next: u64,
+    /// Answered: the pick's number, the picker, and the outcome.
+    pub(crate) answered: Vec<(u64, Kind, Outcome)>,
+}
 
 /// The chooser's title, as a browser on Linux titles its own for these
 /// three calls (Chromium's).

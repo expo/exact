@@ -44,8 +44,12 @@ bun exact.mjs pattern      # lists the starters; `pattern <name>` writes one; so
 bun exact.mjs ios --prebuild  # the first iOS build: ten to fifteen minutes, in the background; it names iOS in app.json
 ```
 
-`new` also takes `--name Groceries --bundle-id com.yourcompany.groceries --with ios,android`. The folder's name is lowercase with hyphens, not `exact` or ending `-web`, `-apple`, `-linux`, `-gpu`.
+`new` also takes `--name Groceries --bundle-id com.yourcompany.groceries --with ios,android`. The folder's name is lowercase with hyphens, without a `-web`, `-apple`, `-linux` or `-gpu` suffix.
+For an SDK-named folder such as `exact`, `--name Everbloom` supplies the crate prefix `everbloom`;
+a prefix that still collides gains `-app`. The prefix stays in `package.json`'s `name` across
+updates and directory renames. Authored host crates keep their own names.
 `bun <exact2>/scripts/exact.mjs setup` takes a few minutes, a first macOS or iOS build ten to fifteen on a laptop, later builds a minute or two.
+Before a platform's first build, `bun <exact2>/scripts/exact.mjs setup --check --platform ios` (or `macos`, `android`, …) names what it lacks, the Xcode it needs among them: `exact new`'s table shows the web's rows alone.
 Run each once and let it finish, in the background with a completion notification if your tool has one, rather than polling its log.
 
 On Linux or Windows through WSL, install the [iOS cross tools](../README.md#1-install-the-tools)
@@ -70,8 +74,15 @@ DejaVu Sans with no frame; `verify windows` also captures the app as it opens on
 judge the look from that one. Windows uses ink by default, or CPU when the manifest declares `game`; `host.windows.painter: "ink"` or `"cpu"` selects either painter. `EXACT_PAINTER` overrides either choice. Headless drives explicitly use CPU unless overridden ([painter choices](reference.md#windows-painter)). A screenshot path with a space is quoted: `"screenshot 'C:\a b\x.png'"`. A screen you
 want checked or captured is a test's end; a drive takes any others (`resize`, `prefer …`, `screenshot`).
 Create seam types once with `bun exact.mjs contract types app.contract -o app.contract.d.ts`.
-`contract build` refreshes that declaration after a successful compile and reports
-the change on stderr. `contract types --check app.contract` checks freshness without writing.
+`contract build`, development web builds, and native development builds (`ios`,
+`mac`, `linux`, `windows`, `android`, and `verify android`) refresh that declaration
+when its source signatures change. `test` and `agent` build and refresh it on
+`ios`, `mac` and `windows` without `--device`. On Linux and Android, `test` and
+`agent` do not build; run a build after a Contract edit there. Native bakes with
+`EXACT_UPDATE_TRUST=production` keep declarations in the build stage, except mixed
+Rust/TypeScript apps with a composer (such as Fieldnotes), which also refresh the
+editor copy before type-checking. `contract build` reports a refresh on stderr.
+`contract types --check app.contract` checks freshness without writing.
 `bun exact.mjs update` reports lock drift after this checkout moves; `bun exact.mjs lock`
 refreshes it. `contract migrate app.contract` rewrites retired Contract syntax;
 [the Snapback upgrade note](../snapback4/README.md#updating-an-inherited-app) covers
@@ -147,7 +158,10 @@ For EAS Build, use [iOS](recipes/eas-ios.md) or [Android](recipes/eas-android.md
 |a number field, a stepper's `step`|`number-field`, `stepper`|
 |a pick from six or more options (a picker)|`select`|
 |a chat that opens at its newest message|`chat-thread`|
+|a chat header with an avatar, and day pills|`chat-header`|
+|a voice note's waveform, a bubble's tail (SVG in a row)|`waveform-and-tail`|
 |a long list or grid that loads more|`long-lists`|
+|a document or article longer than a screen, a long Markdown note|`long-text`|
 |a welcome at first launch|`first-launch`|
 |a tip that teaches a control until it is used (TipKit)|`tips`|
 |records kept across launches, a saved library (`state` holds values, not records): a JSON file, SQLite, grants|`files-and-grants`|
@@ -171,6 +185,7 @@ For EAS Build, use [iOS](recipes/eas-ios.md) or [Android](recipes/eas-android.md
 |a module in Swift that `app.ts` asks; a value from the launch environment (a resource that reads `native.available` or calls `native.call` keeps its answer across launches)|`native-module`|
 |a canvas drawn in Rust on the GPU (a `Surface`); Rust of the app's own, in its own Cargo workspace|`gpu-module`|
 |app.json keys, `assets/`, the `modules` folder|`app-json`|
+|an action Siri, Shortcuts or a browser's agent calls (a `tool` line and its face)|`tools`|
 |a phone manifest: orientation, appearance, HTTP, a public setting|`phone-manifest`|
 |a section of the long guides, whole, by its heading|`bun exact.mjs docs <heading words>`|
 

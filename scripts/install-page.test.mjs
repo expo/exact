@@ -364,7 +364,7 @@ printf '%s\\n' '{"value":"aGk="}'
       // Check at once: a read asked again is the failed read's own, so its helper has run by now
       assert.equal(readFileSync('spawns','utf8'),'x','a closed reader is not asked again');
     `;
-    const child=spawnSync(process.execPath,['--input-type=module','-e',program],{cwd:dir,encoding:'utf8',env:{...process.env,PATH:join(dir,'bin')+':'+process.env.PATH}});
+    const child=spawnSync(process.execPath,['--input-type=module','-e',program],{cwd:dir,encoding:'utf8',env:{...process.env,PATH:join(dir,'bin')+':'+process.env.PATH,CARGO_TARGET_DIR:undefined}});
     assert.equal(child.status,0,child.stderr);
   } finally {rmSync(dir,{recursive:true,force:true});}
 }, 200_000);
@@ -401,7 +401,7 @@ chmod 755 target/exact-filesystem-tool/debug/exact-filesystem
       assert.equal(failed.status,0,failed.stderr);assert.match(failed.stdout,/status 42, signal none/);
       assert.equal(readFileSync('attempts','utf8'),'x','failed operations must not be retried');
     `;
-    const child=spawnSync(process.execPath,['--eval',program],{cwd:dir,encoding:'utf8',env:{...process.env,PATH:join(dir,'bin')+':'+process.env.PATH,RUSTC_WORKSPACE_WRAPPER:'/toolchain/clippy-driver',CLIPPY_ARGS:'-D warnings'}});
+    const child=spawnSync(process.execPath,['--eval',program],{cwd:dir,encoding:'utf8',env:{...process.env,PATH:join(dir,'bin')+':'+process.env.PATH,CARGO_TARGET_DIR:undefined,RUSTC_WORKSPACE_WRAPPER:'/toolchain/clippy-driver',CLIPPY_ARGS:'-D warnings'}});
     assert.equal(child.status,0,child.stderr);
   } finally {rmSync(dir,{recursive:true,force:true});}
 }, 200_000);
@@ -420,7 +420,7 @@ cp helper-source target/exact-filesystem-tool/debug/exact-filesystem
 chmod 755 target/exact-filesystem-tool/debug/exact-filesystem
 `,{mode:0o755});
     writeFileSync(join(dir,'helper-source'),`#!/bin/sh\nprintf '%s\\n' '{"value":"helper"}'\n`);
-    const env={...process.env,PATH:join(dir,'bin')+':'+process.env.PATH,CARGO_HOME:join(dir,'cargo-home')};
+    const env={...process.env,PATH:join(dir,'bin')+':'+process.env.PATH,CARGO_TARGET_DIR:undefined,CARGO_HOME:join(dir,'cargo-home')};
     delete env.EXACT_FILESYSTEM_HELPER;
     const get=()=>{
       const run=spawnSync(process.execPath,['--eval',"import {filesystem} from './scripts/filesystem.mjs';console.log(filesystem({op:'get'}));"],{cwd:dir,encoding:'utf8',env});
@@ -434,6 +434,69 @@ chmod 755 target/exact-filesystem-tool/debug/exact-filesystem
     assert.equal(get(),2);
   } finally {rmSync(dir,{recursive:true,force:true});}
 }, 200_000);
+
+test('a deploy capture keeps its checked helper in its owning Cargo cache', () => {
+  const dir=realpathSync(mkdtempSync(join(tmpdir(),'exact-helper-deploy-')));
+  const capture=join(dir,'capture'), cache=join(dir,'cargo');
+  try {
+    for (const sub of ['scripts','bin','filesystem/src']) mkdirSync(join(capture,sub),{recursive:true});
+    const bridge=readFileSync(new URL('./filesystem.mjs',import.meta.url));
+    const restore=()=>writeFileSync(join(capture,'scripts/filesystem.mjs'),bridge);
+    restore();
+    writeFileSync(join(capture,'filesystem/src/main.rs'),'fn main() {}\n');
+    writeFileSync(join(capture,'helper-source'),`#!/bin/sh\nprintf '%s\\n' '{"value":"helper"}'\n`);
+    writeFileSync(join(capture,'bin/cargo'),`#!/bin/sh
+set -e
+printf x >> '${join(dir,'builds')}'
+while [ "$1" != --target-dir ]; do shift; done
+out="$2/debug"
+mkdir -p "$out"
+cp helper-source "$out/exact-filesystem"
+chmod 755 "$out/exact-filesystem"
+`,{mode:0o755});
+    // The `rustc` on PATH says what `version` says, as a toolchain alias does that an update moves.
+    const version=join(dir,'version');
+    writeFileSync(version,'rustc 1.0.0 (aaaa)\n');
+    writeFileSync(join(capture,'bin/rustc'),`#!/bin/sh\ncat '${version}'\n`,{mode:0o755});
+    writeFileSync(join(dir,'other-rustc'),`#!/bin/sh\necho 'rustc 2.0.0 (bbbb)'\n`,{mode:0o755});
+    const env={...process.env,PATH:join(capture,'bin')+':'+process.env.PATH,CARGO_TARGET_DIR:cache};
+    delete env.EXACT_FILESYSTEM_HELPER;
+    const get=()=>{
+      const run=spawnSync(process.execPath,['--eval',"import {filesystem} from './scripts/filesystem.mjs';console.log(filesystem({op:'get'}));"],{cwd:capture,encoding:'utf8',env});
+      assert.equal(run.status,0,run.stderr); assert.equal(run.stdout.trim(),'helper');
+      return readFileSync(join(dir,'builds'),'utf8');
+    };
+    assert.equal(get(),'x');
+    rmSync(join(capture,'target'),{recursive:true,force:true});
+    restore();
+    assert.equal(get(),'x','recreating captured outputs must not compile the helper again');
+    assert.ok(existsSync(join(cache,'exact-filesystem-tool')));
+    let count='x';
+    for (const name of ['filesystem/src/main.rs','rust-toolchain.toml','.cargo/config.toml']) {
+      mkdirSync(dirname(join(capture,name)),{recursive:true});
+      writeFileSync(join(capture,name),'changed input\n');
+      count+='x';
+      assert.equal(get(),count,`${name}: changed inputs need a new checked helper`);
+      assert.equal(get(),count);
+    }
+    for (const toolchain of ['first-compiler','second-compiler']) {
+      env.RUSTUP_TOOLCHAIN=toolchain;
+      count+='x';
+      assert.equal(get(),count,'a toolchain override needs a new checked helper');
+      assert.equal(get(),count);
+    }
+    env.RUSTC=join(dir,'other-rustc');
+    count+='x';
+    assert.equal(get(),count,'the compiler RUSTC names needs a new checked helper');
+    assert.equal(get(),count);
+    delete env.RUSTC;
+    assert.equal(get(),count,'the compiler checked before still has its helper');
+    writeFileSync(version,'rustc 1.0.1 (cccc)\n');
+    count+='x';
+    assert.equal(get(),count,'a compiler updated behind the same name needs a new checked helper');
+    assert.equal(get(),count);
+  } finally {rmSync(dir,{recursive:true,force:true});}
+});
 
 test('concurrent helper callers share a checked build and validate it against inputs after waiting', async () => {
   const {dir,call,claim,has}=helperBuilds(), callers=[];
@@ -505,7 +568,7 @@ chmod 755 target/exact-filesystem-tool/debug/exact-filesystem
 `,{mode:0o755});
     const helper=value=>`#!/bin/sh\nprintf '%s\\n' '${JSON.stringify({value})}'\n`;
     writeFileSync(join(dir,'helper-source'),helper('checked'));
-    const env={...process.env,PATH:join(dir,'bin')+':'+process.env.PATH};
+    const env={...process.env,PATH:join(dir,'bin')+':'+process.env.PATH,CARGO_TARGET_DIR:undefined};
     delete env.EXACT_FILESYSTEM_HELPER;
     const named=spawnSync(process.execPath,['scripts/filesystem.mjs','--helper'],{cwd:dir,encoding:'utf8',env});
     assert.equal(named.status,0,named.stderr);
@@ -564,7 +627,7 @@ let clock=0;
 helperBuildWait.now=()=>{if(clock<120_000&&(clock+=10_000)===120_000)writeFileSync('waited-'+process.argv[2],'');return clock;};
 try{console.log(filesystem({op:'get'}));}catch(error){console.log(error.message);process.exit(3);}
 `);
-  const env={...process.env,PATH:join(dir,'bin')+':'+process.env.PATH};
+  const env={...process.env,PATH:join(dir,'bin')+':'+process.env.PATH,CARGO_TARGET_DIR:undefined};
   const call=name=>{
     const child=spawn(process.execPath,['caller.mjs',name],{cwd:dir,env,stdio:['ignore','pipe','inherit']});
     let out='';child.stdout.on('data',data=>{out+=data;});

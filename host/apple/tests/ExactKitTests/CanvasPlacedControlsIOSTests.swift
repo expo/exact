@@ -72,6 +72,47 @@ final class CanvasPlacedControlsIOSTests: XCTestCase {
         return try XCTUnwrap(window.perform(NSSelectorFromString("_accessibilityLeafDescendantsWithOptions:"), with: options)?.takeUnretainedValue() as? [NSObject])
     }
 
+    func testPlacedSegmentsKeepTheirAuthoredTabsInAccessibilityReads() throws {
+        guard Presenter.axRuntimeLoaded else { throw missing("accessibility", "UIKit's segments need its accessibility runtime") }
+        let d = try deck("canvas-placed-tabs")
+        defer { d.session.destroy() }
+        let p = d.session.presenter
+        _ = node(101, p, CGRect(x: 0, y: 0, width: 300, height: 300), in: d.overlay)
+        p.apply(wireBatch([
+            ["op": "create", "id": 30, "kind": "view", "props": ["accessibilityRole": "tablist"]],
+            ["op": "create", "id": 31, "kind": "button", "handlers": ["press"], "props": ["accessibilityRole": "tab", "testId": "one"]],
+            ["op": "create", "id": 32, "kind": "button", "handlers": ["press"], "props": ["accessibilityRole": "tab", "testId": "two"]],
+            ["op": "create", "id": 33, "kind": "text", "props": ["text": "One"]],
+            ["op": "create", "id": 34, "kind": "text", "props": ["text": "Two"]],
+            ["op": "children", "id": 31, "ids": [33]], ["op": "children", "id": 32, "ids": [34]],
+            ["op": "children", "id": 30, "ids": [31, 32]], ["op": "children", "id": 101, "ids": [30]],
+            ["op": "frame", "id": 30, "x": 10, "y": 10, "w": 200, "h": 40],
+        ]))
+        try XCTUnwrap(p.segments.control(of: 30)).layoutIfNeeded()
+        placesFirst = true
+        d.frame()
+        let parts = try voiceOver(d.window).compactMap { $0 as? PlacedElement }
+        XCTAssertEqual(Set(parts.compactMap(\.accessibilityLabel)), ["One", "Two"])
+        func projected(_ scope: Set<UInt32>? = nil) -> [[String: Any]] {
+            (p.axElements(roots: [d.canvas], scope: scope)["elements"] as? [[String: Any]] ?? [])
+                .filter { ($0["name"] as? String).map(["One", "Two"].contains) == true }
+        }
+        XCTAssertEqual(Set(projected().compactMap { $0["id"] as? UInt32 }), [31, 32])
+        for (id, testId, name) in [(UInt32(31), "one", "One"), (UInt32(32), "two", "Two")] {
+            let scoped = projected([id])
+            XCTAssertEqual(scoped.count, 1)
+            XCTAssertEqual(scoped.first?["testId"] as? String, testId)
+            XCTAssertEqual(scoped.first?["name"] as? String, name)
+            XCTAssertEqual(scoped.first?["via"] as? String, "owner")
+        }
+        for prop in ["accessibilityElementsHidden", "inert"] {
+            p.apply(wireBatch([["op": "props", "id": 30, "set": [prop: "true"]]]))
+            XCTAssertTrue(projected().isEmpty)
+            p.apply(wireBatch([["op": "props", "id": 30, "clear": [prop]]]))
+            XCTAssertEqual(projected().count, 2)
+        }
+    }
+
     func testAControlInsideAPlacedChildIsWhereTheSurfaceDrawsIt() throws {
         guard Presenter.axRuntimeLoaded else { throw missing("accessibility", "UIKit's VoiceOver traversal needs its accessibility runtime") }
         let d = try deck("canvas-placed-controls")

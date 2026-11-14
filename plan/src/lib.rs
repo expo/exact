@@ -29,6 +29,7 @@ pub mod builder;
 pub mod bytes;
 mod entry;
 pub mod pool;
+mod unsettled;
 pub use entry::entry_identifier;
 /// ActivityKit's ordered placement identities (LLP 1126.001 WP8).
 pub const ACTIVITY_PLACEMENTS: [&str; 8] = [
@@ -196,6 +197,11 @@ pub enum PlanError {
         available: usize,
     },
     BadMagic,
+    /// An executable derive references itself or a later executable row.
+    DeriveOrder {
+        row: u32,
+        dependency: u32,
+    },
     /// A running host received a snapshot, or the snapshot reader received another entry.
     WrongEntry,
     /// A plan compiled for another surface than the host's (LLP 1101.003
@@ -374,6 +380,7 @@ impl Plan {
     /// progress. Called by the generated `validate`, so every loaded or built
     /// plan has passed it.
     pub fn validate_semantics(&self) -> Result<(), PlanError> {
+        self.validate_unsettled()?;
         let activity = !self.activity_slots.is_empty();
         if self.snapshot_entry.is_empty() {
             if self.snapshot_refresh.is_some() || activity {

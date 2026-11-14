@@ -1,0 +1,27 @@
+routes nav
+  home "/"
+    item "/item/:id"
+
+component App
+  action follow(url: string)
+    nav = go(nav, url)
+  action back
+    nav = back(nav)
+  action leave
+    nav = go(nav, "/item/7#other")
+  view
+    main navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow width="100%" height="100%" overflow-y="auto" testId="port"
+      for e in stack(nav) key=e.id
+        column navigationKey=`${e.id}`
+          if e.name == "item"
+            box id="other" height=40
+            link href="#moves" id="before"
+              text "Moves"
+            image "assets/late.svg" width=100 display="block" id="picture"
+            box height=600
+            box id="moves" height=40
+            link href="#other" id="after"
+              text "Other"
+            image "assets/late.svg" width=100 display="block" id="tail"
+            button id="leaver" blur=leave
+              text "Leave"

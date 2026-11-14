@@ -85,6 +85,61 @@ fn every_formatter_is_intl_s_in_each_locale() {
     );
 }
 
+#[test]
+fn day_keys_use_the_table_s_date_formats() {
+    let tags = ["de", "fr", "ar-EG"];
+    let plan = plan(&tags);
+    for (key, midnight) in [
+        ("2024-02-29", 1_709_164_800_000.0),
+        ("0001-01-01", -62_135_596_800_000.0),
+        ("9999-12-31", 253_402_214_400_000.0),
+    ] {
+        for tag in tags {
+            for style in ["medium", "month-year", "iso"] {
+                let want = formatting(
+                    Stdlib::FormatDate,
+                    &[
+                        Value::Number(midnight),
+                        Value::Number(0.0),
+                        Value::str(style),
+                        Value::str(tag),
+                    ],
+                    &plan,
+                );
+                assert_ne!(want, Some(Value::str("")));
+                for offset in [-1080.0, 0.0, 1080.0] {
+                    let got = formatting(
+                        Stdlib::FormatDate,
+                        &[
+                            Value::str(key),
+                            Value::Number(offset),
+                            Value::str(style),
+                            Value::str(tag),
+                        ],
+                        &plan,
+                    );
+                    assert_eq!(got, want, "{key} {tag} {style} {offset}");
+                }
+                for (key, offset) in [("1900-02-29", 0.0), (key, 1081.0)] {
+                    assert_eq!(
+                        formatting(
+                            Stdlib::FormatDate,
+                            &[
+                                Value::str(key),
+                                Value::Number(offset),
+                                Value::str(style),
+                                Value::str(tag)
+                            ],
+                            &plan,
+                        ),
+                        Some(Value::str("")),
+                    );
+                }
+            }
+        }
+    }
+}
+
 /// The fixture's records, which the JS target's test formats with, are the
 /// compiler's.
 #[test]

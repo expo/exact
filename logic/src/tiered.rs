@@ -101,10 +101,6 @@ impl Executor for Tiered {
         true
     }
 
-    fn trapped(&self) -> bool {
-        self.active.trapped()
-    }
-
     fn call(&mut self, bytes: &[u8]) -> Result<Vec<u8>, String> {
         // Calls are serialized by the owning session. Host-owned requests keep
         // their tickets and explicit parse arguments; no request is reissued.

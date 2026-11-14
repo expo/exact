@@ -3,13 +3,18 @@ use super::*;
 impl<D: DataSource> Presenter<D> {
     /// The open surface's nodes, in its own window's points: an alert's
     /// headline, its supporting text and its buttons; a menu's items, each
-    /// section's title a heading before its items.
+    /// section's title a heading before its items. A select's menu is a
+    /// listbox of its options, each placed in the set, the chosen one
+    /// selected, as HTML-AAM maps a `select`'s popup and as `access/menu.rs`
+    /// tells the painted menu.
     pub(super) fn access_surface(&self, b: &mut Build) -> u32 {
         let Some(shown) = self.surface() else {
             return 0;
         };
+        let select = self.select_surface().is_some();
         let whole = [0.0, 0.0, shown.size.0, shown.size.1];
-        let parent = if let Some((offset, max)) = shown.scroll {
+        let scroll = shown.scroll.or(select.then_some((0., 0.)));
+        let parent = if let Some((offset, max)) = scroll {
             let id = b.unique(identity(self.host.kernel(), shown.node));
             let flags = if offset > 0. { flag::BACKWARD } else { 0 }
                 | if offset < max { flag::FORWARD } else { 0 };
@@ -23,7 +28,11 @@ impl<D: DataSource> Presenter<D> {
                 id,
                 parent: 0,
                 view: shown.node,
-                role: role::SCROLLER,
+                role: if select {
+                    role::LIST_BOX
+                } else {
+                    role::SCROLLER
+                },
                 flags,
                 rect: whole,
                 range: [offset, max, 0.],
@@ -111,19 +120,18 @@ impl<D: DataSource> Presenter<D> {
             } else {
                 flag::DISABLED
             };
-            if row.checked {
-                flags |= flag::CHECKABLE | flag::CHECKED;
+            match (select, row.checked) {
+                (true, true) => flags |= flag::SELECTED,
+                (false, true) => flags |= flag::CHECKABLE | flag::CHECKED,
+                _ => {}
             }
+            let role = if select { role::OPTION } else { role::BUTTON };
             let place = (rect, whole);
-            self.access_bar_node(
-                b,
-                row.node,
-                parent,
-                role::BUTTON,
-                flags,
-                row.title.clone(),
-                place,
-            );
+            self.access_bar_node(b, row.node, parent, role, flags, row.title.clone(), place);
+            if select {
+                let count = shown.targets.len() as i32;
+                b.out.last_mut().unwrap().set = (index as i32 + 1, count);
+            }
         }
         shown.serial
     }

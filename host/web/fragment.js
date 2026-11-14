@@ -19,6 +19,7 @@ function reference(el) {
 /** A history push discards the forward entries, including the index it writes (navigation.js). */
 export function forget(from) { for (const k of kept.keys()) if (k >= from) kept.delete(k); }
 addEventListener("scroll", e => {
+  if (held?.restore?.()) return;
   const at = entry(), el = e.target === document ? document.scrollingElement : e.target;
   if (at == null || !(el instanceof Element)) return;
   if (!kept.has(at)) kept.set(at, new Map());
@@ -40,6 +41,9 @@ function scrollers(r) {
   const out = [document.scrollingElement];
   for (let el = r.parentElement; el; el = el.parentElement) if (el !== document.scrollingElement && scrolls(el)) out.push(el);
   return [...out, ...inside(r)];
+}
+function keep(r, at = entry()) {
+  if (at != null) kept.set(at, new Map(scrollers(r).map(el => [reference(el), [el.scrollTop, el.scrollLeft]])));
 }
 /** The fragment of a location: everything after its first `#`. */
 const fragmentOf = url => { const at = url?.indexOf("#") ?? -1; return at < 0 ? "" : url.slice(at + 1); };
@@ -64,7 +68,7 @@ const byId = (r, id) => id ? [...r.querySelectorAll("[id]")].find(el => el.id ==
 export function arm(root, op, person) {
   const r = route(root, op.top), at = entry();
   if (op.pushed && r && at != null) {
-    kept.set(at - 1, new Map(scrollers(r).map(el => [reference(el), [el.scrollTop, el.scrollLeft]])));
+    keep(r, at - 1);
   }
   held?.abort();
   armed = { visit: op.top, fragment: op.fragment, activation: op.activation, traversal: !!op.traversal, since: op.since ?? person.personScrolls, person };
@@ -72,15 +76,30 @@ export function arm(root, op, person) {
 /** The app's own scroll: a fragment's scroll held gives way, and with `pending` (a `scrollIntoView`) one not yet made. */
 export function cancel(pending = true) { held?.abort(); if (armed && pending) armed.authored = true; }
 
+/** A retained visit traversed to the very URL already shown: the router need not emit a change. */
+export function traverse(root, op, person, log) {
+  const fragment = fragmentOf(op.url);
+  arm(root, { ...op, fragment, traversal: true, pushed: false, since: person.personScrolls }, person);
+  scroll(root, op.top, fragment, log);
+}
+
+function holding() {
+  held?.abort();
+  const h = held = new AbortController();
+  h.signal.addEventListener("abort", () => { if (held === h) held = null; }, { once: true });
+  return h;
+}
+
 /** Hold `target` at the start of its scrollers while `r`'s pictures load, until the person scrolls, it leaves, or the
  * entry shown is no longer `visit` at `fragment`. */
 function hold(r, target, visit, fragment, person) {
-  held?.abort();
   const loading = () => [...r.querySelectorAll("img")].some(img => !img.complete);
+  held?.abort();
   if (!loading()) return;
-  const h = held = new AbortController(), since = person?.personScrolls, again = () => {
+  const h = holding(), since = person?.personScrolls, again = () => {
     if (!target.isConnected || person?.personScrolls !== since || !shows(visit, fragment)) return h.abort();
     target.scrollIntoView({ block: "start", inline: "nearest", behavior: "instant" });
+    keep(r);
     if (!loading()) h.abort();
   };
   for (const type of ["load", "error"]) r.addEventListener(type, again, { capture: true, signal: h.signal });
@@ -97,23 +116,30 @@ export function scroll(root, visit, fragment, log, activation) {
   const r = route(root, visit);
   if (!r) return log(`fragment #${fragment}: no route of visit ${visit} is on the page`);
   if (was?.traversal) {
-    const place = new Map(kept.get(entry())), restore = () => {
+    const at = entry(), place = new Map(kept.get(at)), since = was.person?.personScrolls, h = holding();
+    const restore = h.restore = () => {
+      if (h.signal.aborted) return false;
+      if (!r.isConnected || entry() !== at || !shows(visit, fragment) || was.person?.personScrolls !== since) { h.abort(); return false; }
       for (const [ref, [top, left]] of place) {
         const el = ref.deref();
         if (el?.isConnected && (el === document.scrollingElement || r.contains(el) || el.contains(r))) el.scrollTo({ top, left, behavior: "instant" });
       }
+      return true;
     };
-    // The browser's own traversal to an entry with a fragment then scrolls to the document's first element of that
-    // id, which knows no route, at the `hashchange` it sends or, its fragment unchanged, at its next frame's layout:
-    // the place, as it was before that scroll, is put back once more after each, unless the person scrolled since.
+    if (!place.size) { h.abort(); return; }
+    // Chrome may keep aligning its own fragment until the document finishes loading. Those scrolls must neither
+    // replace the saved place nor outlive this activation's cancellation by navigation or authored/user scrolling.
     restore();
-    const since = was.person?.personScrolls, again = () => { if (was.person?.personScrolls === since) restore(); };
-    if (place.size) { addEventListener("hashchange", again, { once: true }); setTimeout(() => removeEventListener("hashchange", again), 1000); requestAnimationFrame(() => requestAnimationFrame(again)); }
+    const settled = () => requestAnimationFrame(() => requestAnimationFrame(() => { if (restore() && document.readyState === "complete") h.abort(); }));
+    addEventListener("hashchange", restore, { signal: h.signal });
+    addEventListener("load", settled, { once: true, signal: h.signal });
+    settled();
     return;
   }
   const id = fragment && decoded(fragment), target = fragment ? byId(r, fragment) ?? byId(r, id) : null;
   if (target) {
     target.scrollIntoView({ block: "start", inline: "nearest" });
+    keep(r);
     hold(r, target, visit, fragment, was?.person);
     // The starting point: the target takes the focus, as the next Tab and a screen reader start from it, with no focus
     // ring, as a browser's own scroll to a fragment draws none. A field the person is typing in keeps it.
@@ -129,7 +155,8 @@ export function scroll(root, visit, fragment, log, activation) {
   if (fragment && id?.toLowerCase() !== "top") log(`fragment #${fragment}: no element in the route of visit ${visit} has that id; the route goes to its top`);
   for (const el of inside(r)) el.scrollTo({ top: 0, left: 0, behavior: "instant" });
   r.scrollIntoView({ block: "start", inline: "nearest", behavior: "instant" });
+  keep(r);
 }
 
 // The wasm host loads this module by a script tag (glue.js `loadAfterPaint`), which finds it here.
-(globalThis.exact ??= {}).fragment = { arm, scroll, cancel, shows, forget };
+(globalThis.exact ??= {}).fragment = { arm, scroll, cancel, shows, forget, traverse };

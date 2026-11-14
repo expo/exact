@@ -18,6 +18,7 @@ import { isAbsolute, join, dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { captureAssets, assetCards, copyStaticTreeIfPresent, webEnvelope, publicFileCards, listAssets, readStaticFile, readDevGeneration, retainDevGeneration } from '../host/web/serve.mjs';
 import { resolveApp, webGpuArtifacts, withAppFixture } from './app.mjs';
+import { streamBundle } from './texture-families.mjs';
 import { bake, sealEnvelope, canonicalBytes, classify, classifyArtifacts, cohortReceipt, defaultRelease, deployRun, holdBundles, inspectHead, materializeSnapshot, readAssetIndex, streamIndex, portableAssetNames, publishRoot, publishStream, renderTable, snapshotOf as capturedSnapshotOf, streamHead } from './deploy.mjs';
 import { blobPath, DirectoryOrigin, HttpsOrigin, OriginUnavailable, sha256, webReleasePath, webRootPath } from './origin.mjs';
 // Minimal compiler receipts for origin protocol fixtures below; capability
@@ -383,6 +384,15 @@ async function rejects(action, matches) {
   result('a bundle needing a newer TypeScript runtime is refused by an older cohort only',
     !olderPrelude.bundle&&olderPrelude.missing[0].includes('typescriptRuntime')&&!runtimeOne.bundle&&runtimeOne.missing[0].includes('runtime 2 or later; this cohort\'s is 1')
     &&samePrelude.bundle&&newerPrelude.bundle, JSON.stringify({olderPrelude,runtimeOne,samePrelude,newerPrelude}));
+  // The TypeScript module pair runs only where the binary's TypeScript grants are exactly its own (js/src/paired.rs).
+  const pair=(grants)=>{const c=structuredClone(moved);c.graph.artifacts.push({name:'typescript/app.hbc',requires:{javascriptGrants:grants}});return c;};
+  const holding=g=>({...installed,compat:{...installed.compat,inputs:{...installed.compat.inputs,javascriptGrants:g}}});
+  const narrower=classifyArtifacts(pair('net.fetch https://x/\nnet.fetch https://y/'),holding('net.fetch https://x/'));
+  const wider=classifyArtifacts(pair('net.fetch https://x/'),holding('net.fetch https://x/\nnet.fetch https://y/'));
+  const exact=classifyArtifacts(pair('net.fetch https://x/'),holding('net.fetch https://x/'));
+  result('a TypeScript pair goes only to a binary holding exactly its grants',
+    !narrower.bundle&&narrower.missing[0].includes('typescript/app.hbc: javascriptGrants')&&!wider.bundle&&exact.bundle,
+    JSON.stringify({narrower,wider,exact}));
   result('artifact graph separates binary changes, compatible older cohorts, and named missing dependencies',
     same.binary&&same.bundle&&old.binary&&old.bundle&&old.warnings[0].includes('will run the old code')
     &&!absent.bundle&&absent.missing[0].includes('sources.camera')&&!unsupported.bundle&&unsupported.missing[0].includes('gpuSurfaces.map')
@@ -1132,6 +1142,40 @@ test('a native stream of a TypeScript app with a Live Activity publishes the mod
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+// A game's baked texture: the web root carries its three files, and each Apple stream the one family its
+// bake's roster holds (scripts/texture-families.mjs).
+test('a native stream publishes only the texture family its platform reads', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'exact-hold-textures-'));
+  try {
+    const card = (name) => ({ name, bytes: Buffer.from(name), sha256: sha256(Buffer.from(name)) });
+    const plan = card('app.plan'), model = card('assets/fox.model');
+    const [rgba, bc, astc] = ['assets/fox/0.tex', 'assets/fox/0.bc.tex', 'assets/fox/0.astc.tex'].map(card);
+    const graph = (cards) => ({ artifacts: cards.map(({ name, bytes, sha256 }) => ({ name, sha256, bytes: bytes.length, kind: 'bundle', requires: {} })) });
+    const builds = {
+      web: { compat: { inputs: { platform: 'web' } }, graph: graph([plan, model, rgba, bc, astc]) },
+      macos: { compat: { inputs: { platform: 'macos', textureFamily: 'bc' } }, graph: graph([plan, model, bc]) },
+      ios: { compat: { inputs: { platform: 'ios', textureFamily: 'astc' } }, graph: graph([plan, model, astc]) },
+    };
+    const bundle = { plan: { sha256: plan.sha256, bytes: plan.bytes }, assets: [model, rgba, bc, astc] };
+    holdBundles(bundle, builds, dir);
+    expect(bundle.assets.length).toBe(4);
+    expect(Object.keys(bundle.platforms)).toEqual(['macos', 'ios']);
+    expect(bundle.platforms.macos.assets.map((a) => a.name)).toEqual(['assets/fox.model', 'assets/fox/0.bc.tex']);
+    expect(bundle.platforms.ios.assets.map((a) => a.name)).toEqual(['assets/fox.model', 'assets/fox/0.astc.tex']);
+    // A stream of an iOS cohort baked with ASTC alone is sent ASTC; one baked before thinning, every file.
+    expect(streamBundle(bundle, 'ios', { textureFamily: 'astc' }).assets.map((a) => a.name)).toEqual(['assets/fox.model', 'assets/fox/0.astc.tex']);
+    expect(streamBundle(bundle, 'ios', { platform: 'ios' }).assets.map((a) => a.name).sort()).toEqual(['assets/fox.model', 'assets/fox/0.astc.tex', 'assets/fox/0.bc.tex', 'assets/fox/0.tex']);
+    // A macOS bake that kept another family differs from the bundle its stream publishes.
+    builds.macos.graph = graph([plan, model, bc, astc]);
+    expect(() => holdBundles({ plan: bundle.plan, assets: [model, rgba, bc, astc] }, builds, dir)).toThrow('macos bake graph differs from the packaged bundle');
+    // A bake that thinned nothing names no family, and its stream publishes every file.
+    builds.macos = { compat: { inputs: { platform: 'macos' } }, graph: graph([plan, model, rgba, bc, astc]) };
+    const whole = { plan: bundle.plan, assets: [model, rgba, bc, astc] };
+    holdBundles(whole, builds, dir);
+    expect(Object.keys(whole.platforms)).toEqual(['ios']);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('adding editing and removing only a sunset publishes a new signed sequence', async () => {
   const { privateKey, publicKey } = generateKeyPairSync('ed25519');
   const app = { id: 'com.exact.sunset', displayName: 'Sunset', manifest: { deploy: { signing: { key: 'test', keys: { test: publicKey.export({ type: 'spki', format: 'der' }).subarray(-32).toString('base64') } } } } };
@@ -1167,4 +1211,44 @@ test('adding editing and removing only a sunset publishes a new signed sequence'
     expect(again.action).toBe('current');
     expect(writes).toBe(before);
   }
+});
+
+// The captured deploy with producer boundaries doubled: an existing iOS stream must reach classification on Linux.
+test.each(['new', 'invalid', 'authenticated'])('deploy skips a native bake only for an authenticated cohort (%s)', async state => {
+  const root = mkdtempSync(resolve(import.meta.dir, '../target/deploy-bundle-'));
+  const sourceRoot = resolve(root, 'exact-source-capture-fixture/source'), exactRoot = resolve(sourceRoot, 'exact');
+  const app = { id: 'com.exact.bundle', name: 'bundle', displayName: 'Bundle', dir: exactRoot, workspace: exactRoot, target: root,
+    manifest: { host: { ios: {} }, deploy: { signing: { key: 'test', keys: { test: 'public' } } } } };
+  const bundle = { plan: { bytes: Buffer.from('plan'), sha256: sha256(Buffer.from('plan')), formatVersion: 4, kernelSchema: '0'.repeat(16) }, assets: [] };
+  const build = fixtureBuild('a'.repeat(32), bundle);
+  build.trust = 'production';
+  build.compat.inputs = { platform: 'ios', store: { L: 'A' }, keys: { test: 'public' }, executors: [] };
+  const cohort = cohortReceipt(build), stream = { channel: 'prod', compatibilityId: build.compat.id };
+  const calls = [], output = [];
+  const bindings = {
+    ROOT: exactRoot, canonicalPath: x => x, basename: path => path.split('/').at(-1), dirname, inside: (parent, child) => child.startsWith(parent + '/'),
+    process: { env: {}, stderr: { write() {} } }, console: { log: text => output.push(text) },
+    resolveApp: () => app, requireReleasePins() {}, channelOf: () => 'prod', validateChannel: x => x,
+    channelOrigin: () => root, openOrigin: () => ({ writable: true, describe: () => root }), nativePlatforms: () => ['ios'],
+    loadSigner: () => ({ keyId: 'test' }), namesNative: () => true,
+    bake: () => root, bakeJs: () => root, readBundle: () => bundle, readBuilds: () => [{ ...build, compat: { ...build.compat, inputs: { ...build.compat.inputs, platform: 'web' } } }],
+    buildFor: () => { calls.push('native bake'); return build; },
+    holdBundles() {}, rustPackage: () => false, resolve, sealedSourceEnv: (_, env) => env,
+    streams: async () => state === 'authenticated' ? [{ stream, head: {}, cohort, platform: 'ios' }] : state === 'new' ? [] : [{ stream, platform: 'ios', problem: 'unauthenticated' }],
+    streamCandidates: async () => [{ row: { kind: 'stream', platform: 'ios', ...stream }, compat: build.compat, build, bundle }],
+    classify: async () => ({ snapshot: {}, rows: [{ kind: 'stream', platform: 'ios', ...stream, receipt: cohort, action: 'bundle' }] }),
+    streamBundle, publishStream: async () => { calls.push('publish'); return { kind: 'stream', action: 'published', seq: 8, head: { sha256: 'b'.repeat(64) } }; },
+    refuse: message => { throw Error(message); },
+  };
+  const source = readFileSync(DEPLOY, 'utf8');
+  const fn = source.slice(source.indexOf('async function deployCaptured('), source.indexOf('/** An explicitly supplied'));
+  const deploy = new Function(...Object.keys(bindings), fn + ';return deployCaptured;')(...Object.values(bindings));
+  try {
+    expect(await deploy({ _: ['bundle'], platform: ['ios'], keys: root, yes: true, json: true }, {
+      version: 1, run: resolve(root, 'run'), sourceRoot, exactRoot, release: 'update', app,
+      snapshot: { id: 'snapshot', sources: [{ repo: resolve(root, 'live'), roles: ['exact'], commit: 'a'.repeat(40) }] },
+    })).toBe(0);
+    expect(calls).toEqual(state === 'authenticated' ? ['publish'] : ['native bake', 'publish']);
+    expect(JSON.parse(output.at(-1)).published[0].seq).toBe(8);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });

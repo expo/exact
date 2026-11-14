@@ -468,6 +468,7 @@ fn validate(schema: &Schema) {
             assert!(
                 literals
                     || range
+                    || (param && t == "number | string")
                     || matches!(
                         t.as_str(),
                         "number"

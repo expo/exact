@@ -13,6 +13,9 @@ pub use crate::export_dials::{marks_of, DialChange, Impact, Pin};
 use crate::syntax::same_conds;
 use crate::{Design, Diagnostic};
 
+#[doc(hidden)]
+pub use crate::budget::{measured as measure_work, IMPORT as WORK_LIMIT};
+
 pub mod astryx;
 pub mod dtcg;
 mod engine;

@@ -114,3 +114,23 @@ test('Contract names follow reorder, rename, removal and module replacement', as
   host.children=[a];f.exact.gpu.layout();
   assert.deepEqual(staged.at(-1).slice(0,2),[0,'sign']);
 });
+
+test('placement clip rows cut the child to the planes Linux clips its composite to', async()=>{
+  const f=await fixture(), host=f.create(1);
+  const child=Object.assign(new f.Element('child'),{hasAttribute:()=>false,offsetLeft:10,offsetTop:20,offsetWidth:100,offsetHeight:50,inert:false});
+  host.children=[child];
+  // x >= 30 and y <= 40 in the child's points; later rows that cut nothing, a module that writes ten floats, and rows that cut all.
+  let rows=[1,0,-30,0,-1,40];
+  Object.assign(f.gpu,{
+    gpu_children_mode:()=>3,gpu_child_view:()=>{},gpu_children_count:()=>{},gpu_dirty:()=>true,
+    gpu_placement:(_,i,out)=>{out.set([1,0,0,0,1,0,0,0,1,-1]);if(rows)out.set(rows,10);return 1;},
+  });
+  f.exact.gpu.layout();f.frame();
+  assert.equal(child.style.clipPath,'polygon(30px 40px,30px 0px,100px 0px,100px 40px)');
+  rows=[0,0,1,0,0,1];f.frame();
+  assert.ok(!child.style.clipPath,'rows that cut nothing leave no clip');
+  rows=[1,0,-30,0,-1,40];f.frame();rows=null;f.frame();
+  assert.ok(!child.style.clipPath,'a ten-float module writes no rows');
+  rows=[-1,0,-1,0,0,1];f.frame();
+  assert.equal(child.style.clipPath,'polygon(0px 0px)','rows that cut everything leave nothing');
+});

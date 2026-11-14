@@ -1,10 +1,40 @@
-always "screen_always"
-  expect state screen in "lock" "home" "settings" "display" "messages"
+always "each screen has a route"
+  expect state screen in "lock" "home" "settings" "display" "messages" "thread" "notfound"
 
 test "the phone visits its screens"
+  clock settle
   tap "lock-unlock"
+  clock settle
   tap "dock-settings"
+  clock settle
   tap "row-display"
+  clock settle
   tap "home-bar"
+  clock settle
   tap "dock-messages"
-  clock data
+  clock settle
+  expect state current.url == "/messages"
+  tap "conversation-nico"
+  clock settle
+  expect state current.url == "/messages/nico"
+  tap "thread-back"
+  clock settle
+  expect state current.url == "/messages"
+  tap "home-bar"
+  tap "dock-settings"
+  tap "row-app-lock"
+  clock settle
+  expect state current.url == "/"
+
+
+test "the specimen returns to Settings"
+  tap "lock-unlock"
+  tap "app-typetour"
+  tap "back-settings"
+  expect state current.url == "/settings"
+  tap "row-display"
+  tap "specimen-later"
+  expect state current.url == "/settings"
+  tap "row-display"
+  tap "specimen-install"
+  expect state current.url == "/settings"

@@ -91,6 +91,7 @@ test('a swap that fails leaves the build as it was', async () => {
   expect(readFileSync(join(dist, 'index.html'), 'utf8')).toBe('<p>kept');
   // A swap killed between its renames left only `.previous`: no stage keeps it.
   renameSync(dist, `${dist}.previous`);
+  writeFileSync(join(`${dist}.previous`, '.exact-build.json'), '{}');
   expect(() => replaceBuild(join(dir, 'no-stage'), dist)).toThrow();
   expect(readFileSync(join(`${dist}.previous`, 'index.html'), 'utf8')).toBe('<p>kept');
   // ...and a stage then goes in place before `.previous` goes.

@@ -248,6 +248,16 @@ impl PaintedField {
 }
 
 impl PaintedBox {
+    /// A singular transform can leave a nonempty axis-aligned bound.
+    pub(crate) fn has_area(&self) -> bool {
+        let area = |r: Rect4| r.2 > 0.0 && r.3 > 0.0;
+        area(self.rect)
+            && self
+                .affine
+                .is_none_or(|(ts, rect)| area(rect) && ts.invert().is_some())
+            && self.projective.is_none_or(|(_, rect, ..)| area(rect))
+    }
+
     /// Drawn without a perspective (`space.rs`), a rotation or a skew, so
     /// its box, and any clip round it, is square to the screen.
     pub(crate) fn flat(&self) -> bool {
@@ -550,10 +560,15 @@ impl Painter {
             let painted = material::FieldText::painted(&paragraph, (ox, oy), ts);
             self.labels.value(node.id, painted);
         }
-        let decorations = field
-            .decorations
-            .as_ref()
-            .map(|_| self.text_decorations(walk.scene.kernel, &paragraph, &palette, walk.reveal));
+        let decorations = field.decorations.as_ref().map(|_| {
+            self.text_decorations(
+                walk.scene.kernel,
+                &paragraph,
+                &palette,
+                walk.reveal,
+                0..palette.len(),
+            )
+        });
         if let Some(decorations) = &decorations {
             decorations.paint(
                 self.backend.as_mut(),

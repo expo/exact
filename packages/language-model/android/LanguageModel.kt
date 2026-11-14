@@ -9,7 +9,8 @@
 // - Structured output is validated, not enforced (D8), and there are no tools (D9): `structuredOutput` reads
 //   `validated` and `tools` false, and a create with tools fails `NotSupportedError`.
 // - ML Kit generates only for the app in the foreground (D10): a prompt in the background fails `NotAllowedError`,
-//   `background`, and one running when the app leaves ends so, with its text so far. One generation runs per process.
+//   `background`, and one running or queued when the app leaves ends so, with its text so far. One generation runs per
+//   process.
 package exact.languagemodel
 
 import dev.exact.canvas.ExactExtension
@@ -20,9 +21,12 @@ import org.json.JSONObject
 /** One input of a session and the reply (D6). */
 class ModelTurn(var input: String?, var reply: String? = null)
 
+/** A call waiting its turn: [go] begins it, [cancel] answers it when the session's end discards it. */
+class Queued(val response: ModelResponse?, val go: (Double) -> Unit, val cancel: () -> Unit)
+
 class ModelSession(val id: String, val system: String?, val turns: MutableList<ModelTurn>, val window: Int, val options: JSONObject) {
     var overflowed = false
-    val queue = ArrayDeque<Pair<ModelResponse?, (Double) -> Unit>>()
+    val queue = ArrayDeque<Queued>()
     var responding: ModelResponse? = null
     val ended = ArrayDeque<String>()
     var count = 0
@@ -184,10 +188,12 @@ class LanguageModelModule(context: ExtensionContext) : ExactExtension(context) {
         if (!r.live) return
         r.state = state
         if (error != null) { r.error = error; r.reason = reason; r.message = message }
+        // Only a live response has a generation for its call's cancel to abort.
+        r.request?.let { if (byRequest[it] === r) byRequest.remove(it) }
         val s = r.session
         val begun = s.responding === r
         // One still waiting its turn never reached the session: nothing of it is committed.
-        if (begun) r.turn.reply = r.text else s.queue.removeAll { it.first === r }
+        if (begun) r.turn.reply = r.text else s.queue.removeAll { it.response === r }
         r.contextUsage = counted(s)
         r.job?.cancel()
         if (begun) s.responding = null
@@ -206,14 +212,15 @@ class LanguageModelModule(context: ExtensionContext) : ExactExtension(context) {
 
     /** The calls waiting on `s`, begun in order until one generates (D6: one generation a session). */
     private fun next(s: ModelSession, at: Double) {
-        while (s.responding == null && s.queue.isNotEmpty()) s.queue.removeFirst().second(at)
+        while (s.responding == null && s.queue.isNotEmpty()) s.queue.removeFirst().go(at)
     }
 
-    /** `work(at)` once the session is free; `r`, the response it begins, holds the session until it ends. */
-    fun queued(s: ModelSession, r: ModelResponse?, work: (Double) -> Unit) {
-        s.queue.addLast(r to { at: Double ->
+    /** `work(at)` once the session is free; `r`, the response it begins, holds the session until it ends.
+     * [cancel] answers the call if the session ends first; a response's own end answers its prompt. */
+    fun queued(s: ModelSession, r: ModelResponse?, cancel: () -> Unit = {}, work: (Double) -> Unit) {
+        s.queue.addLast(Queued(r, { at: Double ->
             if (r == null || r.state == "generating") { if (r != null) s.responding = r; work(at) }
-        })
+        }, cancel))
         next(s, context.now())
     }
 
@@ -326,7 +333,6 @@ class LanguageModelModule(context: ExtensionContext) : ExactExtension(context) {
                     val r = respond(s, args, name == "promptStreaming")
                     if (name == "promptStreaming") return reply(JSONObject().put("id", r.id).put("session", s.id))
                     val settle = { done: ModelResponse ->
-                        done.request?.let { byRequest.remove(it) }
                         when {
                             done.error != null -> reply(error(done.error!!))
                             !done.typed -> reply(JSONObject().put("text", done.text).put("contextUsage", done.contextUsage ?: 0).put("overflowed", done.overflowed))
@@ -349,7 +355,7 @@ class LanguageModelModule(context: ExtensionContext) : ExactExtension(context) {
                 "appendLanguageModel" -> {
                     val s = session() ?: return reply(error("InvalidStateError"))
                     val input = args.optString("input")
-                    queued(s, null) {
+                    queued(s, null, { reply(error("AbortError")) }) {
                         if (!fit(s, cost(input))) return@queued reply(error("QuotaExceededError"))
                         s.turns += ModelTurn(input)
                         announce(SESSION)
@@ -372,7 +378,7 @@ class LanguageModelModule(context: ExtensionContext) : ExactExtension(context) {
                 }
                 "cloneLanguageModel" -> {
                     val s = session() ?: return reply(error("InvalidStateError"))
-                    queued(s, null) {
+                    queued(s, null, { reply(error("AbortError")) }) {
                         serial += 1
                         val c = ModelSession("session-$serial", s.system, s.turns.map { ModelTurn(it.input, it.reply) }.toMutableList(), s.window, s.options)
                         c.overflowed = s.overflowed
@@ -472,10 +478,12 @@ class LanguageModelModule(context: ExtensionContext) : ExactExtension(context) {
         }
     }
 
-    /** A return to the foreground reads the availability again (D5); leaving it ends what generates (D10). */
+    /** A return to the foreground reads the availability again (D5); leaving it fails every live response, those
+     * queued too, since a prompt from the background is refused (D10). */
     override fun foreground(shown: Boolean) {
         if (shown) { announce(AVAILABILITY); return }
-        for (r in responses.values.toList()) if (r.live && r.session.responding === r) {
+        // The queued first: ending a generating one begins its session's next, which must not start in the background.
+        for (r in responses.values.sortedBy { it.session.responding === it }) if (r.live) {
             say("${r.id}: the app left the foreground")
             if (agent) advance(r)
             end(r, "failed", "NotAllowedError", "background")
@@ -490,9 +498,12 @@ class LanguageModelModule(context: ExtensionContext) : ExactExtension(context) {
     }
 
     fun drop(s: ModelSession, why: String) {
-        for (r in responses.values.toList()) if (r.session === s) { abort(r, why); responses.remove(r.id) }
-        s.queue.clear()
         sessions.remove(s.id)
+        // The calls waiting are answered first: the active response's end would begin them.
+        val waiting = s.queue.toList()
+        s.queue.clear()
+        waiting.forEach { it.cancel() }
+        for (r in responses.values.toList()) if (r.session === s) { abort(r, why); responses.remove(r.id) }
         say("${s.id}: $why")
         announce(SESSION)
     }

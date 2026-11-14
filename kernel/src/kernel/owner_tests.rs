@@ -311,6 +311,161 @@ fn a_sticky_inset_reads_its_owners_inset() {
     assert_eq!(constraint.insets[0], Some(106.0));
 }
 
+#[test]
+fn absolute_insets_read_their_owner_instead_of_the_document() {
+    let mut k = Kernel::with_monospace();
+    let mut ops = create(1..=4);
+    ops.push(style(1, &[(StyleId::Height, "844")]));
+    ops.push(style(
+        2,
+        &[
+            (StyleId::PositionType, "relative"),
+            (StyleId::BoxSizing, "border-box"),
+            (StyleId::Width, "300"),
+            (StyleId::Height, "300"),
+        ],
+    ));
+    for (id, sides) in [
+        (3, [(StyleId::Top, "top"), (StyleId::Left, "left")]),
+        (4, [(StyleId::Bottom, "bottom"), (StyleId::Right, "right")]),
+    ] {
+        let mut rows = vec![
+            (StyleId::PositionType, "absolute"),
+            (StyleId::Width, "20"),
+            (StyleId::Height, "30"),
+        ];
+        let values = sides.map(|(_, edge)| format!("var(--exact-safe-area-inset-{edge})"));
+        rows.extend(
+            sides
+                .iter()
+                .zip(&values)
+                .map(|((id, _), value)| (*id, value.as_str())),
+        );
+        ops.push(style(id, &rows));
+    }
+    ops.extend([
+        children(1, &[2]),
+        children(2, &[3, 4]),
+        Op::AttachRoot { id: 1 },
+    ]);
+    k.apply(0, 1, &ops).unwrap();
+    k.set_root_local_insets(Some([62.0, 2.0, 34.0, 3.0]))
+        .unwrap();
+    k.set_local_insets(2, Some([116.0, 7.0, 34.0, 9.0]))
+        .unwrap();
+    layout(&mut k);
+    let frame = k.node(3).unwrap().frame;
+    assert_eq!((frame.x, frame.y), (9.0, 116.0));
+    let frame = k.node(4).unwrap().frame;
+    assert_eq!((frame.x, frame.y), (273.0, 236.0));
+    k.set_host_cover(2, Some(HostCover::Edges([116.0, 7.0, 34.0, 9.0])))
+        .unwrap();
+    layout(&mut k);
+    let frame = k.node(3).unwrap().frame;
+    assert_eq!(
+        (frame.x, frame.y),
+        (9.0, 116.0),
+        "the inset clears the cover once"
+    );
+    let frame = k.node(4).unwrap().frame;
+    assert_eq!((frame.x, frame.y), (273.0, 236.0));
+    k.set_local_insets(2, Some([54.0, 12.0, 40.0, 15.0]))
+        .unwrap();
+    k.set_host_cover(2, Some(HostCover::Edges([54.0, 12.0, 40.0, 15.0])))
+        .unwrap();
+    layout(&mut k);
+    let frame = k.node(3).unwrap().frame;
+    assert_eq!((frame.x, frame.y), (15.0, 54.0));
+    let frame = k.node(4).unwrap().frame;
+    assert_eq!((frame.x, frame.y), (268.0, 230.0));
+    k.apply(
+        0,
+        2,
+        &[
+            style(3, &[(StyleId::Top, "0"), (StyleId::Left, "8")]),
+            style(4, &[(StyleId::Bottom, "8"), (StyleId::Right, "0")]),
+        ],
+    )
+    .unwrap();
+    layout(&mut k);
+    let frame = k.node(3).unwrap().frame;
+    assert_eq!(
+        (frame.x, frame.y),
+        (23.0, 54.0),
+        "plain lengths still add the cover"
+    );
+    let frame = k.node(4).unwrap().frame;
+    assert_eq!((frame.x, frame.y), (268.0, 222.0));
+    k.apply(
+        0,
+        3,
+        &[
+            style(3, &[(StyleId::Top, "var(--exact-safe-area-inset-left)")]),
+            style(
+                4,
+                &[(
+                    StyleId::Bottom,
+                    "calc(var(--exact-safe-area-inset-bottom) + 8px)",
+                )],
+            ),
+        ],
+    )
+    .unwrap();
+    layout(&mut k);
+    assert_eq!(
+        y(&k, 3),
+        69.0,
+        "another edge's inset does not clear the top"
+    );
+    assert_eq!(
+        y(&k, 4),
+        222.0,
+        "a matching inset in calc clears the cover once"
+    );
+    k.set_env(Env::default()).unwrap();
+    k.set_local_insets(2, Some([116.0, 40.0, 34.0, 50.0]))
+        .unwrap();
+    k.set_host_cover(2, Some(HostCover::Edges([116.0, 40.0, 34.0, 50.0])))
+        .unwrap();
+    let mut frames = Vec::new();
+    for (revision, source) in [(4, "env"), (5, "min")] {
+        let offset = |edge| match source {
+            "env" => format!("env(safe-area-inset-{edge})"),
+            _ => format!("min(20px, var(--exact-safe-area-inset-{edge}))"),
+        };
+        k.apply(
+            0,
+            revision,
+            &[
+                style(
+                    3,
+                    &[
+                        (StyleId::Top, &offset("top")),
+                        (StyleId::Left, &offset("left")),
+                    ],
+                ),
+                style(
+                    4,
+                    &[
+                        (StyleId::Bottom, &offset("bottom")),
+                        (StyleId::Right, &offset("right")),
+                    ],
+                ),
+            ],
+        )
+        .unwrap();
+        layout(&mut k);
+        let top_left = k.node(3).unwrap().frame;
+        let bottom_right = k.node(4).unwrap().frame;
+        frames.push(((top_left.x, top_left.y), (bottom_right.x, bottom_right.y)));
+    }
+    assert_eq!(
+        frames,
+        vec![((50.0, 116.0), (240.0, 236.0)); 2],
+        "zero and shorter inset references still clear every covered edge"
+    );
+}
+
 /// D9: an author's `--exact-safe-area-inset-*` on a node is what its
 /// subtree reads, over the host's value on an owner's root, as an inherited
 /// custom property; a change reaches the readers below it.

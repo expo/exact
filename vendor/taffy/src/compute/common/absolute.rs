@@ -76,16 +76,28 @@ struct Placed {
     output: LayoutOutput,
 }
 
+/// A containing block and the native clearance applied to its physical edges.
+pub(crate) struct AbsoluteArea {
+    /// The containing block's used dimensions.
+    pub(crate) size: Size<f32>,
+    /// Its origin in the container's border-box coordinates.
+    pub(crate) offset: Point<f32>,
+    /// Clearance already included in each edge's position.
+    pub(crate) clearance: Rect<f32>,
+}
+
 /// EXACT PATCH 20 (LLP 1074 T1): a container's pass over the absolutely
 /// positioned boxes it is the containing block of. Its own children are
 /// given by its algorithm, each with its [`StaticPosition`]; the descendants
 /// whose parents are `Static` come from the tree
 /// ([`LayoutPartialTree::hoisted_absolute`]).
 pub(crate) struct AbsolutePass {
-    /// The container's padding box less its scrollbar gutter: the containing block.
+    /// The container's padding box less its scrollbar gutter, before native clearance.
     pub(crate) area_size: Size<f32>,
     /// That box's origin in the container's border-box coordinates.
     pub(crate) area_offset: Point<f32>,
+    /// EXACT PATCH 75: native chrome clears this part of the padding box.
+    pub(crate) clearance: Rect<f32>,
     /// The container's direction.
     pub(crate) direction: Direction,
     /// How the boxes are measured.
@@ -96,6 +108,19 @@ pub(crate) struct AbsolutePass {
 }
 
 impl AbsolutePass {
+    /// The containing block inside native chrome (LLP 1123 D3).
+    pub(crate) fn inner_area(&self) -> AbsoluteArea {
+        let (size, offset) = if self.clearance == Rect::ZERO {
+            (self.area_size, self.area_offset)
+        } else {
+            (
+                (self.area_size - self.clearance.sum_axes()).map(|n| f32_max(n, 0.0)),
+                Point { x: self.area_offset.x + self.clearance.left, y: self.area_offset.y + self.clearance.top },
+            )
+        };
+        AbsoluteArea { size, offset, clearance: self.clearance }
+    }
+
     /// Sizes, lays out and places one box, and returns what it adds to the
     /// container's scrollable overflow. `area` is the box's containing block
     /// where that is not the whole padding box (a grid area). `origin` is the
@@ -105,14 +130,27 @@ impl AbsolutePass {
         tree: &mut impl LayoutPartialTree,
         node: NodeId,
         position: StaticPosition,
-        area: Option<(Size<f32>, Point<f32>)>,
+        area: Option<AbsoluteArea>,
         origin: Point<f32>,
     ) -> Rect<f32> {
-        let (area_size, area_offset) = area.unwrap_or((self.area_size, self.area_offset));
+        let AbsoluteArea { size: area_size, offset: area_offset, clearance } = area.unwrap_or_else(|| self.inner_area());
         let style = tree.get_core_container_style(node);
-        let Some(absolute) = AbsoluteBox::of(&style, area_size, |val, basis| tree.calc(val, basis)) else {
+        let Some(mut absolute) = AbsoluteBox::of(&style, area_size, |val, basis| tree.calc(val, basis)) else {
             return Rect::ZERO;
         };
+        // Credit only clearance already applied to this edge. An explicit
+        // grid line keeps the authored inset even inside a covered container.
+        let credit = style.inset_credit();
+        for (inset, clearance, bit) in [
+            (&mut absolute.inset.top, clearance.top, 1),
+            (&mut absolute.inset.right, clearance.right, 2),
+            (&mut absolute.inset.bottom, clearance.bottom, 4),
+            (&mut absolute.inset.left, clearance.left, 8),
+        ] {
+            if credit & bit != 0 && clearance > 0.0 {
+                *inset = inset.map(|n| f32_max(n - clearance, 0.0));
+            }
+        }
         drop(style);
         #[cfg(feature = "content_size")]
         let (overflow, contain) = (absolute.overflow, absolute.contain);

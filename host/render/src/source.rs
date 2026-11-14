@@ -297,6 +297,23 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Anonymous<D> {
         self.inner.take_logs()
     }
 
+    fn parse_tool(
+        &mut self,
+        fetch: Option<u64>,
+        continuation: Option<u64>,
+        store: &mut Store,
+        source: &str,
+        args: &[Value],
+        outcome: Outcome,
+    ) -> Result<Answer, DataError> {
+        self.inner
+            .parse_tool(fetch, continuation, store, source, args, outcome)
+    }
+
+    fn module_identity(&self, source: &str) -> Option<exact_runner::ModuleIdentity> {
+        self.inner.module_identity(source)
+    }
+
     fn take_aborted(&mut self) -> Vec<u64> {
         self.inner.take_aborted()
     }

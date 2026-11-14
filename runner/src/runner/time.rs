@@ -317,7 +317,7 @@ impl<D: DataSource> Runner<D> {
         self.dispose_dropped();
         let topics = std::mem::take(&mut *self.announced.lock().unwrap_or_else(|e| e.into_inner()));
         let mut receipts = Vec::new();
-        for topic in topics {
+        for topic in self.declaration_topics(topics) {
             // An event a bound implementation emitted, said through its
             // module's `changed` (LLP 1133.004 D6): raised, not a topic.
             if let Some(event) = topic.strip_prefix(super::modules::EMITTED) {

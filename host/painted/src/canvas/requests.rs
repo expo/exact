@@ -68,16 +68,19 @@ impl<D: DataSource + Default> CanvasHost<D> {
         answer
     }
 
-    /// An app module's event, only for the allocation whose view the reader still holds.
+    /// An app module's event, only for the session and allocation whose view the reader still holds.
     pub fn module_event(
         &mut self,
         id: u32,
         key: exact_kernel::NodeKey,
+        session: u64,
         kind: &str,
         payload: String,
     ) {
         let now = self.now();
-        self.force |= self.p.reader_module_event(id, key, kind, payload, now);
+        self.force |= self
+            .p
+            .reader_module_event(id, key, session, kind, payload, now);
     }
 
     /// The reader's answer to request `id`, or its cancellation (`None`).

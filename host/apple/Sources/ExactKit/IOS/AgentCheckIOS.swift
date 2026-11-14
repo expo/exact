@@ -119,10 +119,10 @@ extension Agent {
             }
             return r
         }
-        /// `v`'s alpha times its ancestors'.
+        /// `v`'s alpha times its ancestors'. A view's `alpha` is its layer's `opacity`, so each counts once.
         func opacity(_ v: UIView) -> Double {
             var o = 1.0, at: UIView? = v
-            while let cur = at { o *= Double(cur.alpha) * Double(cur.layer.opacity); at = cur.superview }
+            while let cur = at { o *= Double(cur.alpha); at = cur.superview }
             return o
         }
         /// Whether `s` or a view in it paints at `p` something a style does not say for certain: a fill, a picture, a
@@ -287,8 +287,8 @@ extension Agent {
         // and not each of its children.
         var visited = Set<ObjectIdentifier>()
         func walk(_ v: UIView, alpha: CGFloat, held: Bool, out: Bool = false, parent: NodeView? = nil) {
-            guard visited.insert(ObjectIdentifier(v)).inserted, !v.isHidden, v.alpha > 0.01, v.layer.opacity > 0.01, (v as? NodeView)?.drawnBySurface != true else { return }
-            let a = alpha * v.alpha * CGFloat(v.layer.opacity)
+            guard visited.insert(ObjectIdentifier(v)).inserted, !v.isHidden, v.alpha > 0.01, (v as? NodeView)?.drawnBySurface != true else { return }
+            let a = alpha * v.alpha
             var heldBelow = held, outBelow = out
             if let n = v as? NodeView {
                 guard !n.inert, !n.cssVisibilityHidden, !presenter.navigation.isInactiveRoute(containing: n) else { return }

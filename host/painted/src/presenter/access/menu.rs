@@ -106,9 +106,12 @@ impl<D: DataSource> Presenter<D> {
             .map(|n| n.id)
     }
 
-    /// A service chooses option `view` of the open menu, as a press on its
-    /// row does: whether it was chosen.
+    /// A service chooses option `view` of the open menu, painted or the top
+    /// layer's, as a press on its row does: whether it was chosen.
     pub(super) fn access_choose(&mut self, view: ViewId) -> bool {
+        if self.select_surface().is_some() {
+            return self.choose_surface_option(view);
+        }
         let Some(select) = self.menu else {
             return false;
         };
@@ -123,9 +126,12 @@ impl<D: DataSource> Presenter<D> {
         done.is_ok()
     }
 
-    /// A service scrolls the open menu by what it shows, less a row kept in
-    /// view: whether it moved.
+    /// A service scrolls the open menu, painted or the top layer's, by what
+    /// it shows, less a row kept in view: whether it moved.
     pub(super) fn access_menu_scroll(&mut self, forward: bool) -> bool {
+        if self.select_surface().is_some() {
+            return self.scroll_select_surface(forward);
+        }
         let Some(menu) = self.menu_now() else {
             return false;
         };

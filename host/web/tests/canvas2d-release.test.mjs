@@ -5,7 +5,7 @@ import { glueDeclarations } from './glue-fixture.mjs';
 import { standIns } from './stand-ins.mjs';
 
 const host = glueDeclarations(readFileSync(new URL('../glue.js', import.meta.url), 'utf8'), ['apply', 'bootNow', 'reportColors']);
-const runtime = ['rt.js', 'clock.js', 'resources.js', 'tree.js', 'events.js', 'pieces.js', 'mount.js', 'strings.js', 'rt-link.js', 'held.js', 'font-family.js', 'observers.js', 'grid.js', 'overlay.js', 'roster.js', 'router.js', 'route-pattern.js', 'schedule.js', 'budget.js', 'elements.js'];
+const runtime = ['rt.js', 'clock.js', 'resources.js', 'tree.js', 'events.js', 'pieces.js', 'mount.js', 'strings.js', 'rt-link.js', 'held.js', 'font-family.js', 'observers.js', 'grid.js', 'overlay.js', 'roster.js', 'router.js', 'route-pattern.js', 'schedule.js', 'budget.js', 'elements.js', 'shape.js'];
 const standins = standIns(runtime);
 
 // The data module supplies one valid list; both targets use the real browser replayer.

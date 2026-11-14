@@ -1,4 +1,4 @@
-# wgpu-hal 30.0.1 — sixteen local patches: seven in Metal, nine in Vulkan
+# wgpu-hal 30.0.1 — seventeen local patches: seven in Metal, nine in Vulkan, one in D3D12
 
 Complete crates.io archive, including the upstream MIT/Apache licenses and
 `.cargo_vcs_info.json`. No dependency upgrade. Patch 11 offers an explicit native arithmetic-only f16 opt-in. Every changed
@@ -315,6 +315,25 @@ cache and the pipeline archive empty: 3,740 to 3,878 ms compiling the sources,
 821 to 1,070 ms from the shipped libraries. On an iPhone 17e simulator, a fresh
 install: 3,993 to 4,289 ms against 3,750 to 4,040 ms; there the GPU compile, which
 no library holds and no archive can keep on a simulator, is most of it.
+
+## 17. The D3D12 debug-message handler is removed by its handle
+
+`src/auxil/dxgi/exception.rs`, `src/auxil/shared_registration.rs`,
+`src/dx12/device.rs`. A device made with validation registers a vectored
+exception handler that logs D3D12's debug messages, counted across devices.
+Upstream discarded the handle
+[`AddVectoredExceptionHandler`](https://learn.microsoft.com/windows/win32/api/errhandlingapi/nf-errhandlingapi-addvectoredexceptionhandler)
+returned and passed the handler's address to
+[`RemoveVectoredExceptionHandler`](https://learn.microsoft.com/windows/win32/api/errhandlingapi/nf-errhandlingapi-removevectoredexceptionhandler),
+which takes that handle, so no handler was ever removed: each device made
+after the last was dropped registered another, and every exception the
+process raised walked them all. The count now keeps the handle and the last
+device removes it; a failed registration is logged, removes nothing, and is
+tried again by the next device. `Device::new` registers only once nothing
+after it can fail, so a device whose construction fails leaves no
+registration behind. Metadata revision 17. Upstreamable.
+`cargo test --manifest-path vendor/wgpu-hal/Cargo.toml --lib shared_registration`
+runs on any host.
 
 ## Updating
 

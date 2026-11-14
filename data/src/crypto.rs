@@ -173,7 +173,10 @@ pub fn random_bytes(store: &Store, out: &mut [u8]) -> Result<(), DataError> {
             DataError::Unavailable(format!("random_bytes: OS randomness unavailable: {error}"))
         })?,
     }
-    store.observe_entropy();
+    // An empty fill drew nothing
+    if !out.is_empty() {
+        store.observe_entropy();
+    }
     Ok(())
 }
 
@@ -323,6 +326,8 @@ mod tests {
         ));
         assert!(too_many.iter().all(|&b| b == 7), "nothing written");
         assert_eq!(store.entropy_draws(), 3, "a refusal draws nothing");
+        random_bytes(&store, &mut []).unwrap();
+        assert_eq!(store.entropy_draws(), 3, "an empty fill draws nothing");
     }
 
     /// Two processes under the agent with seed 1 mint the `rust` stream's

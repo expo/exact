@@ -382,4 +382,18 @@ final class Canvas2DReplayer {
     }
 
     func image() -> CGImage? { context?.makeImage() }
+
+    /// Continue a canvas drawn elsewhere: `pixels` become the bitmap, and
+    /// `state` the state its next list starts from.
+    func `continue`(from pixels: CGImage?, state s: Canvas2DReplayState) {
+        if let c = context, let pixels {
+            c.saveGState()
+            c.concatenate(c.ctm.inverted())
+            c.setBlendMode(.copy)
+            c.draw(pixels, in: CGRect(x: 0, y: 0, width: width, height: height))
+            c.restoreGState()
+            blank = false
+        }
+        restore(s)
+    }
 }

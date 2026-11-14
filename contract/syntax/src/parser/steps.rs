@@ -162,7 +162,16 @@ impl Parser {
         for step in &steps {
             let refused = match step {
                 Step::Perf { .. } | Step::ExpectPerf { .. } => Some("a `perf` block measures steps; its `expect perf` lines follow it, and blocks do not nest".to_string()),
-                Step::Clock { arg, .. } if arg.ends_with(" real") => Some(format!("`clock {arg}` lets the wall clock run, so the counts would depend on the machine's speed; step the agent's clock (`clock +N`, `clock data`, `clock settle`)")),
+                // `clock +N real`, `clock held` and `clock until` let real
+                // time pass while the agent's clock stands.
+                Step::Clock { arg, .. }
+                    if arg.ends_with(" real")
+                        || arg == "held"
+                        || arg.starts_with("held ")
+                        || arg.starts_with("until ") =>
+                {
+                    Some(format!("`clock {arg}` lets the wall clock run, so the counts would depend on the machine's speed; step the agent's clock (`clock +N`, `clock data`, `clock settle`)"))
+                }
                 s if !launch_word(s).is_empty() => Some(format!("`{}` is a launch line and leads the test, not a `perf` block", launch_word(s))),
                 _ => None,
             };
@@ -583,12 +592,14 @@ impl Parser {
                     };
                     let (mut press, mut over, mut hold) = (None, None, None);
                     let (mut from, mut mouse) = (None, false);
+                    let mut into = None;
                     // Quoted reads or `clock`, last, while the finger is down (drums R8).
                     let mut during = Vec::new();
                     while let TokenKind::Ident(w) = self.peek_kind().clone() {
                         let twice = match w.as_str() {
                             "from" => from.is_some(),
                             "mouse" => mouse,
+                            "into" => into.is_some(),
                             _ => false,
                         };
                         if twice {
@@ -600,6 +611,12 @@ impl Parser {
                         if w == "mouse" {
                             self.next();
                             mouse = true;
+                            continue;
+                        }
+                        if w == "into" {
+                            self.next();
+                            self.expect_word("keyboard")?;
+                            into = Some("keyboard".to_string());
                             continue;
                         }
                         if w == "from" {
@@ -658,6 +675,7 @@ impl Parser {
                         to,
                         from,
                         mouse,
+                        into,
                         press,
                         over,
                         hold,

@@ -35,7 +35,7 @@ const DRIVE = [
   ['--size <w>x<h>', 'the viewport (default 420x900; a simulator\'s own)'],
   ['--scale <n>', 'screenshots at n pixels per point (exact.mjs agent on ios, macos: 1; an iPhone\'s own: 3)'],
   ['--chrome platform|agent', 'UIKit\'s bars (exact.mjs on iOS); agent paints the header'],
-  ['--timing platform · --bind <extension>', 'Apple: UIKit\'s transitions keep their own timing (default: frozen) · Apple, Android: a module answered by its implementation, not the substitute'],
+  ['--live · --timing platform · --bind <extension>', 'Mac: normal scheduling and input · Apple: native transitions · use a module implementation'],
   ['--touch platform', 'iOS simulator: every tap a real touch, through the XCTest runner'],
   ['--epoch <ISO|ms|now> · --login [hidden]', 'the date at the clock\'s zero (default 2026-01-01) · a launch the login item made, hidden: with no window'],
   ['--locale <tag> · --format-locale <tag> · --time-zone <zone> · --seed <n>', 'default en-US, the locale (the Region\'s format, exactTime().formatLocale), UTC, 1'],
@@ -49,7 +49,7 @@ const DRIVE = [
   ['--family <name> · --mode fullColor|accented|vibrant · --scheme light|dark · --props <json> · --configuration <json> · --placement <name> · --state <json>', 'gallery: widget variant/props/configuration choices or activity placement/state; --size large|xxxl is widget text size'],
   ['--json', 'one compact JSON object per op reply, one per line (default: short text)'],
 ];
-const TEST_IGNORES = ['--bind <extension>', '--timing <v>', '--world <file>', '--open <file>', '--json', '--family <name>', '--mode <name>', '--scheme <name>', '--props <json>', '--configuration <json>', '--placement <name>', '--state <json>'];
+const TEST_IGNORES = ['--live', '--bind <extension>', '--timing <v>', '--world <file>', '--open <file>', '--json', '--family <name>', '--mode <name>', '--scheme <name>', '--props <json>', '--configuration <json>', '--placement <name>', '--state <json>'];
 // The drive flags a first build reaches for; `--help all` shows the rest.
 const DRIVE_FIRST = ['--storage', '--size', '--chrome', '--epoch', '--sim', '--json'];
 const naming = (names, keep) => ([row]) => specs(row).some((spec) => names.includes(name(spec))) === keep;
@@ -142,7 +142,8 @@ file at its path; else, for a browser's navigation to a path a route in routes.j
 shell.html with 200, or for a render=request or cached route its page rendered under Bun
 (curl's request too); else 404.html with 404. A static host serves the directory so, with
 those routes' shell. A request preferring text/markdown (its Accept header) for a page whose
-.md file is beside it gets that file, with Vary: Accept. Beside the app's sources, a page asked for after a source changed
+.md file is beside it gets that file, with Vary: Accept; for a path nothing answers, 404.md
+with 404 where the build has one. Beside the app's sources, a page asked for after a source changed
 builds the site again first (no restart); a build that fails is the answer, with its errors.
 Ports    one HTTP port, on 127.0.0.1 (--lan: every interface). Runs in the foreground until ^C.`,
     example: 'bun exact.mjs serve dist --port 3000',
@@ -161,10 +162,10 @@ Ports    one HTTP port, on 127.0.0.1 (--lan: every interface). Runs in the foreg
     body: `Compiles first, a compile error said as contract build says it, so no contract build before
 it: web builds the app (web-build); ios, macos and windows build when the build is missing or
 older than its sources, saying so on stderr; windows drives at app.json's window size. Each test launches the app fresh with its own
-store, after its first data has landed; its leading lines (size, epoch, fail fetch …) override flags.
+store, after its first data has landed; its leading lines (size, epoch, fail fetch …) override flags. Exit 1 when a test fails.
 Host     unnamed: one app.json ships, chosen as verify's (verify --help) and macos or linux too; none here: refused, saying why.
-Server   runs server.ts on DB=.exact/test/db.sqlite; refuses a live server or an entry ignoring DB.
-Runs     to completion, exit 1 when a test fails; nothing is left running.
+Server   runs server.ts once a run on DB=.exact/test/db.sqlite, empty at the start and shared by its tests: a reset per
+         test is docs/recipes/rest-backend.md's; refuses a live server or an entry ignoring DB. Nothing is left running.
 Backend  test web never starts a Snapback backend: start snapback4 dev on app.ts’s selected origin’s port
          first; checked before launch. The app's own server.ts is managed as above. EXACT_PORT is the page’s.
 Lines    tap, type, expect text|tree|state|disabled|refusal, clock data|settle|+<ms>|until state …, reload, back, fail|pass
@@ -184,7 +185,7 @@ Ports    --port <n> or EXACT_PORT chooses the page’s port; otherwise web: head
     flags: DRIVE.filter(naming(DRIVE_FIRST, true)),
     more: DRIVE.filter(naming(DRIVE_FIRST, false)),
     internal: ['--test <file>', ...DRIVE_INTERNAL],
-    body: `Gallery: ios|macos widget|activity <entry> tree|state|screenshot|clock · drag: tap <target> drag dx dy [hold ms during "read"] [then dx dy …] (one iOS touch).
+    body: `Gallery: ios|macos widget|activity <entry> tree|state|screenshot|clock · drag: tap <target> drag dx dy [hold ms during "read"] [then dx dy …] (one iOS touch; into keyboard needs --touch platform and keyboard up).
 Ops      a target is a testId, else a view's exact text or label
   tree [<target>|--ax] · logs · layout|perf [<target>] · resize <w>x<h> · close · back
   state [<name>] [--full]  a state, resource or field, dotted: groceries.0.done; >8 KB: sizes
@@ -566,7 +567,7 @@ Ports    none; send makes one HTTPS request. Runs to completion.`,
   // exact2's own verb that makes an app (scripts/exact.mjs new), not one of an app's.
   new: {
     line: 'a new app outside this repo, using this checkout',
-    usage: 'bun <exact2>/scripts/exact.mjs new <path> [--name <name>] [--bundle-id <id>] [--with ios,mac,linux,android,windows]\n       bun <exact2>/scripts/exact.mjs new <path> --game [--assets]',
+    usage: 'bun <exact2>/scripts/exact.mjs new <path> [--name <name>] [--bundle-id <id>] [--with ios,mac,linux,android,windows] [--rust]\n       bun <exact2>/scripts/exact.mjs new <path> --game [--assets]',
     flags: [
       ['--name <name>', 'app only: the name people see (app.json app.name); default: the path\'s last part, capitalised'],
       ['--bundle-id <id>', 'app only: the reverse-DNS id (app.json app.id); default: com.example.<name>-<hex>'],
@@ -574,6 +575,7 @@ Ports    none; send makes one HTTPS request. Runs to completion.`,
       ['--online', 'use the server without a local device'],
       ['--snapback', 'write a guestbook wired to the Snapback backend above the app'],
       ['--port <n>', 'the Snapback origin’s port with --snapback (default 4400)'],
+      ['--rust', 'app only: the data sources in Rust (data/, with apple/ and web/ host crates) instead of app.ts'],
       ['--game', 'a game (game/README.md): a Rust world under Contract\'s menus'],
       ['--assets', 'with --game: declare game.assets'],
       ['--update', 'rewrite an existing app\'s generated files (its exact.mjs update runs this)'],
@@ -581,12 +583,14 @@ Ports    none; send makes one HTTPS request. Runs to completion.`,
     ],
     body: `The app is eight files and no Rust: app.contract, app.ts, app.test.contract, app.json, exact.mjs,
 AGENTS.md, package.json and .gitignore. A native verb (ios, mac, linux, android, windows) names its platform
-in app.json the first time it runs and builds in a workspace generated under .exact/ (LLP 1153 D1). Give
+in app.json the first time it runs and builds in a workspace generated under .exact/ (LLP 1153 D1). With --rust,
+app.ts is a Rust crate instead: data/ answers the sources, apple/ and web/ link it, in the app's own Cargo
+workspace (docs/reference.md, "Rust data sources"). Give
 --name and --bundle-id here, before the first build: a later change to the id makes the next build cold
 and leaves the old app installed. Then cd there: its exact.mjs runs everything, and bun exact.mjs help
 lists its verbs. Read docs/start-here-site.md first for a website, else docs/start-here.md.
-A game uses --game without --name or --bundle-id. Set app.name and app.id in its generated app.json
-before the first build.
+A game uses --game without --name or --bundle-id; its id is com.exact.<name> until app.json says
+otherwise. Before the first build, set "app": {"name", "id"} in its app.json (create it if absent).
 Ports    none. Runs to completion.`,
     example: 'bun scripts/exact.mjs new ~/notes --name Notes --bundle-id com.yourcompany.notes && cd ~/notes && bun exact.mjs test web',
   },

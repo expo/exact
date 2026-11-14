@@ -254,7 +254,7 @@ fn a_heading_rings_its_box_without_an_extra_ring_around_its_text() {
 #[test]
 fn touch_route_arrival_stays_unringed_until_a_key() {
     let mut p = boot_source(&ring_source());
-    (p.brush.touch_mode, p.brush.keyless) = (true, true);
+    (p.brush.touch_mode, p.brush.pointer_modality) = (true, true);
     p.set_pointer_kind(PointerKind::Touch);
     click(&mut p, "open");
     assert_ring(&mut p, "detail-title", false);
@@ -377,7 +377,7 @@ fn a_press_explains_an_arrival_for_two_seconds() {
     let mut p = boot();
     let open = id(&p, "open");
     assert!(p.set_focus(Some(open), 0.).is_none());
-    p.note_press(open, false);
+    p.note_press(open);
     arrive_at(&mut p, "/detail");
     assert_eq!(focused(&p), "detail-title");
     // Past two seconds the press explains nothing, and the focus is where
@@ -385,7 +385,7 @@ fn a_press_explains_an_arrival_for_two_seconds() {
     let mut p = boot();
     let open = id(&p, "open");
     assert!(p.set_focus(Some(open), 0.).is_none());
-    p.note_press(open, false);
+    p.note_press(open);
     let pressed = p.route_focus.pressed.as_mut().unwrap();
     pressed.at = pressed.at.checked_sub(RECENT).unwrap();
     arrive_at(&mut p, "/bare");
@@ -486,7 +486,7 @@ fn a_long_mouse_press_notes_its_activation_before_the_route_arrives() {
         let mut p = boot_source(&source);
         let open = id(&p, "open");
         assert!(p.set_focus(Some(open), 0.).is_none());
-        p.note_press(open, false);
+        p.note_press(open);
         let (x, y, w, h) = p.rect_of(open).unwrap();
         let (x, y) = (x + w / 2., y + h / 2.);
         p.pointer_down(x, y, 0.).unwrap();
@@ -629,11 +629,11 @@ fn unactivated_mouse_field_contact_does_not_explain_a_route() {
 #[test]
 fn in_androids_touch_mode_a_finger_after_the_press_takes_the_arrivals_ring_off() {
     let mut p = boot();
-    (p.brush.touch_mode, p.brush.keyless) = (true, true);
+    (p.brush.touch_mode, p.brush.pointer_modality) = (true, true);
     p.set_pointer_kind(crate::presenter::PointerKind::Touch);
     enter(&mut p, "open");
     assert_eq!(focused(&p), "detail-title");
-    assert!(!p.brush.keyless, "a key left touch mode");
+    assert!(!p.brush.pointer_modality, "a key left touch mode");
     // A finger on the route, then a Back within the key's press: the
     // focus returns to the control, with no ring.
     let now = p.host.now();
@@ -650,4 +650,96 @@ fn in_androids_touch_mode_a_finger_after_the_press_takes_the_arrivals_ring_off()
     settle(&mut p);
     assert_eq!(focused(&p), "open");
     assert_ne!(p.brush.ringless, Some(id(&p, "open")));
+}
+
+#[test]
+fn a_pointer_arrival_does_not_carry_the_openers_keyboard_ring() {
+    let source = APP.replace(
+        "                  button press=open(\"/detail\") testId=\"open\" height=40\n                    text \"Open\"",
+        "",
+    ).replace(
+        "      input testId=\"aside\"",
+        "      button press=open(\"/detail\") testId=\"open\" height=40\n        text \"Open\"\n      input testId=\"aside\"",
+    );
+    for (winui, android) in [(false, false), (true, false), (false, true)] {
+        let mut p = boot_source(&source);
+        p.brush.winui_focus = winui;
+        p.brush.touch_mode = android;
+        p.set_pointer_kind(if android {
+            PointerKind::Touch
+        } else {
+            PointerKind::Mouse
+        });
+        p.set_focus(Some(id(&p, "open")), 0.);
+        p.key_down("Shift", 0.);
+        assert_eq!(p.brush.ringless, None);
+        click(&mut p, "open");
+        assert_eq!(focused(&p), "detail-title");
+        assert_eq!(
+            p.brush.ringless, p.focus,
+            "winui={winui}, android={android}"
+        );
+    }
+}
+
+#[test]
+fn route_arrivals_use_the_latest_input_instead_of_the_cached_press() {
+    let source = ring_source()
+        .replace("component App", "component App\n  action keyed(k: string)\n    if k == \"ArrowDown\"\n      nav = push(nav, \"/detail\")")
+        .replace("press=open(\"/detail\")", "key=keyed");
+    let mut rings = Vec::new();
+    for (winui, android) in [(false, false), (true, false), (false, true)] {
+        let mut p = boot_source(&source);
+        p.brush.winui_focus = winui;
+        p.brush.touch_mode = android;
+        if android {
+            p.set_pointer_kind(PointerKind::Touch);
+        }
+        click(&mut p, "open");
+        p.key_down("ArrowDown", p.host.now());
+        settle(&mut p);
+        let title = id(&p, "detail-title");
+        assert_eq!(p.focus, Some(title));
+        rings.push(p.brush.ringless != Some(title));
+
+        // An arrival without an activation still follows a key in touch mode.
+        let mut p = boot_source(&ring_source());
+        p.brush.winui_focus = winui;
+        p.brush.touch_mode = android;
+        p.set_pointer_kind(PointerKind::Touch);
+        p.key_down("Shift", p.host.now());
+        arrive_at(&mut p, "/detail");
+        let title = id(&p, "detail-title");
+        assert_eq!(p.focus, Some(title));
+        rings.push(p.brush.ringless != Some(title));
+    }
+    assert!(rings.iter().all(|ring| *ring), "{rings:?}");
+}
+
+#[test]
+fn a_route_heading_remounted_by_its_focus_handler_keeps_pointer_modality() {
+    let source = ring_source()
+        .replace("component App", "component App\n  state changed = false\n  action changeTitle\n    changed = true")
+        .replace(
+            "                    text \"Detail\" role=\"heading\" testId=\"detail-title\" width=160 height=50",
+            "                    if !changed\n                      text \"Detail\" role=\"heading\" focus=changeTitle testId=\"old-title\"\n                    if changed\n                      text \"New\" role=\"heading\" autofocus tabindex=-1 testId=\"detail-title\" width=160 height=50",
+        );
+    let mut p = boot_source(&source);
+    click(&mut p, "open");
+    assert_eq!(focused(&p), "detail-title");
+    assert_eq!(p.brush.ringless, p.focus);
+}
+
+#[test]
+fn pointer_back_to_a_field_keeps_the_fields_focus_visible_look() {
+    let source = APP.replace(
+        "button press=open(\"/detail\") testId=\"open\" height=40\n                    text \"Open\"",
+        "input tabindex=0 press=open(\"/detail\") testId=\"open\" height=40",
+    );
+    let mut p = boot_source(&source);
+    click(&mut p, "open");
+    assert_eq!(focused(&p), "detail-title");
+    click(&mut p, "back");
+    assert_eq!(focused(&p), "open");
+    assert_eq!(p.brush.ringless, None);
 }

@@ -72,6 +72,8 @@ pub struct GroupedSection {
     /// Whether its rows sit on a card: false when the section's group has a
     /// transparent background (`section background-color="transparent"`).
     pub card: bool,
+    /// The group holding the rows, whose style defines the card.
+    pub card_view: ViewId,
     /// The space above it, in points, when the author wrote a margin at
     /// that boundary (its `margin-top`, or the previous section's
     /// `margin-bottom`): the web's, the two margins collapsed. `None` keeps
@@ -315,6 +317,24 @@ impl GroupedRow {
 }
 
 impl Kernel {
+    /// The card receiving a grouped section's shadow paint. The section
+    /// retains its own hover and focus predicates (LLP 1084 D7, LLP 1121 D8).
+    pub fn grouped_section_card(&self, view: ViewId) -> Option<ViewId> {
+        let section = self.node(view)?;
+        self.node(section.parent?)?.props.str(PropId::ListStyle)?;
+        section.children().into_iter().find(|id| {
+            self.node(*id).is_some_and(|n| {
+                !matches!(n.props.str(PropId::SemanticTag), Some("header" | "footer"))
+            })
+        })
+    }
+
+    /// The section whose host-state shadow this card paints, if it is a card.
+    pub fn grouped_card_section(&self, view: ViewId) -> Option<ViewId> {
+        let section = self.node(view)?.parent?;
+        (self.grouped_section_card(section) == Some(view)).then_some(section)
+    }
+
     /// The grouped list `view` is, as it now stands; `None` for a node
     /// without `listStyle`.
     pub fn grouped_list(&self, view: ViewId) -> Option<GroupedList> {
@@ -353,6 +373,7 @@ impl Kernel {
                                 .map_or((None, TextLook::default()), |(t, l)| (Some(t), l))
                         }
                         _ => {
+                            out.card_view = part.id;
                             out.card = part.style.background_color.is_none_or(|c| {
                                 c.resolve(false).a() != 0 || c.resolve(true).a() != 0
                             });

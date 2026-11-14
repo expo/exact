@@ -357,7 +357,7 @@ fn enum_arguments_keep_delete_admission_and_warnings_in_agreement() {
         .map(|w| source.lines().nth(w.span.line as usize - 1).unwrap())
         .collect();
     assert_eq!(warned.len(), 1, "{warned:?}");
-    assert!(warned[0].contains("testId=\"enum-cell\""), "{warned:?}");
+    assert!(warned[0].contains("testId=\"enum-scroll\""), "{warned:?}");
 }
 
 /// The element lint, which runs beside an earlier refusal, takes `delete=`

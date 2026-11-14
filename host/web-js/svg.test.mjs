@@ -8,6 +8,87 @@ import { webkit } from 'playwright-core';
 import { decodePng } from '../../scripts/png.mjs';
 import { suiteBrowser } from '../../scripts/agent-launch.mjs';
 
+test('dynamic SVG attribute lengths are refused before reaching the DOM', async () => {
+  const root = resolve(import.meta.dir, '../..');
+  mkdirSync(resolve(root, 'target'), { recursive: true });
+  const dir = mkdtempSync(resolve(root, 'target/svg-lengths-'));
+  let server, browser;
+  try {
+    const compiled = spawnSync(resolve(root, `target/debug/exact-web-js${EXE}`), [
+      'js', resolve(root, 'runner/tests/fixtures/svg-lengths.contract'), '-o', dir,
+    ], { encoding: 'utf8' });
+    expect(compiled.status, compiled.stderr).toBe(0);
+    server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch(request) {
+      const path = new URL(request.url).pathname.slice(1);
+      if (!path) return new Response(`<div id="exact-root"></div>
+        <script type="module">import app from '/app.js';app();</script>`,
+      { headers: { 'content-type': 'text/html' } });
+      const bases = path.startsWith('web/') ? [resolve(root, 'host')] : [dir, import.meta.dir, resolve(root, 'host/web')];
+      const file = bases.map(base => resolve(base, path)).find(existsSync);
+      return file ? new Response(Bun.file(file)) : new Response('Not found', { status: 404 });
+    } });
+    browser = await suiteBrowser();
+    const page = await browser.newPage();
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    await page.goto(server.url.href);
+    const field = page.getByTestId('value');
+    await field.waitFor({ state: 'attached' });
+    expect(await page.getByTestId('invalid-literal-line').evaluate(e =>
+      ['x1', 'y1', 'x2'].map(name => e.getAttribute(name)))).toEqual([null, null, null]);
+    expect(await page.getByTestId('invalid-literal-text').getAttribute('x')).toBeNull();
+    const initialLines = await page.evaluate(async () => (await import('/rt.js')).journal);
+    for (const refused of ['invalid x1 value ""; unset', 'invalid y1 value "10px 20px"; unset',
+      'invalid x2 value "1e9999"; unset', 'invalid textX value ""; unset']) {
+      expect(initialLines.some(line => line.includes('runtime-svg-length:') && line.endsWith(refused)), refused).toBe(true);
+    }
+    for (const [value, valid] of [['2px', true], ['2em', false], ['3CM', true],
+      ['calc(1px + 2px)', false], ['50%', true], ['env(safe-area-inset-top)', false],
+      ['1e2pt', true], ['var(--x)', false], ['10px, 2em', false], ['0', true]]) {
+      await field.fill(value);
+      const values = await page.evaluate(() => {
+        const attrs = { line: ['x1', 'y1', 'x2', 'y2'], linear: ['x1', 'y1', 'x2', 'y2'],
+          radial: ['fx', 'fy', 'fr'], marker: ['markerWidth', 'markerHeight', 'refX', 'refY'],
+          text: ['x', 'y', 'dx', 'dy'], span: ['x', 'y', 'dx', 'dy'] };
+        return Object.entries(attrs).flatMap(([id, names]) => names.map(name =>
+          document.querySelector(`[data-testid="${id}"]`).getAttribute(name)));
+      });
+      expect(values, value).toEqual(Array(23).fill(valid ? value : null));
+      expect(await page.evaluate(() => [['marker', 'orient'], ['offset', 'offset'], ['primitive', 'dx'], ['primitive', 'dy']]
+        .map(([id, name]) => document.querySelector(`[data-testid="${id}"]`).getAttribute(name))))
+        .toEqual(Array(4).fill(value));
+      if (!valid) {
+        const lines = await page.evaluate(async () => (await import('/rt.js')).journal);
+        expect(lines.some(line => line.includes('runtime-svg-length') && line.includes(value)), value).toBe(true);
+      }
+    }
+    for (const value of ['1 2px, 3%', 'center', 'left', 'right', 'top', 'bottom', '1in', '1cm', '1mm', '1pt', '1pc']) {
+      await field.fill(value);
+      const values = await page.evaluate(() => {
+        const attrs = { line: ['x1'], text: ['x', 'y', 'dx', 'dy'], marker: ['refX', 'refY'] };
+        return Object.entries(attrs).flatMap(([id, names]) => names.map(name =>
+          document.querySelector(`[data-testid="${id}"]`).getAttribute(name)));
+      });
+      const expected = value === '1 2px, 3%' ? [null, value, value, value, value, null, null]
+        : value === 'center' ? [null, null, null, null, null, value, value]
+          : ['left', 'right'].includes(value) ? [null, null, null, null, null, value, null]
+            : ['top', 'bottom'].includes(value) ? [null, null, null, null, null, null, value]
+              : Array(7).fill(value);
+      expect(values, value).toEqual(expected);
+    }
+    for (const unit of ['em', 'px', 'vh', '%']) {
+      await page.getByTestId('unit').fill(unit);
+      expect(await page.getByTestId('assembled').evaluate(e => [e.getAttribute('x1'), e.getAttribute('y1')]))
+        .toEqual(Array(2).fill(['px', '%'].includes(unit) ? `2${unit}` : null));
+    }
+    expect(errors).toEqual([]);
+  } finally {
+    await browser?.close();
+    server?.stop(true);
+    rmSync(dir, { recursive: true, force: true });
+  }
+}, 30000);
+
 test('compiled SVG geometry bindings render, change, unset and preserve zero', async () => {
   const root = resolve(import.meta.dir, '../..');
   const target = resolve(root, 'target');

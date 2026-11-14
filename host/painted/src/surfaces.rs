@@ -32,6 +32,7 @@ pub use android::{buffer_frame, window_ready};
 pub(crate) use android::{device_pending as gpu_device_pending, prepare as prepare_gpu, sensors};
 #[cfg(target_os = "macos")]
 pub(crate) mod apple;
+mod capture;
 #[path = "surface_controls.rs"]
 pub(crate) mod controls;
 mod period;
@@ -47,11 +48,11 @@ type Read = unsafe extern "C" fn(u32) -> u32;
 type Text = unsafe extern "C" fn(u32, *const u8, usize) -> u32;
 
 struct Abi {
-    // Symbols never outlive this library; gpu_unload joins acquisition workers
-    // and drops thread-local state before dlclose.
+    // gpu_unload joins workers and drops thread-local state before dlclose; no symbol outlives the library.
     library: Library,
     output_error: std::cell::RefCell<Option<String>>,
     rendered: bool,
+    device_loaded: bool,
     shaders: shaders::Pack,
     /// Each symbol's address, looked up once: an animated canvas calls a
     /// handful every frame, and `dlsym` walks the library's hash table.
@@ -101,8 +102,7 @@ impl Abi {
     fn open_path(path: &std::path::Path, compat: &Value, artifact: &str) -> Result<Self, String> {
         Self::open_path_as(path, compat, artifact, true)
     }
-    /// The module verified and opened; `load`: its device made (on Android,
-    /// with its shaders), else nothing called yet.
+    /// The module verified and opened; `load`: its device made on Android.
     fn open_path_as(
         path: &std::path::Path,
         compat: &Value,
@@ -111,11 +111,12 @@ impl Abi {
     ) -> Result<Self, String> {
         verify_module(path, compat, artifact)?;
         // SAFETY: the app's own module, with the ABI checked before any call.
-        let abi = Self {
+        let mut abi = Self {
             library: unsafe { Library::new(path) }.map_err(|e| e.to_string())?,
             output_error: Default::default(),
             shaders: Default::default(),
             rendered: std::env::var("EXACT_GPU_RENDER").as_deref() == Ok("1"),
+            device_loaded: false,
             symbols: Default::default(),
         };
         unsafe {
@@ -169,9 +170,7 @@ impl Abi {
                         .get::<*const ()>(name.as_bytes())
                         .map_err(|e| format!("GPU ABI {name}: {e}"))?;
                 }
-                if abi.symbol::<unsafe extern "C" fn() -> u32>(b"gpu_load")() != 0 {
-                    return Err(abi.error().unwrap_or("GPU initialization failed".into()));
-                }
+                abi.load_device()?;
                 abi.symbol::<unsafe extern "C" fn(bool)>(b"gpu_seekable")(
                     std::env::var("EXACT_AGENT").as_deref() == Ok("1"),
                 );
@@ -183,11 +182,18 @@ impl Abi {
         }
         #[cfg(target_os = "android")]
         if load {
-            android::load(&abi, artifact.is_empty())?;
+            android::load(&mut abi)?;
         }
         #[cfg(not(target_os = "android"))]
         let _ = load;
         Ok(abi)
+    }
+    fn load_device(&mut self) -> Result<(), String> {
+        if unsafe { self.symbol::<unsafe extern "C" fn() -> u32>(b"gpu_load")() } != 0 {
+            return Err(self.error().unwrap_or("GPU initialization failed".into()));
+        }
+        self.device_loaded = true;
+        Ok(())
     }
     // SAFETY: all callers supply the signature declared by gpu/src/native.rs.
     unsafe fn symbol<T: Copy>(&self, name: &'static [u8]) -> T {
@@ -458,6 +464,8 @@ pub(crate) struct Surfaces {
     restore_read: bool,
     pub(crate) error: Option<String>,
     work: Vec<RequestOut>,
+    /// Canvas captures, served once this turn's 2D lists are applied.
+    pub(crate) captures: Vec<RequestOut>,
     outcomes: Vec<(u64, Outcome)>,
     /// Records taken after a frame presented, for the next sync (`owe_records`).
     owed: Vec<(String, String)>,
@@ -513,6 +521,9 @@ impl Surfaces {
     }
 
     pub(crate) fn enqueue(&mut self, request: RequestOut, admitted: &str) {
+        if let Some(SurfaceRequest::Canvas { .. }) = request.request.surface.as_deref() {
+            return self.captures.push(request);
+        }
         let oversized = matches!(
             request.request.surface.as_deref(),
             Some(SurfaceRequest::Restore { bytes, .. }) if bytes.len() > MAX_HOST_WORK_BYTES
@@ -583,10 +594,8 @@ impl Surfaces {
             // LLP 1015.004) is the reply's error.
             let present = !absent(Abi::file(&compat, &artifact));
             let opened = Abi::open(&compat, &artifact).and_then(|mut abi| {
-                if artifact.is_empty() {
-                    let pack = abi.prepare_shaders(&compat, assets)?;
-                    abi.commit_shaders(pack)?;
-                }
+                let pack = abi.prepare_shaders(&compat, assets)?;
+                abi.commit_shaders(pack)?;
                 Ok(abi)
             });
             match opened {
@@ -848,6 +857,7 @@ impl Surfaces {
             let (name, restore) = match *surface {
                 SurfaceRequest::Capture { name } => (name, None),
                 SurfaceRequest::Restore { name, bytes } => (name, Some(bytes)),
+                SurfaceRequest::Canvas { .. } => unreachable!("enqueue keeps captures apart"),
             };
             let matches: Vec<_> = self
                 .canvases
@@ -1030,6 +1040,10 @@ impl<D: DataSource> Presenter<D> {
 
     /// Settle mounted GPU surfaces after first pixel and forward their public state.
     pub fn sync_surfaces(&mut self) {
+        self.sync_surfaces_with_canvas_tick(false);
+    }
+
+    pub(crate) fn sync_surfaces_with_canvas_tick(&mut self, canvas_frame: bool) {
         // The module's GPU tier is the page's (LLP 1139.003 D2).
         if let Some(tier) = self.surfaces.tier() {
             let page = self.host.runner().page();
@@ -1042,13 +1056,10 @@ impl<D: DataSource> Presenter<D> {
                 }
             }
         }
-        // LLP 1056: the 2D canvases' draws for this turn's commits.
-        self.dirty |= self
-            .host
-            .sync_canvases(self.brush.scale as f64, false, &self.assets);
-        // A publication/message may change the canvas arguments. Drain to a fixed
-        // point; an app feedback loop is refused rather than hanging the carrier.
-        for _ in 0..16 {
+        // A publication/message may change the canvas arguments or ask for another capture.
+        // Drain to a fixed point; refuse an app feedback loop rather than hang the carrier.
+        for turn in 0..16 {
+            self.draw_and_capture_canvases(canvas_frame && turn == 0);
             let changed = self
                 .surfaces
                 .sync(&mut self.host, &self.compat, &self.assets);
@@ -1182,6 +1193,9 @@ impl<D: DataSource> Presenter<D> {
     /// holding the contact, else the one under the pointer, sees it as the
     /// web does — the first button held is a down, the last released an up.
     pub fn pointer_aux(&mut self, bit: u32, down: bool, x: f32, y: f32, at: f64) {
+        if down {
+            self.touched();
+        }
         let before = self.surfaces.aux;
         self.surfaces.aux = if down { before | bit } else { before & !bit };
         let after = self.surfaces.aux;
@@ -1401,11 +1415,10 @@ impl<D: DataSource> Presenter<D> {
 }
 
 #[cfg(test)]
-mod tests;
-
-#[cfg(test)]
 #[path = "surface_controls_tests.rs"]
 mod control_tests;
+#[cfg(test)]
+mod tests;
 
 mod retire;
 mod tier;

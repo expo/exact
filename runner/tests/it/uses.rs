@@ -222,6 +222,53 @@ fn gradients_are_linked_by_use() {
 }
 
 #[test]
+fn visual_grammars_follow_literal_class_and_computed_rows() {
+    assert_eq!(used("component A\n  view\n    text \"a\"\n"), Uses::NONE);
+    for (row, value, capability) in [
+        ("box-shadow", "0 2px 4px #000", "shadows"),
+        ("text-shadow", "1px 2px #000", "shadows"),
+        ("corner-shape", "squircle", "corners"),
+        ("rotate", "y 30deg", "rotate"),
+        ("-webkit-text-stroke", "1px #f00", "text_stroke"),
+        ("-webkit-text-stroke-width", "1px", "text_stroke"),
+        ("-webkit-text-stroke-color", "#f00", "text_stroke"),
+        ("-exact-symbol-palette", "#f00 #00f", "symbol_palette"),
+        (
+            "background-image",
+            "conic-gradient(#f00, #00f)",
+            "gradients",
+        ),
+        ("mask-image", "linear-gradient(#000, #fff)", "gradients"),
+    ] {
+        for source in [
+            format!("component A\n  view\n    text \"a\" {row}=\"{value}\"\n"),
+            format!("style S\n  {row}=\"{value}\"\ncomponent A\n  view\n    text \"a\" class=S\n"),
+            format!(
+                "component A\n  state paint = \"{value}\"\n  view\n    text \"a\" {row}=paint\n"
+            ),
+        ] {
+            assert_eq!(used(&source).to_string(), capability, "{source}");
+        }
+    }
+}
+
+#[test]
+fn decoration_styles_link_their_visual_grammars() {
+    let field = "component A\n  view\n    textarea decorations=TextDecorations(value=\"a\", spans=[TextDecorationSpan(name=\"glow\", start=0, end=1)])\n";
+    assert_eq!(used(field), Uses::NONE);
+    assert_eq!(
+        used(&format!("decoration glow color=\"#000\"\n{field}")),
+        Uses::NONE
+    );
+    let shadow = "decoration glow text-shadow=\"0 0 1px #000\"\n";
+    assert_eq!(used(&format!("{shadow}{field}")).to_string(), "shadows");
+    assert_eq!(
+        used(&format!("{shadow}component A\n  view\n    text \"a\"\n")),
+        Uses::NONE
+    );
+}
+
+#[test]
 fn data_words_and_tabs_are_linked_by_use() {
     // @ref LLP 1075.003 §3.3, §3.7 — the web core carries neither the
     // `dataset` reading nor the tabs' walk unless a plan binds the row.
@@ -351,7 +398,7 @@ fn a_grouped_list_is_a_list_whose_appearance_is_auto() {
         "component A\n  view\n    list appearance=\"auto\"\n      section\n        text \"a\"\n",
     );
     assert!(grouped.has(Capability::GroupedLists));
-    assert_eq!(grouped.to_string(), "grouped_lists");
+    assert_eq!(grouped.to_string(), "grouped_lists, corners");
 }
 
 /// LLP 1115.001.000 D2: a date or time control, which on Android links

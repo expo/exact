@@ -276,7 +276,8 @@ impl Painter {
             for (p, r) in &shaped {
                 x += r.dx;
                 y += r.dy;
-                if let Some(fill) = &r.fill {
+                // A gradient on text is owed, not its fallback colour.
+                if let Some(fill) = r.fill.as_ref().filter(|f| f.server.is_none()) {
                     let mut c = rgba(fill.color.resolve(self.dark));
                     c[3] = (c[3] as f32 * fill.opacity).round() as u8;
                     let palette = [crate::text::RunPaint {
@@ -555,6 +556,10 @@ impl Painter {
         // @ref LLP 1055.000 D19 — a blended element is drawn alone into an
         // island over the frame, then blended onto what is below it.
         if item.blend != 0 {
+            // The reader does not play a blended element (`crate::host::lower`):
+            // a layer opened for one anyway closes, and the island draws the
+            // element at its values.
+            self.layer_close(layer);
             let (vw, vh) = self.viewport;
             let mut plain = item.clone();
             plain.blend = 0;

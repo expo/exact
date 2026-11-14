@@ -37,6 +37,7 @@ adler2 = "2"
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Threading"] }
 
 [build-dependencies]
+serde_json = "1.0"
 cc = "1"
 hermes-lean-sys = { path = "../vendor/ibex/crates/hermes-lean-sys", default-features = false }
 

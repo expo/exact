@@ -98,6 +98,7 @@ typedef struct ExactFrameHealthHitch {
     int32_t after_at_us;
     uint32_t after_gap_us, after_callback_us;
     ExactFrameHealthHitchWork work;
+    int32_t frame_start_us;
 } ExactFrameHealthHitch;
 typedef struct ExactFrameHealthHistoryStatus {
     uint64_t capture, active, segments, started_ns, changed_ns, callbacks;
@@ -228,9 +229,11 @@ size_t exact_text_collapse(const uint8_t *utf8, size_t len, const size_t *lens, 
 size_t exact_material_platform(const uint8_t *name, size_t len, uint8_t platform, const uint8_t **out);
 
 /* LLP 1066. Resolve length stops/repetition for a painted box. UTF-8 CSS in,
- * JSON out; returns bytes needed, writing nothing when cap is too small. */
+ * JSON out; returns bytes needed, writing nothing when cap is too small.
+ * tint is null or the painting view's effective tint as four floats: extended
+ * sRGB red, green and blue, unclipped, then alpha 0-1. */
 size_t exact_gradient(const uint8_t *css, size_t len, float width, float height,
-                      uint8_t dark, uint8_t *out, size_t cap);
+                      uint8_t dark, const float *tint, uint8_t *out, size_t cap);
 
 /* LLP 1077 D1. A box outline with shaped corners as one closed polygon: `shape` 4 K values
  * (NaN is -exact-continuous), `radii` 8 (top-left first, horizontal then vertical, reduced).
@@ -550,6 +553,8 @@ uint32_t exact_pump(ExactRuntime rt, double now_ms);
 /* Presenter-owned surface work uses the ordinary runner ticket. Kinds are
  * 2 refused, 3 unsupported, 4 aborted, 6 captured bytes, 7 restored. */
 uint8_t exact_request_active(ExactRuntime rt, uint64_t ticket);
+/* The host owns the pixel copy. Call on the runtime owner before encoding. */
+uint8_t exact_canvas_snapshotted(ExactRuntime rt, uint64_t ticket);
 uint32_t exact_fulfill_surface(ExactRuntime rt, uint64_t ticket, uint32_t kind, size_t len, double now_ms);
 
 /* LLP 1038 D5/D8: input URL -> UTF-8 canonical location in exact_out.
@@ -897,6 +902,9 @@ uint32_t exact_canvas_display(ExactRuntime rt, double scale, double memory);
  * decoded (ok 1, its size in pixels) or not (ok 0); the handle is the input
  * buffer's first len bytes. Returns the batch length. */
 uint32_t exact_canvas_image(ExactRuntime rt, size_t len, uint32_t width, uint32_t height, uint32_t ok);
+/* LLP 1056 D9: the presenter let a decoded Canvas 2D image handle go (the
+ * input buffer's first len bytes); a canvas that draws it again asks again. */
+void exact_canvas_image_released(ExactRuntime rt, size_t len);
 /* LLP 1056 D5: a 2D canvas's replay is behind (held 1) or caught up (0);
  * while held, its frame request waits (frames drop rather than queue). */
 void exact_canvas_held(ExactRuntime rt, uint32_t view, uint32_t held);

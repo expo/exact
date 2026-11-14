@@ -5,7 +5,7 @@
 //! the router sends to its not-found route, is rendered with a new
 //! runner and module realm (D10), then composed over the
 //! built shell ([`crate::page`]). A `client` route gets the shell. Files
-//! under `dist/` are served as they are; `/.exact/health` answers `ok`.
+//! in the public part of `dist/` are served as they are; `/.exact/health` answers `ok`.
 //! Renders run on a fixed set of workers behind a bounded queue: a request
 //! that finds the queue full is a 503 at once. A failed render, or one that
 //! panics, is a 500 and the server keeps serving. Each render prints one
@@ -14,7 +14,7 @@
 //! lifetime, bounded to 64 locations and 32 MiB. Other routes render fresh.
 
 use crate::encode::{self, Accepts, Variants};
-use crate::files::{asset_shaped, named_build, percent_decode, static_file, AUTH_CALLBACK};
+use crate::files::{asset_shaped, percent_decode};
 use crate::{page, render_with_at, Ids, Projection, Rendered};
 use exact_plan::{Plan, RenderPolicy};
 use exact_runner::DataSource;
@@ -27,6 +27,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
+
+#[path = "serve_files.rs"]
+mod files;
 
 #[path = "deferred.rs"]
 pub(crate) mod deferred;
@@ -59,8 +62,8 @@ pub struct Serve {
     /// A rendered route's shared-cache lifetime (`s-maxage`), until routes
     /// declare their own.
     pub lifetime: Duration,
-    /// Where the builds of `app.wasm` it has served are kept, so a browser
-    /// holding one gets the next as a delta against it (LLP 1047.000 §9).
+    /// Retained builds for versioned URLs and delta dictionaries
+    /// (LLP 1047.000 §9, LLP 1048.000 D10).
     pub generations: Option<PathBuf>,
 }
 
@@ -103,7 +106,7 @@ impl Stopper {
 
 struct Shared {
     serve: Serve,
-    plan: Plan,
+    plan: exact_runner::Program,
     delivery: exact_runner::delivery::Delivery,
     shell: String,
     /// A page's CSP header lines, none when the app sends none (D11).
@@ -190,7 +193,6 @@ impl Server {
         // seconds); pay it here, not in the first request.
         drop(crate::Executor::start(grants));
         let variants = Variants::default();
-        variants.warm(encode::files(&serve.dist));
         let generations = match &serve.generations {
             Some(dir) => Some(crate::generations::Generations::open(
                 dir,
@@ -198,6 +200,11 @@ impl Server {
             )?),
             None => None,
         };
+        let mut files = encode::files(&serve.dist);
+        if let Some(generations) = &generations {
+            files.extend(generations.files());
+        }
+        variants.warm(files);
         let lang = (plan.locale.is_none() || plan.locales.len() <= 1).then(|| {
             plan.locales.first().map_or((String::new(), "ltr"), |row| {
                 (
@@ -225,7 +232,7 @@ impl Server {
             stop: Arc::new(AtomicBool::new(false)),
             shared: Shared {
                 serve,
-                plan,
+                plan: plan.into(),
                 delivery,
                 shell,
                 csp,
@@ -264,10 +271,13 @@ impl Server {
         // Closing a connection waits on its peer: one thread does that for
         // every connection, and no worker or accept loop does (crate::linger).
         let closing = crate::linger::Linger::start()?;
+        let http_cache = exact_executor::SharedHttpCache::new();
         for _ in 0..shared.serve.renders.max(1) {
             let (shared, waiting, stop) = (shared.clone(), waiting.clone(), self.stop.clone());
             let closer = closing.closer();
+            let http_cache = http_cache.clone();
             std::thread::spawn(move || {
+                crate::executor::set_http_cache(http_cache);
                 let (state, ready) = &*waiting;
                 let mut answered = None;
                 // Its first render's realm, before any request.
@@ -799,10 +809,17 @@ fn respond<D: DataSource + 'static>(
     if let Some(response) = deferred::response(path, &shared.checkpoints) {
         return response;
     }
-    if path == "/sitemap.xml" {
+    // An authored route at a crawler file's path is the app's page, not the generated file.
+    let crawler = matches!(path, "/robots.txt" | "/sitemap.xml")
+        && !shared
+            .plan
+            .routes
+            .iter()
+            .any(|r| !r.notfound && canonical_location(shared.plan.str(r.pattern)) == path);
+    if crawler && path == "/sitemap.xml" {
         return sitemap::sitemap(shared, data);
     }
-    if path == "/robots.txt" {
+    if crawler && path == "/robots.txt" {
         // Neutral until hosting decides a crawler policy (LLP 1048 §9.9).
         let sitemap = shared
             .serve
@@ -817,71 +834,8 @@ fn respond<D: DataSource + 'static>(
             format!("public, max-age=0, s-maxage={lifetime}"),
         );
     }
-    if let Some((file, kind)) = static_file(&shared.serve.dist, path) {
-        if std::fs::metadata(&file).is_ok_and(|meta| meta.len() > MAX_PAGE as u64) {
-            return stream_file(&file, kind, request)
-                .unwrap_or_else(|| Response::text(404, "not found\n"));
-        }
-        let compressible = encode::compressible(kind);
-        let Some(served) = shared.variants.serve(&file, request.accepts, compressible) else {
-            return Response::text(404, "not found\n");
-        };
-        let tag = served
-            .etag
-            .trim_matches('"')
-            .split('-')
-            .next()
-            .unwrap_or("");
-        let named = path == "/app.wasm" && named_build(&request.target, tag);
-        let delta = shared
-            .generations
-            .as_ref()
-            .filter(|generations| named && generations.tag == tag)
-            .zip(request.dictionary.as_deref())
-            .filter(|_| !request.cdn && request.accepts.dcb())
-            .and_then(|(generations, hash)| generations.delta(hash));
-        let etag = match delta {
-            Some(_) => format!("\"{tag}-dcb\""),
-            None => served.etag.clone(),
-        };
-        // Other files aren't content-addressed yet (D10): revalidated, by
-        // their ETags.
-        let auth = path.starts_with(AUTH_CALLBACK);
-        let cache = match (named, auth) {
-            (true, _) => "public, max-age=31536000, immutable",
-            (false, true) => "no-store",
-            (false, false) => "no-cache",
-        };
-        let mut headers = vec![
-            ("Content-Type", kind.into()),
-            ("Cache-Control", cache.into()),
-            ("ETag", etag.clone()),
-        ];
-        if auth {
-            headers.push(("Referrer-Policy", "no-referrer".into()));
-        }
-        if named && !request.cdn {
-            // The next build is sent against this one (crate::generations).
-            headers.push(("Use-As-Dictionary", "match=\"/app.wasm\"".into()));
-        }
-        match delta {
-            Some(_) => headers.push(("Vary", "Accept-Encoding, Available-Dictionary".into())),
-            None if compressible => headers.push(("Vary", "Accept-Encoding".into())),
-            None => {}
-        }
-        match (delta, served.encoding) {
-            (Some(_), _) => headers.push(("Content-Encoding", "dcb".into())),
-            (None, Some(encoding)) => headers.push(("Content-Encoding", encoding.name().into())),
-            (None, None) => {}
-        }
-        let fresh = encode::none_match(request.if_none_match.as_deref(), &etag);
-        return Response {
-            status: if fresh { 304 } else { 200 },
-            headers,
-            body: delta.map_or_else(|| served.body.to_vec(), <[u8]>::to_vec),
-            file: None,
-            streamed: false,
-        };
+    if let Some(response) = files::response(request, shared, path) {
+        return response;
     }
     // One URL per page: any other spelling redirects to the canonical one.
     let canonical = canonical_location(&request.target);
@@ -983,7 +937,12 @@ fn render_kept<D: DataSource + 'static>(
         hints: request.hints,
     };
     let mut response = document(&unconditional, policy, notfound, shared, data, early);
-    if response.status != 200 || response.body.len() > MAX_CACHE_BYTES {
+    // Keep no page sent `no-store`, such as one whose render drew randomness
+    let unkept = response
+        .headers
+        .iter()
+        .any(|(name, value)| *name == "Cache-Control" && value == "no-store");
+    if response.status != 200 || response.body.len() > MAX_CACHE_BYTES || unkept {
         if response.status == 200 && identity(&response, request) {
             response.status = 304;
         }
@@ -1369,6 +1328,11 @@ fn document<D: DataSource + 'static>(
             response.headers.push(("Cache-Control", "no-store".into()));
             response.headers.push(("Retry-After", "1".into()));
         }
+        // A page whose render drew randomness is the reader's alone, whatever
+        // its status, as a draw is the device's (LLP 1069.005 D2)
+        _ if rendered.drew => {
+            response.headers.push(("Cache-Control", "no-store".into()));
+        }
         404 | 410 => {
             response
                 .headers
@@ -1390,8 +1354,10 @@ fn document<D: DataSource + 'static>(
     // sent, so what follows reaches only the origin's cache, which keeps a
     // flushed 200 of a cached route. A page nothing keeps skips it (the
     // page's SHA-256 was ~3% of RealWorld's CPU per page).
-    let kept =
-        policy == Some(RenderPolicy::Cached) && !serve.lifetime.is_zero() && !request.no_store;
+    let kept = policy == Some(RenderPolicy::Cached)
+        && !serve.lifetime.is_zero()
+        && !request.no_store
+        && !rendered.drew;
     if streamed && !kept {
         return response;
     }

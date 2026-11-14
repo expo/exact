@@ -40,7 +40,7 @@ impl<D: DataSource> Bridge<D> {
             })
             .is_some_and(|b| {
                 use exact_plan::Opcode;
-                match plan.code(b.expr) {
+                match plan.read_code(plan.code(b.expr)).0 {
                     [op, a, b, c, d, ret]
                         if *op == Opcode::Str as u8 && *ret == Opcode::Return as u8 =>
                     {

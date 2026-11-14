@@ -482,9 +482,10 @@ fn code_block(
         }
         let line = lines[i];
         let trimmed = line.trim_start();
-        if trimmed.chars().take_while(|&c| c == marker).count() >= width
-            && trimmed.trim_end_matches(marker).is_empty()
-        {
+        // The marker at least as long as the opener's, then only spaces or
+        // tabs (CommonMark 0.31.2 §4.5).
+        let run = trimmed.chars().take_while(|&c| c == marker).count();
+        if run >= width && trimmed[run..].trim_matches([' ', '\t']).is_empty() {
             i += 1;
             break;
         }
@@ -534,7 +535,15 @@ fn heading_of(line: &str) -> Option<(u32, &str)> {
     if !rest.starts_with(' ') && !rest.is_empty() {
         return None;
     }
-    Some((hashes as u32, rest.trim().trim_end_matches('#').trim_end()))
+    // A closing run of `#` goes only when a space or tab comes before it
+    // (CommonMark 0.31.2 §4.2): `# C#` is the heading `C#`.
+    let text = rest.trim();
+    let open = text.trim_end_matches('#');
+    let text = match open.trim_end_matches([' ', '\t']) {
+        shorter if shorter.len() < open.len() || open.is_empty() => shorter,
+        _ => text,
+    };
+    Some((hashes as u32, text))
 }
 
 /// GitHub's heading anchor: lowercased, punctuation dropped, spaces to dashes.

@@ -5,7 +5,7 @@ import { implementation } from '../web/index.js';
 const implementations = [];
 afterEach(() => { for (const impl of implementations.splice(0)) impl.destroy(); });
 
-function browser(promptStreaming, invoke = async () => ({ text: 'null' }), beforeCreate = () => {}) {
+function browser(promptStreaming, invoke = async () => ({ text: 'null' }), beforeCreate = () => {}, append = async () => {}) {
   const created = [], prompts = [], destroyed = [];
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'LanguageModel');
   globalThis.LanguageModel = class {
@@ -16,6 +16,7 @@ function browser(promptStreaming, invoke = async () => ({ text: 'null' }), befor
       return {
         contextWindow: 4096,
         promptStreaming(input, options) { prompts.push({ id, input }); return promptStreaming(input, options); },
+        append(messages) { return append(id, messages); },
         destroy() { destroyed.push(id); },
       };
     }
@@ -336,4 +337,96 @@ test('an uninterrupted browser reply runs every tool and prompts with their resu
     type: 'tool-response', value: { callID: `c${n}`, name: 'charge', result: [{ type: 'text', value: `${n}` }], error: undefined },
   })) }]);
   expect(created).toHaveLength(1);
+});
+
+for (const ending of ['resolves', 'rejects', 'destroy-session']) {
+  test(`an append whose browser call ${ending === 'destroy-session' ? 'is held while its session is destroyed' : ending} holds the session until it settles`, async () => {
+    const order = [], entered = Promise.withResolvers(), held = Promise.withResolvers();
+    const { impl, created } = browser(async function* (input) { order.push(`prompt ${input}`); yield 'A reply.'; }, undefined, undefined,
+      async (_, [{ content }]) => {
+        order.push(`append ${content}`);
+        if (content === 'First') {
+          entered.resolve();
+          await held.promise;
+          if (ending === 'rejects') throw new DOMException('busy', 'InvalidStateError');
+        }
+        order.push(`appended ${content}`);
+      });
+    const { id: session } = await impl.createLanguageModel({}, { origin: 'app' });
+    const first = impl.appendLanguageModel({ session, input: 'First' });
+    await entered.promise;
+    const reply = impl.prompt({ session, input: 'A question' });
+    const clone = impl.cloneLanguageModel({ session });
+    const second = impl.appendLanguageModel({ session, input: 'Second' });
+    await new Promise(setImmediate);
+    expect(order).toEqual(['append First']);
+
+    if (ending === 'destroy-session') {
+      await impl.destroyLanguageModel({ session });
+      held.resolve();
+      expect(await reply).toEqual({ error: 'AbortError' });
+      expect([await clone, await second]).toEqual([{ error: 'AbortError' }, { error: 'AbortError' }]);
+      await first;
+      expect(order).toEqual(['append First', 'appended First']);
+      return;
+    }
+    held.resolve();
+    expect(await first).toMatchObject({ id: session });
+    expect(await reply).toMatchObject({ text: 'A reply.' });
+    const copy = await clone;
+    expect(await second).toMatchObject({ id: session });
+    // A failed append leaves the browser session stale: the prompt rebuilds it with the appended input.
+    expect(order).toEqual(ending === 'resolves'
+      ? ['append First', 'appended First', 'prompt A question', 'append Second', 'appended Second']
+      : ['append First', 'prompt A question', 'append Second', 'appended Second']);
+    expect(created.map(c => c.initialPrompts)).toEqual(ending === 'resolves' ? [[]] : [[], [{ role: 'user', content: 'First' }]]);
+    expect(impl.state().sessions.find(s => s.id === copy.id).turns).toBe(2);
+  });
+}
+
+// The agent path (§9): a create waiting on the download it started ends when the preferred availability changes.
+for (const after of ['available', 'unavailable']) {
+  test(`a create waiting on a download answers when the model becomes ${after}`, async () => {
+    const impl = implementation({ agent: true, now: () => 0, foreground: () => true, changed() {}, invoke: async () => ({ text: 'null' }) });
+    implementations.push(impl);
+    impl.preferred({ languageModelAvailability: { availability: 'downloadable' } });
+    const created = impl.createLanguageModel({}, { origin: 'app' });
+    expect(await impl.languageModelAvailability()).toMatchObject({ availability: 'downloading' });
+    impl.preferred({ languageModelAvailability: { availability: after } });
+    if (after === 'available') expect(await created).toMatchObject({ id: expect.stringMatching(/^session-/) });
+    else expect(await created).toEqual({ error: 'NotSupportedError' });
+  });
+}
+
+test('a stream is kept by its call only while it is live, and a destroyed session keeps none', async () => {
+  // The implementation's maps, recorded as it makes them: sessions, responses and requests.
+  const maps = [], Original = globalThis.Map;
+  globalThis.Map = class extends Original { constructor(...args) { super(...args); maps.push(this); } };
+  let impl;
+  try {
+    impl = implementation({ agent: true, now: () => 0, foreground: () => true, changed() {} });
+  } finally {
+    globalThis.Map = Original;
+  }
+  implementations.push(impl);
+  impl.preferred({ rate: 0 });
+  const sizes = () => maps.map(m => m.size);
+  const { id: session } = await impl.createLanguageModel({}, { origin: 'app' });
+  for (let request = 1; request <= 100; request++) {
+    const { id } = await impl.promptStreaming({ session, input: `question ${request}` }, { request });
+    expect(await impl.languageModelResponse({ response: id })).toMatchObject({ state: 'complete' });
+  }
+  expect(sizes()).toEqual([1, 8, 0]);
+
+  // A live one stays until its call is let go, which still aborts it.
+  impl.preferred({ rate: 0, responses: [{ text: 'held', hold: true }, { text: 'held', hold: true }] });
+  const { id: held } = await impl.promptStreaming({ session, input: 'held' }, { request: 101 });
+  expect(sizes()[2]).toBe(1);
+  impl.cancel(101);
+  expect(await impl.languageModelResponse({ response: held })).toMatchObject({ state: 'aborted' });
+  expect(sizes()[2]).toBe(0);
+
+  await impl.promptStreaming({ session, input: 'held again' }, { request: 102 });
+  await impl.destroyLanguageModel({ session });
+  expect(sizes()).toEqual([0, 0, 0]);
 });

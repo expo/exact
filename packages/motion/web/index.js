@@ -7,7 +7,8 @@
 // - One acquisition per name for the page (D4), and for `deviceOrientation`
 //   one per event type (`absolute` picks `deviceorientationabsolute`): a
 //   `Sensor` object, or one listener of an event, at the fastest
-//   `frequency` its readers ask; each reader group (a name with one
+//   `frequency` its readers and canvas inputs ask, 60 Hz for a reader that
+//   names none, as Apple's; each reader group (a name with one
 //   `frequency`, `referenceFrame` and `history`) keeps a ring of its own
 //   thinned samples, numbered, and is answered statelessly from the cursor
 //   the runner passes as `after` (D5).
@@ -169,20 +170,22 @@ export function implementation({ changed, now = () => performance.now(), foregro
     changed(`motion.${s.name}`);
   };
   const streamKey = (name, args) => (name === 'deviceOrientation' && args.absolute ? 'deviceOrientation absolute' : name);
-  // The stream of `name` that `args` reads, running at the fastest frequency of its groups and inputs.
-  const stream = (name, args) => {
+  // The stream of `name` that `args` reads, running at the fastest frequency of its groups and inputs; with
+  // `reads` false (a canvas input), no reader group is made.
+  const stream = (name, args, reads = true) => {
     const key = streamKey(name, args);
     let s = streams.get(key);
     if (!s) streams.set(key, s = { name, groups: new Map(), frequency: null, stop: null, latest: null, error: null, absolute: key !== name });
-    const g = group(s, args);
+    const g = reads ? group(s, args) : null;
     restart(s);
     // A reader that moved to the other `deviceOrientation` event left its old stream with no group (`releaseArgs`).
     for (const [k, o] of streams) if (o !== s && o.name === name && !o.groups.size) { o.stop?.(); streams.delete(k); }
     return [s, g];
   };
   const rate = s => {
-    const fs = [...s.groups.values()].map(g => g.args.frequency).concat([...inputs.values()].filter(i => i.name === s.name).map(i => 1000 / i.period));
-    return fs.some(f => !(f > 0)) || !fs.length ? null : Math.max(...fs);
+    const fs = [...s.groups.values()].map(g => (g.args.frequency > 0 ? g.args.frequency : 60))
+      .concat([...inputs.values()].filter(i => i.name === s.name).map(i => 1000 / i.period));
+    return fs.length ? Math.max(...fs) : null;
   };
   const restart = s => {
     const f = rate(s);
@@ -286,7 +289,7 @@ export function implementation({ changed, now = () => performance.now(), foregro
       inputs.get(key)?.writer.close?.();
       const frequency = args.frequency > 0 ? args.frequency : 60;
       inputs.set(key, { writer, name, sensor: args.sensor, period: 1000 / frequency, next: -Infinity, dropped: 0, screen: args.referenceFrame === 'screen' });
-      stream(name, {});
+      stream(name, {}, false);
       log(`sensor input ${key}: ${frequency} Hz`);
       return { surface: args.surface, sensor: args.sensor };
     },

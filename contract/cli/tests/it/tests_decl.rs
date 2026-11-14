@@ -186,6 +186,19 @@ fn a_test_drags_a_card_to_another_list() {
 }
 
 #[test]
+fn a_test_opts_into_dragging_to_the_keyboard() {
+    let tests = contract::tests("test \"keyboard\"\n  tap \"transcript\" drag 0 300 hold 1000 into keyboard during \"state\"\n").unwrap();
+    let json = contract::tests_json(&tests);
+    assert!(json.contains("\"into\":\"keyboard\""), "{json}");
+    assert!(json.contains("\"during\":[\"state\"]"), "{json}");
+    for option in ["into screen", "into", "into keyboard into keyboard"] {
+        assert!(
+            contract::tests(&format!("test \"t\"\n  tap \"a\" drag 0 300 {option}\n")).is_err()
+        );
+    }
+}
+
+#[test]
 fn a_test_drags_and_opens_at_its_size() {
     // kanban F18, paint F5: a drag, as the driver's `tap … drag`, and the
     // viewport a test's session opens at, as its `--size`.
@@ -1037,8 +1050,16 @@ fn a_perf_block_and_its_counts_parse_to_the_drivers_steps() {
 
 #[test]
 fn a_perf_block_refuses_the_wall_clock_and_counts_need_a_block() {
-    let e = contract::tests("test \"t\"\n  perf\n    clock +100 real\n").unwrap_err();
-    assert!(e.message.contains("wall clock"), "{e}");
+    for clock in [
+        "clock +100 real",
+        "clock held",
+        "clock held board 5s",
+        "clock until state ready == true within 500",
+    ] {
+        let e = contract::tests(&format!("test \"t\"\n  perf\n    {clock}\n")).unwrap_err();
+        assert!(e.message.contains("wall clock"), "{clock}: {e}");
+        assert_eq!(e.span.line, 3, "{clock}: {e}");
+    }
     let e = contract::tests("test \"t\"\n  expect perf query a == 1\n").unwrap_err();
     assert!(e.message.contains("`perf` block before it"), "{e}");
     let e = contract::tests("test \"t\"\n  perf\n    clock data\n  expect perf query a == 1.5\n")

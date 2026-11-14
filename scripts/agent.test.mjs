@@ -14,6 +14,22 @@ import { typeCommand } from './agent-keys.mjs';
 import { render, stateOp } from './agent-inspect.mjs';
 import { parseStep } from '../host/web-js/conform-steps.mjs';
 
+test('an iOS AX drive requests its accessibility runtime before opening the carrier', async () => {
+  const say = console.log;
+  console.log = () => {};
+  try {
+    for (const op of ['tree --ax', 'tree']) {
+      let launched;
+      await main(['ios', '--json', '--storage', 'ax-test', op], {
+        open: async options => { launched = options; return { tree: async () => ({}), close() {} }; },
+        driveServer: async () => null,
+        resolveDevice: () => 'our simulator', exclusiveNativeStore: async (_, launch) => launch(),
+      });
+      assert.equal(launched.ax, op === 'tree --ax');
+    }
+  } finally { console.log = say; }
+});
+
 for (const engine of ['chromium', 'firefox', 'webkit']) {
   need(engine, await browserMissing(engine))(`a Playwright reload keeps the current entry and its Back and Forward entries (${engine})`, async () => {
     let loads = 0;

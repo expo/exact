@@ -196,25 +196,29 @@ fn change_cycles(c: &Component) -> Vec<AnalyzeError> {
             read
         })
         .collect();
-    fn effects<'a>(body: &'a [Stmt], out: &mut BTreeSet<&'a str>) {
+    // `sends` holds the mutations a body sends. Only a send runs a mutation's refreshes and
+    // `then`; assigning its result slot writes the slot and nothing more.
+    fn effects<'a>(body: &'a [Stmt], out: &mut BTreeSet<&'a str>, sends: &mut BTreeSet<&'a str>) {
         for s in body {
             match s {
-                Stmt::Assign { target, .. }
-                | Stmt::Send { target, .. }
-                | Stmt::Refresh { target, .. } => {
+                Stmt::Send { target, .. } => {
+                    out.insert(target);
+                    sends.insert(target);
+                }
+                Stmt::Assign { target, .. } | Stmt::Refresh { target, .. } => {
                     out.insert(target);
                 }
                 Stmt::If {
                     then, otherwise, ..
                 } => {
-                    effects(then, out);
-                    effects(otherwise, out);
+                    effects(then, out, sends);
+                    effects(otherwise, out, sends);
                 }
                 Stmt::Match { some, none, .. } => {
-                    effects(&some.1, out);
-                    effects(none, out);
+                    effects(&some.1, out, sends);
+                    effects(none, out, sends);
                 }
-                Stmt::Call { body, .. } => effects(body, out),
+                Stmt::Call { body, .. } => effects(body, out, sends),
                 _ => {}
             }
         }
@@ -223,20 +227,21 @@ fn change_cycles(c: &Component) -> Vec<AnalyzeError> {
         .iter()
         .map(|t| {
             let mut out = BTreeSet::new();
+            let mut sends = BTreeSet::new();
             if let Some(a) = c.actions.iter().find(|a| a.name == t.timer.1) {
-                effects(&a.body, &mut out);
+                effects(&a.body, &mut out, &mut sends);
             }
             let mut seen = BTreeSet::new();
             loop {
                 let before = seen.len();
                 for m in &c.mutations {
-                    if !out.contains(m.name.as_str()) || !seen.insert(m.name.as_str()) {
+                    if !sends.contains(m.name.as_str()) || !seen.insert(m.name.as_str()) {
                         continue;
                     }
                     out.extend(m.refreshes.iter().map(|(n, _)| n.as_str()));
                     if let Some((name, _)) = &m.then {
                         if let Some(a) = c.actions.iter().find(|a| &a.name == name) {
-                            effects(&a.body, &mut out);
+                            effects(&a.body, &mut out, &mut sends);
                         }
                     }
                 }

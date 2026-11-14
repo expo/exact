@@ -12,6 +12,61 @@ use super::catalog::FaceId;
 use parley::FontData;
 use std::sync::Arc;
 
+impl super::Paragraph {
+    /// A fragment's ink, retaining original line indices and coordinates.
+    /// Lines assigned to other columns have no glyphs or inline boxes.
+    pub(crate) fn line_fragment(&self, range: std::ops::Range<usize>) -> Self {
+        use std::cell::{OnceCell, RefCell};
+        let source = self.lines();
+        let glyph_start = source.lines[range.start].glyphs.0;
+        let glyph_end = source.lines[range.end - 1].glyphs.1;
+        let lines = Lines {
+            lines: source
+                .lines
+                .iter()
+                .enumerate()
+                .map(|(i, line)| {
+                    let mut line = *line;
+                    if range.contains(&i) {
+                        line.glyphs = (line.glyphs.0 - glyph_start, line.glyphs.1 - glyph_start);
+                    } else {
+                        line.glyphs = (0, 0);
+                        line.w = 0.0;
+                    }
+                    line
+                })
+                .collect(),
+            glyphs: source.glyphs[glyph_start as usize..glyph_end as usize].to_vec(),
+            faces: source.faces.clone(),
+            boxes: source
+                .boxes
+                .iter()
+                .filter(|b| range.contains(&(b.line as usize)))
+                .copied()
+                .collect(),
+        };
+        Self {
+            source: self.source.clone(),
+            record: OnceCell::from(Arc::new(lines)),
+            measured: RefCell::new(None),
+            remake: None,
+            flow: self.flow.clone(),
+            #[cfg(test)]
+            layout_lifetime: self.layout_lifetime.clone(),
+            width: self.width,
+            height: self.height,
+            first_baseline: self.first_baseline,
+            baselines: self.baselines.clone(),
+            bottoms: self.bottoms.clone(),
+            ink: RefCell::new(Default::default()),
+            strokes: RefCell::new(Default::default()),
+            ellipsized: RefCell::new(None),
+            resident_capacity_bytes: 0,
+            private_text_bytes_estimate: 0,
+        }
+    }
+}
+
 /// A laid-out glyph.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LayoutGlyph {

@@ -6,7 +6,7 @@
 #if os(macOS)
 import AppKit
 
-private final class SegmentAccessibility: NSAccessibilityElement {
+private final class SegmentAccessibility: NSAccessibilityElement, AgentOwned {
     weak var control: ExactSegmentedControl?
     let index: Int
     init(_ control: ExactSegmentedControl, _ index: Int) {
@@ -15,6 +15,14 @@ private final class SegmentAccessibility: NSAccessibilityElement {
         super.init()
     }
     private var native: NSAccessibilityElement? { control?.nativeSegment(at: index) }
+    var agentViewId: UInt32? {
+        guard let control, control.memberIDs.indices.contains(index) else { return nil }
+        return control.memberIDs[index]
+    }
+    override func accessibilityIdentifier() -> String? {
+        guard let control, control.memberTestIDs.indices.contains(index) else { return nil }
+        return control.memberTestIDs[index]
+    }
     private var enabled: Bool {
         guard let control, index < control.segmentCount else { return false }
         return control.isEnabled(forSegment: index)
@@ -24,11 +32,13 @@ private final class SegmentAccessibility: NSAccessibilityElement {
     override func accessibilityAttributeValue(_ attribute: NSAccessibility.Attribute) -> Any? {
         if attribute == .enabled { return enabled }
         if attribute == .parent { return control }
+        if attribute == .identifier { return accessibilityIdentifier() }
         return native?.accessibilityAttributeValue(attribute)
     }
     override func accessibilityActionNames() -> [NSAccessibility.Action] { native?.accessibilityActionNames() ?? [] }
     override func accessibilityPerformAction(_ action: NSAccessibility.Action) { native?.accessibilityPerformAction(action) }
     override func accessibilityRole() -> NSAccessibility.Role? { native?.accessibilityRole() }
+    override func isAccessibilityElement() -> Bool { native?.isAccessibilityElement() ?? false }
     override func accessibilitySubrole() -> NSAccessibility.Subrole? { native?.accessibilitySubrole() }
     override func accessibilityLabel() -> String? { native?.accessibilityLabel() }
     override func accessibilityHelp() -> String? { native?.accessibilityHelp() }
@@ -43,6 +53,8 @@ private final class SegmentAccessibility: NSAccessibilityElement {
 private final class ExactSegmentedControl: NSSegmentedControl {
     let ownerID: UInt32
     var accessibilityDisabledSegments: [Bool] = []
+    var memberIDs: [UInt32] = []
+    var memberTestIDs: [String?] = []
     private var segmentElements: [SegmentAccessibility] = []
     private var exposingNativeChildren = false
     init(ownerID: UInt32) {
@@ -209,6 +221,8 @@ final class SegmentHost {
             control.frame = owner.contentBox()
             control.setAccessibilityLabel(owner.props["accessibilityLabel"])
             control.segmentCount = tabs.count
+            control.memberIDs = tabs.map(\.id)
+            control.memberTestIDs = tabs.map { $0.props["testId"] }
             control.accessibilityDisabledSegments = tabs.map(\.ariaUnavailable)
             for (index, tab) in tabs.enumerated() {
                 if case .image(let icon)? = tab.segmentFace {

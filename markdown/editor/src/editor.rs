@@ -860,7 +860,8 @@ impl Editor {
             unavailable: s.unavailable,
             atom: String::new(),
         };
-        // Exactly one atom: its source, its destination as a link's, and no
+        // Exactly one atom: its source, its destination as a link's (one
+        // link, so not mixed, as `wire::selection_with` reports it), and no
         // `link` command over it (LLP 1045.000 D3, D5).
         if let Some(atom) = self
             .proj
@@ -870,6 +871,7 @@ impl Editor {
             facts.atom.clone_from(&atom.source);
             if !atom.href.is_empty() {
                 facts.link.clone_from(&atom.href);
+                facts.mixed = false;
             }
             if !facts.unavailable.split(' ').any(|c| c == "link") {
                 if !facts.unavailable.is_empty() {

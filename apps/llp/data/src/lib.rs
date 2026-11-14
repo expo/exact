@@ -79,9 +79,12 @@ impl Llp {
         if path.is_dir() {
             return asked.to_string();
         }
-        path.parent()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_default()
+        // A bare file name's parent is empty: its folder is the current one.
+        match path.parent() {
+            Some(p) if p.as_os_str().is_empty() => ".".to_string(),
+            Some(p) => p.to_string_lossy().into_owned(),
+            None => String::new(),
+        }
     }
 
     /// The document a path names: the corpus's lowest-numbered document when
@@ -91,6 +94,10 @@ impl Llp {
     fn document_of(&self, asked: &str) -> Option<PathBuf> {
         let path = PathBuf::from(asked);
         if !path.is_dir() {
+            // Named as its corpus's index names it: `./` and the bare name.
+            if path.parent().is_some_and(|p| p.as_os_str().is_empty()) {
+                return Some(Path::new(".").join(path));
+            }
             return Some(path);
         }
         let entries = self.entries(&Self::root_of(asked));

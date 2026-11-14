@@ -850,6 +850,26 @@ final class IframeWindowsTests: XCTestCase {
         spin { answered != nil }
         XCTAssertEqual(answered as? Bool, false)
     }
+
+    #if os(iOS)
+    /// A person's download that finishes with the frame in no window has no
+    /// export picker to ask where it goes: it is cancelled, and its file in
+    /// the temporary directory goes.
+    func testADownloadThatFinishesInNoWindowIsCancelled() throws {
+        let arm = try arm(), seen = Seen()
+        let (handle, web) = mount(arm, seen, configuration: ["partition": "no-window"], src: "\(baseURL)/opener")
+        defer { arm.destroy(handle) }
+        loaded(seen, web, "/opener")
+        web.removeFromSuperview()
+        let downloads = FileManager.default.temporaryDirectory.appendingPathComponent("exact-downloads")
+        let before = Set((try? FileManager.default.contentsOfDirectory(atPath: downloads.path)) ?? [])
+        json(["op": "navigate", "url": "\(baseURL)/report"], arm.command, handle)
+        spin { self.events(seen).filter { $0 == "download" }.count >= 2 }
+        XCTAssertEqual(seen.records.map { $0.record["state"] as? String }, ["progressing", "cancelled"], "\(seen.records)")
+        let after = Set((try? FileManager.default.contentsOfDirectory(atPath: downloads.path)) ?? [])
+        XCTAssertEqual(after.subtracting(before), [], "the file in the temporary directory is removed")
+    }
+    #endif
 }
 
 /// Takes the frame a page's message came from.

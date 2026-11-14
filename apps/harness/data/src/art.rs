@@ -141,32 +141,52 @@ pub fn write_png(path: &std::path::Path, w: u32, h: u32) -> Result<(), String> {
     writer.write_image_data(&data).map_err(|e| e.to_string())
 }
 
-/// An image file's pixel size, from its header (PNG, GIF, JPEG).
+/// An image file's pixel size, from its header (PNG, GIF, JPEG). Only the
+/// header is read: a PNG's or GIF's first bytes, and a JPEG's segment
+/// headers up to its frame header, each segment's body skipped.
 pub fn image_size(path: &std::path::Path) -> Option<(u32, u32)> {
-    let bytes = std::fs::read(path).ok()?;
-    let be16 = |i: usize| Some(u16::from_be_bytes([*bytes.get(i)?, *bytes.get(i + 1)?]) as u32);
-    if bytes.starts_with(b"\x89PNG") && bytes.len() >= 24 {
-        let w = u32::from_be_bytes(bytes[16..20].try_into().ok()?);
-        let h = u32::from_be_bytes(bytes[20..24].try_into().ok()?);
+    header_size(std::fs::File::open(path).ok()?)
+}
+
+fn header_size(mut file: impl std::io::Read + std::io::Seek) -> Option<(u32, u32)> {
+    use std::io::{Read, SeekFrom};
+    // The bytes at `at`, as many of `n` as the file has.
+    let mut at = |at: u64, n: usize| -> Option<Vec<u8>> {
+        file.seek(SeekFrom::Start(at)).ok()?;
+        let mut bytes = Vec::with_capacity(n);
+        (&mut file).take(n as u64).read_to_end(&mut bytes).ok()?;
+        Some(bytes)
+    };
+    let head = at(0, 24)?;
+    if head.starts_with(b"\x89PNG") && head.len() >= 24 {
+        let w = u32::from_be_bytes(head[16..20].try_into().ok()?);
+        let h = u32::from_be_bytes(head[20..24].try_into().ok()?);
         return Some((w, h));
     }
-    if bytes.starts_with(b"GIF") && bytes.len() >= 10 {
-        let w = u16::from_le_bytes([bytes[6], bytes[7]]) as u32;
-        let h = u16::from_le_bytes([bytes[8], bytes[9]]) as u32;
+    if head.starts_with(b"GIF") && head.len() >= 10 {
+        let w = u16::from_le_bytes([head[6], head[7]]) as u32;
+        let h = u16::from_le_bytes([head[8], head[9]]) as u32;
         return Some((w, h));
     }
-    if bytes.starts_with(&[0xff, 0xd8]) {
-        let mut i = 2;
-        while i + 9 < bytes.len() {
-            if bytes[i] != 0xff {
+    if head.starts_with(&[0xff, 0xd8]) {
+        let be16 = |b: &[u8], i: usize| u16::from_be_bytes([b[i], b[i + 1]]) as u32;
+        // A frame header comes after the file's other segments; a file
+        // that takes more steps than this to reach one is answered unread.
+        let mut i = 2u64;
+        for _ in 0..4096 {
+            let b = at(i, 10)?;
+            if b.len() < 10 {
+                return None;
+            }
+            if b[0] != 0xff {
                 i += 1;
                 continue;
             }
-            let marker = bytes[i + 1];
+            let marker = b[1];
             if (0xc0..=0xcf).contains(&marker) && ![0xc4, 0xc8, 0xcc].contains(&marker) {
-                return Some((be16(i + 7)?, be16(i + 5)?));
+                return Some((be16(&b, 7), be16(&b, 5)));
             }
-            i += 2 + be16(i + 2)? as usize;
+            i += 2 + be16(&b, 2) as u64;
         }
     }
     None
@@ -451,6 +471,45 @@ mod tests {
         assert_eq!(image_size(&path), Some((32, 20)));
         assert_eq!(cell_box(320, 200, 48), (48, 15));
         let _ = std::fs::remove_file(path);
+    }
+
+    /// A reader that counts the bytes read from it.
+    struct Counted(std::io::Cursor<Vec<u8>>, usize);
+    impl std::io::Read for Counted {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let n = self.0.read(buf)?;
+            self.1 += n;
+            Ok(n)
+        }
+    }
+    impl std::io::Seek for Counted {
+        fn seek(&mut self, to: std::io::SeekFrom) -> std::io::Result<u64> {
+            self.0.seek(to)
+        }
+    }
+
+    // A megabyte of segments before a JPEG's frame header, and a megabyte
+    // after each header: the size is the header's, and the rest is not read.
+    #[test]
+    fn a_large_image_s_size_is_read_from_its_header_alone() {
+        let size = |mut bytes: Vec<u8>| {
+            bytes.resize(bytes.len() + (1 << 20), 0);
+            let mut file = Counted(std::io::Cursor::new(bytes), 0);
+            let size = header_size(&mut file);
+            assert!(file.1 < 1024, "{} bytes read", file.1);
+            size
+        };
+        let mut jpeg = vec![0xff, 0xd8];
+        for _ in 0..16 {
+            jpeg.extend([0xff, 0xe1, 0xff, 0xff]);
+            jpeg.resize(jpeg.len() + 0xffff - 2, 0);
+        }
+        jpeg.extend([0xff, 0xc0, 0x00, 0x11, 0x08, 0x01, 0xe0, 0x02, 0x80, 0x03]);
+        assert_eq!(size(jpeg), Some((640, 480)));
+        let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
+        png.extend([0, 0, 0, 32, 0, 0, 0, 20]);
+        assert_eq!(size(png), Some((32, 20)));
+        assert_eq!(size(b"GIF89a\x20\x00\x14\x00".to_vec()), Some((32, 20)));
     }
 
     #[test]

@@ -351,3 +351,44 @@ fn site_header_symbols() {
         }
     }
 }
+
+pub(super) fn file_icons_draw_in_a_linux_menu_row() {
+    let dir = std::env::temp_dir().join(format!("exact-file-icon-menu-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("assets")).unwrap();
+    std::fs::write(
+        dir.join("assets/ai.svg"),
+        r#"<svg viewBox="0 0 24 24"><defs><style>.cls-1{fill:#000}</style></defs><path class="cls-1" d="M2 2h20v20H2Z"/></svg>"#,
+    )
+    .unwrap();
+    let plan = contract::compile(
+        r##"component App
+  state clicks = 0
+  action choose
+    clicks = clicks + 1
+  view
+    column width=160 height=160 background-color="#ffffff"
+      column role="menu" width=96 background-color="#ffffff"
+        button appearance="auto" aria-label="Illustrator" testId="item" width=48 height=48 press=choose
+          image "symbol:icon||0 0 24 24||ai.svg" font-size=24 -exact-tint-color="#00ff00"
+"##,
+    )
+    .unwrap()
+    .encode();
+    let (mut p, error) =
+        Presenter::boot_with(&plan, (), (160., 160.), 1., dir.clone(), PainterChoice::Cpu).unwrap();
+    assert!(error.is_none(), "{error:?}");
+    let k = p.host().kernel();
+    let item = k.node_by_key(k.find_by_test_id("item")[0]).unwrap().id;
+    p.wait_images(std::time::Duration::from_secs(30));
+    assert_eq!(p.images().bitmaps.len(), 1, "the file icon loaded");
+    let (x, y, w, h) = p.rect_of(item).unwrap();
+    let (cx, cy) = ((x + w / 2.) as u32, (y + h / 2.) as u32);
+    let frame = p.frame();
+    let ink = (cy - 8..cy + 8)
+        .flat_map(|y| (cx - 8..cx + 8).map(move |x| (x, y)))
+        .map(|(x, y)| frame.pixel(x, y).unwrap())
+        .filter(|c| c.red() == 0 && c.green() == 0 && c.blue() == 0)
+        .count();
+    assert_eq!(ink, 256, "the menu row draws the file's black centre");
+    std::fs::remove_dir_all(dir).unwrap();
+}

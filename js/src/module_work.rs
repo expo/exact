@@ -17,10 +17,17 @@ pub(crate) struct Letting {
     /// Let-go calls whose awaited fetch has effects, set aside until the
     /// commit that let them go ends: the runner then names the ones it keeps,
     /// and the rest are forgotten.
-    calls: Vec<(Key, Parked)>,
+    pub(super) calls: Vec<(Key, Parked)>,
+    kept: std::collections::HashSet<u64>,
     /// What the runner said is in flight at its last `forgotten`, by key: a
     /// continuation's token, or `None` for a plain request.
     pub(crate) flight: HashMap<Key, Option<u64>>,
+}
+
+impl Letting {
+    pub(super) fn keep_ticket(&mut self, ticket: u64) {
+        self.kept.insert(ticket);
+    }
 }
 
 /// Start call `call`'s turn: the steps module work left for it run first
@@ -100,10 +107,15 @@ impl Module {
             let (_, parked) = self.work.calls.remove(at);
             let (call, ticket) = (parked.call.to_string(), parked.ticket.to_string());
             let adopted = self.engine.as_mut().is_some_and(|engine| {
-                engine
+                let adopted = engine
                     .call("__exact_adopt", [&call, &ticket, ""])
-                    .is_ok_and(|r| r == "adopted")
+                    .is_ok_and(|r| r == "adopted");
+                // Keep the submitted request until retirement settles it, even if adoption exhausted the VM.
+                adopted || engine.out_of_memory()
             });
+            if adopted {
+                self.work.kept.insert(parked.ticket);
+            }
             kept.push(adopted.then_some(parked.ticket));
             forget.push(parked.call);
         }
@@ -141,6 +153,11 @@ impl Module {
         token: u64,
         outcome: Outcome,
     ) -> Result<(), DataError> {
+        if !self.work.kept.remove(&token) {
+            return Err(DataError::Unavailable(
+                "module work belongs to a retired runtime".into(),
+            ));
+        }
         let Some(engine) = self.engine.as_mut() else {
             return Err(DataError::Unavailable(
                 "exact-js: the engine is not loaded".into(),

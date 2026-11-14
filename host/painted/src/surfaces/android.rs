@@ -22,42 +22,14 @@ pub(super) fn library_dir() -> Option<PathBuf> {
     std::env::var_os("EXACT_NATIVE_LIBS").map(|d| PathBuf::from(d).join("app"))
 }
 
-/// Load `abi` with a device and, for the primary module, register the app's
-/// shaders. The shader pack is the primary's (LLP 1030 D8), as on Linux: a
-/// named module (LLP 1009 D6) refuses a shader its Rust does not bind.
-pub(super) fn load(abi: &Abi, primary: bool) -> Result<(), String> {
+/// Load `abi` with a device. The shared loader registers its shader roster.
+pub(super) fn load(abi: &mut Abi) -> Result<(), String> {
     agent_tier(abi);
-    if unsafe { abi.symbol::<unsafe extern "C" fn() -> u32>(b"gpu_load")() } != 0 {
-        return Err(abi.error().unwrap_or_else(|| "gpu_load failed".into()));
-    }
+    abi.load_device()?;
     unsafe {
         abi.symbol::<unsafe extern "C" fn(Option<extern "C" fn()>)>(b"gpu_on_acquire")(Some(
             acquired,
         ));
-    }
-    let root = std::env::var_os("EXACT_ASSETS")
-        .map(PathBuf::from)
-        .unwrap_or_default();
-    let shader = unsafe {
-        abi.symbol::<unsafe extern "C" fn(*const u8, usize, *const u8, usize) -> u32>(b"gpu_shader")
-    };
-    let pack = primary.then(|| std::fs::read_dir(root.join("shaders")).ok());
-    if let Some(dir) = pack.flatten() {
-        for entry in dir.flatten() {
-            let path = entry.path();
-            let (Some(name), Some("wgsl")) = (
-                path.file_stem().and_then(|s| s.to_str()),
-                path.extension().and_then(|s| s.to_str()),
-            ) else {
-                continue;
-            };
-            let text = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-            if unsafe { shader(name.as_ptr(), name.len(), text.as_ptr(), text.len()) } != 0 {
-                return Err(abi
-                    .error()
-                    .unwrap_or_else(|| format!("shader {name} refused")));
-            }
-        }
     }
     Ok(())
 }
@@ -250,10 +222,17 @@ pub fn buffer_frame(view: u32, take: bool) -> Result<([u32; 3], usize), bool> {
 impl Surfaces {
     /// Every canvas went with the replaced host. The windows stay the
     /// reader's, by view, until it detaches them: a new canvas at a window's
-    /// view is attached to it.
+    /// view is attached to it. Until that canvas presents, the view is
+    /// preparing again, so the reader covers it with its retained image and
+    /// reads its status anew, and the old canvas's buffer is no frame of
+    /// the new one's: its first, whose words may match, is published.
     pub(super) fn windows_replaced(&mut self) {
-        for w in self.windows.values_mut() {
+        let mut presented = PRESENTED.lock().unwrap_or_else(|e| e.into_inner());
+        let mut frames = frames();
+        for (view, w) in self.windows.iter_mut() {
             w.attached = false;
+            frames.remove(view);
+            presented.insert(*view, 0);
         }
     }
 

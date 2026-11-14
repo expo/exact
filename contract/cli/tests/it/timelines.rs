@@ -84,6 +84,56 @@ fn the_rows_reach_the_kernel_and_a_computed_animation_keeps_its_binding() {
     );
 }
 
+/// The animation checks read every string a value can be, as the length
+/// checks do: a `match` arm, an enum argument (a type ascription) and a
+/// child's derive bound once and read twice (a `let`), not a ternary alone.
+#[test]
+fn animation_checks_read_every_arm_a_value_can_take() {
+    let app = |attr: &str, extra: &str, refused: &str, fine: &str, row: &str| {
+        format!(
+            "keyframes k\n  to opacity=0\ncomponent App\n  state pick: option<number> = none\n  view\n    column\n      {row}\ncomponent Spin\n  props\n    anim: enum<\"{fine}\", \"{refused}\">\n  view\n    box width=4 height=4 {attr}=anim {extra}\ncomponent Based\n  derive base = \"{refused}\"\n  derive anim = base == \"\" ? \"none\" : base\n  view\n    box width=4 height=4 {attr}=anim {extra}\n"
+        )
+    };
+    let bound = "animation-timeline=\"--pull\" animation-range=\"0px 100px\"";
+    for (attr, extra, refused, fine, id) in [
+        ("animation", "", "nope 1s", "k 1s", "lower-animation-name"),
+        (
+            "animation",
+            bound,
+            "k 1s infinite both",
+            "k 1s both",
+            "lower-timeline-endless",
+        ),
+        (
+            "-exact-exit-animation",
+            "",
+            "k 1s infinite",
+            "k 1s",
+            "lower-exit-endless",
+        ),
+    ] {
+        let arm = format!(
+            "box width=4 height=4 {attr}=(match pick {{ case some(x) => \"{refused}\", case none => \"{fine}\" }}) {extra}"
+        );
+        for row in [
+            arm.as_str(),
+            &format!("Spin(anim=\"{refused}\")"),
+            "Based()",
+        ] {
+            let error = contract::compile(&app(attr, extra, refused, fine, row)).unwrap_err();
+            assert_eq!(error.id, id, "{row}: {error}");
+        }
+        contract::compile(&app(
+            attr,
+            extra,
+            refused,
+            fine,
+            &format!("Spin(anim=\"{fine}\")"),
+        ))
+        .unwrap_or_else(|e| panic!("{attr} {fine}: {e}"));
+    }
+}
+
 /// Keyframes refuse `height` already (`lower-keyframe-property`), and an SVG
 /// element takes no timeline in phase 1, so what reaches this rule is a box
 /// binding geometry keyframes.

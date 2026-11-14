@@ -524,7 +524,7 @@ impl ChildCtl {
     /// The child took `bytes` of its stdin queue.
     pub(crate) fn consumed(&self, bytes: u64) {
         if bytes > 0 {
-            let _ = (self.queued).fetch_update(Ordering::AcqRel, Ordering::Acquire, |q| {
+            let _ = (self.queued).try_update(Ordering::AcqRel, Ordering::Acquire, |q| {
                 Some(q.saturating_sub(bytes))
             });
         }
@@ -674,8 +674,7 @@ fn answer(
     // admitted under `fs.read`, and below its root with nothing followed
     // (ibex2's `open_read`). Each incarnation reads it from its start.
     if let Some(path) = &spec.stdin_from {
-        let roots =
-            (shared.root_paths.get()).map(|p| shared.roots.get_or_init(|| super::body::open(p)));
+        let roots = shared.app_roots();
         let directories = roots.and_then(|d| d.as_ref().ok());
         match ibex2::stdlib::fs::open_read(&set, directories, path) {
             Ok(file) => spec.stdin_file = Some(Arc::new(file)),

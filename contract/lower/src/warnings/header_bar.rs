@@ -48,6 +48,11 @@ fn part(node: &Node) -> Part {
     if role == Some("tablist") {
         return Part::Tablist;
     }
+    // A heading that presses is still the heading, as the kernel's bar
+    // takes it (`exact_kernel::bars`).
+    if tag == "text" && role == Some("heading") {
+        return Part::Heading;
+    }
     // A link navigates, given the benefit as a pressed thing; a disabled button is a dimmed item.
     let disabled = |a: &Attr| a.name == "disabled" && !matches!(a.value, Expr::Bool(false, _));
     // A command that opens what it names (`Invocation::opens`); a computed one is given the benefit.
@@ -67,7 +72,6 @@ fn part(node: &Node) -> Part {
         return Part::Status;
     }
     match tag.as_str() {
-        "text" if role == Some("heading") => Part::Heading,
         "text" => Part::Text,
         "input" if computed(attrs, "type") => Part::Doubt,
         "input" if literal(attrs, "type") == Some("search") => Part::Search,
@@ -268,7 +272,7 @@ pub(super) fn route_header<'a>(
         out.push(LowerError {
             id: "lower-header-unplaced",
             message: format!(
-                "{what} in this route's `header` is not shown on iOS: the navigation bar there takes one heading as its title (with the symbol images beside it in its own row), the first text after it as the subtitle, one `input type=\"search\"`, one `role=\"tablist\"`, the buttons that press or are disabled and the readouts (`role=\"status\"`), and hides the rest of the header. Move it below the `header`, into the route's content (the scroller's first row), make it a button that presses, or, if it is a status that nothing presses (a \"● Live\" beside the title), give it `role=\"status\"` (docs/contract-for-agents.md, \"Tabs and stacks\")"
+                "{what} in this route's `header` is not shown on iOS: the navigation bar there takes one heading as its title (with the symbol images beside it in its own row), the first text after it as the subtitle, one `input type=\"search\"`, one `role=\"tablist\"`, the buttons that press or are disabled and the readouts (`role=\"status\"`), and hides the rest of the header. Move it below the `header`, into the route's content (the scroller's first row), make it a button that presses, or, if it is a status that nothing presses (a \"● Live\" beside the title), give it `role=\"status\"`; or, for a header the bar cannot hold (a chat's avatar beside the name), say `navigationBar=\"none\"` on the route's element and draw the row yourself (docs/recipes/chat-header.md; docs/contract-for-agents.md, \"Tabs and stacks\")"
             ),
             span,
         });

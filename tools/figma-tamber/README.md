@@ -34,6 +34,8 @@ design server: it reads, and it proposes. It never writes the design.
   - The export is kept in the file as the pull's baseline, in parts of under 100 KB.
   - If a value changed in both Figma and the design since the last pull, by token and context, the plugin asks
     which one to keep. A Figma edit whose token or context the design dropped counts too.
+  - The pull writes only over the variables its questions were asked about: if the file's variables change while it
+    asks (an edit of yours, or another person's), it writes nothing and says to pull again.
   - If the design's contexts changed, the plugin asks before rewriting. A re-pull removes the modes and the
     variables of tokens the design no longer has, and a collection the new layout doesn't use. Anything in the file
     bound to them loses it.

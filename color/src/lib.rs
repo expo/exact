@@ -1053,17 +1053,29 @@ pub const PROFILES: [(&str, &str, usize); 12] = [
 ];
 
 /// `color(--name c… [/ alpha])`: the name, one to four components, alpha.
+/// The function's name is case-insensitive and a dashed ident is not, as
+/// in CSS: an app's `--Brand` keeps its case. A standard space (`PROFILES`)
+/// is matched in any case and named in lowercase.
 pub fn parse_profiled(input: &str) -> Option<(String, Vec<f64>, f64)> {
-    let s = input.trim().to_ascii_lowercase();
-    let body = s.strip_prefix("color(")?.strip_suffix(')')?.trim_start();
+    let s = input.trim();
+    if !s.get(..6)?.eq_ignore_ascii_case("color(") {
+        return None;
+    }
+    let body = s[6..].strip_suffix(')')?.trim_start();
     if !body.starts_with("--") || body.contains(',') {
         return None;
     }
     let end = body.find(char::is_whitespace)?;
-    let (name, rest) = (&body[..end], &body[end..]);
+    let (name, rest) = (&body[..end], body[end..].to_ascii_lowercase());
+    let lower = name.to_ascii_lowercase();
+    let name = if PROFILES.iter().any(|p| p.0 == lower) {
+        lower
+    } else {
+        name.to_string()
+    };
     let (main, alpha) = match rest.split_once('/') {
         Some((m, a)) => (m, Some(a.trim())),
-        None => (rest, None),
+        None => (rest.as_str(), None),
     };
     let c: Vec<f64> = main
         .split_whitespace()
@@ -1076,7 +1088,7 @@ pub fn parse_profiled(input: &str) -> Option<(String, Vec<f64>, f64)> {
     if c.is_empty() || c.len() > 4 || alpha == Some("") {
         return None;
     }
-    Some((name.to_string(), c, alpha_value(alpha)?))
+    Some((name, c, alpha_value(alpha)?))
 }
 
 #[cfg(test)]

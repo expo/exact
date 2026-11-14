@@ -13,11 +13,14 @@ use exact_plan::{BindingKind, BindingsRow};
 pub struct Sites {
     /// Every component instantiation, the root first (`Expanded::instances`).
     pub instances: Vec<Instance>,
+    /// The declaring instance of each plan region.
+    pub regions: Vec<u32>,
+    region_tags: std::collections::BTreeMap<u32, u32>,
     /// One per plan node, in the `nodes` table's order.
     pub nodes: Vec<NodeSite>,
     /// The plan's slots: the declaring `state` or `mutation`.
     pub slots: Vec<Declared>,
-    /// The plan's derives (a child's never reach the plan).
+    /// The plan's settled derives and executable instance expressions.
     pub derives: Vec<Declared>,
     /// The plan's resources, including a placeholder's owner declaration.
     pub resources: Vec<Declared>,
@@ -147,6 +150,11 @@ impl Origin {
 }
 
 impl Sites {
+    pub(crate) fn region(&mut self, tag: u32) {
+        self.regions
+            .push(self.region_tags.get(&tag).copied().unwrap_or(0));
+    }
+
     /// The declarations' sites from the expansion; nodes are pushed as the
     /// lowering emits them.
     pub(crate) fn declared(ex: &Expanded) -> Sites {
@@ -167,6 +175,8 @@ impl Sites {
         };
         Sites {
             instances: ex.instances.clone(),
+            regions: Vec::new(),
+            region_tags: ex.region_instances.clone(),
             nodes: Vec::new(),
             slots: root
                 .states

@@ -153,9 +153,27 @@ fn target(path: &Path) -> Result<PathBuf, String> {
     Ok(target(parent)?.join(path.file_name().ok_or("file has no name")?))
 }
 
+/// The file at `path`, or `None` when nothing is there. Anything but a regular file is refused: a FIFO or a
+/// device may never reach its end, so it is opened without blocking and read only once known to be a file.
 fn contents(path: &Path) -> Result<Option<Vec<u8>>, String> {
-    match std::fs::read(path) {
-        Ok(bytes) => Ok(Some(bytes)),
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32);
+    }
+    let read = options.open(path).and_then(|mut file| {
+        if !file.metadata()?.is_file() {
+            return Ok(None);
+        }
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)?;
+        Ok(Some(bytes))
+    });
+    match read {
+        Ok(Some(bytes)) => Ok(Some(bytes)),
+        Ok(None) => Err(format!("{} is not a regular file", path.display())),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             match std::fs::symlink_metadata(path) {
                 Ok(_) => Err(format!("cannot read {}: {e}", path.display())),
@@ -1380,6 +1398,37 @@ mod tests {
         );
         writer.join().unwrap();
         assert_eq!(done.text, "     2\thello\n");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A preview refuses a FIFO without waiting on it: nothing writes to this one.
+    #[cfg(unix)]
+    #[test]
+    fn an_edit_preview_of_a_fifo_is_refused_at_once() {
+        let dir = test_dir("preview-fifo");
+        let path = dir.join("input.fifo");
+        assert!(std::process::Command::new("mkfifo")
+            .arg(&path)
+            .status()
+            .unwrap()
+            .success());
+        let (tx, rx) = std::sync::mpsc::channel();
+        for name in ["edit_file", "write_file"] {
+            let (tx, input) = (
+                tx.clone(),
+                json!({"path":path,"old":"a","new":"b","content":"b"}),
+            );
+            std::thread::spawn(move || {
+                let (_, lines, prepared) = preview(name, &input);
+                let _ = tx.send((lines, prepared.map(|p| p.err())));
+            });
+            let (lines, error) = rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("the preview returns");
+            let error = error.flatten().unwrap_or_default();
+            assert!(error.contains("not a regular file"), "{error}");
+            assert_eq!(lines.len(), 1);
+        }
         std::fs::remove_dir_all(dir).unwrap();
     }
 

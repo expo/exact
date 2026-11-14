@@ -50,3 +50,11 @@ test.skipIf(process.platform !== 'darwin')('the host receives the catalogue laun
     assert.deepEqual(iosAssets(app(manifest), dir, false, { kept }).ExactLaunchColor, first.ExactLaunchColor);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }, 60_000);
+
+test('a resource directory under a root Exact owns is refused by name, with another to use', () => {
+  const refused = (from) => () => nativeResourceMappings({ host: { ios: { resources: [{ from, to: 'Resources/x' }] } } }, 'ios');
+  assert.throws(refused('data'), /^Error: host\.ios\.resources\.from "data" is under `data\/`, a directory Exact owns \(each of `assets\/`, .*`dist\/` holds sources, assets or build output\); put the files in a directory of their own, such as `data-files\/`$/);
+  assert.throws(refused('assets/raw'), /"assets\/raw" is under `assets\/`[^]*such as `assets-files\/`$/);
+  assert.throws(refused('../outside'), /must name a separate app-relative resource directory/);
+  assert.deepEqual(nativeResourceMappings({ host: { ios: { resources: [{ from: 'data-files', to: 'Resources/data-files' }] } } }, 'ios'), [{ from: 'data-files', to: 'Resources/data-files' }]);
+});

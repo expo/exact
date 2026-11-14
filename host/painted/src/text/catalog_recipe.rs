@@ -16,7 +16,7 @@ pub(crate) struct CatalogSnapshot {
     collection: fontique::Collection,
     files: Arc<HashMap<u64, Arc<std::path::Path>>>,
     locale: String,
-    families: Vec<FamilyChoice>,
+    families: Vec<Vec<FamilyChoice>>,
     declared: HashMap<(u16, u16, bool), catalog::FaceId>,
     sans: String,
 }
@@ -35,7 +35,7 @@ pub(super) struct Recipe {
     collection: fontique::Collection,
     files: Arc<HashMap<u64, Arc<std::path::Path>>>,
     locale: String,
-    families: Vec<FamilyChoice>,
+    families: Vec<Vec<FamilyChoice>>,
     declared: HashMap<(u16, u16, bool), catalog::FaceId>,
     sans: String,
     pub cost: CaptureCost,
@@ -53,7 +53,7 @@ impl CatalogSnapshot {
     }
     pub(super) fn prepare(mut self) -> Result<Arc<Recipe>, TransferError> {
         let label = NEXT_CATALOG
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
             .map_err(|_| TransferError::CatalogExhausted)?;
         let names = super::fonts::family_names(&mut self.collection);
         let faces = names

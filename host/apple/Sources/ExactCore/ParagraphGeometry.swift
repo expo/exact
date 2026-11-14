@@ -517,7 +517,7 @@ extension MeasuredGlyphs.Line {
 extension Spec {
     package var reusesMeasuredGlyphs: Bool {
         lineClamp == 0 && !ellipsis && align != 3 && shadow == nil && runs.allSatisfy {
-            !$0.hidden && !$0.fixedInk && ($0.color == nil || $0.color == color) && $0.decoration.isEmpty
+            $0.opacity.isEmpty && !$0.hidden && !$0.fixedInk && ($0.color == nil || $0.color == color) && $0.decoration.isEmpty
                 && $0.underlineColor == nil && $0.strikeColor == nil && $0.background == nil && $0.shadow == nil && $0.stroke == nil && $0.href.isEmpty
         }
     }

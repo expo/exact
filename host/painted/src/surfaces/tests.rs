@@ -246,6 +246,7 @@ uint32_t gpu_carry(void) { return 268435457; }
 uint32_t gpu_restore(void) { return 1; }
 void gpu_destroy(void) {}
 uint32_t gpu_error(void) { return 0; }
+uint32_t gpu_shader_names(void) { output="[]"; return 2; }
 const unsigned char* gpu_out_ptr(void) { return (const unsigned char*)(output ? output : reply); }
 "#,
     )
@@ -415,8 +416,9 @@ fn controls_own_release_and_focus_and_placed_siblings_cover() {
         },
     );
     p.boxes();
+    // The focus a press gives (`press_hit_after_down`, `control_tap`).
+    assert!(p.set_focus(Some(button), 0.).is_none());
     assert!(p.control_input(button, "down", 20., 30., 1, 0.));
-    assert_eq!(p.focus(), Some(button));
     p.hardware_key("Space", "Space", true, false);
     assert_eq!(p.control_bindings[&(canvas, u32::MAX - 1)].name, "jump");
     p.hardware_key("Space", "Space", false, false);

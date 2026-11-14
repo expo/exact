@@ -180,6 +180,24 @@ fn window_frames_have_work_against_their_deadline_and_no_frame_times() {
 }
 
 #[test]
+fn a_landing_after_the_lease_ends_capture_before_it_records() {
+    // A 10 ms lease; a landing inside it keeps a late-work and a late-apply event
+    for (lands, kept) in [(T0 + 11_000_000, 0), (T0 + 9_000_000, 2)] {
+        let mut r = Reader::new(true);
+        r.answer(
+            &json!({"op": "perf", "frames": true, "capture": "start", "durationMs": 10}),
+            T0,
+        );
+        r.turned(T0 + 100_000, T0, T0 + 1_000_000, P, T0 + 500_000, 1);
+        r.landed(1, T0 + 8_000_000, lands);
+        assert_eq!(r.app.retained(), kept, "landing at {lands}");
+        assert_eq!(r.app.capturing(), kept != 0, "landing at {lands}");
+        let h = health(&mut r, lands);
+        assert_eq!(h["work"]["late"], "1", "expiry keeps the core count");
+    }
+}
+
+#[test]
 fn a_report_keeps_a_captured_hitch_within_its_bytes_once_per_fifteen_seconds() {
     let mut r = Reader::new(true);
     r.answer(
@@ -216,6 +234,15 @@ fn a_report_keeps_a_captured_hitch_within_its_bytes_once_per_fifteen_seconds() {
         report["columns"].as_array().unwrap().len(),
         rows[0].as_array().unwrap().len()
     );
+    let columns = report["columns"].as_array().unwrap();
+    let column = |name: &str| columns.iter().position(|v| v == name).unwrap();
+    let work = rows
+        .iter()
+        .find(|row| row[column("flags")].as_u64().unwrap() & 128 != 0)
+        .expect("late pending work is exported separately from the callback overrun");
+    assert_eq!(work[column("frame_start_offset_us")], -11_833);
+    assert_eq!(work[column("target_offset_us")], -3500);
+    assert_eq!(work[column("apply_began_offset_us")], Value::Null);
     assert_eq!(report["otherSources"][0]["source"], "android-frame-metrics");
     let again: Value = serde_json::from_str(
         &r.answer(

@@ -19,6 +19,70 @@ pub(in super::super) enum Phase {
 pub(in super::super) type Hook = Arc<dyn Fn(Phase, Run) + Send + Sync>;
 
 impl Machine {
+    /// Prepare the file on a bounded reader, then give the starter its first
+    /// hop. A stalled root open holds a reader and this run's charge; its
+    /// starter stays free.
+    pub(super) fn file_reply(self: &Arc<Self>, lane: usize, run: Run, file: FileJob) {
+        if let Some(ms) = file.request.timeout_ms {
+            self.timer.arm(ms, lane, run, file.abort.clone());
+        }
+        {
+            let mut state = self.shared.state.lock().unwrap();
+            if state.retired {
+                return;
+            }
+            let Some(r) =
+                find(&mut state.running, run).filter(|r| !r.terminal && r.claim == Claim::None)
+            else {
+                return;
+            };
+            r.live += 1;
+        }
+        let m = self.clone();
+        let ended = Ended(m.clone(), lane, run);
+        let job = move || {
+            let _ended = ended;
+            let prepared = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                m.body_destination(lane, run, &file.request, &file.abort)
+            }));
+            let destination = match prepared {
+                Ok(Ok(destination)) => destination,
+                Ok(Err(outcome)) => return m.answer(lane, run, outcome),
+                Err(_) => {
+                    return m.answer(
+                        lane,
+                        run,
+                        failed(FailureKind::Aborted, "native reader panicked"),
+                    );
+                }
+            };
+            let url = file.request.url.clone();
+            let start: Box<dyn FnOnce() + Send> = {
+                let m = m.clone();
+                Box::new(move || {
+                    m.fetch(
+                        lane,
+                        run,
+                        file.request,
+                        None,
+                        file.forced,
+                        file.abort,
+                        file.retiring,
+                        file.limit,
+                        file.fetch,
+                        None,
+                        destination,
+                    );
+                })
+            };
+            m.post(lane, Event::Hop(run, url, start));
+        };
+        match super::super::body::reader(job) {
+            Ok(thread) => self.threads.lock().unwrap().push(thread),
+            Err(outcome) => self.answer(lane, run, outcome),
+        }
+    }
+
     #[cfg(test)]
     pub(super) fn body_to_phase(&self, phase: Phase, run: Run) {
         let hook = self.body_to_hook.lock().unwrap().clone();
@@ -39,9 +103,12 @@ impl Machine {
         }
         #[cfg(test)]
         self.body_to_phase(Phase::Prepare, run);
+        let roots = self.shared.roots_for(request);
+        if abort.signal().aborted() {
+            return Err(failed(FailureKind::Aborted, "native request aborted"));
+        }
         let staged =
-            super::super::body_to::stage(self.shared.roots_for(request), &self.grants, request)?
-                .expect("file destination");
+            super::super::body_to::stage(roots, &self.grants, request)?.expect("file destination");
         find(&mut self.shared.state.lock().unwrap().running, run)
             .expect("preparing run")
             .live += 1;

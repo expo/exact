@@ -10,6 +10,7 @@ impl Core {
         work: Option<OwnedWork>,
         forgotten: bool,
         waiting: bool,
+        cache_store_withheld: Option<bool>,
     ) -> Result<(), (&'static str, Option<OwnedWork>)> {
         let ordered = r.request.is_ordered();
         let overlap = reads::overlaps(&r, work.is_some());
@@ -42,6 +43,10 @@ impl Core {
         if state.retired {
             return Err(("native executor retired", work));
         }
+        let cache_store_withheld = cache_store_withheld.unwrap_or_else(|| {
+            cache::asked(&mut state, &r, work.is_some());
+            false
+        });
         let effect_read = reads::effect_read(&r, work.is_some());
         let waits_for_effect =
             (effect_read || waiting) && preload::effect_count(&state) >= COUNTS[0];
@@ -66,9 +71,13 @@ impl Core {
             match place {
                 Ok(charge) => {
                     state.fenced_bytes += charge;
-                    state
-                        .fenced
-                        .push_back(Fenced::Held(Box::new(r), work, charge, forgotten));
+                    state.fenced.push_back(Fenced::Held(
+                        Box::new(r),
+                        work,
+                        charge,
+                        forgotten,
+                        cache_store_withheld,
+                    ));
                 }
                 Err(why) => {
                     state.fenced.push_back(Fenced::Refused(r.ticket, why));
@@ -144,7 +153,10 @@ impl Core {
                 return Err((reason, work));
             }
         };
-        let queued_deadline = if lane == 1 && !r.request.stream && work.is_none() {
+        // Only a request that waits in its lane's queue has one: a stream or
+        // a one-shot starts on a thread of its own at once.
+        let queues = !r.request.stream && !one_shot;
+        let queued_deadline = if lane == 1 && queues && work.is_none() {
             match r
                 .request
                 .timeout_ms
@@ -251,6 +263,7 @@ impl Core {
             queued_deadline,
             overlap,
             class: r.class,
+            cache_store_withheld,
         });
         cache::serve_ready(&mut state);
         #[cfg(test)]
@@ -276,10 +289,12 @@ impl Core {
         let mut refused = Vec::new();
         for place in fenced {
             match place {
-                Fenced::Held(r, work, _, forgotten) => {
+                Fenced::Held(r, work, _, forgotten, withheld) => {
                     let ticket = r.ticket;
                     // Behind a refusal made just now, it is held again.
-                    if let Err((reason, work)) = self.admit(*r, work, forgotten, automatic) {
+                    if let Err((reason, work)) =
+                        self.admit(*r, work, forgotten, automatic, Some(withheld))
+                    {
                         refused.push((ticket, reason));
                         let mut state = self.shared.state.lock().unwrap();
                         self.discard(&mut state, work);

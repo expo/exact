@@ -117,7 +117,21 @@ pub fn reserved(plan: &Plan, body: &mut String) -> Result<String, String> {
         format!("import{{{}}}from\"./facts.js\";", imports.join(","))
     };
     // The tools after the modules, whose origins they stand beside (calls.js).
-    Ok(facts + &modules(plan, body) + &crate::calls::tools(plan, body) + &fetches(plan, body))
+    Ok(facts + &modules(plan, body) + &crate::calls::tools(plan, body))
+}
+
+/// The declared sources' registration (`fetches`) as an exported
+/// `prepareSources`, which the app calls first and a `pages=` enumeration
+/// calls without booting the app (build.mjs `__pages`): the import, the
+/// function and its call. A plan with none adds nothing to the module.
+pub(super) fn prepared_sources(plan: &Plan) -> (String, String, &'static str) {
+    let mut body = String::new();
+    let import = fetches(plan, &mut body);
+    if body.is_empty() {
+        return (import, String::new(), "");
+    }
+    let prepare = format!("export function prepareSources(){{{body}}}");
+    (import, prepare, "prepareSources();")
 }
 
 /// The sources declared in Contract (LLP 1162.001), which fetches.js answers

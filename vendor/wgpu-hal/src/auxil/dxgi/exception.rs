@@ -9,22 +9,33 @@ use windows::Win32::{Foundation, System::Diagnostics::Debug};
 //
 // By routing all the registration through these functions we can guarantee
 // there is either 1 or 0 exception handlers registered, not multiple.
-static EXCEPTION_HANDLER_COUNT: Mutex<usize> = Mutex::new(0);
+//
+// EXACT (EXACT-PATCHES.md, 17): the registration keeps the handle
+// `AddVectoredExceptionHandler` returned, which is what
+// `RemoveVectoredExceptionHandler` takes; upstream passed the handler's
+// address, which removed nothing.
+static EXCEPTION_HANDLER: Mutex<crate::auxil::shared_registration::Shared> =
+    Mutex::new(crate::auxil::shared_registration::Shared::new());
 
 pub fn register_exception_handler() {
-    let mut count_guard = EXCEPTION_HANDLER_COUNT.lock();
-    if *count_guard == 0 {
-        unsafe { Debug::AddVectoredExceptionHandler(0, Some(output_debug_string_handler)) };
-    }
-    *count_guard += 1;
+    EXCEPTION_HANDLER.lock().register(|| {
+        // SAFETY: the handler is a `'static` function; Windows returns null on failure.
+        let handle =
+            unsafe { Debug::AddVectoredExceptionHandler(0, Some(output_debug_string_handler)) };
+        if handle.is_null() {
+            log::warn!(
+                "D3D12 debug messages will not be logged: AddVectoredExceptionHandler failed"
+            );
+        }
+        handle as usize
+    });
 }
 
 pub fn unregister_exception_handler() {
-    let mut count_guard = EXCEPTION_HANDLER_COUNT.lock();
-    if *count_guard == 1 {
-        unsafe { Debug::RemoveVectoredExceptionHandler(output_debug_string_handler as *mut _) };
-    }
-    *count_guard -= 1;
+    EXCEPTION_HANDLER.lock().unregister(|handle| {
+        // SAFETY: the handle `AddVectoredExceptionHandler` returned, removed once.
+        unsafe { Debug::RemoveVectoredExceptionHandler(handle as *const _) };
+    });
 }
 
 const MESSAGE_PREFIXES: &[(&str, log::Level)] = &[

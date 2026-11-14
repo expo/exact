@@ -45,7 +45,7 @@ pub fn formatting(f: Stdlib, args: &[Value], plan: &Plan) -> Option<Value> {
                 "iso" => Style::Iso,
                 _ => return None,
             };
-            match wall_ms(num(0)?, num(1)?) {
+            match date_wall(args.first()?, num(1)?) {
                 Some(wall) => Value::str(&date(wall, style)),
                 None => Value::str(""),
             }
@@ -67,6 +67,27 @@ pub fn formatting(f: Stdlib, args: &[Value], plan: &Plan) -> Option<Value> {
         Stdlib::FormatDecimal => format_decimal(num(0)?, digits(num(1)?, 20)?),
         _ => return None,
     })
+}
+
+/// A timestamp's shifted wall time, or a day key's midnight without a zone
+/// shift. Both keep the formatters' offset and year bounds.
+fn date_wall(input: &Value, offset: f64) -> Option<f64> {
+    if let Some(epoch) = input.as_number() {
+        return wall_ms(epoch, offset);
+    }
+    wall_ms(0.0, offset)?;
+    let (year, month, day) = crate::stdlib::iso_date(input.as_str()?)?;
+    if year == 0 {
+        return None;
+    }
+    // The inverse of `civil`, with March as the first month of a year.
+    let year = year - i64::from(month <= 2);
+    let era = year / 400;
+    let yoe = year - era * 400;
+    let month = if month > 2 { month - 3 } else { month + 9 };
+    let doy = (153 * month + 2) / 5 + day - 1;
+    let days = era * 146_097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719_468;
+    Some(days as f64 * 86_400_000.0)
 }
 
 /// A `formatDate` style.

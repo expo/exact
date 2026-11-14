@@ -16,6 +16,32 @@ on Linux and the web"), and TypeScript's `atomicWriteFile` carries a kept
 file. What remains in this repository is under "What remains (2026-10-26)".
 Exact Draw's row is work in Exact Draw's own repository, not this one.
 
+## Status (2026-11-13)
+
+D4's hard rows have an editor and a fixture. `scripts/fixtures/kept-editor`
+is a Markdown editor (`textarea markup="markdown"`) over a document chosen
+under `doc.keep`: Save is TypeScript's `atomicWriteFile`, expecting the file
+the draft began from (D2a), and the document is watched (D1).
+`kept.drives.mjs` drives it; where the file is on this machine's disk,
+another program replaces it (a new file renamed over the path) mid-session.
+
+- **Linux** (the host built for macOS, headless): the editor's atomic save
+  lands and reads back at the same `doc:` path; after another program's
+  replacement, the save of a draft begun from the earlier file is refused
+  `ECHANGED`, the draft kept, and the path reads the other program's file.
+  That host has no inotify, so the watch's re-ask is not shown there.
+- **The web**: the editor's atomic save, through the agent, which hands the
+  page in-memory handles that no other program can reach. Over real handles
+  in Chrome (`host/web/documents-kept.test.mjs`): a kept file saved by the
+  app's atomic replace reads the save after a reload; another writer's
+  replacement at its name fires the `FileSystemObserver`, the browser's
+  handle reads the new file, and a save expecting the earlier read is
+  refused `ECHANGED`.
+- **macOS**: `kept.drives.mjs macos` has the relaunch legs (the kept path
+  reads the editor's save after a relaunch; replaced by another program, it
+  is forgotten at the next launch) and the watch. The fixture builds for
+  macOS, but the drive was not run: the screen was locked.
+
 ## The consumer
 
 Exact Draw edits Excalidraw drawings on disk: a Contract shell (file explorer,
@@ -76,10 +102,9 @@ Recent list. Left:
 
 ## What remains (2026-10-26)
 
-- **D4's hard rows by an editor**: the Markdown editor saving a kept file
-  with its own atomic replace (the carry is built and tested beneath it,
-  from Rust and TypeScript), and a fixture where another program replaces
-  it, driven on each host.
+- **D4's hard rows by an editor**: built and driven on Linux and the web
+  (Status, 2026-11-13); left: `kept.drives.mjs macos` run with the screen
+  unlocked, and the watch's re-ask on a real Linux.
 - **The Linux file chooser on a desktop**: `showOpenFilePicker`,
   `showDirectoryPicker` and `showSaveFilePicker` ask the desktop portal's
   `FileChooser` and keep what it answers (`host/painted/src/portal.rs`), tested

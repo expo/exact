@@ -233,6 +233,7 @@ pub const STYLE_NAMES: &[(&str, &str, AttrTarget)] = &[
     ("align-content", "css CSS Box Alignment 3", AttrTarget::Styles(&[StyleId::AlignContent])),
     ("align-self", "css CSS Box Alignment 3", AttrTarget::Styles(&[StyleId::AlignSelf])),
     ("box-sizing", "css CSS Sizing 3", AttrTarget::Styles(&[StyleId::BoxSizing])),
+    ("image-rendering", "css CSS Images 3", AttrTarget::Styles(&[StyleId::ImageRendering])),
     ("object-fit", "css CSS Images 3", AttrTarget::Styles(&[StyleId::ObjectFit])),
     ("justify-content", "css CSS Box Alignment 3", AttrTarget::Styles(&[StyleId::JustifyContent])),
     ("justify-items", "css CSS Box Alignment 3", AttrTarget::Styles(&[StyleId::JustifyItems])),

@@ -7,7 +7,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
-import { openTouches, realTap, springboard } from '../host/apple/touches.mjs';
+import { openTouches, realTap, springboard, withAccessibilityRuntime } from '../host/apple/touches.mjs';
 import { nativeKey } from './agent-keys.mjs';
 import { jsonLines, hangup, waitAtMost, bootRefusal, simulatorConsole, REPLY_MS } from './agent-wire.mjs';
 import { appleArtifacts, bundleId, install } from '../host/apple/build.mjs';
@@ -37,6 +37,7 @@ export async function openIOS({
   session,
   hostFixture = false,
   touch = 'agent',
+  ax = false,
   onProcess,
 }) {
   const a = resolveApp(app);
@@ -52,7 +53,10 @@ export async function openIOS({
   const dev = simulator(undefined, { app: id, dir: a.dir, hint: '--sim <udid|name> (or EXACT_SIM)' });
   return withSoftwareKeyboard(dev, () =>
     exclusiveIOS(dev.udid, id, () =>
-      openIOSOwned({ a, bundle, id, dev, plan, size, extra, session, hostFixture, touch, onProcess }),
+      // An AX drive turns UIKit's accessibility runtime on for its launch (`withAccessibilityRuntime`).
+      withAccessibilityRuntime(dev.udid, ax && touch === 'agent', () =>
+        openIOSOwned({ a, bundle, id, dev, plan, size, extra, session, hostFixture, touch, onProcess }),
+      ),
     ),
   );
 }
@@ -89,7 +93,7 @@ async function openIOSOwned({ a, bundle, id, dev, plan, size, extra, session, ho
   // (`keepInstalledRelease`).
   let kept = null;
   try {
-    kept = keepInstalledRelease(dev.udid, id, bundle, hostFixture ? 'ExactHostIOS' : appleExecutableName(a));
+    kept = keepInstalledRelease(dev.udid, id, bundle, hostFixture ? 'ExactHostIOS' : appleExecutableName(a, true));
     if (kept.install) install(dev, bundle, a, hostFixture, true);
   } catch (e) {
     await touches?.close();
@@ -108,7 +112,7 @@ async function openIOSOwned({ a, bundle, id, dev, plan, size, extra, session, ho
   };
   const childEnv = { ...process.env };
   for (const [k, v] of Object.entries(env)) childEnv[`SIMCTL_CHILD_${k}`] = v;
-  const crashName = hostFixture ? 'ExactHostIOS' : appleExecutableName(a);
+  const crashName = hostFixture ? 'ExactHostIOS' : appleExecutableName(a, true);
   let closing = false;
   const crashes = crashWatch(crashName, bundle, { bundleId: id, udid: dev.udid }),
     // `logs`, a failed launch: this build's crash here (ReportCrash writes it seconds after the exit: LLP 1156.001 D4)
@@ -117,9 +121,9 @@ async function openIOSOwned({ a, bundle, id, dev, plan, size, extra, session, ho
   let launch,
     pid = null,
     socket = null;
-  // The launch brings the app to the front: not while another drive reads this simulator's display
-  // (`simulatorDisplay`).
-  await simulatorDisplay(dev.udid, async () => {
+  // The launch brings the app to the front: not while another drive reads this simulator's display. The caller
+  // holds the display lock (`simulatorDisplay`) through the accessibility setup and the launch.
+  try {
     launch = simulatorConsole(
       () =>
         spawn(
@@ -160,13 +164,13 @@ async function openIOSOwned({ a, bundle, id, dev, plan, size, extra, session, ho
       });
       if (!socket) await sleep(50);
     }
-  }).catch(async e => {
+  } catch (e) {
     if (!launch) {
       rmSync(dir, { recursive: true, force: true });
       await touches?.close();
     }
     throw e;
-  });
+  }
   socket.on('error', () => {});
   const lines = jsonLines(socket, socket, hostLines);
   const exited = new Promise(r =>

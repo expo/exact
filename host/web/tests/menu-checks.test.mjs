@@ -59,28 +59,29 @@ component App
               button role="menuitemradio" aria-checked=true white-space="nowrap" testId="long"
                 text "A title far wider than the menu that holds it, which ends in an ellipsis"
               button role="menuitemradio" aria-checked=true display="flex" align-items="center" gap=8 height=44 testId="raster"
-                image "maps.png" width=24 height=24
+                image "assets/maps.png" width=24 height=24
                 text "Maps"
               button role="menuitemradio" aria-checked=false display="flex" align-items="center" gap=8 height=44 padding=4 border-bottom-width=2 border-bottom-style="solid" border-bottom-color="#ff9999" testId="raster-off"
-                image "maps.png" width=24 height=24
+                image "assets/maps.png" width=24 height=24
                 text "Waze"
               button role="menuitemradio" aria-checked=true display="flex" align-items="center" gap=8 height=44 padding-left=(stacked ? 12 : 4) border-bottom-width=2 border-bottom-style="solid" border-bottom-color="#ff9999" testId="raster-bound"
-                image "maps.png" width=24 height=24
+                image "assets/maps.png" width=24 height=24
                 text "Google"
               button role="menuitemradio" aria-checked=true direction="rtl" display="flex" align-items="center" gap=8 height=44 padding-left=4 padding-right=12 testId="raster-rtl"
-                image "maps.png" width=24 height=24
+                image "assets/maps.png" width=24 height=24
                 text "Apple"
           // A row in a button is no native one, so this menu is apart: its one raster row is all it checks.
           button appearance="none" padding-left=32 testId="holder"
             column id="menu2" popover="auto" role="menu"
               button role="menuitemradio" aria-checked=true display="flex" align-items="center" gap=8 height=44 testId="nested"
-                image "maps.png" width=24 height=24
+                image "assets/maps.png" width=24 height=24
                 text "Maps"
 `;
 const ROWS = ['title', 'off', 'box', 'leading', 'trailing', 'turning', 'wide', 'long', 'raster', 'raster-off', 'raster-bound', 'raster-rtl'];
 const RASTERS = ['raster', 'raster-off', 'raster-bound', 'raster-rtl'];
 
-// Each row's mark as painted: the page is shot with every face hidden, so the only ink in a row is its mark's (a
+// Each row's mark as painted: the page is shot with every face hidden and no row's wash (a menu focuses its first
+// row as it opens, which washes it), so the only ink in a row is its mark's (a
 // pixel nearer the mark's colour than the menu's ground, the check's antialiased edges included). `painted`: some ink with ground among it, no larger than the em square (a check, not a block); `before`: the
 // ink ends before the face's first box starts, in the row's direction; `centred`: its middle is within a pixel of the face's.
 async function marks(s, png) {
@@ -92,7 +93,7 @@ async function marks(s, png) {
       return { id, rtl, row: [r.x, r.y, r.width, r.height], face, middle, fs: parseFloat(getComputedStyle(b).fontSize), ink: rgba(ink), ground: rgba(getComputedStyle(b.closest('[popover]')).backgroundColor) };
     });
   })()`);
-  await s.carrier.evaluate(`(() => { const h = document.createElement('style'); h.id = 'hide-faces'; h.textContent = '#menu button > * { visibility: hidden !important; }'; document.head.append(h); })()`);
+  await s.carrier.evaluate(`(() => { const h = document.createElement('style'); h.id = 'hide-faces'; h.textContent = '#menu button > * { visibility: hidden !important; } #menu button { background-image: none !important; }'; document.head.append(h); })()`);
   await s.screenshot(png);
   await s.carrier.evaluate(`document.getElementById('hide-faces').remove()`);
   const { width, data } = decodePng(readFileSync(png));

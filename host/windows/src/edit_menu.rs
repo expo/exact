@@ -43,7 +43,8 @@ pub(super) fn show(hwnd: isize, spec: &EditMenu, scale: f32) -> Result<Option<Ed
                 return Err(error());
             }
             let available = spec.enabled(*action)
-                && (*action != EditAction::Paste || IsClipboardFormatAvailable(13) != 0);
+                && (*action != EditAction::Paste
+                    || crate::clipboard::paste_available(|| IsClipboardFormatAvailable(13) != 0));
             let label: Vec<u16> = label.encode_utf16().chain(Some(0)).collect();
             if AppendMenuW(
                 menu.0,

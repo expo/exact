@@ -31,6 +31,7 @@ pub const RECIPES: &[(&str, &str)] = &[
     recipe!("app-json"),
     recipe!("background-transfers"),
     recipe!("background-work"),
+    recipe!("chat-header"),
     recipe!("chat-thread"),
     recipe!("content-design"),
     recipe!("convex"),
@@ -55,6 +56,7 @@ pub const RECIPES: &[(&str, &str)] = &[
     recipe!("list-rows"),
     recipe!("local-network"),
     recipe!("long-lists"),
+    recipe!("long-text"),
     recipe!("mobile-build"),
     recipe!("money"),
     recipe!("motion"),
@@ -91,7 +93,9 @@ pub const RECIPES: &[(&str, &str)] = &[
     recipe!("timer-that-survives-relaunch"),
     recipe!("timers"),
     recipe!("tips"),
+    recipe!("tools"),
     recipe!("usb-hid-serial"),
+    recipe!("waveform-and-tail"),
     recipe!("web-look"),
     recipe!("website"),
 ];
@@ -114,6 +118,7 @@ const ALIASES: &[(&str, &str)] = &[
     ("sequence", "sequencer"),
     ("keyframes", "motion"),
     ("@keyframes", "motion"),
+    ("tool", "tools"),
 ];
 
 /// The recipe a name looks up, as a builder may write it (`grouped-form`,

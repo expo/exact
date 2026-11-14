@@ -52,3 +52,13 @@ put the picture on `imageLayer` in every case, masking it to the rounded
 border box. An XCTest: a 100×100 image, `border-radius=12`, `padding=8`,
 `background-color` grey, a red bitmap; render the window and read a centre
 pixel.
+
+
+## Verification
+
+`BoxPaintMacTests.testARoundedDrawnImageKeepsItsBackgroundBehindItsPixels`
+checks a padded image with a blue fill, both with every corner rounded and
+with only the top-left corner rounded plus `overflow: hidden`. The live
+layer tree and capture show the red picture above the fill and blue in the
+padding. The partial-corner case failed both picture assertions before the
+fill-sublayer guard was widened. All eight tests in the class pass.

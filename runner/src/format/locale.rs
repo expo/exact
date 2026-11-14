@@ -133,7 +133,7 @@ pub(super) fn formatting(
         },
         Stdlib::FormatDate => {
             let style = style(2)?;
-            let wall = wall_ms(num(0)?, num(1)?);
+            let wall = super::date_wall(args.first()?, num(1)?);
             match (style, wall) {
                 (_, None) if matches!(style, "medium" | "month-year" | "iso") => String::new(),
                 ("medium", Some(wall)) => date(&r, wall, Field::Medium, Field::MediumNames),

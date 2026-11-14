@@ -466,7 +466,7 @@ fn allocate_serial(counter: &AtomicU64) -> Result<u64, EngineError> {
 
 fn allocate_serials(counter: &AtomicU64, count: u64) -> Result<u64, EngineError> {
     counter
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |serial| {
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |serial| {
             serial.checked_add(count)
         })
         .map_err(|_| EngineError::HoldSerialExhausted)

@@ -272,6 +272,45 @@ fn a_plan_graph_names_the_plans_own_format() {
     assert_eq!(requires["kernelSchema"], json!("0000000000000007"));
 }
 
+/// A source's signature names an enum's members, in parameters and nested
+/// results alike, so an installed source that answers the old vocabulary is
+/// not admitted under a plan that refuses it. Their order and an unrelated
+/// declaration do not change it.
+#[test]
+fn a_source_signature_names_its_enum_members() {
+    let sources = |members: &[&str], unrelated: bool| {
+        let mut builder = exact_plan::builder::PlanBuilder::new(0, 0);
+        if unrelated {
+            let number = builder.primitive(exact_plan::TypeKind::Number);
+            builder.record("Other", &[("n", number)]);
+        }
+        let members: Vec<String> = members.iter().map(|m| m.to_string()).collect();
+        let state = builder.string_enum(&members);
+        let list = builder.list(state);
+        let result = builder.record("Result", &[("state", state), ("seen", list)]);
+        builder.source("read", &[state], result);
+        let plan = builder.finish().unwrap().encode();
+        plan_graph(&plan, &json!({}), "aarch64-apple-darwin").unwrap()["sources"]["read"].clone()
+    };
+    let old = sources(&["old", "common"], false);
+    assert_eq!(
+        old["params"][0],
+        json!({"kind":"String","members":["common","old"]})
+    );
+    assert_eq!(
+        old["result"]["fields"][1]["type"]["item"],
+        json!({"kind":"String","members":["common","old"]})
+    );
+    assert_ne!(old, sources(&["new", "common"], false));
+    assert_eq!(old, sources(&["common", "old"], true));
+    let mut plain = exact_plan::builder::PlanBuilder::new(0, 0);
+    let string = plain.primitive(exact_plan::TypeKind::String);
+    plain.source("read", &[string], string);
+    let plain = plain.finish().unwrap().encode();
+    let plain = plan_graph(&plain, &json!({}), "aarch64-apple-darwin").unwrap();
+    assert_eq!(plain["sources"]["read"]["params"][0], json!("String"));
+}
+
 #[test]
 fn rust_plan_receipts_require_the_baked_wasmi_executor() {
     let mut builder = exact_plan::builder::PlanBuilder::new(0, 0);
@@ -451,6 +490,26 @@ fn a_plan_requires_the_typescript_runtime_its_inputs_carry() {
         json!(crate::compat::TYPESCRIPT_RUNTIME)
     );
     assert_eq!(requires(json!({})), Value::Null);
+}
+
+/// A TypeScript module pair requires exactly the binary's TypeScript grants
+/// and its prelude's runtime, as a Rust module requires its own.
+#[test]
+fn a_typescript_pair_requires_its_grants_and_runtime() {
+    let plan = exact_plan::builder::PlanBuilder::new(0, 0)
+        .finish()
+        .unwrap();
+    let inputs = json!({"javascriptGrants": "net.fetch https://x/", "typescriptRuntime": 2});
+    let assets = ["typescript/app.hbc", "typescript/app.module.json"]
+        .map(|name| json!({"name": name, "sha256": "00", "bytes": 1}));
+    let graph = artifact_graph(&plan, &inputs, &assets, false, "aarch64-apple-ios").unwrap();
+    for row in &graph["artifacts"].as_array().unwrap()[1..] {
+        assert_eq!(
+            row["requires"],
+            json!({"javascriptGrants": "net.fetch https://x/", "typescriptRuntime": 2}),
+            "{row}"
+        );
+    }
 }
 
 /// LLP 1098 D8: the receipt says whether a node claims the media session.
@@ -872,7 +931,9 @@ fn a_masked_svg_image_loads_the_svg_island_module() {
         .unwrap();
     let manifest = Manifest::read(&root).unwrap();
     let loads = |root: &Path| {
-        let cards = asset_cards(root, &root.join("out"), &manifest).unwrap();
+        let cards = asset_cards(root, &root.join("out"), &manifest, "ios")
+            .unwrap()
+            .0;
         let pictures = asset_islands(root, &cards);
         artifact_graph(&plan, &json!({}), &cards, pictures, "aarch64-apple-ios").unwrap()["loads"]
             .clone()
@@ -906,7 +967,9 @@ fn the_embedded_roster_uses_the_copy_gate_and_refuses_symlink_assets() {
         std::fs::write(root.join(folder).join(".DS_Store"), b"Bud1").unwrap();
     }
     let manifest = Manifest::read(&root).unwrap();
-    let cards = asset_cards(&root, &root.join("out"), &manifest).unwrap();
+    let cards = asset_cards(&root, &root.join("out"), &manifest, "ios")
+        .unwrap()
+        .0;
     assert_eq!(
         cards,
         vec![
@@ -914,16 +977,134 @@ fn the_embedded_roster_uses_the_copy_gate_and_refuses_symlink_assets() {
             json!({"name":"deck/nested/index.html","sha256":hash(b"deck"),"bytes":4}),
         ]
     );
+    assert_eq!(
+        asset_cards(&root.join("absent/.."), &root.join("out"), &manifest, "ios")
+            .unwrap()
+            .0,
+        cards
+    );
     std::fs::write(root.join("assets/two words.png"), b"space").unwrap();
-    assert!(asset_cards(&root, &root.join("out"), &manifest)
+    assert!(asset_cards(&root, &root.join("out"), &manifest, "ios")
         .unwrap_err()
         .contains("bake asset gate: the asset name assets/two words.png is not portable"));
     std::fs::remove_file(root.join("assets/two words.png")).unwrap();
     std::fs::write(root.join("outside"), b"must not be embedded").unwrap();
     std::os::unix::fs::symlink("../outside", root.join("assets/escape")).unwrap();
-    assert!(asset_cards(&root, &root.join("out"), &manifest)
+    assert!(asset_cards(&root, &root.join("out"), &manifest, "ios")
         .unwrap_err()
         .contains("bake asset gate"));
+    std::fs::remove_file(root.join("assets/escape")).unwrap();
+    std::fs::create_dir(root.join("outside-dir")).unwrap();
+    std::fs::write(root.join("outside-dir/file"), b"outside").unwrap();
+    for target in ["../outside-dir", "../missing"] {
+        std::os::unix::fs::symlink(target, root.join("assets/nested")).unwrap();
+        assert!(asset_cards(&root, &root.join("out"), &manifest, "ios")
+            .unwrap_err()
+            .contains("bake asset gate"));
+        std::fs::remove_file(root.join("assets/nested")).unwrap();
+    }
+    std::fs::remove_dir_all(root.join("assets")).unwrap();
+    for target in ["outside-dir", "missing"] {
+        std::os::unix::fs::symlink(target, root.join("assets")).unwrap();
+        assert!(asset_cards(&root, &root.join("out"), &manifest, "ios")
+            .unwrap_err()
+            .contains("bake asset gate"));
+        std::fs::remove_file(root.join("assets")).unwrap();
+    }
+    std::fs::remove_dir_all(root.join("deck")).unwrap();
+    assert!(asset_cards(&root, &root.join("out"), &manifest, "ios")
+        .unwrap()
+        .0
+        .is_empty());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+#[ignore = "async lane: inventories a 392 MiB asset tree"]
+fn a_large_embedded_roster_hashes_each_file_without_a_tree_reply() {
+    let root = std::env::temp_dir().join(format!(
+        "exact-bake-large-assets-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(root.join("assets")).unwrap();
+    let mut expected = Vec::new();
+    // Base64 for this tree exceeds the helper's 512 MiB reply buffer.
+    for index in 0..7 {
+        let bytes = vec![index as u8; 56 << 20];
+        let name = format!("assets/{index}.bin");
+        std::fs::write(root.join(&name), &bytes).unwrap();
+        expected.push(json!({"name":name,"sha256":hash(&bytes),"bytes":bytes.len()}));
+    }
+    let manifest = Manifest::read(&root).unwrap();
+    let cards = asset_cards(&root, &root.join("out"), &manifest, "ios");
+    std::fs::remove_dir_all(root).unwrap();
+    assert_eq!(cards.unwrap().0, expected);
+}
+
+/// A baked texture's three files: a Mac's roster holds its BC payload, an
+/// iPhone's its ASTC payload, the web's all three. An authored `.tex` with no
+/// payloads stays everywhere. A roster that left a file out names the family
+/// it kept, which joins the cohort's inputs; one that left none out names none.
+#[test]
+fn a_native_roster_holds_only_its_platforms_texture_family() {
+    let root = std::env::temp_dir().join(format!(
+        "exact-bake-textures-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(root.join("assets/fox")).unwrap();
+    for name in [
+        "fox/0.tex",
+        "fox/0.bc.tex",
+        "fox/0.astc.tex",
+        "hand.tex",
+        "fox.model",
+    ] {
+        std::fs::write(root.join("assets").join(name), name).unwrap();
+    }
+    let manifest = Manifest::read(&root).unwrap();
+    let names = |platform| {
+        asset_cards(&root, &root.join("out"), &manifest, platform)
+            .unwrap()
+            .0
+            .iter()
+            .map(|card| card["name"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>()
+    };
+    let family = |platform| {
+        asset_cards(&root, &root.join("out"), &manifest, platform)
+            .unwrap()
+            .1
+    };
+    assert_eq!(family("macos").as_deref(), Some("bc"));
+    assert_eq!(family("ios").as_deref(), Some("astc"));
+    assert_eq!(family("web"), None);
+    assert_eq!(
+        names("macos"),
+        ["assets/fox.model", "assets/fox/0.bc.tex", "assets/hand.tex"]
+    );
+    assert_eq!(
+        names("ios"),
+        [
+            "assets/fox.model",
+            "assets/fox/0.astc.tex",
+            "assets/hand.tex"
+        ]
+    );
+    for platform in ["web", "linux", "windows", "android"] {
+        assert_eq!(names(platform).len(), 5, "{platform}");
+    }
+    for name in ["fox/0.tex", "fox/0.bc.tex", "fox/0.astc.tex"] {
+        std::fs::remove_file(root.join("assets").join(name)).unwrap();
+    }
+    assert_eq!(family("ios"), None, "nothing left out: an older cohort's");
     std::fs::remove_dir_all(root).unwrap();
 }
 

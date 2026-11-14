@@ -24,7 +24,7 @@ concat: xs.concat(ys) -> T[]
 filter: xs.filter(x => bool) -> T[]
 flat: xs.flat() -> T[]
 first: first(xs) -> option<T>
-formatDate: formatDate(ms, offsetMinutes, "medium"|"month-year"|"iso") -> string
+formatDate: formatDate(msOrDayKey, offsetMinutes, "medium"|"month-year"|"iso") -> string
 formatDay: formatDay(then, now, offsetMinutes, "day"|"day-time"|"list") -> string  (Today, Monday)
 formatDecimal: (cents to "12.34"; literal digits)
 formatNumber: formatNumber(n, "compact"|"decimal"|"percent"|"currency", "USD") -> string  (1,234.5; 26%)
@@ -163,7 +163,7 @@ action add
 text items.join(", ")
 ```
 ### a dated record
-The write reads the clock, not a ticked `now`, and stores `at`; `performanceNow()` alone is 0 each launch. `"iso"` is the day, compared as text; its label `formatDay(at, now, …)`: Today, Yesterday. Tests pin `epoch` and `time-zone`.
+The write reads the clock, not a ticked `now`; `performanceNow()` alone is 0 each launch. `"iso"` is the day, compared as text; its label `formatDay(at, now, …)`: Today, Yesterday. Tests pin `epoch` and `time-zone`.
 ```contract
 shape Time
   epochAtZero: number

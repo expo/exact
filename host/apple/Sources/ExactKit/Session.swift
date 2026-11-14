@@ -492,7 +492,7 @@ public final class ExactSession {
     func trackInputHold(_ hold: SwipeHold) { inputHolds.add(hold) }
     func retireInputHold(_ hold: SwipeHold) { inputHolds.remove(hold) }
     var pendingSurfaceRecords: [(String, String?, Bool)] = []
-    private var pendingSurfaceWork: [([String: Any], Int)] = []
+    var pendingSurfaceWork: [([String: Any], Int)] = []
     /// Authentication sessions this session opened (`Auth.swift`, LLP 1069.006).
     let authSessions = AuthSessions()
 
@@ -539,6 +539,10 @@ public final class ExactSession {
         presenter.canvas2d.onImage = { [weak self] src, image in
             guard let self, self.state != .destroyed else { return }
             self.apply(self.runtime.canvasImage(src, width: image?.width ?? 0, height: image?.height ?? 0, ok: image != nil))
+        }
+        presenter.canvas2d.onRelease = { [weak self] src in
+            guard let self, self.state != .destroyed else { return }
+            self.runtime.canvasImageReleased(src)
         }
         presenter.canvas2d.onReplayEnded = { [weak self] in self?.workEnded() }
         presenter.canvas2d.onHeld = { [weak self] view, held in
@@ -1041,7 +1045,6 @@ public final class ExactSession {
     /// @ref LLP 1038 D7/D11 — observation only; Swift never interprets slots.
     private(set) var routerOp: [String: Any]?
 
-
     /// A batch from a timer, a scroll event or a host's measurement: one that
     /// changes nothing only moves the clock. An app's timer that writes nothing
     /// (a poll that finds no news), a `scroll=` handler whose writes show
@@ -1160,7 +1163,9 @@ public final class ExactSession {
         }
         // Each presenter takes its boot's table, a second one with the same too.
         ThemeRoles.apply(batch, root: presenter.root); if batch.ops.contains(where: { $0.op == .roles }) { presenter.applyThemeTint() }
+        let orientationChanged = presenter.orientationChangesScreen(batch)
         ThemeRoles.within(presenter.root) { presenter.apply(batch) }; Tambers.moved(self) // bindings' places (LLP 1121 D12)
+        drainCanvasCaptures(batch)
         if !batch.canvasImages.isEmpty { presenter.canvas2d.load(batch.canvasImages) }
         AnimatedRasters.shared.poke()
         for op in batch.ops where op.op == .reorder { presenter.reorder?.observe(ReorderState(op.payload)); presenter.reorderGroup?.observe(ReorderGroupState(op.payload)) }
@@ -1186,7 +1191,7 @@ public final class ExactSession {
             transformInputHold?.cancelIfInputIneligible()
             presenter.transformGeometry.changed()
             applying = false
-            ExactLaunch.shared.applied(self, batch)
+            ExactLaunch.shared.applied(self, batch, orientationChanged: orientationChanged)
             workEnded()
             #if os(macOS)
             regions.flush()
@@ -1280,17 +1285,12 @@ public final class ExactSession {
     private func drainSurfaceWork() {
         guard canvases.ready || canvases.failed != nil || canvases.isEmpty,
               !pendingSurfaceWork.isEmpty else { return }
-        let work = pendingSurfaceWork
-        pendingSurfaceWork = []
+        let work = pendingSurfaceWork.filter { $0.0["mode"] as? String != "canvas" }
+        pendingSurfaceWork.removeAll { $0.0["mode"] as? String != "canvas" }
         DispatchQueue.main.async { [weak self] in
             guard let self, state != .destroyed else { return }
             for (op, owner) in work { canvases.surfaceWork(op, generation: owner) }
         }
-    }
-
-    package func completeSurface(_ ticket: UInt64, generation owner: Int, kind: UInt32, body: Data = Data()) {
-        guard state != .destroyed, generation == owner, runtime.requestActive(ticket) else { return }
-        apply(runtime.fulfillSurface(ticket, kind: kind, body: body, now: now()))
     }
 
     /// The first node drew: the GPU module may load now (LLP 1009 D4), on
@@ -1350,18 +1350,7 @@ public final class ExactSession {
         let first = schemeDark == nil
         schemeDark = dark
         reportColors()
-        // Views found painting in an appearance of their own before the
-        // session had a scheme (a `color-scheme` subtree at boot, LLP 1034
-        // §8): queued now, and said in the scheme's own batch, after it.
-        if first {
-            let early = unreported; unreported.removeAll()
-            for id in early {
-                if let v = presenter.views[id] { noteAppearance(v); continue }
-                #if os(iOS) || os(tvOS)
-                if let dark = presenter.flats.appearance(of: id) { noteAppearance(id, dark: dark) }
-                #endif
-            }
-        }
+        reportDeferredAppearances(first: first)
         // A subtree with a `color-scheme` of its own keeps its appearance when the session's changes, so no trait
         // callback says it: said here, after the scheme. Its views' appearance is the row's, already settled,
         // whatever the platform's walk has reached.
@@ -1384,22 +1373,12 @@ public final class ExactSession {
     /// The appearance last reported for the session, and each node view found painting motion in another (a sheet's override, say), by id.
     private(set) var schemeDark: Bool?
     var viewDark: [UInt32: Bool] = [:]
-    private var pendingViewDark: [(UInt32, Bool)] = []
+    var pendingViewDark: [(UInt32, Bool)] = []
     var colorsOwed = false
     fileprivate(set) var awaitingTree = false // committed to a new runner whose tree is not in: a report would reach the old views
     private func treeIsIn() { awaitingTree = false; replayHeld(); if colorsOwed { colorsOwed = false; reportColors() } } // only the replacement batch, not a reset's cleanup
-    /// A view painting motion: when its own appearance is not the one its node's colours resolve by, say so after
-    /// the batch (LLP 1062 D4).
-    func noteAppearance(_ view: NodeView) { noteAppearance(view.id, dark: view.drawsDark) }
-    /// A node painting in `dark`: a view, or a flat leaf in its parent's appearance.
-    func noteAppearance(_ id: UInt32, dark: Bool) {
-        guard let session = schemeDark else { unreported.insert(id); return }
-        guard dark != viewDark[id] ?? session else { return }
-        viewDark[id] = dark == session ? nil : dark
-        pendingViewDark.append((id, dark))
-    }
-    /// Views noted before the session had a scheme.
-    private var unreported = Set<UInt32>()
+    /// Nodes awaiting the session's or their own appearance report.
+    var unreported = Set<UInt32>()
     /// A new runtime has heard no view's appearance: forget what was said,
     /// and say it again after its first scheme (LLP 1062 D4, LLP 1034 §8).
     private func forgetAppearances() {

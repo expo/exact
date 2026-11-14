@@ -68,12 +68,23 @@ extension NodeView {
     }
 
     /// ±: the sign of the field's text flips (an empty field starts a negative
-    /// number) and the field reports the change as UIKit's own edit does
-    /// (`editingChanged`, FieldEditingIOS).
+    /// number). It is a person's edit, so it is admitted as UIKit's own are
+    /// (`textField(_:shouldChangeCharactersIn:replacementString:)`): `maxlength`
+    /// and a cancelable `beforeinput` first, then the change and its `input`.
     @objc func toggleSign() {
-        guard let f = field, !disabled, f.isEnabled else { return }
+        guard let f = field, !disabled, !inert, props["editable"] != "false", f.isEnabled else { return }
         let text = f.text ?? ""
-        f.text = text.hasPrefix("-") || text.hasPrefix("\u{2212}") ? String(text.dropFirst()) : "-" + text
+        let signed = text.hasPrefix("-") || text.hasPrefix("\u{2212}")
+        let range = NSRange(location: 0, length: signed ? 1 : 0), replacement = signed ? "" : "-"
+        guard TextInputLimit.allows(text, range: range, replacement: replacement, props: props) else { return }
+        if let fields = presenter?.fieldSelections {
+            // The sign is not beside the caret: removing it deletes in no direction.
+            let admitted = fields.withIntent(self, signed ? "deleteContent" : "insertText") {
+                fields.shouldEdit(self, range: range, replacement: replacement, marked: false)
+            }
+            guard admitted else { return }
+        }
+        f.text = signed ? String(text.dropFirst()) : "-" + text
         fieldChanged()
     }
 

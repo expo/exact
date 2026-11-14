@@ -472,6 +472,7 @@ structure DCx where
   bodies : List Expr
   sums : List Summary
   rank : List Nat
+  resolve : Bool := true
 
 /-- `e` with every derive it reads resolved (derives.rs `Cx::place`);
 `bound` are the derives an enclosing `let` binds; `whole` where a derive
@@ -487,12 +488,15 @@ def place (cx : DCx) : Nat → List Nat → Bool → Expr → Expr
           s.reads.getD d 0 ≥ 2 && s.always.getD d false && !bound.contains d).mergeSort
             fun a b => cx.rank.getD a 0 ≤ cx.rank.getD b 0
         shared.foldl (fun (lets, bnd) d =>
-          (lets ++ [(d, place cx fuel bnd true (cx.bodies.getD d .none))], bnd ++ [d])) ([], bound)
+          let value := if cx.resolve then place cx fuel bnd true (cx.bodies.getD d .none)
+            else cx.bodies.getD d .none
+          (lets ++ [(d, value)], bnd ++ [d])) ([], bound)
       else ([], bound)
     let body := match e with
       | .var name =>
         match cx.idx name with
-        | .some d => if bound'.contains d then e else place cx fuel bound' true (cx.bodies.getD d .none)
+        | .some d => if !cx.resolve || bound'.contains d then e
+          else place cx fuel bound' true (cx.bodies.getD d .none)
         | .none => e
       | .binary .and a b => .binary .and (place cx fuel bound' false a) (place cx fuel bound' true b)
       | .binary .or a b => .binary .or (place cx fuel bound' false a) (place cx fuel bound' true b)
@@ -882,6 +886,80 @@ def withDerives (records values : List String) (m : SMap) (derives : List (Strin
   { map := insertAll m (derives.map fun (d, e) => (d, substExpr { map := m, records, valueOnly } e)),
     valueOnly, records }
 
+/-- Repeated prop reads share one evaluation within each binding, using the
+same guaranteed-evaluation rule as derives. -/
+def shareProps (names : List String) (e : Expr) : Expr := Id.run do
+  let names := names.mergeSort (· ≤ ·)
+  let n := names.length
+  let (e, _) := (freshen e).run 0
+  let cx : DCx := {
+    n, names, idx := names.idxOf?, bodies := names.map Expr.var,
+    sums := List.replicate n (Summary.new n), rank := List.range n, resolve := false }
+  return place cx (1 <<< 20) [] true e
+
+def computedProp : Expr → Bool
+  | .typed e _ => computedProp e
+  | .var _ | .num _ | .str _ | .bool _ | .none => false
+  | _ => true
+
+/-- Follow calls and root derives too: a clock read keeps its evaluation time. -/
+def readsClock (p : CProgram) : Nat → List String → Expr → Bool
+  | 0, _, _ => true
+  | fuel + 1, seen, e =>
+    let (seen, here) : List String × Bool := match e with
+      | .call "performanceNow" _ => (seen, true)
+      | .call name _ =>
+        let key := "fn:" ++ name
+        if seen.contains key then (seen, false) else
+          let seen := key :: seen
+          (seen, (p.fns.find? (fun f => f.name == name)).any fun f => readsClock p fuel seen f.body)
+      | .var name =>
+        let key := "derive:" ++ name
+        if seen.contains key then (seen, false) else
+          let seen := key :: seen
+          (seen, (p.root.derives.find? (fun d => d.name == name)).any fun d => readsClock p fuel seen d.body)
+      | _ => (seen, false)
+    let children : List Expr := match e with
+      | .some x | .unary _ x | .member x _ | .named _ x | .typed x _ | .arrow _ x => [x]
+      | .binary _ a b | .letE _ a b => [a, b]
+      | .ternary a b c | .matchOpt a _ b c => [a, b, c]
+      | .call _ args | .list args | .template args => args
+      | .record _ base fields => base.toList ++ fields.map (·.2)
+      | _ => []
+    here || children.any (readsClock p fuel seen)
+
+/-- Each binding shares within itself (use_node.rs `share_view_props`):
+handlers keep their event-time reads, and a forwarded argument to a value
+prop is one expression wherever its callee reads it. An argument naming one
+of `actions` keeps the shape its callee calls. -/
+def shareViewProps (p : CProgram) (ds : Subst) (shared actions : List String) :
+    List CNode → List CNode
+  | [] => []
+  | nd :: rest =>
+    let share := fun e => shareProps shared (substExpr ds e)
+    let namesAction : Expr → Bool
+      | .var n | .call n _ => actions.contains n
+      | _ => false
+    let here := match nd with
+      | .element tag pos props hs children =>
+        .element tag (pos.map (mapPositional share tag))
+          (props.map fun (a, e) => (a, mapAttrValue share a e)) hs
+          (shareViewProps p ds shared actions children)
+      | .when id c a b =>
+        .when id (share c) (shareViewProps p ds shared actions a) (shareViewProps p ds shared actions b)
+      | .each id x ix l k body =>
+        .each id x ix (share l) (share k) (shareViewProps p ds shared actions body)
+      | .matchN id s x a b =>
+        .matchN id (share s) x (shareViewProps p ds shared actions a)
+          (shareViewProps p ds shared actions b)
+      | .use id name args children =>
+        let callee := if p.root.name == name then Option.some p.root else p.component? name
+        let value := fun a => callee.any fun c => c.props.any fun pd => pd.name == a && !pd.action
+        .use id name (args.map fun (a, e) => (a, if value a && !namesAction e then share e else e))
+          (shareViewProps p ds shared actions children)
+      | .children id => .children id
+    here :: shareViewProps p ds shared actions rest
+
 /-- Enter arm `arm` of the region tagged `tag`. -/
 def inArm {α} (tag arm : Nat) (m : ExM α) : ExM α := do
   modify fun ctx => { ctx with arms := .arm tag arm :: ctx.arms }
@@ -1020,6 +1098,12 @@ def inlineNode (p : CProgram) : Nat → Subst → CNode → ExM (List Node)
       if !fill.isEmpty && !c.slot then
         refuse s!"`{name}` declares no `slot`, so nothing can be indented under it"
       let renamed := renameNodes n [] c.view
+      let shared := ((c.props ++ c.injects).filter fun pd => !pd.action &&
+        (child.get? pd.name).any fun e => computedProp e && !readsClock p (1 <<< 20) [] e).map (·.name)
+      let renamed := if shared.isEmpty then renamed else
+        let ds : Subst := { map := derives, records := p.records, valueOnly := cs.valueOnly }
+        let actions := c.actions.map (·.name) ++ ((c.props ++ c.injects).filter (·.action)).map (·.name)
+        shareViewProps p ds shared actions renamed
       let outer ← get
       let fill' := if c.slot then Option.some (Fill.mk fill s outer.provides outer.fill) else Option.none
       let provided : List (String × Expr) := c.provides.map fun (x, e) => (x, substExpr cs e)

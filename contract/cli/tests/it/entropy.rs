@@ -180,10 +180,11 @@ fn sign_in(r: &mut Runner<Writer>) -> [u32; 5] {
 }
 
 /// D2, "Asking again": a draw does not make a resource ask again, so a write
-/// to the store asks again the resources that read it, directly or through
-/// their arguments, and not one that only drew randomness or took an argument
-/// derived from a draw (expo/exact#54: Convex's socket, which draws its
-/// session id, was opened again by every sign-in).
+/// to the store asks again the resources whose own ask read it, and not one
+/// that only drew randomness (expo/exact#54: Convex's socket, which draws its
+/// session id, was opened again by every sign-in). A resource whose arguments
+/// read a reader is asked when they change: `watch(session)` keeps its
+/// arguments, as `session` answers the same.
 #[test]
 fn a_store_write_asks_again_what_read_the_store_not_what_only_drew() {
     let plan = contract::bake(contract::compile(WRITES).unwrap(), Writer::default()).unwrap();
@@ -196,7 +197,7 @@ fn a_store_write_asks_again_what_read_the_store_not_what_only_drew() {
     )
     .unwrap();
     // token (drew), session (read), both (drew and read), connect(id), watch(session).
-    assert_eq!(sign_in(&mut r), [0, 1, 1, 0, 1]);
+    assert_eq!(sign_in(&mut r), [0, 1, 1, 0, 0]);
     // Still the device's: bake keeps no value for either.
     assert!(r.resource_draws_entropy("id") && r.resource_reads_store("id"));
     assert!(r.resource_reads_store("live"));
@@ -224,7 +225,7 @@ fn a_reload_carries_which_readers_only_drew() {
     )
     .unwrap();
     assert_eq!(asks(&mut reloaded), [0; 5], "every answer was carried");
-    assert_eq!(sign_in(&mut reloaded), [0, 1, 1, 0, 1]);
+    assert_eq!(sign_in(&mut reloaded), [0, 1, 1, 0, 0]);
 }
 
 const LATER: &str = r#"
@@ -250,11 +251,12 @@ component App
       text trailed testId="trailed"
 "#;
 
-/// An upstream answer that starts reading the store and gives the same value
-/// leaves its dependent's cached arguments as they were; the dependent is
-/// asked again by a store write from then on all the same.
+/// An upstream answer that starts reading the store is asked again by a store
+/// write from then on, and while it gives the same value its dependents keep
+/// their arguments and ask nothing, whether they read it directly or through
+/// a derive.
 #[test]
-fn an_argument_that_starts_reading_the_store_makes_its_dependent_ask_again() {
+fn a_store_write_asks_no_dependent_whose_arguments_stay() {
     let plan = contract::bake(contract::compile(LATER).unwrap(), Writer::default()).unwrap();
     let mut r = Runner::boot(
         plan,
@@ -279,5 +281,67 @@ fn an_argument_that_starts_reading_the_store_makes_its_dependent_ask_again() {
         "the same answer: both keep their arguments"
     );
     r.act("signIn", vec![]).unwrap();
-    assert_eq!(asks(&mut r), enabled.map(|n| n + 1));
+    assert_eq!(asks(&mut r), [enabled[0] + 1, enabled[1], enabled[2]]);
+}
+
+/// `token()` asks with a GET; its reply's turn draws randomness and answers
+/// outside its shape, so the reply's commit is refused and a later one fails
+/// the resource.
+#[derive(Default)]
+struct Drawn {
+    asks: u32,
+}
+
+impl DataSource for Drawn {
+    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
+        Err(DataError::UnknownSource(source.into()))
+    }
+    fn answer(&mut self, _: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
+        self.asks += 1;
+        Ok(Answer::Later(exact_runner::Request::get(
+            "https://example.test/token",
+        )))
+    }
+    fn parse(
+        &mut self,
+        store: &mut Store,
+        _: &str,
+        _: &[Value],
+        _: exact_runner::Outcome,
+    ) -> Result<Answer, DataError> {
+        store.observe_entropy();
+        Ok(Answer::Now(Value::Number(7.0)))
+    }
+    fn grants(&self) -> &str {
+        "secret.keep session\n"
+    }
+}
+
+/// A refused reply keeps what its turn read, and a turn that only drew
+/// randomness read nothing the store holds: no store write asks it again.
+#[test]
+fn a_refused_reply_that_only_drew_is_asked_again_by_no_store_write() {
+    let src = "component App
+  resource id = token() as shape string else empty()
+  view
+    text id
+";
+    let mut r = Runner::boot(
+        contract::compile(src).unwrap(),
+        Drawn::default(),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    let ticket = r.take_requests()[0].ticket;
+    let reply = exact_runner::Outcome::Response(exact_runner::Response {
+        status: 200,
+        headers: Vec::new(),
+        body: Vec::new(),
+    });
+    r.fulfill(ticket, reply).unwrap();
+    r.store_changed(vec![("session".into(), b"ada".to_vec())])
+        .unwrap();
+    assert_eq!(r.data().asks, 1);
 }

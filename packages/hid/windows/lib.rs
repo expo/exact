@@ -182,8 +182,8 @@ struct Log {
 
 /// The open collection's handle, shared with its reader thread.
 struct Shared(Handle);
-// SAFETY: a Win32 file handle may be used from any thread; the reader only reads, and the handle is closed after
-// the reader is told to stop and its read cancelled.
+// SAFETY: a Win32 file handle may be used from any thread; the reader only reads, and the handle is closed only
+// once the reader has returned (`release`).
 unsafe impl Send for Shared {}
 unsafe impl Sync for Shared {}
 
@@ -191,13 +191,43 @@ struct Open {
     handle: Arc<Shared>,
     log: Arc<Mutex<Log>>,
     stop: Arc<AtomicBool>,
+    /// None for a collection with no input reports.
+    reader: Option<std::thread::JoinHandle<()>>,
     leases: usize,
 }
 
 struct Connection {
     device: Device,
     open: bool,
+    /// The open's log, kept past this connection's close for its last reads; `gone` only once the reader saw the
+    /// device leave.
+    log: Arc<Mutex<Log>>,
     readers: BTreeMap<String, u64>,
+}
+
+impl Connection {
+    /// `hidConnection`'s answer: a close leaves the device connected.
+    fn state(&self) -> Json {
+        let gone = self.log.lock().unwrap_or_else(|e| e.into_inner()).gone;
+        json!({ "open": self.open && !gone, "connected": !gone })
+    }
+
+    /// `inputReports`' answer: the reports this reader has not taken, at most `history` of them.
+    fn reports(&mut self, args: &Json) -> Json {
+        let log = self.log.lock().unwrap_or_else(|e| e.into_inner());
+        let wanted = args["reportId"].as_u64().map(|r| r as u8);
+        let history = args["history"].as_u64().unwrap_or(16).min(1024) as usize;
+        let reader = format!("{wanted:?} {history}");
+        let of: Vec<&(u64, u8, Vec<u8>, f64)> = log.reports.iter().filter(|r| wanted.is_none_or(|w| w == r.1)).collect();
+        let mut fresh: Vec<&(u64, u8, Vec<u8>, f64)> = match self.readers.get(&reader) {
+            Some(cursor) => of.into_iter().filter(|r| r.0 > *cursor).collect(),
+            None => of.into_iter().last().into_iter().collect(),
+        };
+        let dropped = fresh.len().saturating_sub(history);
+        fresh.drain(..dropped);
+        self.readers.insert(reader, log.sequence);
+        json!({ "reports": fresh.iter().map(|r| json!({ "reportId": r.1, "data": base64(&r.2), "at": r.3 })).collect::<Vec<_>>(), "dropped": dropped, "interrupted": log.gone })
+    }
 }
 
 pub struct Hid {
@@ -233,6 +263,18 @@ fn read_loop(handle: Arc<Shared>, log: Arc<Mutex<Log>>, stop: Arc<AtomicBool>, l
         drop(l);
         notifier.changed("hid.inputReports");
     }
+}
+
+/// Waits for a reader told to stop, calling `cancel` until it has returned. `CancelIoEx` cancels the reads in
+/// progress, so a reader between its `stop` check and its `ReadFile` would block in a read no cancel had reached:
+/// the cancel is made again until the reader is out
+/// (https://learn.microsoft.com/windows/win32/fileio/cancelioex-func). The caller closes the handle after.
+fn stop_reader(reader: std::thread::JoinHandle<()>, cancel: impl Fn()) {
+    while !reader.is_finished() {
+        cancel();
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let _ = reader.join();
 }
 
 fn base64(bytes: &[u8]) -> String {
@@ -281,43 +323,28 @@ impl Hid {
             let (handle, log, stop) = (Arc::new(Shared(h)), Arc::new(Mutex::new(Log::default())), Arc::new(AtomicBool::new(false)));
             let (hh, l, s, n, len) = (handle.clone(), log.clone(), stop.clone(), self.context.notifier(), device.caps.input as usize);
             let epoch = std::time::Instant::now();
-            if len > 0 {
-                std::thread::spawn(move || read_loop(hh, l, s, len, n, epoch));
-            }
-            self.opens.insert(id.to_owned(), Open { handle, log, stop, leases: 0 });
+            let reader = (len > 0).then(|| std::thread::spawn(move || read_loop(hh, l, s, len, n, epoch)));
+            self.opens.insert(id.to_owned(), Open { handle, log, stop, reader, leases: 0 });
         }
-        self.opens.get_mut(id).expect("just opened").leases += 1;
+        let shared = self.opens.get_mut(id).expect("just opened");
+        shared.leases += 1;
+        let log = shared.log.clone();
         self.next += 1;
         let connection = format!("hid-{}", self.next);
         if !self.remembered.iter().any(|r| r == id) {
             self.remembered.push(id.to_owned());
         }
         let answer = json!({ "connection": connection, "device": record(&device, true) });
-        self.connections.insert(connection, Connection { device, open: true, readers: BTreeMap::new() });
+        self.connections.insert(connection, Connection { device, open: true, log, readers: BTreeMap::new() });
         self.context.changed("hid.getDevices");
         answer
     }
 
     fn reports(&mut self, args: &Json) -> Json {
-        let Some(c) = self.connections.get_mut(args["connection"].as_str().unwrap_or_default()) else {
-            return json!({ "error": "InvalidStateError" });
-        };
-        let Some(o) = self.opens.get(&c.device.id) else {
-            return json!({ "reports": [], "dropped": 0, "interrupted": true });
-        };
-        let log = o.log.lock().unwrap_or_else(|e| e.into_inner());
-        let wanted = args["reportId"].as_u64().map(|r| r as u8);
-        let history = args["history"].as_u64().unwrap_or(16).min(1024) as usize;
-        let reader = format!("{wanted:?} {history}");
-        let of: Vec<&(u64, u8, Vec<u8>, f64)> = log.reports.iter().filter(|r| wanted.is_none_or(|w| w == r.1)).collect();
-        let mut fresh: Vec<&(u64, u8, Vec<u8>, f64)> = match c.readers.get(&reader) {
-            Some(cursor) => of.into_iter().filter(|r| r.0 > *cursor).collect(),
-            None => of.into_iter().last().into_iter().collect(),
-        };
-        let dropped = fresh.len().saturating_sub(history);
-        fresh.drain(..dropped);
-        c.readers.insert(reader, log.sequence);
-        json!({ "reports": fresh.iter().map(|r| json!({ "reportId": r.1, "data": base64(&r.2), "at": r.3 })).collect::<Vec<_>>(), "dropped": dropped, "interrupted": log.gone })
+        match self.connections.get_mut(args["connection"].as_str().unwrap_or_default()) {
+            Some(c) => c.reports(args),
+            None => json!({ "error": "InvalidStateError" }),
+        }
     }
 
     /// A report the call names, at the length the collection's capabilities give its kind: the id first.
@@ -361,11 +388,15 @@ impl Hid {
             o.leases -= 1;
             if o.leases == 0 {
                 o.stop.store(true, Ordering::Relaxed);
-                // SAFETY: the reader's read is cancelled before the handle closes, once.
-                unsafe {
-                    CancelIoEx(o.handle.0, std::ptr::null_mut());
-                    CloseHandle(o.handle.0);
+                let handle = o.handle.0;
+                if let Some(reader) = o.reader.take() {
+                    // SAFETY: the handle stays open until the reader has returned.
+                    stop_reader(reader, || unsafe {
+                        CancelIoEx(handle, std::ptr::null_mut());
+                    });
                 }
+                // SAFETY: no reader is left to use the handle; closed once.
+                unsafe { CloseHandle(handle) };
                 self.opens.remove(&id);
             }
         }
@@ -393,10 +424,7 @@ impl Package for Hid {
             "requestDevice" => json!({ "error": "NotSupportedError" }),
             "open" => self.open(args["device"].as_str().unwrap_or_default()),
             "hidConnection" => match self.connections.get(args["connection"].as_str().unwrap_or_default()) {
-                Some(c) => {
-                    let gone = self.opens.get(&c.device.id).is_none_or(|o| o.log.lock().map(|l| l.gone).unwrap_or(true));
-                    json!({ "open": c.open && !gone, "connected": !gone })
-                }
+                Some(c) => c.state(),
                 None => json!({ "open": false, "connected": false }),
             },
             "inputReports" => self.reports(args),
@@ -424,5 +452,73 @@ impl Package for Hid {
         for h in open {
             self.release(&h);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Condvar;
+
+    fn device() -> Device {
+        Device { id: String::new(), path: String::new(), vendor: 0, product: 0, name: String::new(), caps: Caps::default() }
+    }
+
+    /// A close keeps the log for the connection's last reads and leaves the device connected; only the reader seeing
+    /// the device leave interrupts the reads.
+    #[test]
+    fn a_close_keeps_the_log_and_the_device_connected() {
+        let log = Arc::new(Mutex::new(Log::default()));
+        let mut c = Connection { device: device(), open: true, log: log.clone(), readers: BTreeMap::new() };
+        let all = json!({ "history": 16 });
+        assert_eq!(c.reports(&all)["reports"], json!([]));
+        log.lock().unwrap().sequence = 1;
+        log.lock().unwrap().reports.push((1, 0, vec![1, 2, 3], 5.0));
+        c.open = false;
+        assert_eq!(c.state(), json!({ "open": false, "connected": true }));
+        let last = c.reports(&all);
+        assert_eq!(last["reports"], json!([{ "reportId": 0, "data": "AQID", "at": 5.0 }]));
+        assert_eq!(last["interrupted"], json!(false));
+        log.lock().unwrap().gone = true;
+        assert_eq!(c.state(), json!({ "open": false, "connected": false }));
+        assert_eq!(c.reports(&all)["interrupted"], json!(true));
+    }
+
+    /// A reader that enters its read after the first cancel was made, as one between its `stop` check and its
+    /// `ReadFile` does, still ends: the cancel is made again until it has.
+    #[test]
+    fn a_reader_that_reads_after_the_first_cancel_still_ends() {
+        // (in a read, cancelled): a cancel reaches only a read in progress, as `CancelIoEx`'s does.
+        let device = Arc::new((Mutex::new((false, false)), Condvar::new()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (d, s) = (device.clone(), stop.clone());
+        let (checked, at_check) = std::sync::mpsc::channel::<()>();
+        let (enter, at_read) = std::sync::mpsc::channel::<()>();
+        let reader = std::thread::spawn(move || {
+            if s.load(Ordering::Relaxed) {
+                return;
+            }
+            checked.send(()).unwrap();
+            at_read.recv().unwrap();
+            let mut state = d.0.lock().unwrap();
+            state.0 = true;
+            while !state.1 {
+                state = d.1.wait(state).unwrap();
+            }
+            *state = (false, false);
+        });
+        let cancel = || {
+            let mut state = device.0.lock().unwrap();
+            if state.0 {
+                state.1 = true;
+                device.1.notify_all();
+            }
+        };
+        at_check.recv().unwrap();
+        stop.store(true, Ordering::Relaxed);
+        cancel();
+        enter.send(()).unwrap();
+        stop_reader(reader, cancel);
+        assert!(!device.0.lock().unwrap().0, "the reader left its read");
     }
 }

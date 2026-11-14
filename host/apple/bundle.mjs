@@ -2,7 +2,7 @@ import { writePrivacyManifest } from './privacy.mjs';
 // Apple bundle assembly. The build owns compilation and artifact publication.
 // @ref LLP 1126 D2/D8 — an extension is packaged inside its app's cohort.
 import { packageActivityArm, assertActivityRefusals } from './activities.mjs';
-import { packageWidgets, packageAlarmExtension, widgetId, entryProfiles, activityEntries, platformWidgetEntries, macWidgetGroup, macWidgetEntitlements, widgetGroup, widgetSigningTeam } from './widgets.mjs';
+import { packageWidgets, packageAlarmExtension, widgetId, entryProfiles, activityEntries, platformWidgetEntries, macWidgetGroup, macWidgetEntitlements, widgetGroup, widgetSigningTeam, widgetAppKeys } from './widgets.mjs';
 import { packageShareExtension, shareInfo, shareId, macShareEntitlements } from './extensions.mjs';
 import { createHash } from 'node:crypto';
 import { spawnSync } from './toolchain.mjs';
@@ -10,7 +10,7 @@ import { resolve, basename, dirname } from 'node:path';
 import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { verifyBakeFiles } from '../../scripts/app.mjs';
 import { webRefusal, browserEntitlements } from './documents.mjs';
-import { memoryEntitlements } from './plist.mjs';
+import { memoryEntitlements, alarmKeys } from './plist.mjs';
 import { listAssets } from '../web/serve.mjs';
 import { appIcon, buildInfo, iosAssets, appleAssets, copyNativeResources, IOS_RESOURCE_ROOT, iosBundleGrants, iosExecutableRefusal, shareIosResources, iconFiles, signingOrder, helperEntitlements, wrapFramework, assertArchiveFrameworks, plistFile } from './assets.mjs';
 import { allows, profile, identity, embeddedProfile } from './devices.mjs';
@@ -40,14 +40,10 @@ export function assembleMac({intents, shared, library, moduleLibraries = [], ser
     const team = widgetTeam ?? (app.manifest.share_target && sha1 && sha1 !== '-' ? (() => { try { return widgetSigningTeam(sha1); } catch (e) { console.log(`Mac share extension: ${e.message}`); return null; } })() : null);
     if (app.manifest.share_target && !team) console.log('Mac share extension: no Apple Development identity; building without it (EXACT_IDENTITY names one, LLP 1133.024 D4).');
     const shareGroup = app.manifest.share_target && team ? macWidgetGroup(app, team) : null;
-    const widgetKeys = { ...shareInfo(app, shareGroup), ...(shared ? {
-      ExactAppGroup: macWidgetGroup(app, team), ExactAppIdentifier: app.id,
-      ExactWidgetKinds: platformWidgetEntries(app, 'macos').map(entry => entry.kind),
-      ExactWidgetTypeScript: existsSync(resolve(app.dir, 'app.ts')),
-      ExactWidgetRequiresSecrets: platformWidgetEntries(app, 'macos').filter(entry => entry.requiresSecrets).map(entry => entry.kind),
-      ExactWidgetGeneration: createHash('sha256').update(JSON.stringify([bakedCompat.id, buildReceipt.graph.artifacts])).digest('hex'),
-      ...(profiles ? { ExactKeychainAccessGroup: profiles.keychain } : {}),
-    } : {}) };
+    const widgetKeys = { ...shareInfo(app, shareGroup), ...(shared ? widgetAppKeys(app, 'macos', {
+      group: macWidgetGroup(app, team), keychain: profiles?.keychain,
+      generation: createHash('sha256').update(JSON.stringify([bakedCompat.id, buildReceipt.graph.artifacts])).digest('hex'),
+    }) : {}) };
     if (shared && !profiles) console.log('Mac widgets: no shared Keychain profiles; entries with requiresSecrets show the placeholder (LLP 1126.001 §5 Q5).');
     // What a macOS profile authorizes (LLP 1133.010 D7) is signed beside the widgets' group, under the one profile.
     const ent = shared || shareGroup || provisioning ? resolve(linkRoot, 'mac-entitlements.plist') : null;
@@ -244,7 +240,7 @@ export function assembleIOS({intents, shared, library, moduleLibraries = [], ser
   if (shared) run('plutil', ['-insert', 'ExactWidgetGeneration', '-string', createHash('sha256').update(JSON.stringify([bakedCompat.id, buildReceipt.graph.artifacts])).digest('hex'), resolve(bundle, 'Info.plist')]);
   writeUsageStrings(appleReach, bundle);
   // AlarmKit's countdown is a Live Activity the extension draws (LLP 1133.030 D8 item 2).
-  if (alarm && !tv) for (const key of ['NSSupportsLiveActivities', 'ExactAlarmCountdown']) run('plutil', ['-replace', key, '-bool', 'YES', resolve(bundle, 'Info.plist')]);
+  for (const [key, value] of Object.entries(alarmKeys(alarm, tv))) run('plutil', ['-replace', key, '-bool', String(value), resolve(bundle, 'Info.plist')]);
   intents?.place(bundle); // LLP 1133.023 D8: the faces' App Intents metadata
   copyAppleGpuProducts(libDir, resolve(bundle, 'Frameworks'), gpuArtifacts, production);
   for (const [has, built, name] of looseArms) if (has) copyFileSync(built, resolve(bundle, 'Frameworks', name));
@@ -305,8 +301,8 @@ export function assembleIOS({intents, shared, library, moduleLibraries = [], ser
     writeFileSync(ent, entitlements({ ...app, id, widgetTV: tv, widgetHost: kind === 'host', ...(kind === 'clip' ? { clipParent: app.id } : {}) }, signingProfile?.team, signingProfile?.dev ?? !unsigned, appleReach, { simulator: !device, prefix: signingProfile?.prefix, allows: signingProfile?.entitlements ?? [], distributed: distribution }));
     if (shared && kind === 'app') {
       const group = JSON.parse(runApple('plutil', ['-convert', 'json', '-o', '-', ent], { read: true }).stdout)['keychain-access-groups'][0];
-      runApple('plutil', ['-insert', 'ExactKeychainAccessGroup', '-string', group, resolve(assembled, 'Info.plist')]);
-      runApple('plutil', ['-insert', 'ExactWidgetTypeScript', '-bool', String(existsSync(resolve(app.dir, 'app.ts'))), resolve(assembled, 'Info.plist')]);
+      const keys = widgetAppKeys(app, 'ios', { group: widgetGroup(app), keychain: group });
+      for (const key of ['ExactKeychainAccessGroup', 'ExactWidgetTypeScript']) runApple('plutil', ['-insert', key, typeof keys[key] === 'boolean' ? '-bool' : '-string', String(keys[key]), resolve(assembled, 'Info.plist')]);
     }
     verifyBakeFiles(bakedCompat, bakedPlan, listAssets(assembled, true, ['typescript']));
     assertAppleIdentity(app, resolve(assembled, executable), bakedCompat.id);

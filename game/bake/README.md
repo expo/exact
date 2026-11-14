@@ -18,6 +18,14 @@ Every texture bakes to three files, and a device fetches exactly one:
 | `x.bc.tex` | BC7 colour/data, BC5 normal XY, BC4 occlusion | devices granting `texture-compression-bc` |
 | `x.astc.tex` | ASTC 4×4 | devices granting only `texture-compression-astc` |
 
+A native Apple bundle holds the one family its devices read
+(`scripts/texture-families.mjs`): a Mac's the BC file, an iPhone's, iPad's or Apple
+TV's the ASTC file, and neither the RGBA8 file where that family's file is there. The
+Fox's 1024² texture is 8.4 MB in all three files and 1.4 MB in an iOS bundle. The web
+root and the other platforms' bundles hold all three. A thinned bundle names its family
+in the cohort's inputs (`textureFamily`), so it is a new binary; an installed binary
+from before, whose renderer falls back to the RGBA8 file, is sent all three files.
+
 Each is the same `.tex` `Data` record (`TextureData`), digest-addressed like any
 asset; its `format` says how the levels are encoded. Models and `Sprite`s name only
 `x.tex`; the renderer maps that name to its device's file (see

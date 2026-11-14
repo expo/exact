@@ -1,8 +1,8 @@
 //! A component and its sections. When the parser recovers, a refused
 //! member (a `state`, `derive`, `resource`, `mutation`, `action`, `task` or
 //! `sequence`) is recorded and skipped, and the component keeps the rest, so
-//! later passes still check it; the member's name is hidden from what they
-//! report (`Parser::hidden`). A component whose view is refused is refused
+//! later passes still check it; what they report because the member is
+//! missing is left out (`Parser::hidden`). A component whose view is refused is refused
 //! whole: without its view, later passes would refuse the component itself.
 
 use super::*;
@@ -10,7 +10,26 @@ use crate::members::MembersLine;
 
 impl Parser {
     pub(super) fn component(&mut self) -> R<Component> {
-        self.component_body("component")
+        let from = self.hidden.len();
+        let c = self.component_body("component")?;
+        // A component whose `members` lines name other files has members
+        // read there too, so its refused members' names are not scoped.
+        if c.members.lines.is_empty() {
+            let last = self.tokens[..self.pos]
+                .iter()
+                .rev()
+                .find(|t| {
+                    !matches!(
+                        t.kind,
+                        TokenKind::Newline | TokenKind::Indent | TokenKind::Dedent | TokenKind::Eof
+                    )
+                })
+                .map_or(c.span.line, |t| t.span.line);
+            for h in &mut self.hidden[from..] {
+                h.lines = Some((c.span.line, last));
+            }
+        }
+        Ok(c)
     }
 
     /// A members file's `members Name` block (LLP 1091.002 D2): a
@@ -181,7 +200,9 @@ impl Parser {
                                 {
                                     self.hidden.push(Hidden {
                                         name: name.clone(),
+                                        kind: w.clone(),
                                         component: Some(c.name.clone()),
+                                        lines: None,
                                     });
                                 }
                                 self.recovered.push(e);

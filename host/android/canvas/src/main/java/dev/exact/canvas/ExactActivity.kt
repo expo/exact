@@ -74,10 +74,7 @@ open class ExactActivity : Activity() {
         // A history launch carries no new callback, and a new process has no auth session to resume.
         if (!again || intent.flags and android.content.Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0) intent.data?.takeIf { Auth.claims(this, it) }?.let { intent.data = null }
         Exact.live = true
-        // An activity this one replaces that is not destroyed yet (it finished; its onDestroy comes late) lets go of
-        // the host now, before this one's view takes it.
-        Exact.reader?.get()?.takeIf { it !== this }?.release()
-        Exact.reader = java.lang.ref.WeakReference(this)
+        take()
         // Before anything loads exact2's library: mimalloc reads its options as it loads. Freed memory goes back at
         // once (decoded pictures otherwise stay held).
         if (!again) android.system.Os.setenv("MIMALLOC_PURGE_DELAY", "0", false)
@@ -87,7 +84,11 @@ open class ExactActivity : Activity() {
         // platform's fade, to compare): the first frame is what shows.
         if (Build.VERSION.SDK_INT >= 31 && intent.getStringExtra("splashfade") != "1") Splash.quick(this)
         val arrived = Shares.arrived(intent, state != null)
-        if (!again) environment(arrived)
+        if (!again) {
+            environment(arrived)
+            try { FilePicker.start(applicationContext) }
+            catch (e: Exception) { android.util.Log.w("exact", "file picker: startup cleanup failed", e) }
+        }
         edgeToEdge()
         // exact2's thread, made before the assets are checked: it loads exact2's library meanwhile.
         owner()
@@ -504,7 +505,7 @@ open class ExactActivity : Activity() {
      * stop makes the reader again ([read]). */
     override fun onStart() {
         super.onStart()
-        if (stopped) { stopped = false; read() }
+        if (stopped) { stopped = false; take(); read() }
         contentResolver.registerContentObserver(android.provider.Settings.Global.getUriFor(android.provider.Settings.Global.ANIMATOR_DURATION_SCALE), false, settings)
         contentResolver.registerContentObserver(android.provider.Settings.System.getUriFor(android.provider.Settings.System.TIME_12_24), false, settings)
         // What changed while the activity was stopped and is no configuration change.
@@ -588,6 +589,14 @@ open class ExactActivity : Activity() {
         requests.destroy()
         release()
         super.onDestroy()
+    }
+
+    /** This activity's view reads the host from now on. One that read it before and is not destroyed yet (it
+     * finished: its stop and onDestroy come after this activity's create or start) lets go of the host now, before
+     * this one's view takes it, and from then on tells the host nothing. */
+    private fun take() {
+        Exact.reader?.get()?.takeIf { it !== this }?.release()
+        Exact.reader = java.lang.ref.WeakReference(this)
     }
 
     /** Whether this activity's view is the one that reads the host. An activity that was replaced before it stopped

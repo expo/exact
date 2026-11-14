@@ -602,40 +602,56 @@ pub(crate) fn escape(rest: &str) -> Result<(char, usize), String> {
 /// The byte offset of the backtick closing a template literal. Nested
 /// `${…}` expressions may themselves contain strings, braces, or templates.
 pub(crate) fn template_literal_end(text: &str, start: usize) -> Option<usize> {
-    let bytes = text.as_bytes();
-    let mut pos = start + 1;
-    while pos < bytes.len() {
-        match bytes[pos] {
-            b'\\' => pos = skip_escaped(text, pos),
-            b'`' => return Some(pos),
-            b'$' if bytes.get(pos + 1) == Some(&b'{') => {
-                let end = template_expr_end(&text[pos + 2..])?;
-                pos += end + 3;
-            }
-            _ => pos += char_len(text, pos),
-        }
-    }
-    None
+    template_end(text, start + 1, Nest::Template)
 }
 
 /// The byte offset of the `}` matching an expression immediately after
 /// `${`. Braces in strings and nested template literals do not close it.
 pub(crate) fn template_expr_end(text: &str) -> Option<usize> {
+    template_end(text, 0, Nest::Expr(0))
+}
+
+/// What the template scan is inside: a template literal, or a `${…}`
+/// expression with the count of braces it has opened.
+#[derive(Clone, Copy)]
+enum Nest {
+    Template,
+    Expr(usize),
+}
+
+/// The byte offset that closes `outer`, scanning from `pos`. The nesting is
+/// kept on a stack of its own, not the native one, so a template nested
+/// thousands deep lexes and the parser refuses it (`syntax-expression-depth`)
+/// instead of the scan overflowing the stack.
+fn template_end(text: &str, mut pos: usize, outer: Nest) -> Option<usize> {
     let bytes = text.as_bytes();
-    let mut pos = 0;
-    let mut depth = 0usize;
+    let mut stack = vec![outer];
     while pos < bytes.len() {
-        match bytes[pos] {
-            b'\\' => pos = skip_escaped(text, pos),
-            b'"' => pos = quoted_end(text, pos, b'"')?,
-            b'`' => pos = template_literal_end(text, pos)? + 1,
-            b'{' => {
-                depth += 1;
+        let top = stack.last_mut()?;
+        match (*top, bytes[pos]) {
+            (_, b'\\') => pos = skip_escaped(text, pos),
+            (Nest::Template, b'`') | (Nest::Expr(0), b'}') => {
+                stack.pop();
+                if stack.is_empty() {
+                    return Some(pos);
+                }
                 pos += 1;
             }
-            b'}' if depth == 0 => return Some(pos),
-            b'}' => {
-                depth -= 1;
+            (Nest::Template, b'$') if bytes.get(pos + 1) == Some(&b'{') => {
+                stack.push(Nest::Expr(0));
+                pos += 2;
+            }
+            (Nest::Expr(_), b'"') => pos = quoted_end(text, pos, b'"')?,
+            (Nest::Expr(_), b'`') => {
+                stack.push(Nest::Template);
+                pos += 1;
+            }
+            (Nest::Expr(depth), b'{') => {
+                *top = Nest::Expr(depth + 1);
+                pos += 1;
+            }
+            (Nest::Expr(depth), b'}') => {
+                *top = Nest::Expr(depth - 1);
                 pos += 1;
             }
             _ => pos += char_len(text, pos),

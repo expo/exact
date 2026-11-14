@@ -147,6 +147,8 @@ mod kept_rows_tests;
 #[cfg(test)]
 mod longpoll_tests;
 #[cfg(test)]
+mod module_events_tests;
+#[cfg(test)]
 mod spacing_tests;
 #[cfg(test)]
 mod swipe_left_tests;
@@ -245,7 +247,7 @@ pub struct Presenter<D: DataSource> {
     window_focuser: Option<Box<dyn Fn()>>,
     window_hider: Option<Box<dyn Fn()>>,
     /// The desktop portal's answers to document pickers (`portal.rs`).
-    portal: crate::portal::Inbox,
+    pub(crate) portal: crate::portal::Inbox,
     /// The modifier keys held, each side a bit (Shift, Control, Alt, Meta,
     /// left then right): a `key` event's flags (`KeyboardEvent.shiftKey`…).
     pub(crate) held: u8,
@@ -810,7 +812,7 @@ impl<D: DataSource> Presenter<D> {
 
     /// Whether the picture is stale.
     pub fn dirty(&self) -> bool {
-        self.dirty
+        self.dirty || !self.surfaces.captures.is_empty()
     }
 
     /// Where the pointer is drawn (`None` draws none).
@@ -984,6 +986,7 @@ impl<D: DataSource> Presenter<D> {
             .map(|op| op.activation)
             .filter(|a| *a > self.fragment_seen)
         {
+            self.fragment_anchor = None;
             self.fragment_seen = activation;
             self.fragment_armed = Some((activation, self.person_scrolls));
         }

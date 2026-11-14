@@ -3,10 +3,42 @@
 // whose status is not 200 or 503, or one whose robots meta says `noindex` (or `none`, which implies it). A page
 // rendered per request is not made at build, so it is not listed.
 import { existsSync, writeFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { canonical } from '../web-js/route-pattern.js';
+import path, { resolve } from 'node:path';
+import { canonical, filePathOf, matchPattern } from '../web-js/route-pattern.js';
 
 const xml = t => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+/** Choose every page file before either renderer writes one. Static lookup uses the same segment mapping. */
+export function buildPageFiles(dir, pages, routes, paths = path, platform = process.platform) {
+  const chosen = new Map();
+  const files = pages.map(page => {
+    let value;
+    const at = matchPattern(routes, canonical(page.location), (_, parameter) => { value = parameter; });
+    const route = page.notfound ? routes.find(r => r.notfound) : routes[at];
+    const label = `route \`${route?.name ?? page.location}\` page ${JSON.stringify(page.location)}${value === undefined ? '' : ` (value ${JSON.stringify(value)})`}`;
+    try {
+      const decoded = decodeURIComponent(page.location);
+      if (!page.location.startsWith('/') || /[?#]/.test(page.location) || /[\\\0]/.test(decoded)
+          || decoded.split('/').some(s => s === '.' || s === '..')) throw new Error('unsafe page path');
+      const file = page.notfound ? '404.html' : `${filePathOf(page.location).replace(/^\/|\/$/g, '')}/index.html`.replace(/^\//, '');
+      const relative = paths.relative(paths.resolve(dir), paths.resolve(dir, file));
+      if (!relative || relative === '..' || relative.startsWith('..' + paths.sep) || paths.isAbsolute(relative)) throw new Error('page leaves the build directory');
+      const key = platform === 'darwin' ? relative.normalize('NFD').toLowerCase()
+        : paths.sep === '\\' ? relative.toLowerCase() : relative;
+      const prior = chosen.get(key);
+      if (prior && (prior.page.location !== page.location || prior.page.notfound !== page.notfound)) throw new Error(`the same page file as ${JSON.stringify(prior.page.location)}: ${file}`);
+      chosen.set(key, { page, label });
+      return file;
+    } catch (error) { throw new Error(`${label}: ${error.message}`); }
+  });
+  for (const [file, { label }] of chosen) {
+    for (let parent = paths.dirname(file); parent !== '.'; parent = paths.dirname(parent)) {
+      const prior = chosen.get(parent);
+      if (prior) throw new Error(`${label}: page file is inside the page file for ${JSON.stringify(prior.page.location)}`);
+    }
+  }
+  return files;
+}
 
 /** Writes crawler files for built `pages` against the manifest's `origin`. A route declared at either file's path
  * keeps it, whether rendered at build or per request; a route with a parameter does not claim it. Without an origin,

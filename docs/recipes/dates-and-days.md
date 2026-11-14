@@ -70,7 +70,7 @@ test "an entry made 30 s after midnight, before the tick, is the new day's"
 - `"iso"` is the day key, compared as text. A label is `formatDay(then, shown, offset,
   mode)`, never `day == today ? "Today" : …`: `"day"` is `Today`, `Tomorrow` or `Mar 14, 2026`;
   `"day-time"` adds ` at 11:30 PM`; `"list"` is Mail's.
-- A picked day (`input type="date"`) is a key too; the data module adds its UTC midnight
-  (`Date.UTC(y, m - 1, d)`) for its label, `formatDate(ms, 0, "medium")`.
+- Label an `input type="date"` value with `formatDate(due, 0, "medium")`.
+  A strict `YYYY-MM-DD` key keeps its day at any valid offset; invalid dates print `""`.
 - `utcOffset` is the zone's offset now, so `shown - 86400000` and `formatDay` can miss by an hour
   across a DST change. Tests pin `epoch` and `time-zone`; the default is 2026-01-01 UTC.

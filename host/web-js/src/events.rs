@@ -68,6 +68,7 @@ pub(crate) fn binder(event: EventKind) -> Option<&'static str> {
         EventKind::Copy | EventKind::Cut | EventKind::Paste => Some("onClipboard"),
         EventKind::Selectionchange => Some("onSelectionChange"),
         EventKind::Toggle => Some("onToggle"),
+        EventKind::Load | EventKind::Error => Some("onImage"),
         // @ref LLP 1020.002 D2 — an iframe's guest (the root's `navigate`
         // is `navigateTo`, emit.rs), with its `FrameNavigation`.
         EventKind::Navigate
@@ -127,10 +128,12 @@ mod tests {
             Navigatesuccess,
             Navigateerror,
             Capture,
+            Load,
+            Error,
         ] {
             assert!(binder(k).is_some(), "{k:?}");
         }
-        for k in [Load, Cancel, Play, Pause, Timeupdate] {
+        for k in [Cancel, Play, Pause, Timeupdate] {
             assert!(binder(k).is_none(), "{k:?}");
         }
     }

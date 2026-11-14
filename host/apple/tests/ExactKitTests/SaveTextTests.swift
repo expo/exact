@@ -65,6 +65,52 @@ final class SaveTextTests: XCTestCase {
         session.picker.save(["export-file", NSNull(), "notes.txt", "the exported notes"])
     }
 
+    func testAnExportCopiesARegularFileAndRefusesLinks() throws {
+        let session = try booted(), files = FileManager.default
+        let ruling = session.runtime.command(["command": "saveFile", "agent": false, "id": "export-file",
+                                              "text": "", "suggestedName": "saved.txt"])
+        let view = try XCTUnwrap((ruling["view"] as? NSNumber)?.uint32Value)
+        let reply = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(session.agent(#"{"op":"appRoots"}"#).utf8)) as? [String: Any])
+        let roots = try XCTUnwrap(reply["roots"] as? [String: String])
+        let name = UUID().uuidString
+        let root = URL(fileURLWithPath: try XCTUnwrap(roots["tmp"]))
+        let dir = root.appendingPathComponent(name)
+        let outside = files.temporaryDirectory.appendingPathComponent("exact-export-test-\(name)")
+        try files.createDirectory(at: dir.appendingPathComponent("plain"), withIntermediateDirectories: true)
+        try files.createDirectory(at: outside, withIntermediateDirectories: true)
+        defer { try? files.removeItem(at: dir); try? files.removeItem(at: outside) }
+        let bytes = Data("exported contents".utf8)
+        try bytes.write(to: dir.appendingPathComponent("plain/file.txt"))
+        try Data("outside contents".utf8).write(to: outside.appendingPathComponent("file.txt"))
+        for (link, target) in [("leaf-in", dir.appendingPathComponent("plain/file.txt")),
+                               ("leaf-out", outside.appendingPathComponent("file.txt")),
+                               ("ancestor-in", dir.appendingPathComponent("plain")), ("ancestor-out", outside)] {
+            try files.createSymbolicLink(at: dir.appendingPathComponent(link), withDestinationURL: target)
+        }
+        let destination = outside.appendingPathComponent("saved.txt")
+        func export(_ suffix: String) {
+            session.picker.saveAnswered(["capability": "export", "node": view,
+                                         "request": ["from": "app:/tmp/\(name)/\(suffix)"]],
+                                        request: ["text": destination.path])
+        }
+        export("plain/file.txt")
+        XCTAssertEqual(try Data(contentsOf: destination), bytes)
+        try files.removeItem(at: destination)
+        let opened = try XCTUnwrap(session.picker.appFile("app:/tmp/\(name)/plain/file.txt"))
+        let original = dir.appendingPathComponent("plain/file.txt")
+        try files.removeItem(at: original)
+        try files.createSymbolicLink(at: original, withDestinationURL: outside.appendingPathComponent("file.txt"))
+        session.picker.copyOut(view: view, file: opened, to: destination)
+        XCTAssertEqual(try Data(contentsOf: destination), bytes, "the file opened before the panel showed")
+        try files.removeItem(at: destination)
+        try files.removeItem(at: original)
+        try bytes.write(to: original)
+        for suffix in ["leaf-in", "leaf-out", "ancestor-in/file.txt", "ancestor-out/file.txt"] {
+            export(suffix)
+            XCTAssertFalse(files.fileExists(atPath: destination.path), suffix)
+        }
+    }
+
     #if os(macOS)
     /// The panel's sheet holds the scratch file while it shows, and a
     /// cancel takes it.

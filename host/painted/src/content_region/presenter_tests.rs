@@ -6,8 +6,12 @@ use std::time::Instant;
 
 #[path = "fail_backend.rs"]
 mod fail_backend;
+#[path = "inline_opacity_tests.rs"]
+mod inline_opacity;
 #[path = "input_clock_tests.rs"]
 mod input_clock;
+#[path = "popover_tests.rs"]
+mod popover;
 #[path = "projection_discriminator_tests.rs"]
 mod projection_discriminator;
 const APP: &str = r#"component App
@@ -64,6 +68,7 @@ fn ready(p: &mut Presenter<()>) {
         assert!(p.poll_content_region().is_none());
     }
 }
+
 #[test]
 fn non_cpu_region_refuses_before_plan_font_or_device_work() {
     for choice in [PainterChoice::Auto, PainterChoice::Gpu] {
@@ -1289,4 +1294,148 @@ fn retained_actions_input_clock_presents_timer_that_invalidates_event() {
             assert!(!p.dirty());
         }
     }
+}
+
+/// A retained text is drawn under its own overflow clip, as the live walk
+/// draws it: its nowrap glyphs stop at its padding edge.
+#[test]
+fn retained_text_stays_inside_its_overflow_clip() {
+    let _service = crate::content_region::test_service();
+    let source = APP.replace(
+        "text title href=link press=activate testId=\"paragraph\" font-size=20 color=\"light-dark(#ff0000,#0000ff)\"",
+        "text \"WWWWWWWWWWWWWWWW\" testId=\"paragraph\" width=50 white-space=\"nowrap\" overflow-x=\"hidden\" overflow-y=\"hidden\" font-size=20 color=\"#ff0000\"",
+    );
+    let mut p = region_from(&source);
+    p.frame();
+    ready(&mut p);
+    let frame = p.frame();
+    assert!(p.last_frame_succeeded);
+    let paragraph = p.host.kernel().node(id(&p, "paragraph")).unwrap().frame;
+    let width = frame.width() as usize;
+    let red = |p: &[u8]| p[0] > 128 && p[1] < 100 && p[2] < 100;
+    let inside = frame.data().chunks_exact(4).filter(|p| red(p)).count();
+    let past = frame
+        .data()
+        .chunks_exact(4)
+        .enumerate()
+        .filter(|(i, p)| (i % width) as f32 >= paragraph.width + 2.0 && red(p))
+        .count();
+    assert!(inside > 20, "the text paints");
+    assert_eq!(past, 0, "no glyph past the text's padding edge");
+}
+
+#[test]
+fn an_accepted_retained_press_commits_and_blurs_the_focused_field() {
+    let _service = crate::content_region::test_service();
+    let source = actions::source()
+        .replace(
+            "  state draft = \"\"",
+            "  state draft = \"\"\n  state blurred = false",
+        )
+        .replace(
+            "  action edit(value)\n",
+            "  action left\n    blurred = true\n  action edit(value)\n",
+        )
+        .replace(
+            "input value=draft input=edit",
+            "input value=draft change=edit blur=left",
+        );
+    let mut p = actions::boot(&source, true, actions::Rows::default());
+    let composer = actions::id(&p, "composer");
+    p.type_text(composer, "typed").unwrap();
+    assert_eq!((p.focus, p.edited), (Some(composer), Some(composer)));
+    let reply = actions::id(&p, "reply-message-0");
+    let at = actions::point(&mut p, reply);
+    assert_eq!(p.press_at(at.0, at.1, 10.), Some(reply));
+    assert_eq!(actions::selected(&p), Value::str("message-0"));
+    assert_eq!((p.focus, p.edited), (None, None), "focus left the field");
+    assert_eq!(p.host.runner().slot("draft"), Some(&Value::str("typed")));
+    assert_eq!(p.host.runner().slot("blurred"), Some(&Value::Bool(true)));
+}
+
+#[test]
+fn moving_exclusions_publish_owned_fragments_and_keep_original_run_metadata() {
+    let _service = crate::content_region::test_service();
+    let source = r##"component App
+  state left = 40
+  action move
+    left = left + 80
+  view
+    column width=400 height=500
+      button press=move testId="move" height=32
+        text "Move"
+      view id="owner" width=400 height=200 overflow-x="hidden" overflow-y="hidden"
+        view id="content" width=400 height=200 position="relative"
+          text testId="paragraph" width=400 height=180 font-size=16 text-align="justify"
+            text "One two three four five six seven eight nine ten eleven twelve thirteen fourteen. " href="https://example.test/original" color="#cc0000"
+            text "More words flow around the moving circle and keep their original source ranges. One two three four five six seven eight nine ten." color="#0000cc"
+          view position="absolute" left=left top=0 width=120 height=120 wrap-flow="both" shape-outside="circle()"
+        text "Preparing content" id="pending" position="absolute"
+"##;
+    let mut p = region_from(source);
+    p.frame();
+    ready(&mut p);
+    let original = p.frame();
+    let key = p.host.kernel().node(id(&p, "paragraph")).unwrap().key;
+    let snapshot = p.host.content_region().unwrap().text_snapshot(key).unwrap();
+    let paragraph = snapshot.paragraph.fragments().to_vec();
+    let request = snapshot.request.clone();
+    assert!(!paragraph.is_empty());
+    assert_eq!(snapshot.runs.len(), 2);
+    let runs: Vec<_> = snapshot
+        .runs
+        .iter()
+        .map(|r| (r.leaf, r.bytes.clone(), r.utf16.clone(), r.link.clone()))
+        .collect();
+    assert_eq!(
+        runs[0].3.as_ref().unwrap().1.as_ref(),
+        "https://example.test/original"
+    );
+    assert_eq!(runs[0].1.end, runs[1].1.start);
+    assert_eq!(runs[1].1.end, request.source().bytes());
+    let gate = crate::content_region::test_hooks::next_text();
+    for time in [1., 2.] {
+        assert!(p
+            .host
+            .dispatch_at(id(&p, "move"), Event::Press, time)
+            .is_none());
+        assert!(p.after_commit().is_none());
+        if time == 1. {
+            gate.entered();
+        }
+    }
+    assert_eq!(p.frame().data(), original.data());
+    let snapshot = p.host.content_region().unwrap().text_snapshot(key).unwrap();
+    assert!(!snapshot.current);
+    assert_eq!(snapshot.paragraph.fragments(), paragraph);
+    drop(gate);
+    ready(&mut p);
+    let moved = p.frame();
+    assert_ne!(moved.data(), original.data());
+    let snapshot = p.host.content_region().unwrap().text_snapshot(key).unwrap();
+    assert!(snapshot.current);
+    assert_eq!(snapshot.request.stamp(), request.stamp());
+    assert!(Arc::ptr_eq(snapshot.request.source(), request.source()));
+    assert_eq!(
+        snapshot.request.exclusions(),
+        &[exact_kernel::FlowShape::Circle {
+            cx: 260.,
+            cy: 60.,
+            r: 60.
+        }]
+    );
+    assert_ne!(snapshot.paragraph.fragments(), paragraph);
+    assert_eq!(
+        snapshot
+            .runs
+            .iter()
+            .map(|r| (r.leaf, r.bytes.clone(), r.utf16.clone(), r.link.clone()))
+            .collect::<Vec<_>>(),
+        runs
+    );
+    assert!(snapshot
+        .paragraph
+        .layout_runs()
+        .flat_map(|r| r.glyphs)
+        .any(|g| g.run() == 1));
 }

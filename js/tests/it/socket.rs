@@ -691,3 +691,51 @@ fn where_an_answer_s_continuation_runs() {
         }
     }
 }
+
+/// Unloading forgets the engine's streams, so a reply to one kept across a
+/// reload cannot reach the new engine's mapper.
+#[test]
+fn an_unloaded_engine_s_stream_takes_no_reply_after_a_reload() {
+    use exact_runner::{Answer, DataSource, Store, Target};
+    let grants = "net.websocket wss://echo.test\n";
+    let mut m = Module::loaded(HBC.to_vec(), "test.socket", grants).unwrap();
+    m.set_budget_ms(f64::INFINITY);
+    let plan = "component App\n  resource first = feed(\"a\") as shape string\n  resource second = feed(\"side\") as shape string\n  view\n    text first\n";
+    m.bind(&contract::compile(plan).unwrap());
+    let mut s = Store::new(grants, vec![]);
+    let a = [Value::str("a")];
+    let Answer::Later(first) = m
+        .answer_for(Target::Resource(0), &mut s, "feed", &a)
+        .unwrap()
+    else {
+        panic!("a stream waits")
+    };
+    assert_eq!(m.in_flight(), 1);
+    m.unload();
+    assert_eq!(m.in_flight(), 0, "unloading forgets the stream");
+    m.load().unwrap();
+    let side = [Value::str("side")];
+    let Answer::Later(next) = m
+        .answer_for(Target::Resource(1), &mut s, "feed", &side)
+        .unwrap()
+    else {
+        panic!("a stream waits")
+    };
+    assert!(next.fetch.is_some());
+    let message = Message {
+        data: "hello".into(),
+        ..Default::default()
+    };
+    let reply = m.parse_fetch_for(
+        Target::Resource(0),
+        first.fetch,
+        &mut s,
+        "feed",
+        &a,
+        Outcome::Message(message),
+    );
+    assert!(
+        matches!(&reply, Err(e) if e.to_string().contains("not in flight")),
+        "the old stream's reply reached a mapper: {reply:?}"
+    );
+}

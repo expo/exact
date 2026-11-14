@@ -20,6 +20,15 @@ export function watchEntries(app) {
     return false;
   });
 }
+/** The companion's own Info.plist, never the iOS app's. */
+export function watchInfo(app, { appInfo, group, entries, live, generation, icon = {} }) {
+  return { CFBundleIdentifier: `${app.id}.watchkitapp`, CFBundleName: app.displayName, CFBundleDisplayName: app.displayName, CFBundleExecutable: 'ExactWatch', CFBundlePackageType: 'APPL',
+    CFBundleVersion: appInfo.CFBundleVersion, CFBundleShortVersionString: appInfo.CFBundleShortVersionString, CFBundleSupportedPlatforms: ['WatchSimulator'], MinimumOSVersion: '10.0', UIDeviceFamily: [4],
+    WKApplication: true, WKCompanionAppBundleIdentifier: app.id, WKRunsIndependentlyOfCompanionApp: true,
+    ExactAppGroup: group, ExactAppIdentifier: app.id, ExactWidgetTypeScript: false, ExactWidgetGeneration: generation,
+    ExactWatchEntries: entries.map(({ kind, families, title }) => ({ kind, families, title: title ?? kind })),
+    ...(live ? { ExactWatchPlan: 'plans/watch.plan' } : {}), ...icon };
+}
 export function watchSimulator(args) {
   const at = args.indexOf('--watch-sim');
   if (at < 0) return undefined;
@@ -93,12 +102,7 @@ export async function buildWatch(app, args, { runApple, appleArtifacts, appleBui
     for (const name of ['assets', 'deck']) copyStaticTreeIfPresent(resolve(app.dir, name), resolve(bundle, name));
     const appInfo = JSON.parse(runApple('plutil', ['-convert', 'json', '-o', '-', resolve(parent.bundle, 'Info.plist')], { read: true }).stdout);
     const icon = appleAssets(app, bundle, { platform: 'watchos', kept: { dir: resolve(directory, 'assets'), stamp: swiftc } });
-    const info = { CFBundleIdentifier: watch.id, CFBundleName: app.displayName, CFBundleDisplayName: app.displayName, CFBundleExecutable: 'ExactWatch', CFBundlePackageType: 'APPL',
-      CFBundleVersion: appInfo.CFBundleVersion, CFBundleShortVersionString: appInfo.CFBundleShortVersionString, CFBundleSupportedPlatforms: ['WatchSimulator'], MinimumOSVersion: '10.0', UIDeviceFamily: [4],
-      WKApplication: true, WKCompanionAppBundleIdentifier: app.id, WKRunsIndependentlyOfCompanionApp: true,
-      ExactAppGroup: group, ExactAppIdentifier: app.id, ExactWidgetTypeScript: false, ExactWidgetGeneration: createHash('sha256').update(JSON.stringify([baked.compat.id, baked.graph.artifacts])).digest('hex'),
-      ExactWatchEntries: entries.map(({ kind, families, title }) => ({ kind, families, title: title ?? kind })),
-      ...(live ? { ExactWatchPlan: 'plans/watch.plan' } : {}), ...icon };
+    const info = watchInfo(app, { appInfo, group, entries, live, generation: createHash('sha256').update(JSON.stringify([baked.compat.id, baked.graph.artifacts])).digest('hex'), icon });
     writeFileSync(resolve(bundle, 'Info.plist'), plistFile(info));
     const executableArgs = [...swiftArgs, '-Xlinker', '-rpath', '-Xlinker', '@executable_path/Frameworks',
       '-Xlinker', '-sectcreate', '-Xlinker', '__TEXT', '-Xlinker', '__entitlements', '-Xlinker', entitlementPath];

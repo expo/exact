@@ -26,9 +26,14 @@ impl<D: DataSource> Runner<D> {
             if !row.gated && !row.keyed {
                 continue;
             }
-            let on = self.eval(row.gate, &[], &[])? == Value::Bool(true);
+            let on = self
+                .eval(row.gate, &[], &[])
+                .map_err(|e| e.evaluated(|| format!("task {:?} gate", self.plan.str(row.name))))?
+                == Value::Bool(true);
             let key = if row.keyed && on {
-                let value = self.eval(row.key, &[], &[])?;
+                let value = self.eval(row.key, &[], &[]).map_err(|e| {
+                    e.evaluated(|| format!("task {:?} key", self.plan.str(row.name)))
+                })?;
                 match crate::instance::key_text(&value) {
                     Some(k) => Some(k),
                     None => {
@@ -151,6 +156,8 @@ impl<D: DataSource> Runner<D> {
     fn other_timer_due_ms(&self) -> Option<f64> {
         self.wake_due()
             .into_iter()
+            // An input held behind a change action's receipt (`inputs.rs`).
+            .chain(self.held_input_due())
             .chain(self.call_due())
             .chain(self.presence_due_ms())
             // A resource a turn over its budget refused, asked again (`overrun.rs`).

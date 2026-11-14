@@ -74,9 +74,11 @@ impl Module {
     /// A round's work: wait on the host's I/O worker for the completion of
     /// the operation in flight, as an answer's storage continuation does.
     pub(crate) fn background_dispatch(&mut self) -> Dispatch {
-        match self.storage.as_ref() {
-            Some(session) => Dispatch::Run(Work::Now(session.continuation())),
-            None => Dispatch::Missing,
+        match (self.storage.as_ref(), self.engine.as_mut()) {
+            (Some(session), Some(engine)) => {
+                Dispatch::Run(Work::Now(session.background_continuation(engine)))
+            }
+            _ => Dispatch::Missing,
         }
     }
 
@@ -152,6 +154,9 @@ impl Module {
     /// are, within `bound`; what is left then is dropped and said. An
     /// operation the store already has completes on disk regardless.
     pub(crate) fn finish_background(&mut self, bound: std::time::Duration) {
+        if self.retire_oom().is_some() {
+            return;
+        }
         let deadline = std::time::Instant::now() + bound;
         self.read_background();
         self.host.between_answers = true;
@@ -162,6 +167,9 @@ impl Module {
         }
         self.read_background();
         loop {
+            if self.retire_oom().is_some() {
+                break;
+            }
             let left = self.background.state.queued + self.background.state.in_flight;
             if left == 0 {
                 break;

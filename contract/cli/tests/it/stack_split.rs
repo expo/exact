@@ -130,6 +130,32 @@ fn a_list_whose_rows_link_to_a_route_splits_and_names_each_rows_detail() {
     assert_eq!(r.stack_split(view(&r, "star-a"), None), None);
 }
 
+/// A row's link is compared as its visit stores it: canonical, without its
+/// fragment.
+#[test]
+fn a_row_whose_link_is_not_canonical_is_still_its_routes_row() {
+    let rows = r#"              link href="/item/a#panel" testId="row-a"
+                text "a"
+              link href="/item/b?q=a b" testId="row-b"
+                text "b"
+              link href="/item/./c" testId="row-c"
+                text "c""#;
+    for (href, detail, row) in [
+        ("/item/a#panel", "item-a", "row-a"),
+        ("/item/b?q=a b", "item-b", "row-b"),
+        ("/item/./c", "item-c", "row-c"),
+    ] {
+        let mut r = boot(&app("", "", rows));
+        let root = r.kernel().roots()[0];
+        r.dispatch(root, Event::Navigate(href.into())).unwrap();
+        assert_eq!(
+            split(&r).unwrap().rows,
+            vec![(view(&r, detail), view(&r, row))],
+            "{href}"
+        );
+    }
+}
+
 #[test]
 fn a_decorative_chevron_cannot_opt_out_another_rows_route_link() {
     let rows = format!(

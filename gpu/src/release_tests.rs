@@ -240,6 +240,21 @@ fn a_held_drawable_goes_before_its_surface() {
     drop((a_layer, b_layer));
 }
 
+/// The web's unload, which destroys the device as well, lets the open
+/// frame's drawable go before its surface.
+#[test]
+fn unload_lets_an_open_frames_drawable_go_before_its_surface() {
+    let Some(mut m) = module() else {
+        return;
+    };
+    m.set_seekable(true);
+    let (layer, id) = canvas(&mut m, "clear");
+    assert_eq!(m.render(id, &frame()), Some(true));
+    assert!(m.open.is_some());
+    m.unload();
+    drop(layer);
+}
+
 /// Where an acquisition thread waits while the test holds it: 1 entered,
 /// 2 let go, 3 gave up after ten seconds (the test was waiting on it).
 static GATE: (Mutex<u8>, Condvar) = (Mutex::new(0), Condvar::new());

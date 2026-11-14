@@ -124,19 +124,24 @@ extension NodeView {
         // label of the props' forget what was written when they write over it.
         let level = headingLevel
         let written = TextAccessibilityWrite(heading: level, value: level == nil ? spokenValue ?? label : nil, label: label)
-        guard lastAccessibilityWrite.text != written else { return }
-        setAccessibilityElement(true)
-        if accessibilitySubrole() != nil { setAccessibilitySubrole(nil) }
+        let last = lastAccessibilityWrite.text
+        guard last != written else { return }
+        // A paragraph rebound to another item (a list's row) keeps its role: only its words are written.
+        let role = last == nil || (last?.heading == nil) != (level == nil)
+        if role {
+            setAccessibilityElement(true)
+            if accessibilitySubrole() != nil { setAccessibilitySubrole(nil) }
+        }
         if let level {
             // The heading role WebKit exposes (AppKit's constant from macOS
             // 26), its level the value, as a `<h1>`–`<h6>` has on the web.
-            setAccessibilityRole(NSAccessibility.Role(rawValue: "AXHeading"))
-            setAccessibilityValue(level)
+            if role { setAccessibilityRole(NSAccessibility.Role(rawValue: "AXHeading")) }
+            if role || last?.heading != level { setAccessibilityValue(level) }
         } else {
-            setAccessibilityRole(.staticText)
-            setAccessibilityValue(written.value)
+            if role { setAccessibilityRole(.staticText) }
+            if role || last?.value != written.value { setAccessibilityValue(written.value) }
         }
-        setAccessibilityLabel(label)
+        if role || last?.label != label { setAccessibilityLabel(label) }
         lastAccessibilityWrite.text = written
         #else
         // UIKit does not visit a container's children when it is itself an

@@ -51,6 +51,7 @@ pub struct DocTree {
     roots: Vec<ViewId>,
     /// The nodes each `id` prop names, in tree order.
     ids: std::collections::HashMap<String, Vec<ViewId>>,
+    references: exact_kernel::svg::refs::IdIndex<ViewId>,
     /// Its styles' wide colours, kept from the table's sweep.
     kept: exact_kernel::style::wide::Keep,
 }
@@ -86,6 +87,7 @@ impl DocTree {
 
     /// Every node, mutably, for the props the runner adds after the fold.
     pub(crate) fn nodes_mut(&mut self) -> &mut [DocNode] {
+        self.references.clear();
         &mut self.nodes
     }
 
@@ -118,8 +120,9 @@ impl DocTree {
     /// nearest node that sets `color` decides, said when its author wrote
     /// it, and where its author wrote none a start of the neutral sheet's
     /// that sets `color` (`says`'s) stops the walk: a route header's, a
-    /// neutral alert's and its children's but its buttons'. (A field's start
-    /// sets it too, and a field holds no image.)
+    /// neutral alert's and its children's but its buttons', a plain dialog's
+    /// and a default-surface popover's. (A field's start sets it too, and a
+    /// field holds no image.)
     fn symbol_color(&self, node: &DocNode) -> bool {
         use exact_kernel::style::metrics::{column, Column};
         use exact_kernel::PropId;
@@ -138,6 +141,18 @@ impl DocTree {
                 && n.props.str(PropId::SemanticTag) == Some("dialog")
                 && n.props.str(PropId::AccessibilityRole) == Some("alertdialog")
         };
+        // The neutral surface's starts (`alert_context` 13, 15 and 17): a
+        // plain dialog, and a popover that is no menu on the default surface.
+        let surface = |n: &DocNode| {
+            let role = n.props.str(PropId::AccessibilityRole);
+            neutral
+                && if n.props.str(PropId::Popover).is_some() {
+                    role != Some("menu") && n.props.bool(PropId::DefaultSurface) == Some(true)
+                } else {
+                    n.props.str(PropId::SemanticTag) == Some("dialog")
+                        && role != Some("alertdialog")
+                }
+        };
         let button = |n: &DocNode| {
             n.node_type == NodeType::Pressable && n.props.str(PropId::Href).is_none()
                 || exact_kernel::control::ControlKind::of(n.node_type, &n.props)
@@ -150,6 +165,7 @@ impl DocTree {
                 && up.is_some_and(|p| p.props.get(PropId::NavigationKey).is_some())
                 || alert(n)
                 || up.is_some_and(&alert) && !button(n)
+                || surface(n)
         };
         let mut at = Some(node);
         while let Some(n) = at {
@@ -192,20 +208,17 @@ impl DocTree {
     /// rule (`Kernel::resolve_id`): the one node with that `id`, or of
     /// several the nearest to `from`.
     pub fn resolve_id(&self, from: ViewId, id: &str) -> Option<ViewId> {
-        match self.ids.get(id)?.as_slice() {
-            [] => None,
-            [one] => Some(*one),
-            several => exact_kernel::svg::refs::nearest(
-                several,
-                self.node(from)?.id,
-                |node| self.node(node).and_then(|n| n.parent),
-                |parent, child| {
-                    self.node(parent)
-                        .and_then(|p| p.children.iter().position(|c| *c == child))
-                        .unwrap_or(usize::MAX)
-                },
-            ),
-        }
+        self.references.resolve(
+            id,
+            self.node(from).map(|n| n.id),
+            || self.ids.get(id).into_iter().flatten().copied(),
+            |node| self.node(node).and_then(|n| n.parent),
+            |node| {
+                self.node(node)
+                    .into_iter()
+                    .flat_map(|n| n.children.iter().copied())
+            },
+        )
     }
 }
 
@@ -399,7 +412,7 @@ impl Build<'_> {
     fn fold(&mut self, n: &NodeInst) -> Result<(Rc<StyleProps>, PropList), DocTreeError> {
         let plan = self.plan;
         let row = plan.node(n.node);
-        let deps = &self.sites.deps;
+        let deps = &self.sites.data.deps;
         let constant = row.bindings.iter().all(|b| {
             plan.binding(b).kind != BindingKind::Style || deps.bindings[b.0 as usize].is_constant()
         });

@@ -886,7 +886,9 @@ test('Apple asset catalogs select platform modules and invalidate native receipt
   assert.equal(appleRunBinary(launchApp), resolve(paths.bundle, 'Contents/MacOS', paths.executable), 'a widget declaration without an identity still launches the bundled app');
   writeFileSync(resolve(paths.products, 'receipt.json'), JSON.stringify({ entitlements: plistFile({ 'com.apple.security.application-groups': ['TEAM.com.exact.catalog.widgets'] }) }));
   assert.equal(appleRunBinary(launchApp), resolve(paths.bundle, 'Contents/MacOS', paths.executable));
-  assert.equal(appleRunBinary(launchApp, true), appleArtifacts(launchApp, { host: true }).binary);
+  // The sample host launches as a bundle too, its own (4ec98dacf).
+  const host = appleArtifacts(launchApp, { host: true });
+  assert.equal(appleRunBinary(launchApp, true), resolve(host.bundle, 'Contents/MacOS', host.executable));
   mkdirSync(resolve(dir, 'modules/apple/Linked.xcassets'));
   symlinkSync(resolve(dir, 'outside'), resolve(dir, 'modules/apple/Linked.xcassets/Contents.json'));
   assert.throws(() => appleAssetCatalogInventory(app, 'ios'), /symlinks/);
@@ -1040,14 +1042,16 @@ test('docs prints the section on its words first, matching whole words', () => {
   for (const [words, file, shows] of [
     [['exit', 'animation'], 'docs/recipes/motion.md', /-exact-exit-animation/],
     [['-exact-exit-animation'], 'docs/recipes/motion.md', /-exact-exit-animation/],
-    [['call'], 'docs/recipes/native-module.md', /func call/],
+    [['call'], 'docs/recipes/native-module.md', /`native\.call`/],
+    [['tool'], 'docs/recipes/tools.md', /^# Recipe: tools an agent or the system calls/],
     [['later'], 'docs/reference.md', /Answer::Later/],
     [['screenshot'], 'docs/recipes/ios-driving.md', /screenshot\s+\.exact\/x\.png compare/],
     [['scheme', 'fixed'], 'docs/recipes/theme.md', /scheme=fixed/],
     [['tabular', 'numbers'], 'docs/contract-for-agents.md', /^### Tabular numbers/],
     [['grant'], 'docs/recipes/files-and-grants.md', /^# Recipe: files, SQLite and grants/],
-    [['sheet'], 'docs/recipes/navigation-stack.md', /Cancel\/Save sheet/],
-    [['sheets'], 'docs/recipes/navigation-stack.md', /Cancel\/Save sheet/],
+    // Its opening no longer says "sheet" (8db3f8578): the topic prints the recipe's worked app.
+    [['sheet'], 'docs/recipes/navigation-stack.md', /^<!-- check: app -->\n```contract\nroutes nav/],
+    [['sheets'], 'docs/recipes/navigation-stack.md', /^<!-- check: app -->\n```contract\nroutes nav/],
     // A whole word: `logs` is the driver's op, not "catalogs".
     [['logs'], 'docs/contract-for-agents.md', /^The driver has ten operations[^]*`logs`/],
     [['colours'], 'docs/recipes/theme.md', /^# Recipe: theme: colours/],
@@ -1076,6 +1080,7 @@ test('docs prints the section on its words first, matching whole words', () => {
     [['dark', 'mode'], 'docs/recipes/theme.md', /follows light, dark/],
     [['image'], 'docs/recipes/app-json.md', /image "assets\/logo.png"/],
     [['svg'], 'docs/recipes/theme.md', /svg "icons\/play\.svg"/],
+    [['waveform'], 'docs/recipes/waveform-and-tail.md', /^# Recipe: a voice note's waveform/],
     [['animation'], 'docs/recipes/motion.md', /animation/],
     [['transition'], 'docs/recipes/motion.md', /transition/],
     [['timer'], 'docs/recipes/timers.md', /^# Recipe: timers/],
@@ -1456,9 +1461,24 @@ test.skipIf(!existsSync('/bin/sh'))('EAS recipes have valid shell syntax after j
 test('an installed command opens the bundle it names, whatever the name holds', async () => {
   const { shimText: shimScript } = await import('./exact-install.mjs');
   const target = "/Users/o'neil $HOME/Applications/Budget $5 `id` 'q'.app";
-  const files = ['a b.txt', '$x', '-n', "it's"];
+  const files = ['a b.txt', '$x', '-n', '-notes.md', "it's"];
   const script = shimScript({ displayName: 'Budget', name: 'budget' }, target).replace('exec /usr/bin/open', "exec printf '%s\\n'");
   const run = spawnSync('/bin/sh', ['-c', script, 'budget', ...files], { encoding: 'utf8' });
   assert.equal(run.status, 0, run.stderr);
-  assert.deepEqual(run.stdout.split('\n').slice(0, -1), ['-a', target, ...files]);
+  assert.deepEqual(run.stdout.split('\n').slice(0, -1), ['-a', target, '--', ...files]);
 });
+
+test('exact new names setup --check for each native platform the app names, whose rows its web table leaves out', async () => { const { shellPath } = await import('./exact.mjs'); inDir((dir) => {
+  const made = spawnSync(process.execPath, [resolve(import.meta.dir, 'exact.mjs'), 'new', resolve(dir, 'with-native'), '--with', 'ios', '--with', 'mac'], { encoding: 'utf8', timeout: 120_000 });
+  assert.equal(made.status, 0, made.stderr);
+  const script = shellPath(resolve(import.meta.dir, 'exact.mjs'));
+  assert.ok(made.stdout.includes(`Before the first ios build: bun ${script} setup --check --platform ios names what it lacks (the Xcode or SDK it needs among them).`), made.stdout);
+  assert.ok(made.stdout.includes(`Before the first macos build: bun ${script} setup --check --platform macos names`), made.stdout);
+  // The command it names is one setup takes, run by a shell from the app: it prints the platform's table, not its usage.
+  const named = /^Before the first macos build: bun (.+? setup --check --platform macos) names/m.exec(made.stdout);
+  const checked = spawnSync('/bin/sh', ['-c', `${shellPath(process.execPath)} ${named[1]}`], { cwd: resolve(dir, 'with-native'), encoding: 'utf8', timeout: 120_000 });
+  assert.doesNotMatch(checked.stderr, /Usage: exact setup/);
+  assert.match(checked.stdout, /\bXcode\b|\bmacOS\b/);
+  const plain = spawnSync(process.execPath, [resolve(import.meta.dir, 'exact.mjs'), 'new', resolve(dir, 'web-only')], { encoding: 'utf8', timeout: 120_000 });
+  assert.doesNotMatch(plain.stdout, /Before the first/);
+}); }, 240_000);
