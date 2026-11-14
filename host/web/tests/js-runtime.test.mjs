@@ -772,6 +772,11 @@ test('formatDay\'s dates, times and weekdays are Intl\'s', async () => {
     const at = options => dtf(off, options).format(new Date(then)), time = at({ timeStyle: 'short' });
     if (mode === 'list') return apart === 0 ? time : apart === -1 ? 'Yesterday'
       : apart >= -6 && apart <= -2 ? at({ weekday: 'long' }) : at({ dateStyle: 'short' });
+    // LLP 1168.000 D5: a weekday within six days either side, else MMMEd, yMMMEd in another year.
+    const year = ms => new Date(Math.trunc(ms) + off * 6e4).getUTCFullYear();
+    if (mode === 'section') return ({ 0: 'Today', '-1': 'Yesterday', 1: 'Tomorrow' })[apart]
+      ?? (Math.abs(apart) <= 6 ? at({ weekday: 'long' })
+        : at({ weekday: 'short', month: 'short', day: 'numeric', ...(year(then) === year(now) ? {} : { year: 'numeric' }) }));
     const label = ({ 0: 'Today', '-1': 'Yesterday', 1: 'Tomorrow' })[apart] ?? at({ dateStyle: 'medium' });
     return mode === 'day-time' ? `${label} at ${time}` : label;
   };
@@ -781,7 +786,7 @@ test('formatDay\'s dates, times and weekdays are Intl\'s', async () => {
   for (let i = 0; i < 3000; i++) {
     const now = 1e12 + next() * 1.5e12, then = now + Math.round((next() - 0.75) * 12 * 864e5);
     const off = [0, 60, -60, 330, 345, -420, -480, 840, -720, 1080, -1080][Math.floor(next() * 11)];
-    for (const mode of ['day', 'day-time', 'list'])
+    for (const mode of ['day', 'day-time', 'list', 'section'])
       if (x_formatDay(then, now, off, mode) !== expected(then, now, off, mode)) wrong.push([then, now, off, mode]);
   }
   expect(wrong.slice(0, 10)).toEqual([]);

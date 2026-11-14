@@ -699,9 +699,9 @@ impl Gen<'_> {
                 let then = if self.rng.chance(1, 3) {
                     num(self)
                 } else {
-                    let days = *self
-                        .rng
-                        .pick(&[-8.0, -7.0, -6.0, -2.0, -1.0, 0.0, 1.0, 2.0]);
+                    let days = *self.rng.pick(&[
+                        -400.0, -8.0, -7.0, -6.0, -2.0, -1.0, 0.0, 1.0, 2.0, 6.0, 7.0,
+                    ]);
                     let hours = *self.rng.pick(&[-23.0, -5.0, 0.0, 7.0, 23.5]);
                     format!(
                         "({now}) + {}",
@@ -709,7 +709,9 @@ impl Gen<'_> {
                     )
                 };
                 let off = number(*self.rng.pick(OFFSETS));
-                let mode = *self.rng.pick(&["\"day\"", "\"day-time\"", "\"list\""]);
+                let mode = *self
+                    .rng
+                    .pick(&["\"day\"", "\"day-time\"", "\"list\"", "\"section\""]);
                 format!("formatDay({then}, {now}, {off}, {mode})")
             }
         }

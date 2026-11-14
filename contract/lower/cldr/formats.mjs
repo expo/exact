@@ -152,9 +152,10 @@ function record(l) {
   }
   // Dates and times: the Gregorian calendar at UTC, of the wall time.
   const dtf = (o, tag = l) => new Intl.DateTimeFormat(`${tag}${tag.includes("-u-") ? "" : "-u"}-ca-gregory`, { timeZone: "UTC", ...o });
+  // A date's names: its twelve months' (`{N}`), then, when it has a weekday (`{E}`), its seven, Sunday's first.
   const date = (o) => {
     const f = dtf(o);
-    let out = "", names = [];
+    let out = "", names = [], days = [];
     for (const p of f.formatToParts(UTC(2026, 9, 5, 13, 2))) {
       const v = toAscii(p.value);
       if (p.type === "literal") out += literal(p.value);
@@ -164,9 +165,12 @@ function record(l) {
       else if (p.type === "month") {
         out += "{N}";
         for (let m = 1; m <= 12; m++) names.push(literal(f.formatToParts(UTC(2026, m, 5)).find((q) => q.type === "month").value));
+      } else if (p.type === "weekday") {
+        out += "{E}";
+        days = [0, 1, 2, 3, 4, 5, 6].map((i) => literal(f.formatToParts(UTC(2026, 10, 4 + i)).find((q) => q.type === "weekday").value));
       } else fail(`date part ${p.type}`);
     }
-    return [out, names];
+    return [out, days.length ? [...(names.length ? names : Array(12).fill("")), ...days] : names];
   };
   const time = (tag) => {
     const f = dtf({ timeStyle: "short" }, tag);
@@ -209,6 +213,19 @@ function record(l) {
   const rtf = new Intl.RelativeTimeFormat(l, { numeric: "auto" });
   const title = (w) => { const [c, ...rest] = w; return c.toLocaleUpperCase(l) + rest.join(""); };
   const [medium, monthYear, short] = [date({ dateStyle: "medium" }), date({ month: "long", year: "numeric" }), date({ dateStyle: "short" })];
+  // formatDay's "section" (LLP 1168.000 D5): CLDR's MMMEd, and yMMMEd for another year, each beginning with a capital
+  // as a line does: the first grapheme upper-cased in the locale, of the template's first text or of the names that
+  // begin it, so no host maps case. Its weekdays alone, two to six days either side, likewise (`weekdayLabels`).
+  const upper = (w) => { const [c = "", ...rest] = w; return c.toLocaleUpperCase(l) + rest.join(""); };
+  const capital = ([t, names]) => {
+    const first = /^\{(\w+)\}/.exec(t)?.[1];
+    if (!first) return [upper(t), names];
+    if (first === "E") return [t, names.map((n, i) => (i >= 12 ? upper(n) : n))];
+    if (first === "N") return [t, names.map((n, i) => (i < 12 ? upper(n) : n))];
+    return [t, names];
+  };
+  const [weekdayDate, weekdayYear] = [capital(date({ weekday: "short", month: "short", day: "numeric" })),
+    capital(date({ weekday: "short", month: "short", day: "numeric", year: "numeric" }))];
   const [plainTime, h12, h23] = [time(l), time(`${l}-u-hc-h12`), time(`${l}-u-hc-h23`)];
   return {
     digits: ascii ? "" : native.join(""),
@@ -233,6 +250,9 @@ function record(l) {
     time23: h23[0], time23Periods: h23[1],
     dateTime: literal(both.replace(d, "\u0000").replace(t, "\u0001")).replace("\u0000", "{D}").replace("\u0001", "{T}"),
     days: [0, -1, 1].map((n) => literal(title(rtf.format(n, "day")))),
+    weekdayDate: weekdayDate[0], weekdayDateNames: weekdayDate[1],
+    weekdayYear: weekdayYear[0], weekdayYearNames: weekdayYear[1],
+    weekdayLabels: [0, 1, 2, 3, 4, 5, 6].map((i) => literal(upper(wf.format(UTC(2026, 10, 4 + i))))),
   };
 }
 
@@ -324,7 +344,7 @@ function oracle() {
     const rtf = new Intl.RelativeTimeFormat(l, { numeric: "auto" });
     const word = (n) => { const [c, ...rest] = rtf.format(n, "day"); return c.toLocaleUpperCase(l) + rest.join(""); };
     const now = 1791762120000, off = -420, dayMs = 86400000;
-    for (const back of [0, 0.1, 1, 1.3, 2, 5, 6, 7, 30, -1, -2, -400]) {
+    for (const back of [0, 0.1, 1, 1.3, 2, 5, 6, 7, 30, -1, -2, -6, -7, -400, 300, 400]) {
       const then = now - back * dayMs;
       const wall = (x) => Math.floor((Math.trunc(x) + off * 60000) / dayMs);
       const apart = wall(then) - wall(now);
@@ -335,9 +355,15 @@ function oracle() {
       const dayLabel = relative ?? dtf({ dateStyle: "medium" }).format(d);
       const dayTime = relative === undefined ? both : both.replace(dtf({ dateStyle: "medium" }).format(d), relative);
       const list = apart === 0 ? time : apart === -1 ? word(-1) : apart >= -6 && apart <= -2 ? dtf({ weekday: "long" }).format(d) : dtf({ dateStyle: "short" }).format(d);
+      // "section" (LLP 1168.000 D5): the words; a weekday within six days either side; else the date with its weekday,
+      // its year when not `now`'s; its first letter upper-cased in the locale.
+      const year = (x) => new Date(Math.trunc(x) + off * 60000).getUTCFullYear(), upper = (s) => { const [c, ...rest] = s; return c.toLocaleUpperCase(l) + rest.join(""); };
+      const section = relative ?? upper(Math.abs(apart) <= 6 ? dtf({ weekday: "long" }).format(d)
+        : dtf({ weekday: "short", month: "short", day: "numeric", ...(year(then) === year(now) ? {} : { year: "numeric" }) }).format(d));
       rows.push([l, "formatDay", [then, now, off, "day"], dayLabel]);
       rows.push([l, "formatDay", [then, now, off, "day-time"], dayTime]);
       rows.push([l, "formatDay", [then, now, off, "list"], list]);
+      rows.push([l, "formatDay", [then, now, off, "section"], section]);
     }
     const nf = (o) => new Intl.NumberFormat(l, o);
     const z = (n) => (Object.is(n, -0) ? "-0" : n);
