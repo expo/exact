@@ -379,5 +379,61 @@ final class RoleKeysMacTests: XCTestCase {
             XCTAssertEqual(focused(p, w), expected, name)
         }
     }
+
+    /// The same in a popover AppKit shows and in a dialog's sheet, each a
+    /// loop of its own: Tab goes on by the member's place in that loop's tree.
+    func testTabFromAMemberOutsideTheOrderGoesOnByItsPlaceInAPopoverAndADialog() throws {
+        keyboardNavigation(true)
+        let group = { (prefix: String) in """
+                button press=setTab("a") tabindex=1 testId="\(prefix)before"
+                  text "Before"
+                row role="tablist" appearance="none" aria-label="Tabs"
+                  button press=setTab("a") appearance="none" role="tab" aria-selected=(tab == "a") testId="\(prefix)tab-a"
+                    text "A"
+                  button press=setTab("b") appearance="none" role="tab" tabindex=-1 testId="\(prefix)tab-b"
+                    text "B"
+                button press=setTab("a") tabindex=2 testId="\(prefix)after"
+                  text "After"
+                button press=setTab("a") tabindex=0 testId="\(prefix)tail"
+                  text "Tail"
+        """ }
+        let f = try SheetFixture(page: """
+        component App
+          state tab = "a"
+          action setTab(v: string)
+            tab = v
+          view
+            column width="100%" height="100%" padding=20 gap=12
+              button testId="open-pop" popovertarget="pop"
+                text "Popover"
+              button testId="open-dialog" commandfor="box" command="show-modal"
+                text "Dialog"
+              column id="pop" testId="pop" popover="auto" padding=16 gap=8 width=260
+        \(group("pop-"))
+              dialog id="box" testId="box" padding=20 width=300
+        \(group("dialog-"))
+
+        """)
+        addTeardownBlock { f.close() }
+        let p = f.presenter
+        f.window.setFrameOrigin(NSPoint(x: 200, y: 120))
+        f.window.orderFrontRegardless()
+        f.settle()
+        func walk(_ prefix: String, in w: NSWindow) throws {
+            for (name, expected) in [("Tab", "after"), ("Shift+Tab", "before")] {
+                XCTAssertTrue(w.makeFirstResponder(try f.node(prefix + "tab-a")))
+                try key("ArrowRight", p, w)
+                XCTAssertEqual(focused(p, w), prefix + "tab-b")
+                try key(name, p, w)
+                XCTAssertEqual(focused(p, w), prefix + expected, "\(prefix) \(name)")
+            }
+        }
+        try f.press("open-pop")
+        let popover = try XCTUnwrap(p.menus.windowed.first?.window, "AppKit shows the popover")
+        try walk("pop-", in: popover)
+        try f.press("open-pop")
+        try f.press("open-dialog")
+        try walk("dialog-", in: try XCTUnwrap(f.window.attachedSheet, "the dialog is a sheet"))
+    }
 }
 #endif

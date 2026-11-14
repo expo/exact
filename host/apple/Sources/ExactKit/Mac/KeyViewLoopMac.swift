@@ -75,9 +75,28 @@ extension Presenter {
     func syncKeyViewLoop() {
         keyViewLoopMode = KeyboardNavigation.on
         keyViewBefore.removeAllObjects()
-        if let dialog = dialogs.active { keyViewLoop([dialog], from: dialogs.entries.last?.sheet?.content ?? viewport) }
-        else { keyViewLoop(root.subviews.compactMap { $0 as? NodeView }, from: viewport) }
-        for popover in menus.windowed { if let node = popover.node { keyViewLoop([node], from: popover.content) } }
+        for scope in keyViewScopes { keyViewLoop(scope.tops, from: scope.start) }
+    }
+    /// Each loop: the nodes under it, and the view it is entered from.
+    private var keyViewScopes: [(tops: [NodeView], start: NSView)] {
+        let page: (tops: [NodeView], start: NSView) = dialogs.active.map { ([$0], dialogs.entries.last?.sheet?.content ?? viewport) }
+            ?? (root.subviews.compactMap { $0 as? NodeView }, viewport)
+        return [page] + menus.windowed.compactMap { popover in popover.node.map { ([$0], popover.content) } }
+    }
+    /// The nodes under `tops` in the order Tab follows, none under an inert
+    /// or hidden one: a table's rows are in its cells, not among the list's
+    /// own subviews; a route in the detail's pane of a split is in that
+    /// pane's view, and stands where it was written (LLP 1115.002 D4); a
+    /// popover painted in the page follows its invoker.
+    private func inTabOrder(_ tops: [NodeView], _ visit: (NodeView) -> Void) {
+        func walk(_ v: NodeView) {
+            if v.inert || v.isHidden { return }
+            visit(v)
+            let own = v.container.subviews.compactMap { $0 as? NodeView }
+            for child in tables.feeds[v.id]?.mounted ?? navigation.split.authored(own, in: v.container) { walk(child) }
+            for popover in menus.following(v) { walk(popover) }
+        }
+        for top in tops { walk(top) }
     }
     /// One loop: the stops under `tops`, entered from `start`.
     private func keyViewLoop(_ tops: [NodeView], from start: NSView) {
@@ -90,8 +109,7 @@ extension Presenter {
         // a focused view that is no key view the same way. So does a
         // control that lost the focus by becoming disabled (`tabStart`).
         var starts: [(NSView, Int)] = []
-        func walk(_ v: NodeView) {
-            if v.inert || v.isHidden { return }
+        inTabOrder(tops) { v in
             // A painted group's members are all in the loop: which one is its stop moves with the focus
             // (LLP 1166.000 D1), and AppKit asks `canBecomeKeyView` at each Tab.
             if Self.tabbable(v) || v.paintedGroup != nil { listed.append((keyView(of: v), v.tabOrder)) }
@@ -100,13 +118,7 @@ extension Presenter {
                 if run.canBecomeKeyView || inlineRoleTabStop(run.id) != nil { listed.append((run, run.tabOrder)) }
                 else if run.acceptsFirstResponder { starts.append((run, listed.count)) }
             }
-            // A table's rows are in its cells, not among the list's own subviews; a route in the detail's
-            // pane of a split is in that pane's view, and stands where it was written (LLP 1115.002 D4).
-            let own = v.container.subviews.compactMap { $0 as? NodeView }
-            for child in tables.feeds[v.id]?.mounted ?? navigation.split.authored(own, in: v.container) { walk(child) }
-            for popover in menus.following(v) { walk(popover) }
         }
-        for top in tops { walk(top) }
         let tabbable = listed.enumerated().sorted { a, b in
             let ia = a.element.order, ib = b.element.order
             let pa = ia > 0 ? ia : Int.max, pb = ib > 0 ? ib : Int.max
@@ -157,26 +169,22 @@ extension Presenter {
     /// negative `tabindex`), which the loop keeps among the sorted stops: the
     /// next or previous stop by its place in tree order, as HTML's sequential
     /// navigation goes on from a focus outside its order (LLP 1166.000 D1),
-    /// and past either end the loop's first or last. Nil for any other view,
-    /// whose Tab is the loop's.
+    /// and past either end the loop's first or last. Within the member's own
+    /// loop: the page's, the open dialog's, or a popover AppKit shows. Nil
+    /// for any other view, whose Tab is the loop's.
     private func outsideTheOrder(_ view: NSView, back: Bool) -> NSView? {
-        guard dialogs.active == nil, view.window === viewport.window, let member = keyTarget(view), keyView(of: member) === view,
-              (member.explicitTabIndex ?? 0) < 0, member.paintedGroup != nil else { return nil }
+        guard let member = keyTarget(view), keyView(of: member) === view, (member.explicitTabIndex ?? 0) < 0, member.paintedGroup != nil,
+              let scope = keyViewScopes.first(where: { $0.start.window === view.window }) else { return nil }
         var views: [NSView] = [], at: Int?
-        func walk(_ v: NodeView) {
-            if v.inert || v.isHidden { return }
+        inTabOrder(scope.tops) { v in
             if v === member { at = views.count } else if Self.tabbable(v) || v.paintedGroup != nil { views.append(keyView(of: v)) }
             views += v.syncInlineKeyViews() as [NSView]
-            let own = v.container.subviews.compactMap { $0 as? NodeView }
-            for child in tables.feeds[v.id]?.mounted ?? navigation.split.authored(own, in: v.container) { walk(child) }
-            for popover in menus.following(v) { walk(popover) }
         }
-        for top in root.subviews.compactMap({ $0 as? NodeView }) { walk(top) }
         guard let at else { return nil }
         let next = back ? views[..<at].last(where: \.canBecomeKeyView) : views[at...].first(where: \.canBecomeKeyView)
         if let next { return next }
-        guard back else { return viewport.nextValidKeyView }
-        return keyViewBefore.object(forKey: viewport).flatMap { $0.canBecomeKeyView ? $0 : $0.previousValidKeyView }
+        guard back else { return scope.start.nextValidKeyView }
+        return keyViewBefore.object(forKey: scope.start).flatMap { $0.canBecomeKeyView ? $0 : $0.previousValidKeyView }
     }
 
     /// Tab, or Shift-Tab, while the window itself is the first responder:
