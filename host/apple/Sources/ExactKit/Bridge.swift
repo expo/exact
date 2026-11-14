@@ -128,6 +128,14 @@ extension Runtime {
             return RadioGroup(json: Data(bytes: exact_out(rt), count: Int(len)))
         }
     }
+    /// A painted group's keys and Tab stop for member `view` (LLP 1166.000
+    /// D2), with `key` pressed and the focus at `focused`; nil for no member.
+    func roleKeys(_ view: UInt32, key: String?, focused: UInt32?) -> RoleKeys? {
+        return on(busy: nil) {
+            let len = exact_role_keys(rt, view, focused ?? 0, write(key ?? ""))
+            return RoleKeys(json: Data(bytes: exact_out(rt), count: Int(len)))
+        }
+    }
     /// A navigation root's tabs by the kernel's rule (LLP 1115.001 D11); nil for one stack.
     func rootTabs(_ view: UInt32) -> RootTabs? {
         return on(busy: nil) {

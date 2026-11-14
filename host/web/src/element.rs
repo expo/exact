@@ -857,6 +857,7 @@ pub fn props_of(node: &NodeFacts<'_>) -> SortedMap<String, String> {
             PropId::AccessibilityHint => "aria-description",
             PropId::AccessibilityOrientation => "aria-orientation",
             PropId::AccessibilityControls => "aria-controls",
+            PropId::AccessibilityActiveDescendant => "aria-activedescendant",
             PropId::AccessibilityHeadingLevel => "aria-level",
             PropId::AccessibilityPosInSet => "aria-posinset",
             PropId::AccessibilitySetSize => "aria-setsize",

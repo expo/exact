@@ -198,19 +198,19 @@ rules
 
 ```contract
 component App
-  state name = ""
+  state low = ""
   state on = false
-  action setName(v: string)
-    name = v
+  action setLow(v: string)
+    low = v
   action setOn(b: bool)
     on = b
   view
     column
-      input value=name input=setName inputmode="decimal" min=-40
-      input type="checkbox" checked=on change=setOn
+      input value=low input=setLow inputmode="decimal" min=-40 aria-label="Low"
+      input type="checkbox" checked=on change=setOn aria-label="On"
 ```
 - `select value=v change=set` holds `option "Label" value="x"`. Tabs: a `row role="tablist"` of `button role="tab" aria-controls="panel-x" aria-selected=… press=…`, each panel a `column role="tabpanel" id="panel-x"`; `routes nav`, `tab`, `select(nav, name)`.
-- A number field's `min`, `max`, `step` are numbers (`min=-40`); with `inputmode="decimal"` a negative `min` gives the pad its ± key.
+- `min`, `max`, `step` are numbers; with `inputmode="decimal"` a negative `min` gives the pad its ± key.
 - Symbols: `"symbol:<role>"` (below); `symbol:sf/<name>` is Apple-only.
 - Not in Contract (`vocab <name>` says what instead): abs pow sqrt sort reduce find some every contains padStart parseInt.
 idioms with code (vocab <name>): scroll loading plural choice select screen notfound modal confirm date persist swipe task mutation resource source match for if let fn shape props derive action stepper gradients menu search menubar ::placeholder glass bar-buttons haptics status-bar toast titlebar share use members svg safe-area var media css cache

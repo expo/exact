@@ -35,6 +35,9 @@ test('tree --ax: outside-modal fires for an element outside the open modal, by t
   const modal = { present: true, element: 0, id: 13, by: 'dialog:modal' };
   const web = axFinish(axReply([sheet, ok, behind], { modal }), axPlain, null).ax.findings;
   expect(web.map(f => [f.kind, f.testId, f.basis])).toEqual([['outside-modal', 'behind', 'platform']]);
+  // The modal's ancestor (Chrome keeps a modal dialog's `main` exposed) holds it: it is not outside it.
+  const held = [el(5, 'main', ''), { ...sheet, i: 1, parent: 0 }, { ...ok, i: 2, parent: 1 }].map((e, i) => ({ ...e, i }));
+  expect(axFinish(axReply(held, { modal: { ...modal, element: 1 } }), axPlain, null).ax.findings).toEqual([]);
   const kit = axFinish(axReply([sheet, ok, { ...behind, outsideModal: false }], { modal, source: 'uikit' }), axPlain, null).ax.findings;
   expect(kit).toEqual([]);
   const leak = axFinish(axReply([sheet, ok, { ...behind, outsideModal: true }], { modal, source: 'uikit' }), axPlain, null).ax.findings;

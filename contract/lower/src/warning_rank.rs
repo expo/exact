@@ -28,6 +28,7 @@ pub fn rank(id: &str, message: &str) -> u8 {
         | "lower-round-button-label"
         | "lower-dialog-role"
         | "lower-level-without-heading"
+        | "lower-role-keys"
         | "lower-scroll-grows"
         | "lower-flex-on-block"
         | "lower-width-padding"

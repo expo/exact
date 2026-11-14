@@ -712,11 +712,12 @@ test.skipIf(!!chromium().unavailable)('verify on a new app: clean, a failing tes
     assert.deepEqual([warned(quiet.stderr), warned(quiet.stdout)], [[], []]);
     const clean = verify('--shots', 'out/shots');
     assert.equal(clean.status, 0, clean.stdout + clean.stderr);
-    assert.ok(clean.lines.length <= 9, clean.stdout);
+    assert.ok(clean.lines.length <= 10, clean.stdout);
     assert.ok(clean.lines.includes("largest text size (root font size 53 px at 390x844, iOS's body at its largest), 5 screens: nothing spills"), clean.stdout); // 4, and 1 the tests pass through
     assert.ok(!clean.lines.some((l) => l.startsWith('compiler:')), clean.stdout);
     assert.ok(clean.lines.includes('tests: 2 passed, 0 failed'), clean.stdout);
     assert.ok(clean.lines.includes('check first screen, 2 test ends, relaunch · 390x844, 1280x900 · light, dark: no findings'), clean.stdout);
+    assert.ok(clean.lines.includes('tree --ax first screen, 2 test ends, relaunch: no findings'), clean.stdout); // LLP 1166.002 D1
     // The starter keeps nothing: the relaunch on the second test's store opens as a fresh launch does, and says so.
     assert.match(clean.stdout, /^relaunch on "the header's button likes it"'s store \(\d+\.\d s of real time\): the first screen is a fresh launch's; that test wrote no storage$/m);
     assert.match(clean.lines.at(-1), /^verify: clean in \d+\.\d s; contract verify: done; 0 findings; properties: 0 held, 0 false, 0 counted only, 0 not exercised; \d+ suggested properties .*; report and receipt: \.exact\/verify\/properties\.txt$/);
@@ -801,6 +802,9 @@ test.skipIf(!!chromium().unavailable)('verify on a new app: clean, a failing tes
     for (const screen of ['first screen', 'the greeting loads', "the header's button likes it", 'relaunch']) assert.deepEqual(onScreen(screen), ['390x844 light contrast', '390x844 dark ', '1280x900 light contrast', '1280x900 dark '], screen);
     assert.deepEqual([r.relaunch.test, r.relaunch.problems, r.tests.results.map((t) => t.shot.split('/').at(-1))], ["the header's button likes it", [], ['web-t1-the-greeting-loads.png', 'web-t2-the-header-s-button-likes-it.png']]);
     assert.deepEqual(r.reloads.map((x) => [x.ran, x.finding]), [[true, null], [true, null]]); // each end screen reloaded: the same
+    // The accessibility tree, read once a screen whatever its widths and schemes (LLP 1166.002 D1).
+    assert.deepEqual(r.ax.map((a) => [a.screen, a.source, a.findings.length, a.incomplete ?? null]), ['first screen', 'the greeting loads', "the header's button likes it", 'relaunch'].map((s) => [s, 'chrome-cdp', 0, null]));
+    assert.equal(r.axUnread, 0); // every screen's tree read whole, so the closing line is a plain "verify: clean"
 
     // A call the host refuses is the report's first line (LLP 1116.010 D5), and a count kept only in memory is lost by a
     // reload: the page's URL and storage hold nothing of it (D6). The starter's greeting source goes with its view.
@@ -815,8 +819,17 @@ test.skipIf(!!chromium().unavailable)('verify on a new app: clean, a failing tes
     // LLP 1116.011 D5: the count lived in memory by design, so its reload is a note, shown and not counted.
     assert.match(poked.stdout, /^reload 1 test end: no findings\nreload note: 1 screen reloads into another state \(not counted\)\n {2}note {5}\/ reloads into another state: "Pokes: 2" → "Pokes: 0" \("poking counts[^\n]*\n {2}a saved value must survive a reload; a game or a draft in progress may not\n/m);
     assert.match(poked.lines.at(-1), /^verify: 1 problem \(1 finding; the tests passed\) in /);
+
+    // LLP 1166.002 D1: a field with no name is the accessibility tree's finding at each screen it is on, failing --strict.
+    writeFileSync(view, 'component App\n  state note = ""\n  action setNote(v: string)\n    note = v\n  view\n    column padding=16\n      input value=note input=setNote testId="note"\n      text note testId="echo"\n');
+    writeFileSync(tests, 'test "a note echoes"\n  type "note" "hi"\n  expect text "echo" == "hi"\n');
+    const unnamed = verify('--strict');
+    assert.equal(unnamed.status, 1, unnamed.stdout + unnamed.stderr);
+    assert.ok(unnamed.lines.includes('tree --ax first screen, 1 test end, relaunch: 1 finding'), unnamed.stdout);
+    assert.match(unnamed.stdout, /^ {2}unnamed {2}note: a textbox with no name: a screen reader says only its role; give it aria-label=/m);
+    assert.match(unnamed.lines.at(-1), /^verify: 1 problem \(1 finding; the tests passed\) in /);
   } finally { rmSync(parent, { recursive: true, force: true }); }
-}, 300_000); // A new app's offline Cargo resolution and its first web build, then four runs.
+}, 360_000); // A new app's offline Cargo resolution and its first web build, then four runs.
 
 // The euxy port (friction item 12): a faithful port's palette and keys are its design. app.json `verify.accept` names a
 // finding by its kind and its node's testId (or its control's, for a label; `*` a prefix), and verify says those apart.
