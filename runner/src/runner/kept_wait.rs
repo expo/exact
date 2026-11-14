@@ -95,7 +95,10 @@ impl<D: DataSource> Runner<D> {
                     }
                     Match::Wait => {
                         out.hold = true;
-                        self.start_waiting(i, kept, false);
+                        // A seed woken from idleness keeps that history: the
+                        // placeholder that replaces it meanwhile does not.
+                        let slept = states[i].as_ref().is_some_and(|s| s.slept);
+                        self.start_waiting(i, kept, slept);
                     }
                     Match::Mismatch => self.refuse_kept(i, &kept, now, states),
                 }

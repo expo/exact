@@ -127,6 +127,12 @@ fn plan_keyed_by_state() -> Plan {
 /// As [`plan_keyed_by_state`]; `gated` adds `when open`, a root state that
 /// starts false and the action `open` sets.
 fn plan_keyed(gated: bool) -> Plan {
+    plan_keyed_with(gated, true)
+}
+
+/// As [`plan_keyed`]; without `compiled`, `feeds` has no build-time answer,
+/// so its placeholder stands in before readiness.
+fn plan_keyed_with(gated: bool, compiled: bool) -> Plan {
     let mut b = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
     let string = b.primitive(TypeKind::String);
     let number = b.primitive(TypeKind::Number);
@@ -140,15 +146,18 @@ fn plan_keyed(gated: bool) -> Plan {
     let mut k = Asm::new();
     k.load_slot(key);
     let k = b.code(k);
+    let loading = Value::str("loading");
     let feeds = b.resource(
         "feeds",
         "feeds",
         &[g, k],
         string,
-        Some(&Value::str("loading")),
+        compiled.then_some(&loading),
     );
     b.set_resource_reader(feeds, true);
-    b.set_resource_initial_args(feeds, &[Value::Number(0.), Value::str("")]);
+    if compiled {
+        b.set_resource_initial_args(feeds, &[Value::Number(0.), Value::str("")]);
+    }
     if gated {
         let boolean = b.primitive(TypeKind::Bool);
         let no = b.constant(&Value::Bool(false));
@@ -641,4 +650,29 @@ fn an_admitted_kept_answer_that_leaves_its_identity_does_not_wait_again() {
     r.act("key", vec![Value::str("alice")]).unwrap();
     shows(&r, "feeds", "loading");
     assert_eq!(lines_with(&r, WAITING).len(), 1, "it waited once, at boot");
+}
+
+#[test]
+fn a_kept_seed_woken_before_readiness_with_no_id_keeps_its_sleep_history() {
+    // No build-time answer: woken with no id before readiness, it waits on
+    // its placeholder, and the id's arrival admits a value that slept, which
+    // is no answer yet.
+    let mut r = launch_plan(
+        plan_keyed_with(true, false),
+        vec![feeds_kept(
+            &[Value::Number(0.), Value::str("alice")],
+            "kept feeds of alice",
+        )],
+    );
+    r.act("open", vec![Value::Bool(true)]).unwrap();
+    shows(&r, "feeds", "");
+    assert_eq!(lines_with(&r, WAITING).len(), 1);
+    r.act("key", vec![Value::str("alice")]).unwrap();
+    shows(&r, "feeds", "kept feeds of alice");
+    assert!(!r.resources[0].current, "a value kept across idleness");
+    r.data.ready = true;
+    r.data_ready().unwrap();
+    settle_requests(&mut r);
+    shows(&r, "feeds", "feeds of alice");
+    assert!(r.resources[0].current);
 }
