@@ -684,6 +684,9 @@ impl<D: DataSource> Bridge<D> {
                         opt(&r.symbol, &mut json);
                         // An svg-only icon's path (LLP 1121 D10, stage 9 A2).
                         crate::icon_path::push_json(r.icon.as_deref(), &mut json);
+                        if r.icon_multicolor {
+                            json.push_str(",\"symbolMulticolor\":true");
+                        }
                         json.push_str(",\"title\":");
                         opt(&r.title, &mut json);
                         json.push_str(",\"secondary\":");

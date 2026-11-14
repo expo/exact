@@ -200,8 +200,8 @@ final class NativeButtonMac: NSButton {
                 title.addAttribute(.foregroundColor, value: color, range: NSRange(location: 0, length: title.length))
                 attributedTitle = title
             }
-            if let color = ButtonConfigurationMac.color(rows.symbol["tint_color"], appearance: owner.effectiveAppearance, accent: written.accent), let base = image {
-                let path = written.face.symbol.map(FaceSymbol.isPath) == true
+            if written.face.symbol.map(FaceSymbol.isOriginal) != true, let color = ButtonConfigurationMac.color(rows.symbol["tint_color"], appearance: owner.effectiveAppearance, accent: written.accent), let base = image {
+                let path = written.face.symbol.map(FaceSymbol.isCustom) == true
                 let shown = path ? FaceSymbol.tinted(base, color)
                     : base.withSymbolConfiguration(NSImage.SymbolConfiguration(paletteColors: [color]))
                         ?? (base.isTemplate ? FaceSymbol.tinted(base, color) : nil)

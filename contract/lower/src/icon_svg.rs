@@ -6,7 +6,8 @@
 //! paths that mix rules are no template.
 //! Anything else (several colours, a gradient, an image, text, a stroke, a
 //! transform, a shape that is not a path) is no template: the web may draw
-//! it as the file, and a shipped target that is not the web refuses it.
+//! it as the file, as Linux does; iOS, macOS and tvOS rasterize it into
+//! their catalog. Other shipped targets require a template or a native source.
 
 /// An SVG read as an icon.
 #[derive(Debug, Clone, PartialEq)]

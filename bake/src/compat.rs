@@ -376,6 +376,16 @@ pub fn compatibility_id_pinned(
     let ships = other.as_ref().or(plan.as_ref());
     crate::icon_rules::apply(&mut compat, ships, entries)?;
     crate::atom_faces::apply(&mut compat, ships, entries);
+    if !target.contains("watchos") {
+        crate::icon_rules::raster_inputs(
+            app_dir,
+            &mut compat.inputs,
+            ships
+                .into_iter()
+                .chain(entries.values().map(|entry| &entry.plan)),
+        )?;
+        compat.id = compatibility_digest(&compat.inputs);
+    }
     if let Some(plan) = &plan {
         faces(&mut compat, plan, platform, target);
     }

@@ -196,6 +196,36 @@ export function resizeImageCommand(args) {
   writeFileSync(output, pngBytes(result));
 }
 
+/** The SVG form of sips used by the catalog builder on a non-Apple host.
+ * The browser draws each scale from the vector source, including its CSS. */
+export async function rasterSvgCommand(args) {
+  if (args.length !== 8 || args.slice(0, 4).join(' ') !== '-s format png -Z' || args[6] !== '--out')
+    throw new Error('host/apple: unsupported SVG raster arguments');
+  const side = Number(args[4]);
+  if (!Number.isInteger(side) || side < 1 || side > 4096) throw new Error('host/apple: invalid SVG raster size');
+  const { chromium: pick } = await import('../../scripts/agent-launch.mjs');
+  const { chromium } = await import('playwright-core');
+  const selected = pick();
+  if (selected.unavailable) throw new Error(selected.unavailable);
+  const browser = await chromium.launch({ executablePath: selected.executable, headless: true, args: ['--no-sandbox'] });
+  try {
+    const page = await browser.newPage();
+    await page.route('**/*', route => route.abort());
+    const png = await page.evaluate(async ({ source, side }) => {
+      const image = new Image();
+      image.src = 'data:image/svg+xml;base64,' + source;
+      await image.decode();
+      const fit = side / Math.max(image.naturalWidth, image.naturalHeight);
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(image.naturalWidth * fit));
+      canvas.height = Math.max(1, Math.round(image.naturalHeight * fit));
+      canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
+      return canvas.toDataURL('image/png').split(',')[1];
+    }, { source: readFileSync(args[5]).toString('base64'), side });
+    writeFileSync(args[7], Buffer.from(png, 'base64'));
+  } finally { await browser.close(); }
+}
+
 export function pngBytes(image) {
   const png = encodePng(image);
   if (image.profile) {
@@ -215,6 +245,10 @@ export function pngBytes(image) {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  try { resizeImageCommand(process.argv.slice(2)); }
+  try {
+    const args = process.argv.slice(2);
+    if (args[0] === '-s') rasterSvgCommand(args).catch(error => { console.error(error.message); process.exitCode = 1; });
+    else resizeImageCommand(args);
+  }
   catch (error) { console.error(error.message); process.exitCode = 1; }
 }

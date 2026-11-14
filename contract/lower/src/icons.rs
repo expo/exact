@@ -22,7 +22,7 @@ pub(crate) struct Resolved {
     pub name: String,
     pub sf: String,
     pub view_box: String,
-    /// Empty for a non-template SVG, drawn as a file on the web and Linux.
+    /// Empty for a non-template SVG, drawn from a file or an Apple raster asset.
     /// An even-odd icon's starts `evenodd:` (stage 14 C2), in the plan's row
     /// and the source form alike; a nonzero one's is the `d`s alone, as
     /// before. Every reader strips it through `exact_kernel::Icon`.
@@ -76,8 +76,9 @@ fn apple(target: &str) -> bool {
 
 /// The source `target` draws for `icon`, by D10's rule (the one
 /// `tamber-icon-missing` checks): Apple draws the SF Symbol, falling back
-/// to a template path except on watchOS. Other hosts draw template paths;
-/// the web and Linux also draw non-template SVG files.
+/// to an SVG except on watchOS. Non-template SVGs become raster assets
+/// in the Apple build. Other hosts draw template paths; the web and Linux
+/// also draw non-template SVG files.
 fn drawn(
     target: &str,
     icon: &tamber::Icon,
@@ -86,7 +87,7 @@ fn drawn(
     let template = svg.is_some_and(|s| s.not_template.is_none());
     match apple(target) {
         true if icon.sf.is_some() => Some("sf"),
-        true => (template && target != "watchos").then_some("svg"),
+        true => (svg.is_some() && target != "watchos").then_some("svg"),
         false => {
             (template || (matches!(target, "web" | "linux") && svg.is_some())).then_some("svg")
         }
@@ -356,15 +357,15 @@ pub(crate) fn declare<'a>(
                 continue;
             }
             errors.push(match (&svg, &icon.svg) {
-                // A one-colour SVG a watch doesn't draw yet: it needs the SF Symbol.
-                (Some(s), Some(_)) if s.not_template.is_none() => refuse(
+                // A watch draws neither template paths nor raster icon assets.
+                (Some(_), Some(_)) if target == "watchos" => refuse(
                     "tamber-icon-missing",
                     format!("{} has no source for {target}: a watch draws an icon only as an SF Symbol (an `sf` source)", icon.name),
                 ),
                 (Some(s), Some(file)) => refuse(
                     "tamber-icon-svg",
                     format!(
-                        "`{}`: {} is no one-colour shape ({}), and the app ships {target}, which draws an icon only as {TEMPLATE}{} (the web and Linux also draw non-template SVG files). To fix it, {}; or start from an SVG already in that form (Material Symbols' are){}",
+                        "`{}`: {} is no one-colour shape ({}), and the app ships {target}, which draws an icon only as {TEMPLATE}{} (the web, Linux, iOS, macOS and tvOS also draw non-template SVG files). To fix it, {}; or start from an SVG already in that form (Material Symbols' are){}",
                         icon.name,
                         home.shown(file),
                         s.not_template.as_deref().unwrap_or(""),

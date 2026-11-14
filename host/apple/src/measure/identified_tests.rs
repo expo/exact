@@ -527,3 +527,45 @@ fn exclusions_cross_the_c_callback_and_bypass_identified_memo() {
         assert_eq!(callback.measure_identified(&stamp(&k), &r).width, x);
     }
 }
+
+#[test]
+fn raster_symbols_measure_the_catalog_viewport_instead_of_the_svg_view_box() {
+    #[allow(unsafe_code)]
+    extern "C" fn catalog(
+        _: *mut c_void,
+        name: *const u8,
+        len: usize,
+        points: f32,
+        _: u16,
+        out: *mut f32,
+    ) -> u8 {
+        let name = unsafe { std::str::from_utf8(std::slice::from_raw_parts(name, len)).unwrap() };
+        let size = match name {
+            "icon-asset:two.svg" => (points, points / 2.0),
+            "icon-asset:tall.svg" => (points / 2.0, points),
+            _ => panic!("unexpected catalog source {name}"),
+        };
+        unsafe {
+            *out = size.0;
+            *out.add(1) = size.1;
+        }
+        1
+    }
+    let state = RefCell::new(Foreign::default());
+    let mut measurer =
+        CallbackMeasurer::new(foreign, std::ptr::from_ref(&state).cast_mut().cast(), None)
+            .with_symbol(Some(catalog));
+    for (role, expected) in [
+        ("icon||0 0 24 24||two.svg", (20.0, 10.0)),
+        ("icon||0 0 24 24||tall.svg", (10.0, 20.0)),
+    ] {
+        assert_eq!(
+            measurer.symbol_size(&exact_kernel::SymbolRequest {
+                role,
+                font_size: 20.0,
+                font_weight: 400
+            }),
+            Some(expected)
+        );
+    }
+}

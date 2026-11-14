@@ -103,7 +103,8 @@ fn explain_answers_a_param_its_declaration_and_the_apps_value() {
 }
 
 /// An icon alias is explained as written, with its chain. Multicolour
-/// files draw on the web and Linux; a missing file has no SVG source.
+/// files draw on the web, Linux and Apple hosts but a watch; a missing
+/// file has no SVG source.
 /// A padded param default keeps its chain.
 #[test]
 fn explain_reads_icons_as_written_and_svgs_as_the_build_does() {
@@ -120,7 +121,7 @@ fn explain_reads_icons_as_written_and_svgs_as_the_build_does() {
     assert_eq!(alias["ok"]["names"], json!(["icon.home"]), "{alias}");
     assert_eq!(
         ask(&mut s, "icon.two")["ok"]["icon"]["draws"],
-        json!({"ios": null, "linux": "svg", "web": "svg"})
+        json!({"ios": "svg", "linux": "svg", "web": "svg"})
     );
     assert_eq!(
         ask(&mut s, "icon.gone")["ok"]["icon"]["draws"],

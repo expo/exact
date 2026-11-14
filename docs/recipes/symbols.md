@@ -1,6 +1,6 @@
 # Recipe: symbols
 
-`image "symbol:<role>"` is an icon each host draws from its own set (SF Symbols on Apple,
+`image "symbol:<role>"` is an icon each host draws from its set (SF Symbols on Apple,
 matching outlines elsewhere). `image "symbol:sf/<name>"` is any SF Symbol by Apple's name.
 
 ```contract
@@ -22,16 +22,17 @@ component Toolbar
         text "Tomorrow"
 ```
 
-Roles include `add`, `close`, `back`, `search`, `share`, `calendar`, `heart` and `star`.
 `contract vocab symbol` lists every role. Unknown literals fail the build; computed
-ones are checked at runtime. Role aliases (`gearshape`, `trash`, `chevron-right`)
+ones are checked at runtime. Aliases (`gearshape`, `trash`, `chevron-right`)
 build with a `lower-symbol-alias` warning naming the role.
 
-- A role draws everywhere; `sf/<name>` on Apple only. For other names, declare
-  `icon.rain = icon(sf "cloud.rain", svg "icons/rain.svg")` in `app.tamber`'s `icons`,
-  used as `symbol:icon.rain`. Alias identical sources (`icon.shower = icon.rain`);
-  duplicates fail. Web and Linux draw an app's non-template SVGs as written;
-  package icons must be templates.
+- A role draws everywhere; `sf/<name>` on Apple. Declare other icons in
+  `app.tamber`'s `icons`: `icon.rain = icon(sf "cloud.rain", svg "icons/rain.svg")`,
+  used as `symbol:icon.rain`. Alias identical sources (`icon.shower = icon.rain`).
+  Non-template SVGs draw on web, Linux and Apple except watchOS; Apple builds
+  raster assets. `-exact-symbol-rendering="multicolor"` keeps their colours;
+  otherwise they are tinted. Changing a raster SVG needs a new Apple binary.
+  Package SVGs must be templates.
 - A symbol-only button needs an `aria-label`. A tab is a symbol over its text. A symbol beside
   text that says the same is decoration: `aria-hidden=true`, so VoiceOver reads it once.
 - `activity` is an ECG trace (heart, workouts). Done or not done is `DoneMark` (`exact:content`).
@@ -39,16 +40,15 @@ build with a `lower-symbol-alias` warning naming the role.
   A `color` written on the symbol is its colour, as `currentcolor` paints an icon on the
   web; a row's `forward-chevron` is already grey.
   Emoji and characters (▦ ☏) aren't icons: they ignore the tint and differ by browser.
-- A role or template icon's `font` sets its natural size (`font="-exact-title1"`
-  follows the reader's text size). On a page or in `button appearance="none"`,
+- A role or icon's `font` sets its natural size (`font="-exact-title1"`
+  follows the reader's text size); a raster icon keeps its SVG aspect. On a page or in `button appearance="none"`,
   `width` and `height` size its box; the glyph keeps its aspect under both
   `object-fit="fill"` (default) and `"contain"`. For a 24-point box, write
   `image "symbol:calendar" width=24 height=24`.
   `object-fit="cover"` fills and clips; `"none"` keeps the natural size;
-  `"scale-down"` shrinks it only when it does not fit. A fixed box can keep
-  the glyph's size when `font-size` changes.
+  `"scale-down"` shrinks it only when it does not fit. An explicit box is independent of the font.
 - On iOS, a titled native button's symbol follows its title's font; a symbol-only
-  button uses the platform's size. An image's own `font-size` overrides either
-  (for example, `font-size="-exact-title1"`). Native button images take no `width`,
+  button uses the platform's size. Its image's `font-size` overrides either.
+  Native button images take no `width`,
   `height` or `object-fit`; to fit a symbol into an authored box, use
   `button appearance="none"`. Native bars, tabs and menus use platform symbol sizes.

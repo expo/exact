@@ -324,10 +324,15 @@ enum ButtonConfigurationIOS {
         // size the configuration gives a symbol here, tinted as one below. A
         // symbol alone is sized by UIKit (its `buttonSize` too): the path
         // takes the size UIKit resolves for a symbol in this configuration.
-        let path = face.symbol.flatMap { FaceSymbol.isPath($0) ? $0 : nil }
+        let path = face.symbol.flatMap { FaceSymbol.isCustom($0) ? $0 : nil }
         if let path {
             if config.preferredSymbolConfigurationForImage == nil { symbolPoints = resolvedSymbolPoints(config, on: button) ?? symbolPoints }
-            config.image = FaceSymbol.pathImage(path, points: symbolPoints)
+            config.image = FaceSymbol.image(path, points: symbolPoints)
+        }
+        if let rendering = rows.symbol["symbol_rendering"]?.string {
+            let base = config.preferredSymbolConfigurationForImage ?? UIImage.SymbolConfiguration.unspecified
+            let tint = color(rows.symbol["tint_color"], traits: traits, accent: colorTint) ?? button.tintColor ?? .systemBlue
+            config.preferredSymbolConfigurationForImage = FaceSymbol.configuration(base, rendering: rendering, tint: tint)
         }
         config.imagePadding = rows.imageGap ?? systemSpacing(font: titleFont)
         // A symbol's colour is the configuration's, which UIKit greys with the whole button behind a modal
@@ -339,7 +344,10 @@ enum ButtonConfigurationIOS {
         let native = button as? NativeButtonIOS
         native?.symbolInk = nil
         if face.image != nil, follows || own != nil { config.image = config.image?.withRenderingMode(.alwaysTemplate) }
-        if follows || own != nil, let template = config.image {
+        let multicolorSF = face.symbol.map { !FaceSymbol.isCustom($0) } == true && rows.symbol["symbol_rendering"]?.string == "multicolor"
+        if face.symbol.map(FaceSymbol.isOriginal) == true || multicolorSF {
+            config.imageColorTransformer = nil
+        } else if follows || own != nil, let template = config.image {
             if !button.isEnabled {
                 // Disabled, an authored colour keeps its look through UIKit's disabled one (D16)
                 if let resolved { config.image = template.withTintColor(resolved, renderingMode: .alwaysOriginal) }

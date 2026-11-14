@@ -5,7 +5,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { availableParallelism } from 'node:os';
 import { resolve } from 'node:path';
-import { iosAssets, plistFile } from './assets.mjs';
+import { appleAssets, appleAssetCatalogInventory, rasterIconAssets, iosAssets, plistFile } from './assets.mjs';
 import { encodePng } from '../../scripts/png.mjs';
 
 const read = (cmd, args, opts = {}) => spawnSync(cmd, args, { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, ...opts });
@@ -14,6 +14,19 @@ const read = (cmd, args, opts = {}) => spawnSync(cmd, args, { encoding: 'utf8', 
  * Plans embed the current schema digest. App entries need the test app's `appId` to boot. */
 export function compileFixtures(root, run, env, dir, prefix, appId) {
   const contract = args => run(env.EXACT_CONTRACT, ['build', ...args]);
+  const iconApp = resolve(dir, 'entries/raster-icons');
+  mkdirSync(resolve(iconApp, 'assets'), { recursive: true });
+  writeFileSync(resolve(iconApp, 'app.json'), JSON.stringify({ app: { id: appId, name: 'Raster icons' }, host: { ios: {}, macos: {} } }));
+  writeFileSync(resolve(iconApp, 'app.tamber'), 'tamber icons\n\nicons\n  icon.two = icon(svg "two.svg")\n');
+  writeFileSync(resolve(iconApp, 'assets/two.svg'), '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20" viewBox="0 0 24 24"><path fill="#ff0000" d="M0 0h12v24H0Z"/><path fill="#0000ff" d="M12 0h12v24H12Z"/></svg>');
+  writeFileSync(resolve(iconApp, 'app.contract'), 'component App\n  view\n    column\n      button\n        image "symbol:icon.two" -exact-symbol-rendering="multicolor"\n        text "Colours"\n      image "symbol:icon.two" -exact-symbol-rendering="multicolor" width=80 testId="raster-wide"\n');
+  contract([resolve(iconApp, 'app.contract'), '-o', env[`${prefix}_RASTER_ICONS_PLAN`] = resolve(dir, 'raster-icons.plan')]);
+  const iconBundle = env[`${prefix}_RASTER_ICONS_BUNDLE`] = resolve(dir, 'RasterIcons.bundle');
+  mkdirSync(iconBundle, { recursive: true });
+  writeFileSync(resolve(iconBundle, 'Info.plist'), plistFile({ CFBundleIdentifier: 'dev.exact.raster-icons', CFBundlePackageType: 'BNDL' }));
+  appleAssets({ dir: iconApp, name: 'Raster icons', manifest: {} }, iconBundle,
+    { platform: prefix === 'EXACT' ? 'macos' : 'ios', icons: [{ svg: 'two.svg', viewBox: '0 0 24 24' }] });
+
   contract([resolve(root, 'host/apple/tests/fixtures/fragment.contract'), '-o', env[`${prefix}_FRAGMENT_PLAN`] = resolve(dir, 'fragment.plan')]);
   if (prefix === 'TEST_RUNNER_EXACT') {
     // LaunchColorIOSTests reads the build's XML and compiled catalogue as an app bundle.
@@ -169,6 +182,8 @@ export function compileFixtures(root, run, env, dir, prefix, appId) {
       writeFileSync(resolve(bundle, 'Contents/Info.plist'), plistFile({ CFBundleIdentifier: id, CFBundlePackageType: bundle === app ? 'APPL' : 'XPC!', CFBundleExecutable: 'Fixture' }));
     writeFileSync(resolve(catalog, 'Contents.json'), JSON.stringify({ info: { version: 1, author: 'xcode' } }));
     writeFileSync(resolve(catalog, 'WidgetInk.colorset/Contents.json'), JSON.stringify({ info: { version: 1, author: 'xcode' }, colors: [{ idiom: 'universal', color: { 'color-space': 'srgb', components: { red: '1.0', green: '0.0', blue: '0.0', alpha: '1.0' } } }] }));
+    const rasterApp = { dir: iconApp, manifest: {}, appleIcons: [{ svg: 'two.svg', viewBox: '0 0 24 24' }] };
+    rasterIconAssets(appleAssetCatalogInventory(rasterApp, 'macos'), rasterApp, catalog);
     run('xcrun', ['actool', '--compile', resources, '--platform', 'macosx', '--minimum-deployment-target', '14.0', '--target-device', 'mac', catalog]);
     writeFileSync(resolve(resources, 'assets/widget.png'), encodePng({ width: 1, height: 1, data: Buffer.from([255, 0, 0, 255]) }));
     env.EXACT_SNAPSHOT_ASSETS_EXTENSION = extension;

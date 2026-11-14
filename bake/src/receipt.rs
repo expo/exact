@@ -114,6 +114,29 @@ pub(crate) fn emit(
     assets.extend(rust_assets);
     assets.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
     let mut graph = artifact_graph(&plan, &compat.inputs, &assets, pictures, target)?;
+    if matches!(platform, "ios" | "macos") {
+        let mut icons = apple_icons(&plan)?;
+        for entry in entries.values() {
+            icons.extend(apple_icons(&entry.plan)?);
+        }
+        icons.sort_by_key(|i| i["svg"].as_str().unwrap_or("").to_owned());
+        icons.dedup();
+        graph["appleIcons"] = json!(icons);
+    }
+    for (kind, entry) in entries {
+        let entry_graph = artifact_graph(&entry.plan, &compat.inputs, &[], false, target)?;
+        let raster = &entry_graph["artifacts"][0]["requires"]["appleRasterIcons"];
+        if raster.is_null() {
+            continue;
+        }
+        if let Some(card) = graph["artifacts"].as_array_mut().and_then(|cards| {
+            cards
+                .iter_mut()
+                .find(|card| card["name"] == format!("plans/{kind}.plan"))
+        }) {
+            card["requires"]["appleRasterIcons"] = raster.clone();
+        }
+    }
     graph["contractSources"] = json!(contract::source_graph(&app.join("app.contract"))
         .sources
         .into_iter()
@@ -532,12 +555,33 @@ fn shape(plan: &exact_plan::Plan, ty: exact_plan::TypesId, depth: usize) -> Resu
     })
 }
 
+/// Files that need raster renditions in an Apple asset catalog. Template
+/// paths and SF Symbols keep their vector presentation.
+pub(crate) fn apple_icons(plan: &exact_plan::Plan) -> Result<Vec<Value>, String> {
+    let mut icons = std::collections::BTreeMap::new();
+    crate::icon_rules::visit(plan, |icon| {
+        if let Some(svg) = icon.apple_asset() {
+            icons.insert(svg.to_owned(), json!({"svg":svg,"viewBox":icon.view_box}));
+        }
+    })?;
+    Ok(icons.into_values().collect())
+}
+
 /// The plan's requirement graph against a cohort's compatibility inputs
 /// (`exact-bake graph`): what a publisher that starts from a signed stream
 /// head, not a native bake, checks a new plan against.
-pub fn plan_graph(plan_bytes: &[u8], inputs: &Value, target: &str) -> Result<Value, String> {
+pub fn plan_graph(
+    plan_bytes: &[u8],
+    inputs: &Value,
+    target: &str,
+    app: &Path,
+) -> Result<Value, String> {
     let plan = exact_plan::Plan::decode(plan_bytes).map_err(|e| format!("the plan: {e:?}"))?;
-    let mut graph = artifact_graph(&plan, inputs, &[], false, target)?;
+    let mut inputs = inputs.clone();
+    if !target.contains("watchos") {
+        crate::icon_rules::raster_inputs(app, &mut inputs, [&plan])?;
+    }
+    let mut graph = artifact_graph(&plan, &inputs, &[], false, target)?;
     let node = &mut graph["artifacts"][0];
     node["sha256"] = json!(hash(plan_bytes));
     node["bytes"] = json!(plan_bytes.len());
@@ -589,6 +633,24 @@ fn artifact_graph(
         }
     }
     let mut requires = serde_json::Map::new();
+    let apple =
+        matches!(inputs["platform"].as_str(), Some("ios" | "macos")) && !target.contains("watchos");
+    let icons = if apple {
+        apple_icons(plan)?
+    } else {
+        Vec::new()
+    };
+    if !icons.is_empty() {
+        let roster = icons
+            .iter()
+            .map(|icon| {
+                let svg = icon["svg"].as_str().expect("icon source");
+                (svg.to_owned(), inputs["appleRasterIcons"][svg].clone())
+            })
+            .collect::<serde_json::Map<_, _>>();
+        requires.insert("appleRasterIcons".into(), json!(roster));
+    }
+
     requires.insert("surfaceCalls".into(), Value::Object(calls.clone()));
     for key in ["app", "kernelSchema", "formatVersion", "formatDigest"] {
         requires.insert(key.into(), inputs[key].clone());
@@ -769,7 +831,7 @@ fn artifact_graph(
         }
     }
     Ok(
-        json!({"version":1,"sources":sources,"extensions":extensions,"surfaceCalls":calls,"loads":loads,"uses":uses,"mediaSession":media_session,"launchBackground":launch_background(plan),"artifacts":artifacts}),
+        json!({"version":1,"appleIcons":icons,"sources":sources,"extensions":extensions,"surfaceCalls":calls,"loads":loads,"uses":uses,"mediaSession":media_session,"launchBackground":launch_background(plan),"artifacts":artifacts}),
     )
 }
 

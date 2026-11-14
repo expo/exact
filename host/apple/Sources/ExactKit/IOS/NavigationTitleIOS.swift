@@ -314,11 +314,11 @@ final class HeaderTitleView: UIControl {
             if let name = glyph.symbol {
                 // A template symbol in the run's font: TextKit tints it with
                 // the run's (dynamic) colour, so it follows the appearance.
-                guard let image = FaceSymbol.image(name, points: font.pointSize, configuration: UIImage.SymbolConfiguration(font: font))?.withRenderingMode(.alwaysTemplate) else { continue }
+                guard let image = FaceSymbol.image(name, points: font.pointSize, configuration: UIImage.SymbolConfiguration(font: font))?.withRenderingMode(FaceSymbol.isOriginal(name) ? .alwaysOriginal : .alwaysTemplate) else { continue }
                 let attachment = NSTextAttachment(image: image)
                 // An svg-only icon's path (stage 9 A2) is no symbol TextKit
                 // seats on the line: its em square centred on the cap height.
-                if FaceSymbol.isPath(name) {
+                if FaceSymbol.isCustom(name) {
                     attachment.bounds = CGRect(x: 0, y: (font.capHeight - image.size.height) / 2, width: image.size.width, height: image.size.height)
                 }
                 let symbol = NSMutableAttributedString(attachment: attachment)
@@ -336,9 +336,9 @@ final class HeaderTitleView: UIControl {
         let out = NSMutableAttributedString()
         func append(_ glyph: HeaderTitle.TitleGlyph) {
             guard let image = FaceSymbol.image(glyph.name, points: font.pointSize,
-                configuration: UIImage.SymbolConfiguration(font: font))?.withRenderingMode(.alwaysTemplate) else { return }
+                configuration: UIImage.SymbolConfiguration(font: font))?.withRenderingMode(FaceSymbol.isOriginal(glyph.name) ? .alwaysOriginal : .alwaysTemplate) else { return }
             let attachment = NSTextAttachment(image: image)
-            if FaceSymbol.isPath(glyph.name) {
+            if FaceSymbol.isCustom(glyph.name) {
                 attachment.bounds = CGRect(x: 0, y: (font.capHeight - image.size.height) / 2, width: image.size.width, height: image.size.height)
             }
             let symbol = NSMutableAttributedString(attachment: attachment)

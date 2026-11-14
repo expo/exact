@@ -476,8 +476,9 @@ void exact_set_lines(ExactRuntime rt, ExactLinesFn lines);
  * order. Writes min(2 * count, cap) floats and returns 2 * count, with exact_set_measure's
  * context. NULL (the default) leaves each image at the paragraph's content origin. */
 void exact_set_inline_boxes(ExactRuntime rt, ExactLinesFn boxes);
-/* A system symbol's natural size, measured before layout: an Apple symbol name (UTF-8, not
- * NUL-terminated), its point size and CSS weight. Writes width and height to out and returns 1,
+/* A symbol's natural size, measured before layout: an Apple symbol name or
+ * icon-asset:<SVG source> for a catalog image (UTF-8, not NUL-terminated), its
+ * point size and CSS weight. Writes width and height to out and returns 1,
  * or 0 when it cannot say; called with exact_set_measure's context, and only beside a text
  * measurer it registered: with the reference measurer, as with NULL (the default), a symbol is
  * the size its view reports. */

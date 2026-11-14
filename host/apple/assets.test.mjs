@@ -1,10 +1,49 @@
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
-import { iosAssets, iosExecutableRefusal, nativeResourceMappings, plistFile } from './assets.mjs';
+import { appleAssets, appleAssetCatalogInventory, rasterIconAssets, iosAssets, iosExecutableRefusal, nativeResourceMappings, plistFile } from './assets.mjs';
+import { pngPixels } from './image.mjs';
 import { useXcode } from './devices.mjs';
+
+test.skipIf(process.platform !== 'darwin')('SVG icon catalogs include independent vector renditions and invalidate on an edit', () => {
+  useXcode();
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-svg-icons-'));
+  try {
+    const app = { dir, name: 'Icons', manifest: {}, appleIcons: [{ svg: 'two.svg', viewBox: '0 0 24 24' }] };
+    mkdirSync(resolve(dir, 'assets'));
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20" viewBox="0 0 24 24"><path fill="#ff0000" d="M0 0h12v24H0Z"/><path fill="#0000ff" d="M12 0h12v24H12Z"/></svg>';
+    writeFileSync(resolve(dir, 'assets/two.svg'), svg);
+    const inventory = appleAssetCatalogInventory(app, 'macos');
+    const catalog = resolve(dir, 'Icons.xcassets');
+    rasterIconAssets(inventory, app, catalog);
+    const set = resolve(catalog, readdirSync(catalog)[0]);
+    const images = JSON.parse(readFileSync(resolve(set, 'Contents.json'))).images;
+    assert.deepEqual(images.map(i => i.scale), ['1x', '2x', '3x']);
+    for (const [i, image] of images.entries()) {
+      const pixels = pngPixels(readFileSync(resolve(set, image.filename)));
+      assert.equal(pixels.width, 64 * (i + 1));
+      assert.equal(pixels.height, 32 * (i + 1));
+      const sample = x => [...pixels.data.subarray((pixels.width * 8 + x) * 4, (pixels.width * 8 + x) * 4 + 4)];
+      assert.deepEqual(sample(pixels.width * 3 / 8), [255, 0, 0, 255]);
+      assert.deepEqual(sample(pixels.width * 5 / 8), [0, 0, 255, 255]);
+    }
+    const kept = { dir: resolve(dir, 'cache'), stamp: 'fixture' };
+    for (const platform of ['macos', 'ios']) {
+      const bundle = resolve(dir, platform); mkdirSync(bundle);
+      appleAssets(app, bundle, { platform, icons: app.appleIcons, kept });
+      const result = spawnSync('xcrun', ['assetutil', '--info', resolve(bundle, 'Assets.car')], { encoding: 'utf8' });
+      assert.equal(result.status, 0, result.stderr);
+      const assets = JSON.parse(result.stdout).filter(a => a.Name === readdirSync(catalog)[0].replace('.imageset', ''));
+      assert.deepEqual(assets.map(a => a.Scale).sort(), platform === 'macos' ? [1, 2] : [1, 2, 3]);
+    }
+    writeFileSync(resolve(dir, 'assets/two.svg'), svg.replace('#ff0000', '#00ff00'));
+    assert.notDeepEqual(appleAssetCatalogInventory(app, 'macos'), inventory);
+    assert.throws(() => appleAssets(app, dir, { platform: 'macos', icons: app.appleIcons, expected: inventory }), /changed after the bake/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 60_000);
 
 test('iOS and App Clip executable names cannot replace the privacy manifest, ignoring case', () => {
   for (const name of ['PrivacyInfo.xcprivacy', 'privacyinfo.xcprivacy', 'PRIVACYINFO.XCPRIVACY']) {

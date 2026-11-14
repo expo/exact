@@ -785,6 +785,9 @@ pub(super) fn props_for(node: &NodeRef<'_>) -> exact_kernel::SortedMap<&'static 
                     out.insert("symbolFillRule", "evenodd".into());
                 }
             }
+            if let Some(svg) = crate::icon_path::asset(role) {
+                out.insert("symbolAsset", svg.into());
+            }
             // Untinted, it draws in its `color` (LLP 1121 stage 9 B).
             if node.symbol_color_said() {
                 out.insert("symbolColorWritten", "1".into());

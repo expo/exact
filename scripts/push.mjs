@@ -171,14 +171,24 @@ function typescriptBundle(bundle, build, baked, cohort) {
   return { bundle: { ...bundle, assets: [...bundle.assets.filter(other), ...assets] }, build: { ...build, graph: { ...build.graph, artifacts } } };
 }
 
-function planGraph(tool, app, plan, compat, env) {
+function planGraph(tool, app, plan, compat, env, entries) {
   const dir = mkdtempSync(resolve(app.target, 'push-graph-'));
   try {
     writeFileSync(resolve(dir, 'app.plan'), plan);
     writeFileSync(resolve(dir, 'compat.json'), JSON.stringify(compat));
-    const r = spawnSync(tool, ['graph', resolve(dir, 'app.plan'), resolve(dir, 'compat.json'), compat.target], { env, encoding: 'utf8' });
+    const r = spawnSync(tool, ['graph', resolve(dir, 'app.plan'), resolve(dir, 'compat.json'), compat.target, app.dir], { env, encoding: 'utf8' });
     if (r.status !== 0) refuse(r.stderr.trim());
-    return JSON.parse(r.stdout);
+    const graph = JSON.parse(r.stdout);
+    const icons = [...(graph.appleIcons ?? [])];
+    for (const [name, bytes] of entries ?? []) {
+      if (!name.startsWith('plans/') || !name.endsWith('.plan')) continue;
+      const entry = planGraph(tool, app, bytes, compat, env);
+      icons.push(...(entry.appleIcons ?? []));
+      const raster = entry.artifacts[0].requires.appleRasterIcons;
+      graph.artifacts.push({ ...entry.artifacts[0], name, requires: raster ? { appleRasterIcons: raster } : {} });
+    }
+    graph.appleIcons = [...new Map(icons.sort((a, b) => Buffer.compare(Buffer.from(a.svg), Buffer.from(b.svg))).map(icon => [icon.svg, icon])).values()];
+    return graph;
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 
@@ -198,14 +208,14 @@ function snapshotCompat(tool, app, cohort, snapshot, env) {
 /** Compare the native build's authenticated source evidence, which the
  * cohort names, with this snapshot. Native SDKs and generated products are
  * not needed to read it. */
-async function binaryInputChanges(origin, app, cohort, compat) {
+async function binaryInputChanges(origin, app, cohort, compat, appleIcons) {
   const card = cohort.binaryInputs;
   const bytes = await origin.get(blobPath(card.sha256));
   if (!bytes || bytes.length !== card.bytes || sha256(bytes) !== card.sha256) refuse('the cohort binary input receipt is missing or does not match its signed digest');
   const evidence = JSON.parse(bytes);
   if (evidence.version !== 1) refuse('the cohort binary input receipt has an unsupported version');
   const platform = compat.inputs.platform, apple = ['ios', 'macos'].includes(platform);
-  const assetApp = { ...app, manifest: { host: app.manifest.host } };
+  const assetApp = { ...app, appleIcons, manifest: { host: app.manifest.host } };
   const appleAssetCatalogs = apple ? appleAssetCatalogInventory(assetApp, compat.target.includes('-tvos') ? 'tvos' : platform) : [];
   const launchImage = platform === 'ios' ? launchImageInventory(app) : null;
   const nativeResources = apple ? nativeResourceInventory(app, null, platform) : [];
@@ -300,16 +310,16 @@ export async function streamCandidates(app, origin, found, env, { baker = null, 
     try {
       let built = variants.get(cohort.compat.target) ?? variants.values().next().value;
       const compat = snapshot?.compat ? snapshotCompat(tools.graph, app, cohort, snapshot, env) : cohort.compat;
-      const graph = planGraph(tools.graph, app, built.plan, compat, env);
+      const graph = planGraph(tools.graph, app, built.plan, compat, env, built.entries);
       const inputs = cohort.compat.inputs;
-      // A module pin, linked composition and texture thinning are completed by
-      // native packaging. Compare the inputs this source-only producer owns.
-      const packaged = new Set(['typescriptModule', 'linked', 'textureFamily']);
+      // Plans check their required raster renditions. Native packaging owns
+      // module pins, linked composition and texture thinning.
+      const packaged = new Set(['typescriptModule', 'linked', 'textureFamily', 'appleRasterIcons']);
       const keys = new Set([...Object.keys(compat.inputs), ...Object.keys(inputs)]);
       const pendingInputs = [...keys].filter(key => !packaged.has(key) && canonicalJson(compat.inputs[key] ?? null) !== canonicalJson(inputs[key] ?? null));
       // A cohort signed before binary input evidence existed has none to compare with.
       const unchecked = snapshot?.compat && !cohort.binaryInputs;
-      if (snapshot?.compat && !unchecked) pendingInputs.push(...await binaryInputChanges(origin, app, cohort, compat));
+      if (snapshot?.compat && !unchecked) pendingInputs.push(...await binaryInputChanges(origin, app, cohort, compat, graph.appleIcons));
       // The named entries are this bake's, in place of the last generation's whole.
       const entries = [...built.entries].map(([name, bytes]) => ({ name, bytes, sha256: sha256(bytes) }));
       const staticAssets = snapshot
@@ -320,7 +330,7 @@ export async function streamCandidates(app, origin, found, env, { baker = null, 
       // A new stream's head names the production build's evidence, which publication uploads.
       const evidence = binary?.binary?.sourceInputs ? { sourceInputs: binary.binary.sourceInputs } : {};
       let build = { version: 1, trust: 'production', compat, binary: { sha256: cohort.binary, ...evidence }, pendingInputs,
-        graph: { ...graph, artifacts: [graph.artifacts[0], ...assets.map((a) => ({ name: a.name, sha256: a.sha256, bytes: a.bytes.length, kind: 'bundle', requires: snapshot?.graph?.artifacts.find(card => card.name === a.name)?.requires ?? {} }))] } };
+        graph: { ...graph, artifacts: [graph.artifacts[0], ...assets.map((a) => ({ name: a.name, sha256: a.sha256, bytes: a.bytes.length, kind: 'bundle', requires: graph.artifacts.find(card => card.name === a.name)?.requires ?? snapshot?.graph?.artifacts.find(card => card.name === a.name)?.requires ?? {} }))] } };
       if (built.variants?.native && ['native', 'tiered'].includes(inputs.rustMode) && cohort.compat.target.includes('apple')) {
         const reused = publishedSignature(built.variants.native.bytes, await publishedModule(origin, app, stream), env);
         if (reused) built = { ...built, variants: { ...built.variants, native: { ...built.variants.native, bytes: reused } } };

@@ -91,6 +91,7 @@ final class SnapshotDriverTests: XCTestCase {
         let color = try XCTUnwrap(SnapshotBundles.all(for: bundle).compactMap { NSColor(named: "WidgetInk", bundle: $0)?.usingColorSpace(.sRGB) }.first)
         XCTAssertEqual(color.redComponent, 1, accuracy: 0.001)
         XCTAssertEqual(color.greenComponent, 0, accuracy: 0.001)
+        XCTAssertNotNil(IconAsset.image(named: IconAsset.name("two.svg"), bundles: SnapshotBundles.all(for: bundle)), "icon catalogs resolve from the containing app")
         let roots = SnapshotBundles.imageRoots(for: bundle)
         XCTAssertTrue(roots.map(\.path).contains(app.bundleURL.appendingPathComponent("Contents/Resources").path))
         let image = try XCTUnwrap(SnapshotRasters().decode("assets/widget.png", roots: roots, appGroup: nil, appID: nil, box: CGSize(width: 1, height: 1), fit: "contain", scale: 1))
@@ -731,6 +732,30 @@ final class SnapshotDriverTests: XCTestCase {
         XCTAssertEqual(SnapshotSemantics.traits(image), .isImage)
         XCTAssertEqual(SnapshotSemantics.role(HeadlessSession.Node(id: 3, kind: "button", frame: .zero, props: ["href": "/x"])), "link")
         XCTAssertEqual(SnapshotSemantics.traits(HeadlessSession.Node(id: 3, kind: "view", frame: .zero, props: ["accessibilityRole": "button"])), .isButton)
+    }
+
+    func testRasterIconCatalogsRenderInWidgetAndActivitySnapshots() throws {
+        let path = try XCTUnwrap(ProcessInfo.processInfo.environment["EXACT_RASTER_ICONS_BUNDLE"])
+        let bundle = try XCTUnwrap(Bundle(path: path))
+        let size = CGSize(width: 80, height: 40)
+        for family in [SnapshotEnvironment.Family.systemSmall, .liveActivity] {
+            for multicolor in [true, false] {
+                let node = HeadlessSession.Node(id: 1, kind: "image", frame: CGRect(origin: .zero, size: size),
+                    props: ["imageSource": "symbol:icon||0 0 24 24||two.svg", "symbolName": "", "symbolAsset": "two.svg"],
+                    style: ["symbol_rendering": .string(multicolor ? "multicolor" : "monochrome"), "text_color": [0, 255, 0, 255]])
+                let environment = SnapshotEnvironment(family: family, imageRoots: [bundle.bundleURL], contentMargins: EdgeInsets())
+                let view = SnapshotImageView(node: node, environment: environment).environment(\.colorScheme, .light).background(.white)
+                let image = try XCTUnwrap(render(view, size: size, scale: 1))
+                let left = try color(image, x: 30, y: 20), right = try color(image, x: 50, y: 20)
+                if multicolor {
+                    XCTAssertGreaterThan(left[0], 240); XCTAssertLessThan(left[1], 10); XCTAssertLessThan(left[2], 10)
+                    XCTAssertGreaterThan(right[2], 240); XCTAssertLessThan(right[0], 10)
+                } else {
+                    XCTAssertGreaterThan(left[1], 240); XCTAssertLessThan(left[0], 10); XCTAssertLessThan(left[2], 10)
+                    XCTAssertEqual(left, right)
+                }
+            }
+        }
     }
 
     /// Stage 14 C2: a widget's even-odd icon (`symbolFillRule`) leaves its

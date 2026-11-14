@@ -446,6 +446,7 @@ impl NodeArena {
             .map_or(StyleMask::EMPTY, |c| self.style(c).mask)
             .intersect(mask(&[
                 StyleId::TintColor,
+                StyleId::SymbolRendering,
                 StyleId::FontSize,
                 StyleId::FontWeight,
             ]));

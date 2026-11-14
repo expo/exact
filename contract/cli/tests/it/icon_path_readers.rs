@@ -254,11 +254,13 @@ fn readers(rel: &str, text: &str) -> (Vec<String>, Vec<usize>) {
     (found, seen)
 }
 
-/// JavaScript tests build fixtures of the form; the Rust scan excepts only
-/// this file (which builds the escape's fixtures).
+/// JavaScript tests, and the XCTest fixture builder, build fixtures of the
+/// form; the Rust scan excepts only this file (which builds the escape's
+/// fixtures).
 fn excepted(rel: &str) -> bool {
     let js = [".js", ".mjs", ".ts"].iter().any(|x| rel.ends_with(x));
     rel.ends_with("contract/cli/tests/it/icon_path_readers.rs")
+        || rel == "host/apple/xctest.mjs"
         || (js && (rel.contains("/tests/") || rel.contains(".test.")))
 }
 

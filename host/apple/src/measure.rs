@@ -176,8 +176,9 @@ pub type MeasureFn = extern "C" fn(ctx: *mut c_void, request: *const CRequest) -
 pub type LinesFn =
     extern "C" fn(ctx: *mut c_void, request: *const CRequest, out: *mut f32, cap: usize) -> usize;
 
-/// A system symbol's natural size (an Apple symbol name, UTF-8, at a point
-/// size and CSS weight): writes width and height and answers 1, or 0 when it
+/// A symbol's natural size (an Apple name or `icon-asset:<SVG source>`,
+/// UTF-8, at a point size and CSS weight): writes width and height and
+/// answers 1, or 0 when it
 /// cannot say. Called on the runtime's thread with the context
 /// `exact_set_measure` was given.
 pub type SymbolFn = extern "C" fn(
@@ -471,7 +472,7 @@ impl CallbackMeasurer {
         self
     }
 
-    /// Measure system symbols with `f` (`TextMeasurer::symbol_size`).
+    /// Measure symbols and catalog icons with `f` (`TextMeasurer::symbol_size`).
     pub fn with_symbol(mut self, f: Option<SymbolFn>) -> Self {
         self.symbol = f;
         self
@@ -663,7 +664,10 @@ impl TextMeasurer for CallbackMeasurer {
             self.symbols_revision = revision;
             self.symbols.clear();
         }
-        let name = exact_kernel::apple_symbol_name(request.role);
+        let asset = crate::icon_path::asset(request.role).map(|svg| format!("icon-asset:{svg}"));
+        let name = asset
+            .as_deref()
+            .unwrap_or_else(|| exact_kernel::apple_symbol_name(request.role));
         let key = (
             name.to_string(),
             request.font_size.to_bits(),

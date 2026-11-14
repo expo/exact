@@ -118,7 +118,7 @@ private final class ExactSegmentedControl: LabelledSegmentedControl {
     func redrawPaths() {
         let points = UIFont.preferredFont(forTextStyle: .body, compatibleWith: traitCollection).pointSize
         for (index, icon) in icons {
-            guard let name = icon.source as? String, FaceSymbol.isPath(name), icon.size.width != points,
+            guard let name = icon.source as? String, FaceSymbol.isCustom(name), icon.size.width != points,
                   let image = FaceSymbol.image(name, points: points) else { continue }
             image.accessibilityLabel = icon.label
             setImage(image, forSegmentAt: index)
@@ -169,7 +169,7 @@ private extension ExactTabBar {
         for case let item as TabBarItem in items ?? [] {
             guard let bar = item.made.firstIndex(of: "|"), let was = Double(item.made[..<bar]), CGFloat(was) != points else { continue }
             let symbol = String(item.made[item.made.index(after: bar)...])
-            guard FaceSymbol.isPath(symbol) else { continue }
+            guard FaceSymbol.isCustom(symbol) else { continue }
             item.image = FaceSymbol.image(symbol, points: points)
             item.made = "\(points)|\(symbol)"
         }
@@ -349,7 +349,7 @@ final class SegmentHost: NSObject, UIGestureRecognizerDelegate, UITabBarDelegate
             // A native tab's symbol, carrying its label (LLP 1069.011.000 D4).
             // A path is drawn at the control's body size, again as that changes (an SF Symbol follows it itself).
             let points = UIFont.preferredFont(forTextStyle: .body, compatibleWith: control.traitCollection).pointSize
-            let size = FaceSymbol.isPath(name) ? CGSize(width: points, height: points) : CGSize(width: -1, height: -1)
+            let size = FaceSymbol.isCustom(name) ? CGSize(width: points, height: points) : CGSize(width: -1, height: -1)
             if let old = control.icons[index], (old.source as? NSString) == name as NSString, old.size == size, old.label == label { return }
             let image = FaceSymbol.image(name, points: points) ?? UIGraphicsImageRenderer(size: CGSize(width: 1, height: 1)).image { _ in }
             if control.titleForSegment(at: index)?.isEmpty == false { control.setTitle(nil, forSegmentAt: index) }
@@ -499,7 +499,7 @@ final class SegmentHost: NSObject, UIGestureRecognizerDelegate, UITabBarDelegate
         let current = bar.items ?? []
         // Made with the symbol and, for a path, the size its glyph was drawn at.
         let points = FaceSymbol.tabBarPoints(bar.traitCollection)
-        let made = { (symbol: String) in FaceSymbol.isPath(symbol) ? "\(points)|\(symbol)" : symbol }
+        let made = { (symbol: String) in FaceSymbol.isCustom(symbol) ? "\(points)|\(symbol)" : symbol }
         if current.count != faces.count || zip(current, faces).contains(where: { $0.title != $1.title || $0.madeWith != made($1.symbol) }) {
             bar.setItems(faces.enumerated().map { index, face in
                 let item = TabBarItem(title: face.title, image: FaceSymbol.image(face.symbol, points: points), tag: index)

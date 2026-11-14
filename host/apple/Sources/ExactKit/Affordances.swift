@@ -47,6 +47,7 @@ extension NodeView {
     /// SF Symbol ink stays dynamic; a path's bitmap is painted again when its tint changes.
     func inkSymbolView(_ image: UIImage?) {
         guard let view = symbolView else { return }
+        if faceSymbol.map(FaceSymbol.isOriginal) == true { view.image = image; return }
         let follows = inkTintShare == 1 || style["symbol_rendering"]?.string == "palette" && style["symbol_palette"]?.namesTint == true
         var ink = follows ? nil : inkTintShare.map(SystemColor.tint) ?? drawnSymbolInk
         let path = props["symbolPath"] != nil
