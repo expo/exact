@@ -1149,7 +1149,7 @@ fn a_non_app_read_checks_its_reach_outside_the_state_lock_and_can_hit() {
             state.ordered.push_back(2);
             state.jobs[lane].push_back(Job {
                 ticket: 2,
-                cache_exchange: exchange(&request, RequestClass::Read),
+                cache_store_withheld: false,
                 request,
                 forced: false,
                 work: None,

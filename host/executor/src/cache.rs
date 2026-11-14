@@ -27,6 +27,19 @@ impl Key {
             headers,
         }
     }
+
+    fn matches(&self, request: &Request) -> bool {
+        self.method == request.method
+            && self.headers.len() == request.headers.len()
+            && self.headers.chunk_by(|a, b| a.0 == b.0).all(|fields| {
+                fields.iter().map(|(_, value)| value).eq(request
+                    .headers
+                    .iter()
+                    .filter(|(name, _)| name.eq_ignore_ascii_case(&fields[0].0))
+                    .map(|(_, value)| value))
+            })
+            && (self.url == request.url || self.url == identity(&request.url))
+    }
 }
 
 struct Entry {
@@ -225,41 +238,48 @@ pub(super) fn replacing(
     .then(|| Key::of(request))
 }
 
-pub(super) fn exchange(request: &Request, class: RequestClass) -> Option<Exchange> {
-    (eligible(request, class) && request.cache != CacheMode::NoStore).then(|| Exchange {
-        key: Key::of(request),
-        previous: None,
-        started: Instant::now(),
-        store: !Directives::of(&request.headers).no_store,
-    })
+pub(super) fn exchange(state: &State, job: &Job) -> Option<Exchange> {
+    state.cache.as_ref()?;
+    let request = &job.request;
+    (job.work.is_none() && eligible(request, job.class) && request.cache != CacheMode::NoStore)
+        .then(|| Exchange {
+            key: Key::of(request),
+            previous: None,
+            started: Instant::now(),
+            store: !job.cache_store_withheld && !Directives::of(&request.headers).no_store,
+        })
 }
 
-pub(super) fn asked(state: &mut State, r: &RequestOut, work: bool) -> Option<Exchange> {
-    state.cache.as_ref()?;
-    let exchange = (!work).then(|| exchange(&r.request, r.class)).flatten()?;
-    if replacing(&r.request, r.class, r.forced, work).is_some() {
-        // A refresh must survive older completions, even before they start (LLP 1162 D4).
-        super::preload::withhold_store(state.cache.as_mut().expect("enabled"), &r.request);
-        for old in state
-            .running
-            .iter_mut()
-            .filter_map(|r| r.cache_exchange.as_mut())
-            .chain(
-                state.jobs[0]
-                    .iter_mut()
-                    .filter_map(|j| j.cache_exchange.as_mut()),
-            )
-            .chain(state.fenced.iter_mut().filter_map(|f| match f {
-                Fenced::Held(_, _, _, _, exchange) => exchange.as_mut(),
-                Fenced::Refused(..) => None,
-            }))
-        {
-            if old.key == exchange.key {
-                old.store = false;
+pub(super) fn asked(state: &mut State, r: &RequestOut, work: bool) {
+    let Some(cache) = state.cache.as_mut() else {
+        return;
+    };
+    let Some(key) = replacing(&r.request, r.class, r.forced, work) else {
+        return;
+    };
+    // A refresh must survive older completions, even before they start (LLP 1162 D4).
+    super::preload::withhold_store(cache, &r.request);
+    for old in state
+        .running
+        .iter_mut()
+        .filter_map(|r| r.cache_exchange.as_mut())
+    {
+        if old.key == key {
+            old.store = false;
+        }
+    }
+    for old in &mut state.jobs[0] {
+        if key.matches(&old.request) {
+            old.cache_store_withheld = true;
+        }
+    }
+    for place in &mut state.fenced {
+        if let Fenced::Held(old, _, _, _, withheld) = place {
+            if key.matches(&old.request) {
+                *withheld = true;
             }
         }
     }
-    Some(exchange)
 }
 
 fn replacing_before(state: &State, ticket: u64, key: &Key) -> bool {

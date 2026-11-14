@@ -22,6 +22,66 @@ fn expect_reply(core: &Core, woke: &Receiver<()>, ticket: u64, body: &[u8]) {
 }
 
 #[test]
+fn a_waiting_cacheable_read_retains_only_a_flag_beside_its_reserved_request() {
+    let mut wrong = Vec::new();
+    for asynchronous in [false, true] {
+        for fenced in [false, true] {
+            let server = Server::new();
+            let (core, woke) = server.core(asynchronous, true);
+            let (release, held) = channel();
+            let mut hold = Plan::new(200, &[], b"lane");
+            hold.held = Some(held);
+            server.plan("/hold", hold);
+            let mut hold = job(1, server.request("/hold"));
+            hold.class = RequestClass::Ordered;
+            core.run(hold, None).unwrap();
+            server.seen(1);
+            if fenced {
+                core.shared.state.lock().unwrap().ordered_barrier = true;
+            }
+            let mut request = server.request("/feed?");
+            request.url.push_str(&"x".repeat(2 << 20));
+            let (_, charge, _) = reads::reservation(&request, true).unwrap();
+            core.run(job(2, request), None).unwrap();
+            {
+                let state = core.shared.state.lock().unwrap();
+                let cache_bytes = if fenced {
+                    assert!(state.jobs[0].is_empty());
+                    let Fenced::Held(r, _, retained, _, cache_store_withheld) =
+                        state.fenced.front().unwrap()
+                    else {
+                        panic!("the read must wait behind the fence");
+                    };
+                    assert_eq!(r.ticket, 2);
+                    assert_eq!(*retained, charge);
+                    assert_eq!(state.fenced_bytes, charge);
+                    std::mem::size_of_val(cache_store_withheld)
+                } else {
+                    let waiting = state.jobs[0].front().unwrap();
+                    assert_eq!(waiting.ticket, 2);
+                    assert_eq!(waiting.charge, charge);
+                    assert_eq!(waiting.waiting_charge, charge);
+                    std::mem::size_of_val(&waiting.cache_store_withheld)
+                };
+                if cache_bytes > std::mem::size_of::<bool>() {
+                    wrong.push((asynchronous, fenced, cache_bytes));
+                }
+            }
+            core.cancel(&[2]);
+            if fenced {
+                assert!(core.resume_ordered().is_empty());
+            }
+            release.send(()).unwrap();
+            expect_reply(&core, &woke, 1, b"lane");
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "waiting cache state owns more than a flag: {wrong:?}"
+    );
+}
+
+#[test]
 fn a_refresh_prevents_an_earlier_running_read_from_storing() {
     let mut wrong = Vec::new();
     for asynchronous in [false, true] {
@@ -345,7 +405,7 @@ fn queued(ticket: u64, request: Request, forced: bool) -> Job {
     let (_, charge, limit) = reads::reservation(&request, true).unwrap();
     Job {
         ticket,
-        cache_exchange: exchange(&request, RequestClass::Read),
+        cache_store_withheld: false,
         request,
         forced,
         work: None,

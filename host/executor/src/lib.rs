@@ -66,7 +66,7 @@ struct Job {
     queued_deadline: Option<forget::QueuedDeadline>,
     overlap: bool,
     class: RequestClass,
-    cache_exchange: Option<cache::Exchange>,
+    cache_store_withheld: bool,
 }
 /// A job a worker took, until its outcome is complete.
 struct Running {
@@ -136,13 +136,7 @@ struct Completed {
 /// A place behind the ordered barrier.
 enum Fenced {
     /// A request, its retained buffers, and whether its outcome is forgotten.
-    Held(
-        Box<RequestOut>,
-        Option<OwnedWork>,
-        usize,
-        bool,
-        Option<cache::Exchange>,
-    ),
+    Held(Box<RequestOut>, Option<OwnedWork>, usize, bool, bool),
     /// A request refused while the barrier was up: refused when its turn
     /// comes, after the held requests before it are admitted.
     Refused(u64, &'static str),

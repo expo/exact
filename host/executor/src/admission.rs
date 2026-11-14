@@ -10,7 +10,7 @@ impl Core {
         work: Option<OwnedWork>,
         forgotten: bool,
         waiting: bool,
-        cache_exchange: Option<cache::Exchange>,
+        cache_store_withheld: Option<bool>,
     ) -> Result<(), (&'static str, Option<OwnedWork>)> {
         let ordered = r.request.is_ordered();
         let overlap = reads::overlaps(&r, work.is_some());
@@ -43,8 +43,10 @@ impl Core {
         if state.retired {
             return Err(("native executor retired", work));
         }
-        let cache_exchange =
-            cache_exchange.or_else(|| cache::asked(&mut state, &r, work.is_some()));
+        let cache_store_withheld = cache_store_withheld.unwrap_or_else(|| {
+            cache::asked(&mut state, &r, work.is_some());
+            false
+        });
         let effect_read = reads::effect_read(&r, work.is_some());
         let waits_for_effect =
             (effect_read || waiting) && preload::effect_count(&state) >= COUNTS[0];
@@ -74,7 +76,7 @@ impl Core {
                         work,
                         charge,
                         forgotten,
-                        cache_exchange,
+                        cache_store_withheld,
                     ));
                 }
                 Err(why) => {
@@ -215,7 +217,7 @@ impl Core {
                 generation: 0,
                 claim: asynch::Claim::None,
                 cached: false,
-                cache_exchange,
+                cache_exchange: None,
                 cache_replacing: cache::replacing(&r.request, r.class, r.forced, work.is_some()),
                 cache_barrier: cache::barrier(&r.request, r.class, work.is_some()),
                 invalidates: cache::invalidates(&r.request, work.is_some()),
@@ -261,7 +263,7 @@ impl Core {
             queued_deadline,
             overlap,
             class: r.class,
-            cache_exchange,
+            cache_store_withheld,
         });
         cache::serve_ready(&mut state);
         #[cfg(test)]
@@ -287,11 +289,11 @@ impl Core {
         let mut refused = Vec::new();
         for place in fenced {
             match place {
-                Fenced::Held(r, work, _, forgotten, exchange) => {
+                Fenced::Held(r, work, _, forgotten, withheld) => {
                     let ticket = r.ticket;
                     // Behind a refusal made just now, it is held again.
                     if let Err((reason, work)) =
-                        self.admit(*r, work, forgotten, automatic, exchange)
+                        self.admit(*r, work, forgotten, automatic, Some(withheld))
                     {
                         refused.push((ticket, reason));
                         let mut state = self.shared.state.lock().unwrap();
