@@ -50,7 +50,8 @@ export function implementation({ changed, agent, now, foreground, log, invoke })
   let serial = 0;
   // The agent's words (§9) and its preferred availability, laid over the agent model's.
   let overlay = {}, script = [], scriptSeen = '', rate = TOKEN_MS, agentWindow = WINDOW;
-  // A download a create started, and the creates waiting on it (D5).
+  // A download a create started, and the creates waiting on it (D5): each resolved with null when the model is
+  // available, or with the error its create answers.
   let downloading = null;
   const waiting = [];
   const announce = key => changed(key);
@@ -192,6 +193,8 @@ export function implementation({ changed, agent, now, foreground, log, invoke })
     if (r.state !== 'generating' && r.state !== 'calling-tool') return;
     r.state = state;
     if (failure) Object.assign(r, failure);
+    // Only a live response has a generation for its call's cancel to abort.
+    if (r.request != null && byRequest.get(r.request) === r) byRequest.delete(r.request);
     const s = r.session, begun = s.responding === r;
     // One still waiting its turn never reached the session: nothing of it is committed.
     if (begun) r.turn.reply = r.text;
@@ -212,14 +215,24 @@ export function implementation({ changed, agent, now, foreground, log, invoke })
   }
   /** The calls waiting on `s`, begun in order until one generates (D6: one generation a session). */
   function nextIn(s, at) {
-    while (!s.responding && s.queue.length) s.queue.shift().go(at);
+    while (!s.responding && !s.busy && s.queue.length) s.queue.shift().go(at);
   }
-  /** `work(at)` once the session is free; `r`, the response it begins, holds the session until it ends. */
+  /** `work(at)` once the session is free; `r`, the response it begins, holds the session until it ends, and other
+   * work holds it until the promise it answers settles (an append awaits the browser's). */
   function queued(s, work, r = null) {
     return new Promise(resolve => {
       s.queue.push({
         r, cancel: () => resolve({ error: 'AbortError' }),
-        go: at => { if (r?.state === 'generating') s.responding = r; else if (r) return resolve(); resolve(work(at)); },
+        go: at => {
+          if (r?.state === 'generating') s.responding = r; else if (r) return resolve();
+          const result = work(at);
+          if (!r && typeof result?.then === 'function') {
+            s.busy = true;
+            const release = () => { s.busy = false; nextIn(s, now()); };
+            result.then(release, release);
+          }
+          resolve(result);
+        },
       });
       nextIn(s, now());
     });
@@ -425,7 +438,8 @@ export function implementation({ changed, agent, now, foreground, log, invoke })
             say('download started (agent)');
             announce(AVAILABILITY);
           }
-          await new Promise((resolve, reject) => waiting.push({ resolve, reject }));
+          const failed = await new Promise(resolve => waiting.push(resolve));
+          if (failed) return failed;
         }
         try { return createdOr(makeSession(args)); } catch (e) { return errorOf(e, 'TypeError'); }
       }
@@ -462,7 +476,6 @@ export function implementation({ changed, agent, now, foreground, log, invoke })
       const r = respond(s, args, how, false);
       if (isError(r)) return r;
       await r.done;
-      if (r.request != null) byRequest.delete(r.request);
       if (r.error) return { error: r.error };
       if (!r.typed) return { text: r.text, contextUsage: r.contextUsage, overflowed: r.overflowed };
       try { return JSON.parse(r.text); } catch { return { error: 'SyntaxError' }; }
@@ -553,10 +566,10 @@ export function implementation({ changed, agent, now, foreground, log, invoke })
       if (now_.availability === 'available' && (downloading || waiting.length)) {
         downloading = null;
         say('download finished (agent)');
-        for (const w of waiting.splice(0)) w.resolve();
+        for (const w of waiting.splice(0)) w(null);
       } else if (now_.availability === 'unavailable' && waiting.length) {
         downloading = null;
-        for (const w of waiting.splice(0)) w.reject(Object.assign(new Error('the model became unavailable'), { name: 'NotSupportedError' }));
+        for (const w of waiting.splice(0)) w({ error: 'NotSupportedError' });
       }
     },
     /** A call let go (D15 item 2): its prompt's generation aborted. */

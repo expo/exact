@@ -330,6 +330,14 @@ pub(crate) fn within(kernel: &Kernel, key: NodeKey, root: NodeKey) -> bool {
     let arena = kernel.arena();
     let mut slot = Some(key.index);
     while let Some(s) = slot {
+        let id = arena.local_id(s);
+        // Capture precedes layout, which removes a stale implied block when
+        // a popover becomes sticky. A supplied block remains independent.
+        if kernel.is_top_layer(id)
+            || (kernel.host_block(id).is_some() && !kernel.host_block_implied(id))
+        {
+            return false;
+        }
         if arena.key(s) == root {
             return true;
         }
@@ -363,7 +371,14 @@ pub(crate) fn projection_size(
         size.nodes = size.nodes.checked_add(1).ok_or("native node overflow")?;
         size.child_edges = size
             .child_edges
-            .checked_add(kernel.arena().children(slot).len())
+            .checked_add(
+                kernel
+                    .arena()
+                    .children(slot)
+                    .iter()
+                    .filter(|s| within(kernel, kernel.arena().key(**s), root))
+                    .count(),
+            )
             .ok_or("native child overflow")?;
         if size.nodes > limits.nodes || size.child_edges > limits.child_edges {
             return Err("native structural capacity".into());

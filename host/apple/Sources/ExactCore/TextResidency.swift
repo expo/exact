@@ -159,6 +159,8 @@ extension Spec {
         value.antialiased = false
         value.source = SourceMap()
         for i in value.runs.indices {
+            value.runs[i].opacity = []
+            value.runs[i].backgroundOpacity = []
             value.runs[i].hidden = false
             value.runs[i].fixedInk = false
             value.runs[i].color = nil
@@ -177,6 +179,7 @@ extension Spec {
             value.runs[i].atomIcon = nil
         }
         if var strut = value.strut {
+            strut.opacity = []; strut.backgroundOpacity = []
             strut.text = ""; strut.color = nil; strut.decoration = ""; strut.href = ""; strut.background = nil
             strut.shadow = nil; strut.stroke = nil
             value.strut = strut
@@ -197,6 +200,8 @@ package struct TextPaint: Hashable {
         let strikeColor: [Double]?
         let href: String
         let background: [Double]?
+        let opacity: [InlineOpacity]
+        let backgroundOpacity: [InlineOpacity]
         let backgroundBox: UInt32
         let backgroundRadii: [InlineRadius]
         let backgroundReach: [CGFloat]
@@ -205,6 +210,7 @@ package struct TextPaint: Hashable {
         let stroke: [Double]?
         let atomIcon: AtomIconRun?
         init(_ r: Run) {
+            opacity = r.opacity; backgroundOpacity = r.backgroundOpacity
             hidden = r.hidden; fixedInk = r.fixedInk; color = r.color; decoration = r.decoration
             underlineColor = r.underlineColor; strikeColor = r.strikeColor; href = r.href
             background = r.background; backgroundBox = r.backgroundBox; backgroundRadii = r.backgroundRadii
@@ -212,6 +218,7 @@ package struct TextPaint: Hashable {
             shadow = r.shadow; stroke = r.stroke; atomIcon = r.atomIcon
         }
         func apply(to run: inout Run) {
+            run.opacity = opacity; run.backgroundOpacity = backgroundOpacity
             run.hidden = hidden; run.fixedInk = fixedInk; run.color = color; run.decoration = decoration
             run.underlineColor = underlineColor; run.strikeColor = strikeColor; run.href = href
             run.background = background; run.backgroundBox = backgroundBox; run.backgroundRadii = backgroundRadii

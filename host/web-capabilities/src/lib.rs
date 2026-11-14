@@ -37,6 +37,51 @@ pub mod text_transform;
 pub mod timelines;
 pub mod wide_colors;
 
+/// Shadow grammars, linked when a plan binds `box-shadow` or `text-shadow`.
+pub mod shadows {
+    /// Register the grammars (LLP 1047 D3).
+    pub const fn link(mut linked: exact_web::Linked) -> exact_web::Linked {
+        linked.shadows = Some(exact_kernel::style::link_shadows);
+        linked
+    }
+}
+
+/// Corner grammar, linked when a plan binds `corner-shape`.
+pub mod corners {
+    /// Register the grammar (LLP 1047 D3).
+    pub const fn link(mut linked: exact_web::Linked) -> exact_web::Linked {
+        linked.corners = Some(exact_kernel::style::link_corners);
+        linked
+    }
+}
+
+/// Rotation grammars, linked when a plan binds its angle or axis.
+pub mod rotate {
+    /// Register the grammars (LLP 1047 D3).
+    pub const fn link(mut linked: exact_web::Linked) -> exact_web::Linked {
+        linked.rotate = Some(exact_kernel::style::link_rotate);
+        linked
+    }
+}
+
+/// Text stroke grammar, linked when a plan binds its width or colour.
+pub mod text_stroke {
+    /// Register the grammar (LLP 1047 D3).
+    pub const fn link(mut linked: exact_web::Linked) -> exact_web::Linked {
+        linked.text_stroke = Some(exact_kernel::style::link_text_stroke);
+        linked
+    }
+}
+
+/// Palette grammar, linked when a plan binds `-exact-symbol-palette`.
+pub mod symbol_palette {
+    /// Register the grammar (LLP 1047 D3).
+    pub const fn link(mut linked: exact_web::Linked) -> exact_web::Linked {
+        linked.symbol_palette = Some(exact_kernel::style::link_symbol_palette);
+        linked
+    }
+}
+
 /// The [`exact_web::Linked`] of the named capabilities, as a constant:
 /// `linked!(markdown)`. The generated entry writes one; nothing else should.
 #[macro_export]
@@ -72,6 +117,11 @@ pub const ALL: exact_web::Linked = linked!(
     animations,
     gradients,
     grid,
+    shadows,
+    corners,
+    rotate,
+    text_stroke,
+    symbol_palette,
     geometry,
     segments,
     dataset,

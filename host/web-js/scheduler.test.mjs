@@ -81,16 +81,16 @@ test('live tool deadlines refresh time and arm a wake without unrelated commits;
   const runtime = readFileSync(resolve(ROOT, 'host/web-js/clock.js'), 'utf8');
   const advance = runtime.slice(runtime.indexOf('export function advance('), runtime.indexOf('let driving ='));
   expect(advance).toContain('function fire(');
-  writeFileSync(resolve(dir, 'rt.js'), `export const clock={now:0,agent:false,timers:[]},wall={now:0},data={},After=[],Clocked=[],Mutations=[],Origin={now:()=>'app'},journal=[],say=x=>journal.push(x),order=()=>0,drive=()=>{};
+  writeFileSync(resolve(dir, 'rt.js'), `export const clock={now:0,agent:false,timers:[]},wall={now:0},data={},After=[],Clocked=[],Resources=[],Mutations=[],Origin={now:()=>'app'},journal=[],say=x=>journal.push(x),order=()=>0,drive=()=>{};
+export const Invocation={id:0,pending:new Set()},Writes=null,stood=()=>{};
 const Link={},Poisoned=false;let Timing=false,Instant=null,start=0;
 export const time=()=>{if(!clock.agent)clock.now=Math.max(clock.now,wall.now)};\n${advance}`);
   writeFileSync(resolve(dir, 'held.js'), 'export const Counting=new Set(),heldTickets=()=>[];');
   try {
     globalThis.exact = {};
     const { tools } = await import(pathToFileURL(resolve(dir, 'calls.js')).href);
-    const { clock, wall, After, advance } = await import(pathToFileURL(resolve(dir, 'rt.js')).href);
-    const { Counting } = await import(pathToFileURL(resolve(dir, 'held.js')).href);
-    tools({ run: [() => () => Counting.add({}), {}, 'reads', [false, true, true], 'run'] });
+    const { clock, wall, After, advance, Resources, Invocation } = await import(pathToFileURL(resolve(dir, 'rt.js')).href);
+    tools({ run: [() => () => Resources.push({ ticket: { invocation: Invocation.id } }), {}, 'reads', [false, true, true], 'run'] });
     const calls = globalThis.exact.calls;
     const first = calls.call({ tool: 'run' }); await Promise.resolve();
     expect(clock.timers.map(t => t.due)).toEqual([10000]);
@@ -102,7 +102,7 @@ export const time=()=>{if(!clock.agent)clock.now=Math.max(clock.now,wall.now)};\
     expect(clock.timers.map(t => t.due)).toEqual([15001]);
     wall.now = 15002; clock.timers.shift().action();
     expect(calls.called(queued.call)).toMatchObject({ outcome: 'refused', reason: 'busy' });
-    waking = false; Counting.clear(); clock.agent = true;
+    waking = false; Resources.length = 0; clock.agent = true;
     const driven = calls.call({ tool: 'run' }); await Promise.resolve();
     wall.now = 1000000;
     for (const f of After) f(); await Promise.resolve();
@@ -115,6 +115,96 @@ export const time=()=>{if(!clock.agent)clock.now=Math.max(clock.now,wall.now)};\
     expect(later).toBe(true);
     expect(calls.called(driven.call).outcome).toBe('timeout');
   } finally { globalThis.exact = old; rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a queued tool call waits at most five seconds behind a running call', async () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-call-wait-')), old = globalThis.exact;
+  cpSync(resolve(ROOT, 'host/web-js/calls.js'), resolve(dir, 'calls.js'));
+  writeFileSync(resolve(dir, 'rt.js'), `export const clock={now:0,agent:true,timers:[]},data={},After=[],Clocked=[],Resources=[],Mutations=[],Origin={now:()=>'app'},say=()=>{},order=()=>0,drive=()=>{},time=()=>{};
+export const Invocation={id:0,pending:new Set()},Writes=null,stood=()=>{};`);
+  writeFileSync(resolve(dir, 'held.js'), 'export const Counting=new Set(),heldTickets=()=>[];');
+  try {
+    globalThis.exact = {};
+    const { tools } = await import(pathToFileURL(resolve(dir, 'calls.js')).href);
+    const { clock, Resources, Invocation } = await import(pathToFileURL(resolve(dir, 'rt.js')).href);
+    let runs = 0;
+    tools({ run: [() => () => { runs++; Resources.push({ ticket: { invocation: Invocation.id } }); }, {}, 'reads', [false, true, true], 'run'] });
+    const calls = globalThis.exact.calls;
+    const fire = async now => { clock.now = now; clock.timers.splice(0).forEach(t => t.action()); await Promise.resolve(); };
+    const release = async () => { Resources.length = 0; clock.timers.splice(0).forEach(t => t.action()); await Promise.resolve(); };
+    // Behind a call that settles after the wait: refused at 5 s, never run.
+    const first = calls.call({ tool: 'run' }), second = calls.call({ tool: 'run' }), third = calls.call({ tool: 'run' });
+    await Promise.resolve();
+    expect(clock.timers.map(t => t.due)).toEqual([5000]);
+    await fire(5000);
+    expect(calls.called(second.call)).toMatchObject({ outcome: 'refused', reason: 'busy', certainty: 'none' });
+    expect(calls.called(third.call)).toMatchObject({ outcome: 'refused', reason: 'busy' });
+    expect(calls.called(first.call).state).toBe('running');
+    expect(clock.timers.map(t => t.due)).toEqual([10000]);
+    // Behind a call that times out within its wait: dispatched then.
+    clock.now = 7000;
+    const fourth = calls.call({ tool: 'run' }); await Promise.resolve();
+    expect(clock.timers.map(t => t.due)).toEqual([10000]);
+    await fire(10000);
+    expect(calls.called(first.call).outcome).toBe('timeout');
+    expect(calls.called(fourth.call).state).toBe('running');
+    // Behind a call that settles within the wait: dispatched when it ends.
+    const fifth = calls.call({ tool: 'run' }); await Promise.resolve();
+    clock.now = 14000; await release();
+    expect(calls.called(fourth.call).outcome).toBe('ok');
+    expect(calls.called(fifth.call).state).toBe('running');
+    expect(runs).toBe(3);
+    // Settling after the wait ran out does not dispatch the call it held.
+    const sixth = calls.call({ tool: 'run' }); await Promise.resolve();
+    expect(clock.timers.map(t => t.due)).toEqual([19000]);
+    clock.now = 20000; await release();
+    expect(calls.called(fifth.call).outcome).toBe('ok');
+    expect(calls.called(sixth.call)).toMatchObject({ outcome: 'refused', reason: 'busy' });
+    expect(runs).toBe(3);
+  } finally { globalThis.exact = old; rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a live wake\'s deadline timer moves with a budget an event raises after delivery', async () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-wake-budget-'));
+  cpSync(resolve(ROOT, 'host/web-js/wakes.js'), resolve(dir, 'wakes.js'));
+  writeFileSync(resolve(dir, 'rt.js'), `export const clock={now:0,agent:false},wall={now:0},inflight={n:0},data={},After=[],Clocked=[],Mutations=[],drive=()=>{};
+export const time=()=>{clock.now=Math.max(clock.now,wall.now)};`);
+  writeFileSync(resolve(dir, 'held.js'), 'export const Counting=new Set(),heldTickets=()=>[];');
+  const set = globalThis.setTimeout, clear = globalThis.clearTimeout, timers = new Map();
+  let ids = 0;
+  try {
+    const { wakes } = await import(pathToFileURL(resolve(dir, 'wakes.js')).href);
+    const { wall } = await import(pathToFileURL(resolve(dir, 'rt.js')).href);
+    const { Counting } = await import(pathToFileURL(resolve(dir, 'held.js')).href);
+    globalThis.setTimeout = (f, ms) => { timers.set(++ids, { f, due: wall.now + ms }); return ids; };
+    globalThis.clearTimeout = id => timers.delete(id);
+    // The wall timers due by `now`, as the browser fires them.
+    const at = async now => {
+      wall.now = now;
+      for (const [id, t] of [...timers].filter(([, t]) => t.due <= now)) { timers.delete(id); t.f(); }
+      await Promise.resolve();
+    };
+    const pull = () => () => Counting.add({});
+    const wk = wakes({
+      events: { 'sync.short': [pull, 'wake', 16, [], 'short', 1000], 'sync.long': [pull, 'wake', 16, [], 'long', 5000] },
+      say: () => {}, value: v => v, run: f => f(), toEpoch: ms => ms, onLine: () => true, lists: new Map(), changed() {},
+    });
+    const first = wk.raise('sync.short', [], { id: 'task' });
+    await Promise.resolve();
+    expect(wk.state().deadline).toBe(1000);
+    await at(500);
+    const second = wk.raise('sync.long', [], { id: 'task' });
+    await Promise.resolve();
+    expect(wk.state().deadline).toBe(5000);
+    await at(1000);
+    expect(wk.state().invocations.map(i => i.state)).toEqual(['running', 'queued']);
+    await at(5000);
+    expect(await first).toBe('expired');
+    expect(await second).toBe('expired');
+  } finally {
+    globalThis.setTimeout = set; globalThis.clearTimeout = clear;
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test.each([false, true])('a wake after an idle spell has its full budget (agent: %s)', async agent => {

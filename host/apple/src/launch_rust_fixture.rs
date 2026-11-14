@@ -128,7 +128,7 @@ impl Drive {
         };
         let mut bridge = Bridge::with_links(Links {
             io: Some(IoLinks {
-                preloads: local,
+                preloads: linked,
                 endow,
                 start: start_io,
                 ..IoLinks::LINKED

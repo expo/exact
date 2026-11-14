@@ -48,7 +48,7 @@ extension NodeView {
         CATransaction.begin(); CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
         if let effect {
-            if let gradient = Gradient(image) {
+            if let gradient = Gradient(image, tint: gradientTint) {
                 let view: UIView
                 if gradient.needsDrawing {
                     let pixels = UIImageView(frame: effect.bounds)
@@ -81,7 +81,7 @@ extension NodeView {
     /// for the layer or a filtered box's picture.
     func composedMask(shaped: CALayer?) -> CALayer? {
         let clip = clipMask(shaped: shaped)
-        guard let gradient = Gradient(style["mask_image"]) else { return clip }
+        guard let gradient = Gradient(style["mask_image"], tint: gradientTint) else { return clip }
         if gradient.needsDrawing {
             // Conic and repeating masks use the drawn pixels (LLP 1077 D5, LLP 1066).
             let m = GradientImageMaskLayer()

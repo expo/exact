@@ -11,6 +11,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+mod crawl;
+mod generations;
+
 const SRC: &str = r#"
 routes nav
   tab home "/" render=build
@@ -45,6 +48,7 @@ component Blog
 #[derive(Default)]
 struct Posts;
 static CACHE_READS: AtomicUsize = AtomicUsize::new(0);
+static DRAWS: AtomicUsize = AtomicUsize::new(0);
 
 fn post(title: &str) -> Value {
     Value::record(vec![Value::str(title)])
@@ -55,7 +59,12 @@ impl DataSource for Posts {
         Err(DataError::UnknownSource(source.into()))
     }
 
-    fn answer(&mut self, _: &mut Store, source: &str, args: &[Value]) -> Result<Answer, DataError> {
+    fn answer(
+        &mut self,
+        store: &mut Store,
+        source: &str,
+        args: &[Value],
+    ) -> Result<Answer, DataError> {
         let id = match args.first() {
             Some(Value::List(ids)) => ids
                 .first()
@@ -72,6 +81,13 @@ impl DataSource for Posts {
             ]))),
             ("posts", _) if args == [Value::str("drafts")] => {
                 Ok(Answer::Now(Value::list(vec![Value::str("d1")])))
+            }
+            ("post", "draw-probe") => {
+                store.observe_entropy();
+                Ok(Answer::Now(post(&format!(
+                    "Draw {}",
+                    DRAWS.fetch_add(1, Ordering::SeqCst) + 1
+                ))))
             }
             ("post", "slow") => Ok(Answer::Later(Request::continuation(1))),
             ("post", "boom") => Err(DataError::Unavailable("boom".into())),
@@ -495,34 +511,19 @@ fn cached_pages_reuse_public_answers_and_honor_request_cache_controls() {
     assert!(get(addr, "/live/cache-probe").2.contains("Read 5"));
 }
 
+/// A draw of randomness is the device's (LLP 1069.005 D2): a `cached`
+/// route's page whose render drew is no one's to keep or share.
 #[test]
-fn the_sitemap_lists_each_rendered_route_and_its_listed_pages() {
-    let served = start("sitemap", 1, 8, 300);
-    let addr = served.addr;
-    let (status, headers, body) = get(addr, "/sitemap.xml");
+fn cached_pages_whose_render_drew_are_neither_kept_nor_shared() {
+    let served = start("origin-draw", 1, 8, 1000);
+    let (status, headers, first) = get(served.addr, "/post/draw-probe");
     assert_eq!(status, 200);
-    assert_eq!(
-        header(&headers, "content-type"),
-        Some("application/xml; charset=utf-8")
-    );
-    for url in [
-        "https://blog.test/",
-        "https://blog.test/post/7",
-        "https://blog.test/post/an%20idea",
-    ] {
-        assert!(body.contains(&format!("<loc>{url}</loc>")), "{url}\n{body}");
-    }
-    // A route without a pages source isn't in it; neither is the shell's,
-    // nor a page that says `noindex`, as the build's sitemap leaves them.
-    assert!(!body.contains("/live/") && !body.contains("/app"), "{body}");
-    assert!(!body.contains("/draft/"), "{body}");
-    assert_eq!(get(addr, "/draft/d1").0, 200);
-    let (status, _, body) = get(addr, "/robots.txt");
-    assert_eq!(status, 200);
-    assert_eq!(
-        body,
-        "User-agent: *\nAllow: /\nSitemap: https://blog.test/sitemap.xml\n"
-    );
+    assert!(first.contains(">Draw "), "{first}");
+    assert_eq!(header(&headers, "cache-control"), Some("no-store"));
+    let (_, headers, second) = get(served.addr, "/post/draw-probe");
+    assert_eq!(header(&headers, "cache-control"), Some("no-store"));
+    assert_eq!(header(&headers, "age"), None);
+    assert_ne!(second, first);
 }
 
 /// A list that answers a moment after it is asked, before a sibling: the
@@ -858,112 +859,6 @@ fn a_kept_page_goes_against_a_dictionary_the_browser_holds() {
 }
 
 #[test]
-fn a_named_build_goes_against_the_earlier_one_the_browser_holds() {
-    use sha2::{Digest, Sha256};
-    super::warm_transport();
-    // Two builds that differ in a few places, each incompressible alone.
-    let mut seed = 7u32;
-    let earlier: Vec<u8> = (0..200_000)
-        .map(|_| {
-            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-            (seed >> 24) as u8
-        })
-        .collect();
-    let mut build = earlier.clone();
-    for at in [10, 50_000, 120_000] {
-        build.splice(at..at + 8, *b"changed!");
-    }
-    let dist = dist("generations");
-    std::fs::write(dist.join("app.wasm"), &build).unwrap();
-    let kept = dist.with_extension("kept");
-    let _ = std::fs::remove_dir_all(&kept);
-    std::fs::create_dir_all(&kept).unwrap();
-    let hex = |bytes: &[u8]| format!("{:x}", Sha256::digest(bytes));
-    std::fs::write(kept.join(format!("{}.wasm", hex(&earlier))), &earlier).unwrap();
-    let served = run(Serve {
-        dist,
-        port: 0,
-        name: "Blog".into(),
-        origin: None,
-        deadline: Duration::from_millis(300),
-        renders: 1,
-        queue: 8,
-        viewport: Default::default(),
-        lifetime: Duration::from_secs(120),
-        generations: Some(kept.clone()),
-    });
-    let addr = served.addr;
-    // The server keeps the build it serves beside the earlier one.
-    assert!(kept.join(format!("{}.wasm", hex(&build))).is_file());
-    let named = format!("/app.wasm?v={}", &hex(&build)[..16]);
-    let hash = exact_data::envelope::base64(&Sha256::digest(&earlier));
-    let ask = |target: &str, extra: &str| {
-        fetch_bytes(
-            addr,
-            &format!("GET {target} HTTP/1.1\r\nAccept-Encoding: gzip, br, dcb\r\nAvailable-Dictionary: :{hash}:\r\n{extra}\r\n"),
-        )
-    };
-    // The URL names the build, so it caches for good, and a browser may keep
-    // it as the next build's dictionary. The delta is made off the request's
-    // path; until then the build goes as it otherwise would.
-    let waited = std::time::Instant::now();
-    let (headers, body) = loop {
-        let (status, headers, body) = ask(&named, "");
-        assert_eq!(status, 200);
-        assert_eq!(
-            header(&headers, "cache-control"),
-            Some("public, max-age=31536000, immutable")
-        );
-        assert_eq!(
-            header(&headers, "use-as-dictionary"),
-            Some("match=\"/app.wasm\"")
-        );
-        if header(&headers, "content-encoding") == Some("dcb") {
-            break (headers, body);
-        }
-        assert!(waited.elapsed() < BOUND, "no delta within {BOUND:?}");
-        std::thread::sleep(Duration::from_millis(20));
-    };
-    assert_eq!(
-        header(&headers, "vary"),
-        Some("Accept-Encoding, Available-Dictionary")
-    );
-    let etag = header(&headers, "etag").unwrap().to_string();
-    assert!(etag.ends_with("-dcb\""), "{etag}");
-    assert_eq!(body[..4], [0xff, 0x44, 0x43, 0x42]);
-    assert_eq!(body[4..36], Sha256::digest(&earlier)[..]);
-    let mut decoded = Vec::new();
-    brotli::Decompressor::new_with_custom_dict(&body[36..], 4096, earlier.clone().into())
-        .read_to_end(&mut decoded)
-        .unwrap();
-    assert!(decoded == build, "the delta decodes to the build");
-    assert!(body.len() < 1_000, "{} bytes", body.len());
-    // Its ETag gets a 304.
-    let (status, _, body) = ask(&named, &format!("If-None-Match: {etag}\r\n"));
-    assert_eq!((status, body.len()), (304, 0));
-    // A URL that doesn't name this build revalidates, holds no dictionary and
-    // gets none; nor does a CDN's request, or a dictionary this server lacks.
-    for target in ["/app.wasm", "/app.wasm?v=0123456789abcdef"] {
-        let (status, headers, _) = ask(target, "");
-        assert_eq!(
-            (status, header(&headers, "cache-control")),
-            (200, Some("no-cache"))
-        );
-        assert_eq!(header(&headers, "use-as-dictionary"), None);
-        assert_ne!(header(&headers, "content-encoding"), Some("dcb"));
-    }
-    let (_, headers, _) = ask(&named, "CDN-Loop: cloudflare\r\n");
-    assert_eq!(header(&headers, "use-as-dictionary"), None);
-    assert_ne!(header(&headers, "content-encoding"), Some("dcb"));
-    let unknown = exact_data::envelope::base64(&[0u8; 32]);
-    let (_, headers, _) = fetch_bytes(
-        addr,
-        &format!("GET {named} HTTP/1.1\r\nAccept-Encoding: dcb\r\nAvailable-Dictionary: :{unknown}:\r\n\r\n"),
-    );
-    assert_eq!(header(&headers, "content-encoding"), None);
-}
-
-#[test]
 fn a_file_the_dist_lacks_is_a_plain_404() {
     let served = start("favicon", 1, 8, 300);
     let addr = served.addr;
@@ -1155,6 +1050,39 @@ fn large_static_files_stream_with_lengths_validators_and_head() {
     assert_eq!(status, 304);
     assert!(body.is_empty());
     assert_eq!(get(addr, "/glue.js").0, 200);
+
+    let dist = path.parent().unwrap();
+    let version = &etag[1..17];
+    std::fs::hard_link(&path, dist.join("app.wasm")).unwrap();
+    std::fs::create_dir(dist.join("stages")).unwrap();
+    let stage = format!("large.{version}.wasm");
+    std::fs::hard_link(&path, dist.join("stages").join(&stage)).unwrap();
+    std::fs::hard_link(&path, dist.join("stages/large.0000000000000000.wasm")).unwrap();
+    for (url, cache) in [
+        (
+            format!("/app.wasm?v={version}"),
+            "public, max-age=31536000, immutable",
+        ),
+        (
+            format!("/stages/{stage}"),
+            "public, max-age=31536000, immutable",
+        ),
+        ("/stages/large.0000000000000000.wasm".into(), "no-cache"),
+    ] {
+        let (status, headers, body) = fetch_bytes(addr, &format!("HEAD {url} HTTP/1.1\r\n\r\n"));
+        assert_eq!((status, body.len()), (200, 0));
+        assert_eq!(header(&headers, "cache-control"), Some(cache));
+        assert_eq!(header(&headers, "etag"), Some(etag));
+        let (status, headers, body) = fetch_bytes(
+            addr,
+            &format!("GET {url} HTTP/1.1\r\nIf-None-Match: {etag}\r\n\r\n"),
+        );
+        assert_eq!((status, body.len()), (304, 0));
+        assert_eq!(header(&headers, "cache-control"), Some(cache));
+    }
+    let (status, headers, _) = get(addr, "/app.wasm?v=0000000000000000");
+    assert_eq!(status, 404);
+    assert_eq!(header(&headers, "cache-control"), Some("no-store"));
 }
 
 /// The JavaScript runtime's shell, as host/web-js/build.mjs writes it.
@@ -1445,6 +1373,14 @@ fn a_navigation_gets_the_head_before_the_render_and_the_rest_after() {
     assert!(header(&headers, "age").is_some(), "{headers:?}");
     assert!(header(&headers, "etag").is_some());
     assert_eq!(kept, flushed);
+    // One whose render drew randomness is kept for no one: the next request
+    // renders again.
+    let (_, _, body) = fetch(addr, &navigate("/post/draw-probe"));
+    let flushed = String::from_utf8(unchunk(body.as_bytes())).unwrap();
+    assert!(flushed.contains(">Draw "), "{flushed}");
+    let (_, headers, again) = get(addr, "/post/draw-probe");
+    assert_eq!(header(&headers, "age"), None);
+    assert_ne!(again, flushed);
     // A conditional navigation waits for its validator on both a cold miss
     // and a forced refresh, then revalidates the kept page without a body.
     let conditional = |tag: &str, cache: &str| {
@@ -1482,4 +1418,64 @@ fn a_navigation_gets_the_head_before_the_render_and_the_rest_after() {
     let mut page = Vec::new();
     brotli::BrotliDecompress(&mut &unchunk(&body)[..], &mut page).unwrap();
     assert!(String::from_utf8(page).unwrap().contains(">Post 9<"));
+}
+
+#[test]
+fn hidden_build_files_are_not_http_assets() {
+    let dir = dist("hidden-assets");
+    for name in [
+        ".gen/plan.map.json",
+        ".env",
+        "assets/.secret.json",
+        ".exact/install/index.html",
+        ".well-known/assetlinks.json",
+    ] {
+        let path = dir.join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "fixture asset").unwrap();
+    }
+    let server = run(Serve {
+        dist: dir,
+        port: 0,
+        name: "Blog".into(),
+        origin: None,
+        deadline: Duration::from_secs(5),
+        renders: 2,
+        queue: 8,
+        viewport: Default::default(),
+        lifetime: Duration::ZERO,
+        generations: None,
+    });
+    for path in [
+        "/.gen/plan.map.json",
+        "/%2egen/plan.map.json",
+        "/.env",
+        "/assets/.secret.json",
+    ] {
+        for method in ["GET", "HEAD"] {
+            let (status, _, body) =
+                fetch(server.addr, &format!("{method} {path} HTTP/1.1\r\n\r\n"));
+            assert_eq!(status, 404, "{method} {path}");
+            assert!(!body.contains("fixture asset"));
+        }
+    }
+    for path in ["/.exact/install/", "/.well-known/assetlinks.json"] {
+        let (status, _, body) = get(server.addr, path);
+        assert_eq!((status, body.as_str()), (200, "fixture asset"), "{path}");
+    }
+    std::thread::scope(|scope| {
+        for id in 0..8 {
+            let addr = server.addr;
+            scope.spawn(move || {
+                let (status, _, body) = get(addr, &format!("/live/request-{id}"));
+                assert_eq!(status, 200);
+                assert!(body.contains(&format!(">Post request-{id}<")), "{body}");
+                for other in 0..8 {
+                    if other != id {
+                        assert!(!body.contains(&format!(">Post request-{other}<")));
+                    }
+                }
+            });
+        }
+    });
 }

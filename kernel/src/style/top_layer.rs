@@ -38,6 +38,14 @@ pub(crate) fn lifted(arena: &NodeArena, slot: u32) -> bool {
         && layout_position(arena, slot) == PositionType::Absolute
 }
 
+/// Whether `slot` is a top-layer box, laid out apart from its parent's
+/// subtree. An inline run or image that says `popover` is lifted but
+/// stays in its paragraph's text: `Kernel::imply_blocks` gives it
+/// no block, and a content region publishes it with its paragraph.
+pub(crate) fn is_box(arena: &NodeArena, slot: u32) -> bool {
+    arena.top_layer_slots.contains(slot) && !arena.in_paragraph(slot)
+}
+
 /// A top-layer box's engine style: absolute, out of flow, its insets
 /// offsets (a platform start's sticky row had laid them out as `auto`).
 /// Its containing block is the viewport, a block the kernel implies

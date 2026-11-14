@@ -1,4 +1,4 @@
-// @exact/tracking-consent on iOS and tvOS (LLP 1133.028 D12-D14): App
+// @exact/tracking-consent/apple on iOS and tvOS (LLP 1133.028 D12-D14): App
 // Tracking Transparency, a platform module with no other implementation.
 // Under the agent it asks the framework for nothing: the runner holds each
 // request as a `tracking` ticket, whose tap reaches the implementation as

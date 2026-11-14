@@ -113,6 +113,31 @@ final class SearchScopeIOSTests: XCTestCase {
         XCTAssertEqual(state(session, "filter") as? String, "all")
     }
 
+    func testScopeAccessibilityElementsJoinTheirAuthoredTabs() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "the bar is a scene window's") }
+        guard Presenter.axRuntimeLoaded else { throw missing("accessibility", "UIKit's scope segments need its accessibility runtime") }
+        guard UIDevice.current.userInterfaceIdiom == .phone else { throw XCTSkip("the scope bar is the iPhone's (D5)") }
+        let (session, route) = try fixture()
+        let search = try XCTUnwrap(route.search)
+        until("the scope segments carry their tabs' identifiers") { search.scopeControl?.segmentViews.map(\.accessibilityIdentifier) == ["filter-all", "filter-mine", "filter-done"] }
+        let control = try XCTUnwrap(search.scopeControl)
+        for (segment, name) in zip(control.segmentViews, ["All", "Mine", "Done"]) {
+            XCTAssertTrue(segment.isAccessibilityElement)
+            XCTAssertEqual(segment.accessibilityLabel, name)
+            let testId = try XCTUnwrap(segment.accessibilityIdentifier)
+            let tab = try node(session, testId)
+            let reply = Agent(session: session).accessibilityElementsTree(["target": testId])
+            let ax = try XCTUnwrap(reply["ax"] as? [String: Any])
+            let elements = try XCTUnwrap(ax["elements"] as? [[String: Any]])
+            XCTAssertEqual(elements.count, 1, testId)
+            let element = try XCTUnwrap(elements.first)
+            XCTAssertEqual(element["id"] as? UInt32, tab.id)
+            XCTAssertEqual(element["testId"] as? String, testId)
+            XCTAssertEqual(element["name"] as? String, name)
+            XCTAssertEqual(element["via"] as? String, "owner")
+        }
+    }
+
     /// LLP 1135: with no search, the filter under a large title is the
     /// item's subtitle views, under the large title and under the inline one.
     func testAFilterUnderALargeTitleIsItsSubtitleViews() throws {

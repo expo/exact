@@ -16,6 +16,7 @@ import Contract.Axiomatic
 import Contract.Invariant
 import Contract.OracleText
 import Contract.Vm
+import Contract.VmRows
 import Contract.Lower
 import Contract.LowerCheck
 import Contract.VmFacts

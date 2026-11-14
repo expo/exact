@@ -96,6 +96,14 @@ impl Assets {
     }
 
     pub(super) fn image_input(&self, name: &str) -> Option<ImageInput> {
+        let file;
+        let name = match super::file_icon(name) {
+            Some(svg) => {
+                file = format!("assets/{svg}");
+                file.as_str()
+            }
+            None => name,
+        };
         // An `app:/tmp`, `app:/cache` or `app:/data` source is the app's own
         // file, read by the host (LLP 1069.002 D7): a picked photo's preview.
         if name.starts_with("app:/") {

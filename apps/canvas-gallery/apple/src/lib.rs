@@ -4,11 +4,14 @@
 include!(concat!(env!("OUT_DIR"), "/module.rs"));
 include!(concat!(env!("OUT_DIR"), "/baked.rs"));
 
-type ExactEmbeddedData = exact_js::Placed<exact_js::Module>;
+type ExactEmbeddedData = canvas_gallery_data::Data<exact_js::Placed<exact_js::Module>>;
 fn embedded_data() -> ExactEmbeddedData {
-    exact_js::Module::new(APP_BYTECODE, APP, GRANTS)
-        .with_canvas_surfaces(CANVAS_SURFACES)
-        .placed(TYPESCRIPT_PLACEMENT)
+    canvas_gallery_data::mixed(
+        exact_js::Module::new(APP_BYTECODE, APP, GRANTS)
+            .with_canvas_surfaces(CANVAS_SURFACES)
+            .placed(TYPESCRIPT_PLACEMENT),
+        RUST_PLACEMENT,
+    )
 }
 include!(concat!(env!("OUT_DIR"), "/logic.rs"));
 include!(concat!(env!("OUT_DIR"), "/linked.rs"));

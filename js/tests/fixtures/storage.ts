@@ -32,6 +32,35 @@ function answer(source:string, args:unknown[], store:Store, storage:Storage, nat
   }
   if (op === "shared-wait") return shared.then(() => ({text: "waited"}));
   const song = storage.fs.directories.data + "/song";
+  if (op === "storage-handoff") {
+    const opened = storage.sqlite.open("app:/data/notes.db");
+    const getter = (globalThis as any).__exact_storage_promise;
+    const raw = getter?.();
+    return opened.then(async db => {
+      const leaked = raw && await raw;
+      await db.close();
+      return {text: leaked ? "raw database exposed" : "private"};
+    });
+  }
+  if (op === "worker-retirement") {
+    return (async () => {
+      const db = await storage.sqlite.open("app:/data/notes.db");
+      const first = db.execute("INSERT INTO notes VALUES ('submitted')");
+      const orphan = storage.fs.atomicWriteFile(song + "-orphan", bytes(value));
+      first.catch(() => storage.fs.atomicWriteFile(song + "-reaction", bytes(value)).catch(() => {}));
+      orphan.catch(() => {});
+      await Promise.all([first, orphan]);
+      await db.close();
+      return {text: "written"};
+    })();
+  }
+  if (op === "timeout-queue") {
+    const first = storage.fs.atomicWriteFile(song, bytes(value));
+    const orphan = storage.fs.atomicWriteFile(song + "-orphan", bytes(value));
+    first.catch(() => storage.fs.atomicWriteFile(song + "-reaction", bytes(value)).catch(() => {}));
+    orphan.catch(() => {});
+    return Promise.all([first, orphan]).then(() => ({text: "written"}));
+  }
   // The summary's edit: answered from memory, saved unawaited, in the answer.
   if (op === "save") {
     saving = storage.fs.atomicWriteFile(song, bytes(value)).catch((e) => { lastError = String(e.code); });
@@ -194,7 +223,8 @@ async function work(_source:string, args:unknown[], store:Store, storage:Storage
   }
   // LLP 1069.010.000 D4: the app's own atomic save of a kept file.
   if (op === "kept-save") {
-    await storage.fs.atomicWriteFile(value, new TextEncoder().encode("saved"));
+    try { await storage.fs.atomicWriteFile(value, new TextEncoder().encode("saved")); }
+    catch (e: any) { return {text: `${e.kind} ${e.code}`}; }
     return {text: (await storage.fs.recentDocuments()).map((d) => d.path).join(",")};
   }
   // LLP 1069.010.000 D1, D2a: the answer watches a chosen file and its
@@ -563,6 +593,19 @@ async function work(_source:string, args:unknown[], store:Store, storage:Storage
   if (op === "peek") {
     try { return {text: value + ":" + String.fromCharCode(...new Uint8Array(await storage.fs.readFile(storage.fs.directories.data + "/note")))}; }
     catch (_) { return {text: value + ":empty"}; }
+  }
+  // Each write of `value` from one buffer refilled after the call, behind an operation in flight: the file holds
+  // what was passed. (Returns each file's contents, joined.)
+  if (op === "reused-buffer") {
+    const data = storage.fs.directories.data, buffer = bytes(value), view = new Uint8Array(buffer.buffer, 1);
+    const writes = [storage.fs.mkdir(data + "/reused"),
+      storage.fs.writeFile(data + "/reused/write", buffer),
+      storage.fs.atomicWriteFile(data + "/reused/atomic", view),
+      storage.fs.appendFile(data + "/reused/append", buffer.buffer)];
+    buffer.fill(63);
+    await Promise.all(writes);
+    const read = async (name: string) => String.fromCharCode(...new Uint8Array(await storage.fs.readFile(data + "/reused/" + name)));
+    return {text:[await read("write"), await read("atomic"), await read("append")].join(",")};
   }
   if (op === "read-at") return {text:String.fromCharCode(...new Uint8Array(await storage.fs.readFile(storage.fs.directories.data + "/" + value)))};
   if (op === "read-size") {

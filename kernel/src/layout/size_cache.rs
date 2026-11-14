@@ -5,7 +5,7 @@ pub use taffy::tree::{SizeCacheCounts, SizeCachePolicy};
 #[cfg(test)]
 mod cost_probe;
 #[cfg(test)]
-mod shapes;
+mod shapes_tests;
 
 impl super::LayoutTree {
     pub(crate) fn reset_size_cache_counts(&mut self) {

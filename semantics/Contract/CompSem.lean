@@ -764,7 +764,7 @@ def cadvance (p : CProgram) (o : Oracle) (c : CConfig) (t : F64) : CConfig × Ou
       if tm.next ≤ t then
         match best with
         | .none => Option.some (tm, i)
-        | .some (b, j) => if tm.next < b.next then Option.some (tm, i) else Option.some (b, j)
+        | .some (b, j) => if tm.precedes b then Option.some (tm, i) else Option.some (b, j)
       else best) Option.none
   let pick (c : CConfig) : Option (String × F64 × String) :=
     match dueThen (rootProgram p) c.armed t, due c with
@@ -788,10 +788,15 @@ def cadvance (p : CProgram) (o : Oracle) (c : CConfig) (t : F64) : CConfig × Ou
       match due c with
       | .none => finish c
       | .some (tm, i) =>
+        -- A change task's commit is applied before anything later fires,
+        -- as `advance` and the runner's `needs_apply` return: one due after
+        -- other fires waits for the next step, and one that fires ends
+        -- this step at its own time, or at `now` when it is overdue.
+        if tm.change && n + 1 < timerFireLimit then (c, .ok) else
         let timers := c.timers.set i tm.fired
-        let c := { c with timers, now := tm.next }
+        let c := { c with timers, now := if tm.change && tm.next < c.now then c.now else tm.next }
         match crunAction p o c .root tm.action [] with
-        | (c, .ok) => go n c
+        | (c, .ok) => if tm.change then (c, .ok) else go n c
         | (c, out) => (c, out)
   if t < c.now then (c, .ok) else go timerFireLimit c
 

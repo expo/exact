@@ -769,6 +769,7 @@ mod tests {
             _: &[Shape],
             _: Transform,
             _: Option<[u8; 4]>,
+            _: exact_kernel::ImageRendering,
         ) {
         }
         fn text(

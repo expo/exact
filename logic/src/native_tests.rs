@@ -25,6 +25,9 @@ fn native_library_uses_copied_buffers_and_keeps_existing_sessions_alive() {
     encoded.u32(abi::ABI);
     encoded.u8(2);
     encoded.u8(0);
+    // No topic, no draw of randomness, no write.
+    encoded.u32(0);
+    encoded.u32(0);
     encoded.u32(0);
     // No socket operation, no overload (LLP 1016.003 D5).
     encoded.u32(0);
@@ -140,7 +143,7 @@ fn native_library_uses_copied_buffers_and_keeps_existing_sessions_alive() {
         crate::tiered::load(&pair(&crate::tests::wasm_with_contract("", false), &bytes)).is_err()
     );
     let mut store = Store::new("secret.keep token", []);
-    let input = abi::call_request(&store, "answer", &[], None).unwrap();
+    let input = abi::call_request(None, &store, "answer", &[], None).unwrap();
     abi::unit_reply(&tiered.call(&abi::activate_request()).unwrap()).unwrap();
     assert_eq!(
         abi::call_reply(&tiered.call(&input).unwrap(), &mut store).unwrap(),
@@ -178,7 +181,7 @@ fn native_library_uses_copied_buffers_and_keeps_existing_sessions_alive() {
     }
     assert_eq!(crate::native::mapping_count(&bytes), 1);
     fs::remove_dir_all(&dir).unwrap();
-    let input = abi::call_request(&Store::default(), "answer", &[], None).unwrap();
+    let input = abi::call_request(None, &Store::default(), "answer", &[], None).unwrap();
     let first_bytes = first.call(&input).unwrap();
     let second_bytes = second.call(&input).unwrap();
     drop(second);

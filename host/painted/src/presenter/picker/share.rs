@@ -70,14 +70,22 @@ impl<D: DataSource> Presenter<D> {
             .runner_mut()
             .claim_share(target, share)
             .ok_or("share: refused: the app declares no routes")?;
+        // Once a token is set pending, its files land whatever else fails, or
+        // it would stay pending with nothing to finish it. The first error is
+        // the answer.
+        let mut error = None;
         for (token, files) in claimed.tokens.clone() {
             if let Some(e) = self.host.set_shared(&token, files) {
-                return Err(e);
+                error.get_or_insert(e);
             }
         }
-        deliver(self, &claimed.location)?;
-        self.land(&mut claimed, &held)?;
-        Ok(claimed.location)
+        if let Err(e) = deliver(self, &claimed.location) {
+            error.get_or_insert(e);
+        }
+        if let Err(e) = self.land(&mut claimed, &held) {
+            error.get_or_insert(e);
+        }
+        error.map_or(Ok(claimed.location), Err)
     }
 
     /// The cold share's copies, after first pixel, when storage is configured.
@@ -94,9 +102,11 @@ impl<D: DataSource> Presenter<D> {
 
     /// Copies a claim's files, from what `held` holds open where it holds
     /// one, and sets each token with what landed, a picture's size read as
-    /// the picker reads it.
+    /// the picker reads it. A token that cannot be set leaves the others to
+    /// be set; the first error is the answer.
     fn land(&mut self, claimed: &mut Claimed, held: &Held) -> Result<(), String> {
         let dir = shared_dir().unwrap_or_default();
+        let mut error = None;
         let opened = |source: &std::path::Path| {
             let (_, file) = held.iter().find(|(path, _)| path == source)?;
             file.try_clone().ok()
@@ -117,10 +127,14 @@ impl<D: DataSource> Presenter<D> {
                 (f.width, f.height) = size.map_or((None, None), |(w, h)| (Some(w), Some(h)));
             }
             if let Some(e) = self.host.set_shared(&token, files) {
-                return Err(e);
+                error.get_or_insert(e);
             }
         }
         self.dirty = true;
-        self.after_commit().map_or(Ok(()), Err)
+        let serviced = self.after_commit();
+        error.or(serviced).map_or(Ok(()), Err)
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -466,7 +466,7 @@ fn document_request(
         .flatten();
     let written = run(operation, data.as_deref())?;
     if let Some(replaced) = kept {
-        exact_data::documents::kept::carry(owner, replaced);
+        exact_data::documents::kept::carry(owner, replaced)?;
     }
     Ok(fs_value(written))
 }

@@ -108,11 +108,15 @@ export function implementation({ changed, agent, now, log, tracks, files }) {
 
   // ---------------------------------------------------------------- live scans (D5)
   const scanKey = (track, keep) => `${track}|${keep ? [...keep].sort().join(',') : '*'}`;
+  // A runner argument group: object key order is immaterial, an array's order and the interval are not, as on Android.
+  const argumentGroup = v => Array.isArray(v) ? `[${v.map(argumentGroup).join(',')}]`
+    : v && typeof v === 'object' ? `{${Object.keys(v).sort().map(k => `${JSON.stringify(k)}:${argumentGroup(v[k])}`).join(',')}}`
+    : JSON.stringify(v) ?? 'null';
   /** Register before awaiting support so the last reader can release a pending scan (D5). */
   function scanOf(track, keep, interval) {
     const key = scanKey(track, keep);
     if (scans.has(key)) return scans.get(key);
-    const s = { key, track, keep, interval, read: 0, state: 'idle', barcodes: [], seen: new Map(), frame: 0, width: 0, height: 0, error: null, video: null, busy: null, leave: null };
+    const s = { key, track, keep, interval, groups: new Set(), read: 0, state: 'idle', barcodes: [], seen: new Map(), frame: 0, width: 0, height: 0, error: null, video: null, busy: null, leave: null };
     scans.set(key, s);
     return s;
   }
@@ -182,7 +186,8 @@ export function implementation({ changed, agent, now, log, tracks, files }) {
       return { formats, tracks: !!Detector && formats.length > 0 };
     },
     detectBarcodes: still,
-    async detectedBarcodes({ track, formats, interval }) {
+    async detectedBarcodes(args) {
+      const { track, formats, interval } = args;
       const keep = asked(formats);
       if (keep?.error) return keep;
       // No track yet (an app's state before its camera opens) is a scan with nothing to read.
@@ -191,6 +196,7 @@ export function implementation({ changed, agent, now, log, tracks, files }) {
       if (!entry) return failure('NotFoundError', `the session holds no track ${track}`);
       if (entry.kind !== 'video') return failure('NotSupportedError', `${track} is not a video track`);
       const s = scanOf(track, keep, interval ?? 100);
+      s.groups.add(argumentGroup(args));
       const read = ++s.read;
       let detector;
       try { detector = await detectorFor(keep); } catch (e) { endScan(s, 'failed', read); throw e; }
@@ -201,13 +207,15 @@ export function implementation({ changed, agent, now, log, tracks, files }) {
       if (result?.error) { endScan(s, 'unsupported', read); return result; }
       return scanShape(s);
     },
-    /** The last reader of a scan let it go: its observer removed, its `seen` dropped (D5). */
+    /** The last argument group reading a scan let it go: its observer removed, its `seen` dropped (D5). */
     releaseArgs(name, args) {
       if (name !== 'detectedBarcodes') return;
       const keep = asked(args?.formats);
       if (keep?.error) return;
       const s = scans.get(scanKey(args?.track, keep));
-      if (s) endScan(s, 'released');
+      if (!s) return;
+      s.groups.delete(argumentGroup(args));
+      if (s.groups.size === 0) endScan(s, 'released');
     },
     release(name) {
       if (name === 'detectedBarcodes') for (const s of [...scans.values()]) endScan(s, 'released');

@@ -150,6 +150,66 @@ impl SurfacePainter for Pixels {
     }
 }
 
+#[test]
+fn popup_keyboard_delivery_leaves_android_touch_mode_before_restoring_focus() {
+    for step in [event::TAB, event::DOWN, event::TAB_BACK, event::UP] {
+        let mut p = boot();
+        p.brush.touch_mode = true;
+        p.set_pointer_kind(PointerKind::Touch);
+        p.serve_overlays();
+        p.frame();
+        tap(&mut p, "more").unwrap();
+        let serial = p.top.open.as_ref().unwrap().serial;
+        assert!(p.brush.pointer_modality);
+        p.surface_event(serial, step, 0., 0., 1.);
+        p.surface_event(serial, event::ENTER, 0., 0., 2.);
+        assert!(p.surface().is_none());
+        assert_eq!(p.focus, Some(id(&p, "more")));
+        assert_eq!(p.brush.ringless, None, "surface key {step}");
+        assert!(!p.brush.pointer_modality);
+    }
+}
+
+#[test]
+fn a_surface_touch_after_a_surface_key_restores_the_opener_ringless() {
+    for (android, winui) in [(false, false), (true, false), (false, true)] {
+        let mut p = boot();
+        p.brush.touch_mode = android;
+        p.brush.winui_focus = winui;
+        p.set_pointer_kind(if android {
+            PointerKind::Touch
+        } else {
+            PointerKind::Mouse
+        });
+        p.serve_overlays();
+        p.frame();
+        tap(&mut p, "more").unwrap();
+        let open = p.top.open.as_ref().unwrap();
+        let (serial, (x, y, w, h)) = (open.serial, open.layout.targets[0].rect);
+        let (x, y) = (x + w / 2., y + h / 2.);
+        p.surface_event(serial, event::DOWN, 0., 0., 1.);
+        assert!(!p.brush.pointer_modality);
+        if winui {
+            // A move over the surface, then a dismissal: the restore is a
+            // scripted focus after pointer input.
+            p.surface_event(serial, 2, x, y, 2.);
+            p.surface_event(serial, event::DISMISSED, 0., 0., 3.);
+        } else {
+            p.surface_event(serial, 0, x, y, 2.);
+            p.surface_event(serial, 1, x, y, 3.);
+        }
+        p.run_commands(|| ());
+        assert!(p.surface().is_none());
+        let more = id(&p, "more");
+        assert_eq!(p.focus, Some(more));
+        assert_eq!(
+            p.brush.ringless,
+            Some(more),
+            "android={android}, winui={winui}"
+        );
+    }
+}
+
 fn boot() -> Presenter<()> {
     let (p, error) = Presenter::boot_with(
         &crate::test_plan(APP),
@@ -197,6 +257,53 @@ fn desktop_overlay_accepts_pointer_keys_and_dismisses_without_clicking_through()
     assert!(p.surface_key("Enter", 6.));
     assert_eq!(text(&p, "said"), "sent");
     assert!(p.surface().is_none());
+}
+
+#[test]
+fn a_menu_row_inserted_above_the_focus_leaves_the_focus_on_its_row() {
+    let source = APP
+        .replace(
+            "  state said = \"nothing\"\n",
+            "  state said = \"nothing\"\n  state extra = false\n  action grow\n    extra = true\n  task growing mount\n    every(100, grow)\n",
+        )
+        .replace(
+            "aria-label=\"Row\"\n",
+            "aria-label=\"Row\"\n        if extra\n          button press=keep popovertarget=\"menu\" popovertargetaction=\"hide\" testId=\"menu-new\"\n            text \"New\"\n",
+        );
+    let (mut p, error) = Presenter::boot_with(
+        &crate::test_plan(&source),
+        (),
+        (400., 800.),
+        1.,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    p.serve_overlays();
+    p.frame();
+    tap(&mut p, "more").unwrap();
+    assert!(p.surface_key("ArrowDown", 1.));
+    assert!(p.surface_key("ArrowDown", 2.));
+    let open = p.top.open.as_ref().unwrap();
+    assert_eq!(
+        open.layout.targets[open.focused.unwrap()].node,
+        id(&p, "menu-share")
+    );
+    p.clock(150.);
+    p.frame();
+    let open = p.top.open.as_ref().unwrap();
+    assert_eq!(
+        open.layout.targets.len(),
+        5,
+        "the new row is in the open menu"
+    );
+    assert_eq!(
+        open.layout.targets[open.focused.unwrap()].node,
+        id(&p, "menu-share")
+    );
+    assert!(p.surface_key("Enter", 160.));
+    assert_eq!(text(&p, "said"), "sent");
 }
 
 #[test]

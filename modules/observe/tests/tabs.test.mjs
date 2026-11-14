@@ -1,7 +1,7 @@
 // Observe's web service in two tabs of one Chromium profile, which share its localStorage
 // queue: a tab adds its rows to the stored queue, and each row reaches the server once.
 // `bun test ./modules/observe/tests/tabs.test.mjs`; it skips when the pinned Chromium is missing.
-import { afterAll, expect } from 'bun:test';
+import { afterAll, expect, test as always } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { join } from 'node:path';
@@ -62,6 +62,8 @@ test('two tabs add to one stored queue and send each row once', async () => {
     // Wait until the first tab sees the second's row: localStorage reaches another renderer asynchronously.
     await one.waitForFunction(() => queued().includes('second'));
     await one.evaluate(() => event('third'));
+    // An append is saved once its edit lock is granted.
+    await two.waitForFunction(() => queued().includes('third'));
     expect(await two.evaluate(() => queued())).toEqual(['first', 'second', 'third']);
 
     await Promise.all([one.evaluate(() => observe.background()), two.evaluate(() => observe.background())]);
@@ -72,3 +74,56 @@ test('two tabs add to one stored queue and send each row once', async () => {
     server.close();
   }
 }, 30_000);
+
+// Two tabs in separate renderer processes, as a fake: each reads its own copy of the stored
+// queue, which learns another tab's save only when told; a lock's grant tells every copy, as
+// it comes after the holder's save. A change made without the lock reads a stale copy and
+// saves over the other tab's rows.
+always('appends and a send\'s removal take the edit lock, so no tab saves over another\'s rows', async () => {
+  const run = new Function('localStorage', 'navigator', 'fetch', 'setTimeout',
+    `${service.replace(/^export /gm, '')}; return start;`);
+  const shared = new Map(), copies = [], held = new Map(), posted = [];
+  const sync = () => { for (const copy of copies) { copy.clear(); for (const [k, v] of shared) copy.set(k, v); } };
+  const locks = {
+    async request(name, work) {
+      while (held.has(name)) await held.get(name);
+      let release;
+      held.set(name, new Promise(r => { release = r; }));
+      sync();
+      try { return await work(); } finally { held.delete(name); release(); }
+    },
+  };
+  // The first request waits for `reply` and is accepted; a later one is refused, so its rows stay queued.
+  let reply = null;
+  const fetch = async (_url, init) => {
+    if (reply) return new Response(null, { status: 503 });
+    for (const r of JSON.parse(init.body).resourceLogs) for (const s of r.scopeLogs) for (const l of s.logRecords) posted.push(l.body.stringValue);
+    return new Promise(resolve => { reply = () => resolve(new Response(null, { status: 200 })); });
+  };
+  const tab = () => {
+    const copy = new Map(shared);
+    copies.push(copy);
+    const storage = { getItem: k => copy.get(k) ?? null, setItem: (k, v) => { copy.set(k, String(v)); shared.set(k, String(v)); } };
+    const service = run(storage, { platform: 'MacIntel', language: 'en-US', locks }, fetch, () => 0)(
+      { projectId: 'p', endpoint: 'https://example.com', 'app.CFBundleIdentifier': 'com.example.tabs' });
+    return { service, log: body => service.event({ kind: 'app.event', name: 'e', body, attributes: {}, wall: 0 }) };
+  };
+  const settle = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
+  const stored = () => JSON.parse(shared.get(KEY)).logs.map(r => r.body);
+  const one = tab(), two = tab();
+  await settle();
+  // Appended in the same moment, before either tab's copy has the other's save.
+  one.log('a');
+  two.log('b');
+  await settle();
+  expect(stored()).toEqual(['a', 'b']);
+  // One tab sends; the other appends as the send's removal is saved.
+  const sending = one.service.background();
+  await settle();
+  reply();
+  two.log('c');
+  await sending;
+  await settle();
+  expect(stored()).toEqual(['c']);
+  expect(posted).toEqual(['a', 'b']);
+});

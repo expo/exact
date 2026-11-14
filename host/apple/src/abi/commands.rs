@@ -210,6 +210,14 @@ impl<D: DataSource> Bridge<D> {
         }
     }
 
+    /// `exact_canvas_image_released`: the handle is the input buffer's first `len` bytes.
+    pub fn canvas_image_released(&mut self, len: usize) {
+        let src = String::from_utf8_lossy(&self.input[..len.min(self.input.len())]).into_owned();
+        if let Some(h) = self.host.as_mut() {
+            h.canvas_image_released(&src);
+        }
+    }
+
     /// A host this bridge boots: inline geometry, Canvas 2D text measurement
     /// (LLP 1056 D8), where its draws run (LLP 1072 §8.5), and where its
     /// app's `console` lines go (LLP 1027.009).
@@ -599,7 +607,10 @@ impl<D: DataSource> Bridge<D> {
                     opt(&s.footer, &mut json);
                     look(",\"headerLook\":", &s.header_look, &mut json);
                     look(",\"footerLook\":", &s.footer_look, &mut json);
-                    json.push_str(&format!(",\"card\":{}", s.card));
+                    json.push_str(&format!(
+                        ",\"card\":{},\"cardView\":{}",
+                        s.card, s.card_view
+                    ));
                     json.push_str(&format!(
                         ",\"spaceAbove\":{}",
                         s.space_above.map_or("null".into(), |v| v.to_string())

@@ -71,8 +71,131 @@ public extension ExactPackageView {
     func destroy() {}
 }
 
+/// A member's requests and result decoder for one credential ceremony
+/// (LLP 1133.014 D10 item 2). Platform objects cross this seam as NSObject.
+public struct ExactCredentialRequest {
+    public let requests: [NSObject]
+    public let answer: (NSObject) -> [String: Any]?
+    public init(requests: [NSObject], answer: @escaping (NSObject) -> [String: Any]?) {
+        self.requests = requests; self.answer = answer
+    }
+}
+
+public protocol ExactCredentialMember: AnyObject {
+    func credentialRequest(_ args: [String: Any]) throws -> ExactCredentialRequest
+}
+
+public struct ExactCredentialFailure: Error {
+    public let json: [String: Any]
+    public init(_ json: [String: Any]) { self.json = json }
+}
+
+/// Shared by contexts of the same session. Registrations do not keep a
+/// package alive; each returned request keeps its own decoder until completion.
+public final class ExactCredentialMembers {
+    private final class WeakTable {
+        weak var value: ExactCredentialMembers?
+        init(_ value: ExactCredentialMembers) { self.value = value }
+    }
+    private final class WeakMember {
+        weak var value: ExactCredentialMember?
+        init(_ value: ExactCredentialMember) { self.value = value }
+    }
+    private static var sessions: [String: WeakTable] = [:]
+    private let session: String
+    private var members: [String: WeakMember] = [:]
+    private struct Ceremony {
+        let id: ObjectIdentifier
+        let replaceable: Bool, modal: Bool
+        let start: () -> Void
+        let cancel: ([String: Any]) -> Void
+        var started = false
+    }
+    private var ceremonies: [Ceremony] = []
+    private var active: ObjectIdentifier?
+    private var changing = 0
+    private var advancing = false
+
+    private init(_ session: String) { self.session = session }
+    deinit { Self.sessions[session] = nil }
+
+    fileprivate static func table(_ session: String) -> ExactCredentialMembers {
+        if let table = sessions[session]?.value { return table }
+        let table = ExactCredentialMembers(session)
+        sessions[session] = WeakTable(table)
+        return table
+    }
+
+    public func register(_ name: String, member: ExactCredentialMember) { members[name] = WeakMember(member) }
+    public func unregister(_ name: String, member: ExactCredentialMember) {
+        if members[name]?.value === member { members[name] = nil }
+    }
+    public func request(_ name: String, args: [String: Any]) throws -> ExactCredentialRequest {
+        guard let member = members[name]?.value else {
+            throw ExactCredentialFailure(["error": "NotSupportedError", "message": "no credential member registered for \(name)"])
+        }
+        return try member.credentialRequest(args)
+    }
+
+    /// Native credential sheets wait in session order. A newer ceremony
+    /// first ends passive identity and conditional gets (LLP 1133.014 D5).
+    /// Call `finish` after replying; closures must not retain the ceremony.
+    public func enqueue(_ ceremony: AnyObject, replaceable: Bool, modal: Bool,
+                        start: @escaping () -> Void, cancel: @escaping ([String: Any]) -> Void) {
+        changing += 1
+        let replaced = ceremonies.filter { $0.replaceable }
+        ceremonies.append(Ceremony(id: ObjectIdentifier(ceremony), replaceable: replaceable, modal: modal, start: start, cancel: cancel))
+        for held in replaced { held.cancel(["error": "AbortError"]) }
+        changing -= 1
+        advance()
+    }
+
+    public func finish(_ ceremony: AnyObject) {
+        let id = ObjectIdentifier(ceremony)
+        ceremonies.removeAll { $0.id == id }
+        if active == id { active = nil }
+        advance()
+    }
+
+    public func cancel(_ pending: [AnyObject]) {
+        let ids = Set(pending.map(ObjectIdentifier.init))
+        cancel(ceremonies.filter { ids.contains($0.id) }, answer: ["error": "AbortError"])
+    }
+
+    /// The host ends all credential calls before destroying the session's packages.
+    public static func cancelSession(_ session: String) {
+        guard let table = sessions[session]?.value else { return }
+        table.cancel(table.ceremonies, answer: ["error": "AbortError"])
+    }
+
+    /// Backgrounding ends sheets and their waiting calls, preserving AutoFill.
+    public func cancelSheets() {
+        cancel(ceremonies.filter { $0.modal }, answer: ["error": "NotAllowedError"])
+    }
+
+    private func cancel(_ pending: [Ceremony], answer: [String: Any]) {
+        changing += 1
+        for held in pending { held.cancel(answer) }
+        changing -= 1
+        advance()
+    }
+
+    private func advance() {
+        guard changing == 0, !advancing else { return }
+        advancing = true
+        defer { advancing = false }
+        while let index = ceremonies.firstIndex(where: { !$0.started && (!$0.modal || active == nil) }) {
+            ceremonies[index].started = true
+            let next = ceremonies[index]
+            if next.modal { active = next.id }
+            next.start()
+        }
+    }
+}
+
 /// The session an implementation instance belongs to.
 public final class ExactPackageContext {
+    public let credentials: ExactCredentialMembers
     /// The session's track table, shared by its implementations (LLP
     /// 1133.009 D10 item 6).
     public let tracks: ExactTracks
@@ -169,6 +292,7 @@ public final class ExactPackageContext {
                 expireWake: @escaping (String) -> Void = { _ in },
                 state: @escaping ([String: Any]) -> Void = { _ in }) {
         self.agent = agent; self.session = session; self.hostSession = hostSession; self.label = label ?? session
+        credentials = ExactCredentialMembers.table(session)
         let scratch = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
         self.data = data ?? scratch; self.cache = cache ?? scratch; self.temporary = temporary ?? scratch
         changedFn = changed; logFn = log; nowFn = now
@@ -499,7 +623,7 @@ public final class ExactTransfers {
 /// a region, and the store, which is the truth. A crossing is written to
 /// the store as the region's undelivered transition, then offered to the
 /// implementation that added the region as `woke(_:)` of kind `region`, its
-/// keys the regions' names; a transition stays until `delivered(name:)`,
+/// keys the regions' names; a transition stays until `delivered(name:pending:)`,
 /// and is offered again at each later launch. macOS hears crossings only
 /// while the app runs.
 public final class ExactRegions {
@@ -516,8 +640,11 @@ public final class ExactRegions {
     public func list() -> [[String: Any]] { callFn("list", [:]) as? [[String: Any]] ?? [] }
     /// The undelivered transition of `name`: `{event: "enter"|"leave", timestamp}`, ms since the epoch.
     public func pending(name: String) -> [String: Any]? { callFn("pending", ["name": name]) as? [String: Any] }
-    /// The transition of `name` was delivered: the store forgets it.
-    public func delivered(name: String) { _ = callFn("delivered", ["name": name]) }
+    /// The transition `pending` read was delivered: the store forgets it,
+    /// unless a later crossing has replaced it.
+    public func delivered(name: String, pending: [String: Any]) {
+        _ = callFn("delivered", ["name": name, "event": pending["event"] ?? NSNull(), "timestamp": pending["timestamp"] ?? NSNull()])
+    }
 }
 
 /// The app's remote-notification registration (LLP 1133.004 §9 P3): the
@@ -799,13 +926,14 @@ public final class ExactPads {
         let t = Self.table
         return (0..<t.count).first { t[$0] as AnyObject === pad }
     }
-    /// `pad`'s slot: the one it holds, else `at` when free, else the lowest
-    /// free one; nil when all are taken.
+    /// `pad`'s slot: the one it holds, else `at` when it is a slot and free,
+    /// else the lowest free one; nil when all are taken.
     public func take(_ pad: AnyObject, at wanted: Int? = nil) -> Int? {
         if let held = index(of: pad) { return held }
         let t = Self.table
         let free = (0..<t.count).filter { t[$0] is NSNull }
-        let index = wanted.flatMap { w in w >= t.count || t[w] is NSNull ? w : nil } ?? free.first ?? t.count
+        let slot = wanted.flatMap { w in (0..<Self.most).contains(w) && (w >= t.count || t[w] is NSNull) ? w : nil }
+        let index = slot ?? free.first ?? t.count
         guard index < Self.most else { return nil }
         while t.count <= index { t.add(NSNull()) }
         t[index] = pad

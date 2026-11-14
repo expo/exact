@@ -44,6 +44,7 @@ pub mod activation;
 pub mod agent;
 pub mod auth;
 pub mod bridge;
+pub mod canvas_capture;
 pub use bridge::icon_of;
 pub mod commands;
 pub mod compare;
@@ -73,6 +74,8 @@ pub mod page;
 pub mod perf;
 pub mod presence;
 pub mod process;
+mod program;
+pub use program::Program;
 pub mod request;
 pub mod runner;
 pub mod save_file;
@@ -141,6 +144,7 @@ pub use runner::{
 };
 pub use runner::{AppState, LiveApplied, LiveRefusal, Place, Tamber};
 pub use runner::{CallHow, WakeHow};
+pub use runner::{ModuleIdentity, ModuleInstance};
 pub use upload::{UPLOAD_PROGRESS, UPLOAD_SENDING};
 /// The binding core's names (LLP 1121 D12): what `contract tamber gen rust`
 /// writes (`pub const SURFACE_CARD: Token<Color>`) and resolves.

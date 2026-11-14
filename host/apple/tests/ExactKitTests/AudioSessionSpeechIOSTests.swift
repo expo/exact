@@ -53,6 +53,23 @@ final class AudioSessionSpeechIOSTests: XCTestCase {
         XCTAssertEqual(session.category, .ambient)
     }
 
+    /// Speech released during a capture leaves no configuration behind: the
+    /// next claim of the same type takes its own again.
+    func testSpeechAfterACaptureTakesItsConfigurationAgain() {
+        let first = AudioSession.claimSpeech(type: "transient") { _ in }
+        let capture = AudioSession.claimCapture(mode: .default, options: [.defaultToSpeaker], background: false) { _ in }
+        AudioSession.releaseSpeech(first)
+        AudioSession.releaseCapture(capture)
+        XCTAssertEqual(session.category, .ambient)
+        let again = AudioSession.claimSpeech(type: "transient") { _ in }
+        XCTAssertNotEqual(again, 0)
+        XCTAssertEqual(session.category, .playback)
+        XCTAssertEqual(session.mode, .voicePrompt)
+        XCTAssertTrue(session.categoryOptions.contains(.duckOthers), "other audio is ducked")
+        AudioSession.releaseSpeech(again)
+        XCTAssertEqual(session.category, .ambient)
+    }
+
     /// A holder that will not stop (a voice pending) keeps the session as it
     /// stands; the speech configuration applies at the boundary its release is.
     func testABusyHolderDelaysTheChangeToItsRelease() throws {

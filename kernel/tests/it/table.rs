@@ -1217,3 +1217,6 @@ fn a_tables_spacing_is_whole_cells_under_the_terminals_space_rule() {
     assert_eq!(frame(&k, 4), [16.0, 32.0, 8.0, 16.0], "its first cell");
     assert_eq!(frame(&k, 6), [32.0, 32.0, 8.0, 16.0], "its second cell");
 }
+
+#[path = "table/contexts.rs"]
+mod contexts;

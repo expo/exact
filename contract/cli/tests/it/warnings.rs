@@ -445,6 +445,62 @@ fn every_literal_colour_is_named_past_the_cap_with_one_line_on_why() {
     );
 }
 
+#[test]
+fn a_builds_text_says_the_literal_colours_in_one_line_and_json_lists_each() {
+    // LLP 1168.000 D7.2: a chat app said 31 colour lines in every build. The text says one,
+    // the closing line's, with the first three sites; `--json` keeps one diagnostic a site.
+    let view: String = (0..5)
+        .map(|i| format!("  text \"{i}\" color=\"#1234{i:02}\"\n"))
+        .collect();
+    let dir = std::env::temp_dir().join(format!("exact-one-scheme-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("app.contract");
+    std::fs::write(&path, screen(&format!("column\n{view}"))).unwrap();
+    let run = |json: bool| {
+        let mut args = vec!["build", path.to_str().unwrap()];
+        if json {
+            args.push("--json");
+        }
+        std::process::Command::new(env!("CARGO_BIN_EXE_contract"))
+            .args(&args)
+            .output()
+            .unwrap()
+    };
+    let json: serde_json::Value = serde_json::from_slice(&run(true).stdout).unwrap();
+    let listed = json
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|w| w["id"] == ONE_SCHEME)
+        .count();
+    let text = String::from_utf8(run(false).stderr).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(listed, 6, "five sites and the closing line: {json}");
+    let said: Vec<&str> = text.lines().filter(|l| l.contains(ONE_SCHEME)).collect();
+    let file = path.display().to_string();
+    assert_eq!(said.len(), 1, "{text}");
+    assert!(
+        said[0].starts_with(&format!("{file}:6:"))
+            && said[0].contains(&format!(
+                "these 5 literal colours ({file}:6, {file}:7, {file}:8, …) stay the same in dark mode"
+            ))
+            && said[0].contains("name a role for each or leave it unsaid")
+            && said[0].contains("one `light-dark(light, dark)` pair on `accent-color`")
+            && said[0].ends_with("`contract build --json` names each."),
+        "{text}"
+    );
+    // One site keeps its own line, whole.
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(&path, screen("text \"a\" color=\"#123456\"")).unwrap();
+    let text = String::from_utf8(run(false).stderr).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        text.contains("`#123456` on `color` stays the same in dark mode"),
+        "{text}"
+    );
+}
+
 const REREAD: &str = "analyze-read-after-assign";
 
 /// One action, `go`, its body from line 10 (LLP 1116.003 D6).

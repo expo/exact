@@ -63,11 +63,17 @@ shape TocItem
   title: string
   href: string
 
+shape Crumb
+  title: string
+  href: string
+  icon: string
+
 shape Page
   slug: string
   path: string
   movedFrom: string[]
   section: string
+  crumbs: Crumb[]
   title: string
   description: string
   subtitle: string

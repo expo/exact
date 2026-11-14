@@ -146,7 +146,7 @@ component Llp
   derive title = index.project != "" ? `LLP — ${index.project}` : "LLP"
 
   view
-    main testId="llp-main" width="100%" height="100%" background-color="page"
+    main testId="llp-main" width="100%" height="100%" background-color="page" color="ink" accent-color="accent"
       head title=title
       column width="100%" height="100%"
         header width="100%" padding=10 background-color="chrome" border-bottom-style="solid" border-bottom-width=1 border-color="edge" box-sizing="border-box"
@@ -158,7 +158,7 @@ component Llp
             input appearance="none" value=query input=search placeholder="Search the corpus" aria-label="Search the corpus" testId="search" width=240 padding=7 border-radius=8 border-style="solid" border-width=1 border-color="fieldEdge" background-color="fieldBg" font-size=12 color="ink"
             if searching
               button appearance="none" press=clearSearch aria-label="Clear the search" testId="clear-search" padding=6
-                text `${index.shown} of ${index.total}` font-size=12 color="softInk"
+                text `${index.shown} of ${index.total}` font-size=12 color="-exact-secondary-label"
             Chip(label="Outline", on=showOutline, press=toggleOutline, testId="outline-toggle")
             // Appearance: system, light, dark — the icons exact1's blog used
             // (`js/src/blog/lib/icons.ts`: monitor, sun, moon), rasterised
@@ -197,7 +197,7 @@ component Llp
                 column width="100%" box-sizing="border-box" padding=8 padding-top=0 gap=1
                   if index.entries.isEmpty()
                     view padding=10
-                      text "No documents here" font-size=12 color="softInk" testId="index-empty"
+                      text "No documents here" font-size=12 color="-exact-secondary-label" testId="index-empty"
                   for e in index.entries key=e.id
                     IndexRow(entry=e, open=openFile, searching=searching)
           scroll flex=1 height="100%" overflow-x="hidden" overscroll-behavior="contain" testId="document"
@@ -212,7 +212,7 @@ component Llp
                 button press=showAll aria-label="The whole document" testId="outline-all" width="100%" text-align="start"
                   if sectioned
                     view width="100%" box-sizing="border-box" padding=6 border-radius=6
-                      text "Whole document" font-size=12 color="softInk"
+                      text "Whole document" font-size=12 color="-exact-secondary-label"
                   else
                     view width="100%" box-sizing="border-box" padding=6 border-radius=6 background-color="pill"
                       text "Whole document" font-size=12 font-weight=700 color="pillInk"
@@ -231,13 +231,13 @@ component DocHeader
         if doc.number != ""
           text `LLP ${doc.number}` font-size=12 font-weight=800 letter-spacing=0.8 color="accent" testId="doc-number"
         if doc.kind != ""
-          text doc.kind font-size=11 font-weight=600 color="softInk" testId="doc-kind"
+          text doc.kind font-size=11 font-weight=600 color="-exact-secondary-label" testId="doc-kind"
         if doc.status != ""
-          text doc.status font-size=11 color="softInk" testId="doc-status"
-        text doc.name font-size=11 color="faintInk"
+          text doc.status font-size=11 color="-exact-secondary-label" testId="doc-status"
+        text doc.name font-size=11 color="-exact-secondary-label"
       if sectioned
         row gap=8 align-items="center"
-          text `Showing one section · ${doc.count} ${doc.count == 1 ? "block" : "blocks"}` font-size=11 color="softInk" testId="section-note"
+          text `Showing one section · ${doc.count} ${doc.count == 1 ? "block" : "blocks"}` font-size=11 color="-exact-secondary-label" testId="section-note"
           button press=all aria-label="Show the whole document" testId="section-clear" padding=4 border-radius=6 background-color="control"
             text "Whole document" font-size=11 font-weight=600 color="ink"
 
@@ -269,15 +269,15 @@ component IndexLine
       // number's box narrower than the number, and `1030.000` wrapped onto a
       // second line. 60 points is the width of the longest number this
       // corpus has (a dotted sub-document) at this size and weight.
-      text entry.number font-size=11 font-weight=700 color="softInk" width=60 flex-shrink=0
+      text entry.number font-size=11 font-weight=700 color="-exact-secondary-label" width=60 flex-shrink=0
       text entry.title font-size=12 font-weight=weight color=color flex=1 min-width=0
     row gap=6 align-items="center" padding-left=66
       if entry.kind != ""
-        text entry.kind font-size=10 color="faintInk"
+        text entry.kind font-size=10 color="-exact-secondary-label"
       if entry.overlay != ""
         text entry.overlay font-size=10 font-weight=700 color="accent"
       if entry.status != ""
-        text entry.status font-size=10 color="faintInk"
+        text entry.status font-size=10 color="-exact-secondary-label"
       if searching and entry.hits > 0
         text `${entry.hits}` font-size=10 font-weight=700 color="accent"
 
@@ -295,7 +295,7 @@ component OutlineRow
           text heading.text font-size=11 font-weight=700 color="pillInk"
       else
         view width="100%" box-sizing="border-box" padding=5 border-radius=6 padding-left=(6 + heading.level * 10)
-          text heading.text font-size=11 color=(heading.level < 3 ? "#4a4a40" : "#7a7a6e")
+          text heading.text font-size=11 color=(heading.level < 3 ? "ink" : "-exact-secondary-label")
 
 // ---- the general reader's document, unchanged (see the note at the top) ----
 
@@ -370,4 +370,4 @@ component Chip
     testId: string
   view
     button press=press aria-label=label testId=testId padding=6 border-radius=6 background-color=(on ? "pill" : "control")
-      text label font-size=12 font-weight=600 color=(on ? "pillInk" : "softInk")
+      text label font-size=12 font-weight=600 color=(on ? "pillInk" : "-exact-secondary-label")

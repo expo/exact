@@ -50,9 +50,10 @@ Under the agent a request holds a `credential` ticket naming the provider,
 audience and nonce; `packages/sign-in/test/idp.mjs` signs what a provider
 would, and `tap @t cancel` dismisses it.
 
-Apple-only native requests are implemented; Google on Apple and combined
-Apple/passkey requests are not; their capabilities read false. For Google
-on Apple, use [`@exact/oauth`](oauth.md) through the system browser.
+Native Apple requests can run alone or beside a passkey: pass both
+`publicKey` and passive `identity` to `get` for one system sheet.
+Google on Apple is not implemented and its capabilities read false; use
+[`@exact/oauth`](oauth.md) through the system browser.
 The `auth.apple` grant derives the signing
 entitlement when the profile allows it. See [native sign-in](../contract-for-agents.md#native-sign-in-exactsign-in)
 for signing, nonce handling, result fields and current limits.

@@ -55,6 +55,7 @@ extension NodeView {
 
     /// The surface at the laid-out size plus `layoutResize`; none at zero.
     func applySurface() {
+        defer { overflowClipGeometryChanged() }
         guard layoutResize != .zero, let host = hostLayer else { return endSurface() }
         let started = surface == nil
         let s = surface ?? SurfaceLayer()
@@ -116,7 +117,7 @@ extension NodeView {
         let radii = sizes.map { $0.width }
         let authored = channels("background_color").map { CGColor(srgbRed: $0[0] / 255, green: $0[1] / 255, blue: $0[2] / 255, alpha: $0[3] / 255) }
         let fill = authored ?? fieldGround
-        let gradients = Gradient.layers(style["background_image"])
+        let gradients = Gradient.layers(style["background_image"], tint: gradientTint)
         let radius = radii.max() ?? 0
         let shape = CornerShape(style["corner_shape"])
         // A background clipped inside the border box is drawn, in the clip `paintBackground` takes (`backgroundOutline`).
@@ -173,6 +174,16 @@ extension NodeView {
     /// shrinks) and a mask stands in; a box of its own that holds them is
     /// masked instead, keeping the node's shadow unclipped.
     private func clipSurface(_ s: SurfaceLayer, _ box: CGRect) {
+        if clipsOneAxis {
+            if s.clipped?.boxMask === s.clip { s.clipped?.mask = nil }
+            s.clipped?.masksToBounds = s.clippedToBounds
+            s.clipped = nil
+            if hostLayer?.boxMask === s.ownClip { hostLayer?.mask = nil }
+            s.madeClipBox = false
+            syncClipBox(true)
+            clipsToBounds = false
+            return
+        }
         let uniform = number("border_width")
         let widths = ["top", "right", "bottom", "left"].map { devicePixels(number("border_width_" + $0, uniform)) }
         // A padding-edge mask must exclude the surface itself, or it cuts

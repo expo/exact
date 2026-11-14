@@ -654,8 +654,12 @@ fn a_moved_row_whose_body_is_opaque_reevaluates_as_before() {
         if virtualized {
             h.send(h.feedback(640.0));
         }
-        h.sites.deps.bodies.set_opaque(0);
-        assert!(h.sites.deps.bodies[0].reads_position());
+        std::sync::Arc::get_mut(&mut h.sites.data)
+            .unwrap()
+            .deps
+            .bodies
+            .set_opaque(0);
+        assert!(h.sites.data.deps.bodies[0].reads_position());
         let before = read(&h);
         h.slots[0] = prepended(100);
         h.update().unwrap();

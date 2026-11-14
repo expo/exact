@@ -1,4 +1,6 @@
-use super::{sources, Scratch};
+use super::{sources, stage_capture, Scratch};
+use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 #[test]
 #[cfg(unix)]
@@ -202,6 +204,7 @@ fn mixed_provider_types_follow_the_composer_and_survive_development_bakes() {
             )
         }),
     };
+    std::fs::write(app.0.join("app.contract.d.ts"), "stale declarations").unwrap();
     let tools = Tools::default();
     let baked = bake_in(
         &app.0,
@@ -213,6 +216,11 @@ fn mixed_provider_types_follow_the_composer_and_survive_development_bakes() {
         None,
     )
     .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(app.0.join("app.contract.d.ts")).unwrap(),
+        baked.declarations,
+        "a composer publishes its provider roster before type-checking, even with production trust"
+    );
     let output = app.0.join("dist");
     baked.write_new(&output).unwrap();
     let mut seed = Seed::read(
@@ -253,6 +261,24 @@ fn mixed_provider_types_follow_the_composer_and_survive_development_bakes() {
     assert!(
         error.contains("rustWrite") && error.contains("TS2741"),
         "{error}"
+    );
+}
+
+#[test]
+fn production_trust_with_a_composer_refreshes_editor_declarations() {
+    let result = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "sources_tests::mixed_provider_types_follow_the_composer_and_survive_development_bakes",
+        ])
+        .env("EXACT_UPDATE_TRUST", "production")
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
     );
 }
 
@@ -820,4 +846,72 @@ fn a_package_declaring_native_writes_the_factory_and_a_second_refuses() {
             && refused.contains("is not JSON: "),
         "{refused}"
     );
+}
+
+// A bake that removed a staged file and then failed a later write leaves
+// the stage short of what the capture held: the next bake neither stumbles
+// on the file already gone nor trusts a restored one to be on disk.
+#[test]
+fn a_stage_left_by_a_failed_write_is_finished_by_the_next_bake() {
+    let stage = Scratch::new(&std::env::temp_dir()).unwrap();
+    let capture = |files: &[(&str, &str)]| -> BTreeMap<PathBuf, Vec<u8>> {
+        files
+            .iter()
+            .map(|(name, text)| (PathBuf::from(name), text.as_bytes().to_vec()))
+            .collect()
+    };
+    let mut previous = BTreeMap::new();
+    stage_capture(&stage.0, &mut previous, &capture(&[("app.ts", "one")])).unwrap();
+    // A directory where the next file goes fails its write.
+    std::fs::create_dir_all(stage.0.join("blocked.ts")).unwrap();
+    assert!(stage_capture(&stage.0, &mut previous, &capture(&[("blocked.ts", "x")])).is_err());
+    assert!(!stage.0.join("app.ts").exists());
+    stage_capture(&stage.0, &mut previous, &capture(&[("app.ts", "one")])).unwrap();
+    assert_eq!(std::fs::read(stage.0.join("app.ts")).unwrap(), b"one");
+    assert_eq!(previous, capture(&[("app.ts", "one")]));
+    std::fs::remove_file(stage.0.join("app.ts")).unwrap();
+    stage_capture(&stage.0, &mut previous, &BTreeMap::new()).unwrap();
+    assert!(previous.is_empty());
+}
+
+#[test]
+fn development_trust_refreshes_editor_declarations_in_a_one_shot_bake() {
+    let app = Scratch::new(&std::env::temp_dir()).unwrap();
+    let stage = Scratch::new(&std::env::temp_dir()).unwrap();
+    let beside = app.0.join(super::DECLARATIONS);
+    let earlier = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1);
+    for (resident, trust, refresh) in [
+        (false, None, true),
+        (false, Some("production"), false),
+        (false, Some("development"), true),
+        (true, None, true),
+    ] {
+        std::fs::write(&beside, "old source signature").unwrap();
+        super::write_declarations(&app.0, &stage.0, "fresh source signature", resident, trust)
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(stage.0.join(super::DECLARATIONS)).unwrap(),
+            "fresh source signature"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&beside).unwrap(),
+            if refresh {
+                "fresh source signature"
+            } else {
+                "old source signature"
+            }
+        );
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&beside)
+            .unwrap();
+        file.set_modified(earlier).unwrap();
+        super::write_declarations(&app.0, &stage.0, "fresh source signature", resident, trust)
+            .unwrap();
+        assert_eq!(
+            std::fs::metadata(&beside).unwrap().modified().unwrap(),
+            earlier,
+            "unchanged declarations must not trigger an editor watcher"
+        );
+    }
 }

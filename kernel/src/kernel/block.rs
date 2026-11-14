@@ -312,8 +312,8 @@ impl Kernel {
     /// layout its subtree is laid out in the block, or in its parent again
     /// (in the viewport for a top-layer box, the block the kernel implies).
     /// Nonfinite or negative lengths are refused, as is a block for a root
-    /// (the offer is its), for an inline run, and while a content region
-    /// is registered.
+    /// (the offer is its), for an inline run, and for an ordinary box while
+    /// a content region is registered. Top-layer subtrees remain independent.
     pub fn set_host_block(
         &mut self,
         view: ViewId,
@@ -332,8 +332,8 @@ impl Kernel {
                 Some("a root is laid out in its offer")
             } else if self.arena.in_paragraph(slot) {
                 Some("an inline run or image has no box of its own")
-            } else if self.region.is_some() {
-                Some("no block while a content region is registered")
+            } else if self.region.is_some() && !self.arena.top_layer_slots.contains(slot) {
+                Some("only a top-layer block while a content region is registered")
             } else {
                 None
             };
@@ -353,10 +353,7 @@ impl Kernel {
     /// top layer, where `width: 50%` is half the viewport whatever box the
     /// popover was written in. Before each layout, after the viewport is
     /// the offer's; until a definite offer has given a viewport there is
-    /// none, and a top-layer box stays in its positioned ancestor. One
-    /// exception: under a registered content region a top-layer box stays
-    /// in the region's trial (QUEUE, "A popover under a registered content
-    /// region").
+    /// none, and a top-layer box stays in its positioned ancestor.
     pub(super) fn imply_blocks(&mut self) {
         let (wants, moved) = self.implied_changes();
         for (slot, want) in wants {
@@ -386,18 +383,12 @@ impl Kernel {
         });
         let mut slots = arena.blocks.implied_slots();
         slots.extend(lifted.iter().filter(|s| arena.blocks.implied(*s).is_none()));
-        let region = self.region.as_ref().map(|r| r.binding.owner.index);
         let wants: Vec<_> = slots
             .into_iter()
             .map(|slot| {
-                // One its host replaced whole (a closed popover, a Linux
-                // shell's menu) has no layout to lay out in it. One under a
-                // registered content region stays in the region's trial
-                // (theme2 09:54; the native region captures it: QUEUE).
                 let boxed = !arena.is_root(slot)
                     && !arena.in_paragraph(slot)
-                    && arena.cover(slot) != Some(super::HostCover::Whole)
-                    && region.is_none_or(|owner| !arena.is_ancestor(owner, slot));
+                    && arena.cover(slot) != Some(super::HostCover::Whole);
                 (slot, viewport.filter(|_| lifted.contains(slot) && boxed))
             })
             .filter(|&(slot, want)| arena.blocks.implied(slot) != want)
@@ -407,6 +398,15 @@ impl Kernel {
             .map(|b| b.slot)
             .collect();
         (wants, moved)
+    }
+
+    /// Whether `view` is a top-layer box under its current rows, including
+    /// while its host covers it whole because it is closed. An inline run
+    /// that says `popover` is not: it stays in its paragraph.
+    pub fn is_top_layer(&self, view: ViewId) -> bool {
+        self.arena
+            .slot_of(view)
+            .is_some_and(|s| crate::style::top_layer::is_box(&self.arena, s))
     }
 
     /// `slot`'s block root styled again, as its block or what is above it
@@ -432,6 +432,13 @@ impl Kernel {
         self.restyle_block(slot);
         if before.is_some() == block.is_some() {
             return;
+        }
+        if let Some(region) = &mut self.region {
+            if !self.arena.top_layer_slots.contains(slot)
+                && self.arena.is_ancestor(region.binding.content.index, slot)
+            {
+                region.invalidate();
+            }
         }
         // It leaves its parent's layout, or returns to it: published whole
         // in the space it is now in, and its parent's children again.

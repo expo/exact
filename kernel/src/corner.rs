@@ -11,6 +11,15 @@
 
 use crate::svg::{Path, Seg};
 
+#[cfg(target_arch = "wasm32")]
+static LINKED: std::sync::OnceLock<fn(&str) -> Option<CornerShape>> = std::sync::OnceLock::new();
+
+/// Link the corner grammar on wasm (LLP 1047 D2). Native hosts parse directly.
+pub fn link() {
+    #[cfg(target_arch = "wasm32")]
+    let _ = LINKED.set(|css| CornerShape::check(css).ok());
+}
+
 /// One corner's shape.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Corner {
@@ -68,6 +77,9 @@ pub const APPLE_ON_THE_WEB: (f32, f32) = (1.6, 1.52);
 impl CornerShape {
     /// The row's parse, as every codec's: `None` for anything not drawn.
     pub fn parse(css: &str) -> Option<Self> {
+        #[cfg(target_arch = "wasm32")]
+        return LINKED.get().and_then(|parse| parse(css));
+        #[cfg(not(target_arch = "wasm32"))]
         Self::check(css).ok()
     }
 

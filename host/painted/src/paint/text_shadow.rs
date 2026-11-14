@@ -30,6 +30,12 @@ struct RunLook {
     stroke: Option<(f32, [u8; 4])>,
 }
 
+pub(super) struct TextInk {
+    palette: Vec<RunPaint>,
+    looks: Vec<RunLook>,
+    decorations: super::text_decoration::Decorations,
+}
+
 impl Painter {
     pub(super) fn text_shadow(&self, node: &NodeRef<'_>, color: [u8; 4]) -> Option<Shadow> {
         let _accent = super::accent_scope(node);
@@ -87,9 +93,83 @@ impl Painter {
         ts: Transform,
         reveal: Option<ViewId>,
         roll: Option<&(Roll, f64)>,
+        range: std::ops::Range<usize>,
     ) {
-        let looks = self.run_looks(kernel, palette, reveal);
-        let decorations = self.text_decorations(kernel, paragraph, palette, reveal);
+        let ink = self.capture_text_ink(kernel, paragraph, palette, reveal, range.clone());
+        let selected = range;
+        // The box's background, clipped to the glyphs, is under all of its
+        // inline content, shadows included.
+        self.glyph_pass(
+            paragraph,
+            roll,
+            &ink.palette,
+            origin,
+            ts,
+            |p, text, ink, at| {
+                p.text_clip(
+                    node,
+                    kernel,
+                    text,
+                    ink,
+                    at,
+                    rect,
+                    ts,
+                    reveal,
+                    selected.clone(),
+                );
+            },
+        );
+        self.paint_text_ink(paragraph, &ink, origin, ts, roll);
+    }
+
+    pub(super) fn capture_text_ink(
+        &mut self,
+        kernel: &Kernel,
+        paragraph: &Paragraph,
+        palette: &[RunPaint],
+        reveal: Option<ViewId>,
+        range: std::ops::Range<usize>,
+    ) -> TextInk {
+        let selected = range;
+        let palette: Vec<_> = palette
+            .iter()
+            .enumerate()
+            .map(|(i, r)| RunPaint {
+                color: if selected.contains(&i) {
+                    r.color
+                } else {
+                    [0; 4]
+                },
+                ..*r
+            })
+            .collect();
+
+        let mut looks = self.run_looks(kernel, &palette, reveal);
+        for (i, look) in looks.iter_mut().enumerate() {
+            if !selected.contains(&i) {
+                *look = RunLook::default();
+            }
+        }
+        let decorations =
+            self.text_decorations(kernel, paragraph, &palette, reveal, selected.clone());
+        TextInk {
+            palette,
+            looks,
+            decorations,
+        }
+    }
+
+    pub(super) fn paint_text_ink(
+        &mut self,
+        paragraph: &Paragraph,
+        ink: &TextInk,
+        origin: (f32, f32),
+        ts: Transform,
+        roll: Option<&(Roll, f64)>,
+    ) {
+        let palette = ink.palette.as_slice();
+        let looks = &ink.looks;
+        let decorations = &ink.decorations;
         let shadows = decorations.shadows();
         let mut steps: Vec<(usize, usize)> = Vec::new();
         for i in 0..looks.len() {
@@ -104,11 +184,6 @@ impl Painter {
                 _ => steps.push((i, i + 1)),
             }
         }
-        // The box's background, clipped to the glyphs, is under all of its
-        // inline content, shadows included.
-        self.glyph_pass(paragraph, roll, palette, origin, ts, |p, text, ink, at| {
-            p.text_clip(node, kernel, text, ink, at, rect, ts, reveal);
-        });
         let single = steps.len() == 1;
         for (start, end) in steps {
             let look = looks[start];

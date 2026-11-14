@@ -1,0 +1,21 @@
+component App
+  state n = -1
+  action grow
+    n = 1
+  view
+    column
+      Counted(values=range(n))
+      text "alive" testId="alive"
+      button press=grow testId="grow"
+        text "grow"
+
+component Counted
+  props
+    values: number[]
+  view
+    text `${values.length + values.length}` testId="count"
+
+test "a shared prop refusal unsets only its display binding"
+  expect text "alive" == "alive"
+  tap "grow"
+  expect text "count" == "2"

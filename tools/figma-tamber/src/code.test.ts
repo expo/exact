@@ -72,6 +72,8 @@ function fakeFigma(limit: number) {
 let f: ReturnType<typeof fakeFigma>;
 let asked = 0;
 const send = async (msg: any, reply: string) => {
+  // An apply goes after a check of its export, as the UI sends it, unless the test made that check (`checked`).
+  if (msg.type === 'apply' && !msg.checked) await f.figma.ui.onmessage({ type: 'check', text: msg.text, id: ++asked });
   const id = ++asked;
   await f.figma.ui.onmessage({ ...msg, id });
   const got = f.said.find((m: any) => m.id === id);
@@ -710,6 +712,19 @@ test('the theme fixture pulls into three modes (one light, two dark); a light ed
   expect(col.modes.map((m: any) => m.name)).toEqual(['light', 'dark-style=black, dark', 'dark-style=dim, dark']);
 });
 
+test('a re-pull that keeps another light context for the one light mode keeps that mode, the default, with nothing parked', async () => {
+  await load(10);
+  await send({ type: 'apply', text: REAL }, 'applied');
+  const col = f.collections[0], light = col.modes[0].modeId;
+  // The same design, exported with the other light context first: it is the one the light mode is kept under now.
+  const dimFirst = (d => { d.modifiers.mode.default = 'dark-style=dim, light'; return JSON.stringify(d); })(JSON.parse(REAL));
+  const checked = await send({ type: 'check', text: dimFirst }, 'checked');
+  expect(checked.contexts).toEqual({ added: [], removed: [] });
+  await send({ type: 'apply', text: dimFirst }, 'applied');
+  expect(col.modes.map((m: any) => [m.name, m.modeId === light])).toEqual([['light', true], ['dark-style=black, dark', false], ['dark-style=dim, dark', false]]);
+  expect(col.defaultModeId).toBe(light);
+});
+
 test('theme2 18:54: a file pulled with two light modes merges them on the next pull, an edit in the dropped one named first', async () => {
   await load(10);
   await send({ type: 'apply', text: TEXT }, 'applied'); // the older plugin's four modes
@@ -946,4 +961,19 @@ test.each(['variable', 'baseline#1', 'plan#n'])('leftovers: a refusal at %s rest
     expect(attempted!.parts['plan#1']).toBeDefined();
   }
   expect(documentState()).toStrictEqual(before);
+});
+
+// A pull's apply writes only over what its check read: an edit since then is refused, nothing written.
+test('an edit after the check refuses the pull, which writes nothing, and a fresh check lets it through', async () => {
+  await load(10);
+  await send({ type: 'apply', text: TEXT }, 'applied');
+  expect((await send({ type: 'check', text: TEXT }, 'checked')).conflicts).toEqual([]);
+  const fill = f.variables.find(v => v.name === 'accent/fill'), mode = f.collections[0].defaultModeId;
+  const red = { r: 1, g: 0, b: 0, a: 1 };
+  fill.valuesByMode[mode] = red;
+  await expect(send({ type: 'apply', text: TEXT, checked: true }, 'applied')).rejects.toThrow(/changed after this pull was checked/);
+  expect(fill.valuesByMode[mode]).toEqual(red);
+  expect((await send({ type: 'check', text: TEXT }, 'checked')).conflicts).toHaveLength(1);
+  await send({ type: 'apply', text: TEXT, checked: true }, 'applied');
+  expect(fill.valuesByMode[mode]).not.toEqual(red);
 });

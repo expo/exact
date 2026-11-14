@@ -534,7 +534,8 @@ capability has a call of its own.
 | 15 | a GPU surface's haptic message (LLP 1009 D10) | the canvas's view id (a surface id is its module's, and two modules count from 1), then a string: the message's JSON as `exact_gpu::haptics` writes it (a texture's `intensity` and `sharpness`, its stop, or a pattern); exact2 sends a stop when the surface goes | `SurfaceHaptics`, on the vibrator ("Haptics", below); nothing while the activity is paused | none |
 | 16 | Contract sound operations | a JSON string: asset `files`, `reset`, monotonic `submitted` seconds and `ops` (play 1, end 2, change 4), each with a voice id and `at` in monotonic seconds; play has a sound index, gain, rate and pan, change has optional gain, rate and pan and a ramp in seconds | `SoundOutput` opens `libexact_sound.so` at the first play; AAudio runs the shared mixer against its speaker timestamp; the existing focus owner applies `audio_session` | none; under the driver, `state.sounds.output` remains `"agent"` |
 | 17 | open an auth session | three strings: the granted authorization URL, callback endpoint and state | opens the default browser, with a Custom Tab when supported; keeps a ten-minute wait across activity recreation | `opened` acknowledges the wait without settling; `unavailable` (501), `failed` (502), or `cancelled` (499 on return after a stop without a callback, at the bound, or with no attached activity); a callback with a matching state arrives through `Native.open` and the runner checks it; a stale callback consumes the return without ending the wait |
-| 18 | end an auth wait | one word: the request id from kind 17 | removes the wait; the browser owns its tab | none |
+| 18 | a file input's `showPicker` (LLP 1069.002) | the input node, `multiple` (1 or 0), the count of `accept` types, then each type as a string | the system photo picker when its filters fit and it is available, otherwise `ACTION_OPEN_DOCUMENT`; offers HEIC/HEIF for conversion as below and copies the selected URIs into the app's cache off the UI thread (`FilePicker`) | a JSON array of `{path, name, type, extension, extensions, converted, name_type}` records: staging path, display name, nullable MIME type and storage extension, the chooser's mapping of extension tokens to MIME types, whether conversion occurred, and Android's MIME for the display-name suffix. Null or an empty array cancels; other text is a refusal reason. The presenter copies into `app:/tmp/picked/`, removes the reader's copies, and fires `change` or journals the refusal and fires `cancel` |
+| 19 | end an auth wait | one word: the request id from kind 17 | removes the wait; the browser owns its tab | none |
 
 Kinds 5, 6, 7, 8, 13 and 14 are statements of the app's state, told when it changes and anew to a reader made again; exact2
 reads them as the queue is taken (`Presenter::tell_shell`), Back, the wake lock and the orientation lock only after a
@@ -573,7 +574,48 @@ where it is asked (`Presenter::request`, which wakes the reader); with an answer
 row above. What layout needs while it runs (a field's metrics, D8) is not a request: a queue taken after the frame is
 too late for it.
 
-**Not on it yet:** the file pickers (`showPicker`, `saveFile`, the document pickers) are still refused, and the journal
+**File inputs.** The photo picker is available from Android 13 or Android 11 with R extension 2. Older devices use
+`ACTION_OPEN_DOCUMENT`. Extensions in `accept` map through `MimeTypeMap`; any unknown extension requires an
+unrestricted document picker. The photo picker takes `image/*`, `video/*`, or both wildcards.
+Specific MIME types and other lists use the document picker with `EXTRA_MIME_TYPES` when needed.
+The presenter checks each delivered file against `accept`; an extension token can match by MIME when the name
+has no extension or its extension maps to that MIME. Thus `.jpg` accepts a provider's JPEG named
+`photo.jpeg`, `photo.jpe` or `photo`, but rejects `invoice.exe` and `scan.png`. `multiple` uses the photo picker's maximum (100 on the Android 11–12 backport) or `EXTRA_ALLOW_MULTIPLE`.
+
+Imports use the result's temporary read grant, which lasts until the receiving task stack finishes
+([Android's file access documentation](https://developer.android.com/training/secure-file-sharing/request-file)).
+They never take or release persistable permissions, so imports cannot evict an app's existing document grants.
+Provider metadata, stream opening and copying run on the worker, including after the result callback returns.
+Completion returns to the main thread before `Exact.answer`, including when no owner thread is configured.
+Short generated filenames under `cacheDir/exact-picker/` hold staging copies; display names are metadata only.
+At the next process launch the reader deletes that staging tree, including interrupted copies.
+Each allocation recreates the root if Android has evicted it, without cleaning other imports.
+Display names are single path segments, with separators and NUL removed and `.` and `..` replaced. The provider's MIME type is
+retained; extension inference is the fallback when it supplies none. Kotlin carries its MIME mappings for both the accept tokens and the display-name suffix into Rust's
+validation, and the storage extension follows the delivered MIME independently of the display name. Rust
+imports the staged files off its owner thread and reads at most 1 MiB for image dimensions; unsupported or
+unreadable metadata stays absent. The files have no host size limit. A failed or stale selection removes its
+copies; a missing file input receives no event. Once Change commits, its copies remain even if a timer or
+layout reports an error. A deferred event owns its copies until it commits or is dropped. Path allocation
+survives runner replacement, including imports still in flight. Neither picker asks for a storage permission.
+Pending results survive activity recreation; a request delivered without an activity cancels and clears its
+wait. Process death ends the session.
+
+A missing Photo Picker activity reports `file picker: photo picker unavailable; using document picker` through
+the request channel. Rust journals it and keeps the request open while the reader falls back once to the document
+picker. A real Back still answers null; a missing document activity refuses and cancels. Under the agent the
+picker is held. HEIC/HEIF stays unchanged when `accept` allows it, including `image/*`; when D6 requires JPEG,
+Android's `ImageDecoder` applies orientation and encodes at quality 90 without the source metadata. The result
+keeps the display name and carries `image/jpeg` plus an explicit conversion flag. Rust validates every converted
+file by the JPEG copy's name, even when the original name has no HEIC suffix. A specific list containing `image/jpeg`, `.jpg` or `.jpeg`
+uses the document picker with `image/heic` and `image/heif` alongside the requested MIME types.
+A PNG-only filter offers no HEIC conversion. The converted result must still meet `accept`. See Android's
+[photo picker](https://developer.android.com/training/data-storage/shared/photo-picker),
+[ImageDecoder](https://developer.android.com/reference/android/graphics/ImageDecoder) and
+[document intents](https://developer.android.com/guide/components/intents-common#Storage).
+
+**Not on it yet:** `saveFile` and the document-handle pickers (`showOpenFilePicker`, `showDirectoryPicker`,
+`showSaveFilePicker`) are still refused, and the journal
 then says the channel does not carry them yet. `@exact/notifications` has no Android implementation until LLP 1133.004
 stage 3. Accessibility events
 (D13) will take it too.
@@ -821,7 +863,7 @@ ScrollView would.
 | `Native.fieldComposing(id, generation, composing, value)` | the field's text began to compose, holding `value`, or its composition ended, committed or cancelled: before the edit that began or ended it | while it composes a statement says the field's own text, and the app's value is held; once it ends, the value the app then shows |
 | `Native.fieldSelected(id, generation, start, end)` | the selection moved with no edit | kept for the next `input`; `select` fires for a range |
 | `Native.fieldAction(id, generation, action)` | the action key, or Enter or Tab on a hardware keyboard: 0 Enter with no action, 2 done, 3 go, 4 next, 5 previous, 6 search, 7 send, 16 Tab, 17 Shift+Tab | Enter's `key` handlers, then `change` and `submit` for a single line; then `next` and `previous` move to the field after or before (the focus leaves where there is none), and `done`, `go`, `search` and `send` leave the field, which puts the keyboard away. Tab is the page's own Tab |
-| `Native.fieldInput(id, generation)` | a finger came down in the field (it is the field's), or a key went down in it | real input on the field: a state held on it (LLP 1122 D8, `hold`, `holdState`) lets go |
+| `Native.fieldInput(id, generation, kind)` | IME input (0), a pointer down (1), or a hardware key that shows focus (2) | updates focus modality for pointer and hardware input; a state held on the field (LLP 1122 D8, `hold`, `holdState`) lets go |
 
 What a call says of a generation exact2 has moved on from is dropped.
 
@@ -1008,12 +1050,14 @@ committed about 35 ms after the touch lifts (alert 30 to 41, menu 29 to 37, five
 until the next collection and is then gone (one root again); resident memory after the first use stays about 8 MB
 above what it was before any, which has not been attributed.
 
-**A select's menu** is painted in the page by the shared presenter, for both default appearance and
-`appearance="none"`. Its rows show the selected option, skip disabled options and commit a choice on a tap.
-A tap outside, Back or Escape dismisses it. Keyboard navigation and a mouse wheel can reach a long list,
-but there is no touch scrolling. The menu is clipped to the page's viewport and stays below hosted views
-such as `EditText` and WebView and below the system bars. Its rows are not exposed as a separate accessible
-menu, and it has no popup-window enter or exit transition. D10's anchored native popup remains unbuilt.
+**A select's menu** is the top layer's menu (`presenter/top/select.rs`), for both default appearance and
+`appearance="none"`, as Material's exposed dropdown menu and a `Spinner` open theirs: a `PopupWindow` hung under
+the select and no narrower than it, a row for each option, the chosen one checked and scrolled into view, a
+disabled one disabled. A tap on a row chooses it (`input`, then `change`); a tap outside, Back or Escape
+dismisses it and chooses nothing; the select keeps the focus while it is open. A key that opens it from a hardware
+keyboard (Space, Enter, an arrow) puts the window's focus at the chosen row; in the window the arrows and Tab move
+it and Enter or Space chooses. TalkBack reads it as a `ListView` of `CheckedTextView` options, counted, the
+chosen one selected. Not seen on a phone yet.
 
 Not built of D10:
 
@@ -1021,7 +1065,7 @@ Not built of D10:
   `android.view.View` with no text, description or children: TalkBack lands on it and has nothing to read (D13).
 - **A text field inside a dialog.** The shape rule admits text and buttons only, so a dialog with an `input` is no
   alert and is refused; nothing hosts a field in a surface's window.
-- A bottom sheet for a chooser or a `dialog` its author lays out (a `modal` route is one: [Sheets](#sheets-and-route-motion-llp-1115001-d10-d12)), a `select`'s anchored native popup, submenus as cascades (a row that opens another
+- A bottom sheet for a chooser or a `dialog` its author lays out (a `modal` route is one: [Sheets](#sheets-and-route-motion-llp-1115001-d10-d12)), submenus as cascades (a row that opens another
   menu replaces the first), a menu or a dialog taller than the window (it is not scrolled), a raster image in a
   menu row, right-to-left placement.
 - The ripple, Material's own type scaling above 100% (sizes are sp taken linearly), and the device's own face.

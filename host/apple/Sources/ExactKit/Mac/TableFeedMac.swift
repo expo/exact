@@ -495,7 +495,12 @@ final class TableFeed: NSObject, NSTableViewDataSource, NSTableViewDelegate {
                 next.append(Row(index: row.index, node: node, root: row.root, kernel: kernel(node)))
             }
             if !ordered { next.sort { $0.index < $1.index } }
-            return (snapshot.count, next, [snapshot.revision, UInt64(snapshot.count), UInt64(snapshot.rows.count), snapshot.extent.bitPattern])
+            // Which row is at which index, not the snapshot's revision: a list's report that moved no row (a
+            // measurement's answer, most of a fling's batches) leaves the table as it is. A selection held by
+            // its item's key is looked up again at every revision: the item may have moved among unmounted rows.
+            var rowsAt = Hasher()
+            for row in next { rowsAt.combine(row.node.id); rowsAt.combine(row.index) }
+            return (snapshot.count, next, [selectedKey == nil ? 0 : snapshot.revision, UInt64(bitPattern: Int64(rowsAt.finalize())), UInt64(snapshot.count), snapshot.extent.bitPattern])
         }
         // A child is a row when it has a box in the list's flow. One with
         // none (`display: none`) is no row, and neither is a positioned
@@ -520,17 +525,24 @@ final class TableFeed: NSObject, NSTableViewDataSource, NSTableViewDelegate {
     /// After a batch's ops and before the list's offset is corrected: the
     /// table's row count and heights from layout, the table where layout
     /// has the rows, and each mounted row in the cell the table has for it.
-    func sync() {
+    /// `separators`: the batch may have changed a row's provenance, which
+    /// changes no row count, frame or placement: the separators are read
+    /// again even on that path.
+    func sync(separators: Bool = true) {
         guard let presenter, let list, presenter.views[id] === list, home != nil else { return }
-        // Provenance may change without a new row count, frame or collection
-        // revision. Refresh the row and its predecessor even on that path.
-        defer { syncSeparators() }
+        var separators = separators
+        defer { if separators { syncSeparators() } }
+        // The list's name is the table's, for VoiceOver: "Notes, table". A
+        // batch can rename it without moving a row.
+        let name = list.authoredLabel
+        if table.accessibilityLabel() != name { table.setAccessibilityLabel(name) }
         let pixel = 1 / (table.pixelScale ?? 1)
         let port = self.port
         // A batch that changed no row, no frame of one and nothing of the port's width leaves the table as it is.
         var (items, next, now) = read(presenter)
         now += [Double(port.width).bitPattern, Double(pixel).bitPattern]
         guard dirty || now != stamp || table.superview !== home else { return }
+        separators = true
         stamp = now
         dirty = false
 
@@ -549,9 +561,6 @@ final class TableFeed: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         }
         rows = next
         held = Set(next.map(\.node.id))
-        // The list's name is the table's, for VoiceOver: "Notes, table".
-        let name = list.authoredLabel
-        if table.accessibilityLabel() != name { table.setAccessibilityLabel(name) }
 
         /// The commonest height among the mounted rows, and how many have it.
         func common() -> (height: CGFloat, rows: Int)? {

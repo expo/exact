@@ -32,7 +32,8 @@ test('web fetches keep byte bodies on the string door as base64 copies', () => {
     } };
     __exact_call('upload', '[]', 'resource');
   `, context);
-  expect(requests.map(r => r.ticket)).toEqual(['1', '2', '3', '4', '5', '6', '7']);
+  // One request for each body, in order; the call took id 1 from the counter it shares with them (prelude.js `nextId`).
+  expect(requests.map(r => r.ticket)).toEqual(['2', '3', '4', '5', '6', '7', '8']);
   expect(requests.map(r => r.body_base64)).toEqual(['', '', 'AA==', 'AP8=', 'AP+A', 'CQD/gAk=', undefined]);
   expect(requests.map(r => r.body)).toEqual(['', '', '', '', '', '', 'text']);
 });

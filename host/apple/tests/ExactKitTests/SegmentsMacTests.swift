@@ -16,8 +16,8 @@ final class SegmentsMacTests: XCTestCase {
         defer { p.reset(); w.close() }
         p.apply(wireBatch([
             ["op": "create", "id": 10, "kind": "view", "props": ["accessibilityRole": "tablist"]],
-            ["op": "create", "id": 11, "kind": "button", "props": ["accessibilityRole": "tab", "accessibilityDisabled": "true"], "handlers": ["press"]],
-            ["op": "create", "id": 12, "kind": "button", "props": ["accessibilityRole": "tab"], "handlers": ["press"]],
+            ["op": "create", "id": 11, "kind": "button", "props": ["accessibilityRole": "tab", "testId": "one", "accessibilityDisabled": "true"], "handlers": ["press"]],
+            ["op": "create", "id": 12, "kind": "button", "props": ["accessibilityRole": "tab", "testId": "two"], "handlers": ["press"]],
             ["op": "create", "id": 13, "kind": "text", "props": ["text": "One"]],
             ["op": "create", "id": 14, "kind": "text", "props": ["text": "Two"]],
             ["op": "children", "id": 11, "ids": [13]],
@@ -37,6 +37,21 @@ final class SegmentsMacTests: XCTestCase {
         XCTAssertTrue(children[0].accessibilityActionNames().contains(.press))
         XCTAssertEqual(children[0].accessibilityAttributeValue(.enabled) as? Bool, false, "VoiceOver's projected segment carries aria-disabled")
         XCTAssertEqual(children[1].accessibilityAttributeValue(.enabled) as? Bool, true)
+        XCTAssertEqual(children[0].accessibilityAttributeValue(.identifier) as? String, "one")
+        XCTAssertEqual(children[1].accessibilityAttributeValue(.identifier) as? String, "two")
+        let ax = p.axElements(roots: [p.viewport])
+        let projected = ax["elements"] as? [[String: Any]] ?? []
+        XCTAssertEqual(projected.first { $0["name"] as? String == "One" }?["id"] as? UInt32, 11)
+        XCTAssertEqual(projected.first { $0["name"] as? String == "Two" }?["id"] as? UInt32, 12)
+        XCTAssertFalse(((ax["coverage"] as? [String: Any])?["limits"] as? [String] ?? []).contains("segments"))
+        for prop in ["accessibilityElementsHidden", "inert"] {
+            p.apply(wireBatch([["op": "props", "id": 10, "set": [prop: "true"]]]))
+            let suppressed = p.axElements(roots: [p.viewport])["elements"] as? [[String: Any]] ?? []
+            XCTAssertFalse(suppressed.contains { [UInt32(11), 12].contains($0["id"] as? UInt32 ?? 0) })
+            p.apply(wireBatch([["op": "props", "id": 10, "clear": [prop]]]))
+            let restored = p.axElements(roots: [p.viewport])["elements"] as? [[String: Any]] ?? []
+            XCTAssertEqual(Set(restored.compactMap { $0["testId"] as? String }), ["one", "two"])
+        }
         var pressed: [UInt32] = []
         p.onPress = { pressed.append($0) }
         XCTAssertTrue(p.segments.activate(try XCTUnwrap(p.views[11])) == true)

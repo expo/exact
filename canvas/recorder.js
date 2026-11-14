@@ -369,14 +369,16 @@ export class TextMetrics {
   }
   get [Symbol.toStringTag]() { return "TextMetrics"; }
 }
-function spacing(v, fontSize) {
+// [text, px, em]: `em`, `ex` and `ch` follow the font in force (canvas/src/context/text.rs `spacing`).
+function spacing(v) {
   const t = String(v).trim().toLowerCase(), i = t.search(/[a-z]/);
   if (i <= 0) return null;
   const n = t.slice(0, i), unit = t.slice(i), value = fnum(n);
   if (value === null) return null;
-  const px = unit === "em" ? value * fontSize : lengthPx(t, false);
-  return px === null || !Number.isFinite(px) ? null : [`${jsNumber(value)}${unit}`, px];
+  const [px, em] = unit === "em" ? [0, value] : unit === "ex" || unit === "ch" ? [0, value / 2] : [lengthPx(t, false), 0];
+  return px === null || !Number.isFinite(px) || !Number.isFinite(em) ? null : [`${jsNumber(value)}${unit}`, px, em];
 }
+const usedSpacing = (s, size) => s[1] + s[2] * size;
 
 // --- geometry (canvas/src/geom.rs) ------------------------------------------
 
@@ -492,7 +494,7 @@ class Writer {
 // --- the recorder (canvas/src/context.rs) ------------------------------------
 
 const BLACK = [0, 0, 0, 1];
-const defaultText = () => ({ font: defaultFont(), ls: ["0px", 0], ws: ["0px", 0], kerning: 0, rendering: 0, align: 0, baseline: 3, direction: 2 });
+const defaultText = () => ({ font: defaultFont(), ls: ["0px", 0, 0], ws: ["0px", 0, 0], kerning: 0, rendering: 0, align: 0, baseline: 3, direction: 2 });
 const defaults = () => ({ transform: M.identity(), fill: { color: BLACK }, stroke: { color: BLACK }, lineWidth: 1, cap: 0, join: 0,
   miter: 10, dash: [], dashOffset: 0, alpha: 1, composite: 0, shadow: { color: [0, 0, 0, 0] }, shadowBlur: 0, shadowOffset: [0, 0],
   smoothing: [true, 0], text: defaultText(), fontSent: null });
@@ -612,7 +614,8 @@ class Inner {
   // Text (canvas/src/context/text.rs)
   rtl() { const d = this.state.text.direction; return d === 2 ? this.env.rtl : d === 1; }
   measureRaw(text) {
-    const t = this.state.text, run = { font: t.font, text, rtl: this.rtl(), ls: t.ls[1], ws: t.ws[1], kerning: t.kerning };
+    const t = this.state.text, size = t.font.size;
+    const run = { font: t.font, text, rtl: this.rtl(), ls: usedSpacing(t.ls, size), ws: usedSpacing(t.ws, size), kerning: t.kerning };
     const host = this.env.host;
     if (!host || !host.measure) return estimate(run);
     const f = t.font;
@@ -623,7 +626,8 @@ class Inner {
   }
   sendFont() {
     const t = this.state.text, f = t.font;
-    const rec = textOperands(f.families.join(","), [f.size, f.weight, f.style, f.stretch, f.caps, t.kerning, t.rendering, t.ls[1], t.ws[1]]);
+    const rec = textOperands(f.families.join(","), [f.size, f.weight, f.style, f.stretch, f.caps, t.kerning, t.rendering,
+      usedSpacing(t.ls, f.size), usedSpacing(t.ws, f.size)]);
     const sent = this.state.fontSent;
     if (!sent || sent.length !== rec.length || !rec.every((v, i) => v === sent[i])) { this.op(OP.Font, rec); this.state.fontSent = rec; }
   }
@@ -1028,9 +1032,9 @@ export class Recorder {
   get fontStretch() { const s = this._.state.text.font.stretch; return (STRETCH.find(([, p]) => p === s) ?? ["normal"])[0]; }
   set fontStretch(v) { const k = STRETCH.find(([n]) => n === v); if (k) this._.state.text.font.stretch = k[1]; }
   get letterSpacing() { return this._.state.text.ls[0]; }
-  set letterSpacing(v) { const s = spacing(v, this._.state.text.font.size); if (s) this._.state.text.ls = s; }
+  set letterSpacing(v) { const s = spacing(v); if (s) this._.state.text.ls = s; }
   get wordSpacing() { return this._.state.text.ws[0]; }
-  set wordSpacing(v) { const s = spacing(v, this._.state.text.font.size); if (s) this._.state.text.ws = s; }
+  set wordSpacing(v) { const s = spacing(v); if (s) this._.state.text.ws = s; }
   fillText(text, x, y, maxWidth) { this._.drawText(OP.FillText, text, x, y, maxWidth); }
   strokeText(text, x, y, maxWidth) { this._.drawText(OP.StrokeText, text, x, y, maxWidth); }
   measureText(text) {

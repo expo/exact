@@ -43,16 +43,25 @@ extension NodeView {
     }
 
     #if os(iOS) || os(tvOS)
-    /// Inks the symbol view. Where its ink is the tint, or its palette names the tint (which UIKit
-    /// resolves by the view's tint), the view has no tint of its own: it inherits the node's, and
-    /// UIKit dims it. Else its tint is its ink, which UIKit leaves as it is (`.normal`); a share of
-    /// the tint is resolved again as the tint changes (`tintColorDidChange`), since UIKit follows no
-    /// view's own tint made from the one above it.
-    func inkSymbolView() {
+    /// Explicit ink belongs to the image, leaving the view's tint and adjustment inherited.
+    /// SF Symbol ink stays dynamic; a path's bitmap is painted again when its tint changes.
+    func inkSymbolView(_ image: UIImage?) {
         guard let view = symbolView else { return }
         let follows = inkTintShare == 1 || style["symbol_rendering"]?.string == "palette" && style["symbol_palette"]?.namesTint == true
-        view.tintColor = follows ? nil : drawnSymbolInk
-        view.tintAdjustmentMode = follows ? .automatic : .normal
+        var ink = follows ? nil : inkTintShare.map(SystemColor.tint) ?? drawnSymbolInk
+        let path = props["symbolPath"] != nil
+        if path, ink != nil {
+            if let share = inkTintShare { ink = tintColor.withAlphaComponent(share) }
+            ink = ink?.resolvedColor(with: traitCollection)
+        }
+        let state = SymbolEffectState.of(view)
+        if state.inkSource !== image || state.inkColor != ink {
+            state.inkSource = image; state.inkColor = ink
+            state.inkImage = ink.flatMap { color in
+                image.flatMap { path ? inkedPathImage($0, color: color) : $0.withTintColor(color, renderingMode: .alwaysOriginal) }
+            } ?? image
+        }
+        if view.image !== state.inkImage { view.image = state.inkImage }
     }
 
     /// The share of the tint the symbol's ink is, nil where it is a colour of its own: a list cell's
@@ -70,7 +79,7 @@ extension NodeView {
         false
         #endif
     }
-    /// Only shape changes replace a symbol; paint is a view configuration.
+    /// The template's shape, independent of ink.
     var symbolLookKey: String {
         [style["symbol_rendering"]?.string ?? "", "\(number("symbol_value", -1))", "\(drawsListSymbol)"].joined(separator: "|")
     }
@@ -206,6 +215,9 @@ typealias SymbolLeaf = NSImageView
 final class SymbolEffectState {
     var effect = "none"
     var value: String?
+    var pathTemplate: SymbolImage?
+    var inkSource: SymbolImage?, inkImage: SymbolImage?
+    var inkColor: PlatformColor?
     private static var key = 0
     static func of(_ leaf: SymbolLeaf) -> SymbolEffectState {
         if let s = objc_getAssociatedObject(leaf, &key) as? SymbolEffectState { return s }

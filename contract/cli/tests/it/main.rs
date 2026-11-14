@@ -80,6 +80,7 @@ mod gamepad;
 mod geometry;
 mod glass_tint;
 mod grouped_action;
+mod grouped_card;
 mod grouped_choice;
 mod grouped_list;
 mod grouped_margins;
@@ -178,7 +179,9 @@ mod queue;
 mod reach;
 mod realworld_then;
 mod recorder_start;
+mod recorder_transcript;
 mod records;
+mod recovery;
 mod refreshes;
 mod refusal_remedies;
 mod rem;
@@ -232,6 +235,7 @@ mod tamber_base_scale;
 mod tamber_base_shadow;
 mod tamber_binding;
 mod tamber_binding_kinds;
+mod tamber_boundary;
 mod tamber_cli;
 mod tamber_describe_library;
 mod tamber_gen;
@@ -304,3 +308,7 @@ mod window_commands;
 mod windows_shortcuts;
 
 mod properties;
+
+mod child_derive_costs;
+
+mod shared_derives;

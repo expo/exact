@@ -312,7 +312,20 @@ impl Collection {
         let arm = plan.region(self.region).arms.iter().next();
         for (i, s) in plan.slots.iter().enumerate() {
             if s.owner.is_some() && s.owner == arm {
-                let value = u.eval(s.init, &inner)?;
+                let value = u
+                    .eval_named(s.init, &inner, || {
+                        format!("state {:?} initializer", plan.str(s.name))
+                    })
+                    .map_err(|e| {
+                        e.at_view(
+                            self.view,
+                            u.env
+                                .plan
+                                .region(self.region)
+                                .parent
+                                .expect("collection parent"),
+                        )
+                    })?;
                 if !value.conforms(plan, s.ty) {
                     return Err(InstanceError::slot_type(
                         plan,
@@ -338,7 +351,7 @@ impl Collection {
         // create emits, less what the row already shows.
         let full = std::mem::replace(&mut u.full, true);
         let around = std::mem::replace(&mut u.theme, self.around.clone());
-        let body = &u.sites.deps.bodies[self.region.0 as usize];
+        let body = &u.sites.data.deps.bodies[self.region.0 as usize];
         let updated = update_row(u, row, frames, !0, body);
         u.full = full;
         u.theme = around;

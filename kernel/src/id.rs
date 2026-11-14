@@ -173,20 +173,33 @@ impl Offer {
 
 /// A box's padding and border as its layout resolved them, each left, top,
 /// right, bottom: CSS's padding, and apart from it what a host cover added
-/// to the engine's for layout (LLP 1075.003 §3.5).
+/// to the engine's for layout (LLP 1075.003 §3.5), and its text item's placement.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub(crate) struct BoxInset {
     pub(crate) padding: [f32; 4],
     pub(crate) border: [f32; 4],
     pub(crate) cover: [f32; 4],
+    pub(crate) text_offset: f32,
+    pub(crate) text_item: Option<Frame>,
 }
 
 impl BoxInset {
+    pub(crate) fn is_zero(self) -> bool {
+        // Bitwise, so a -0 comes back as it went in.
+        let zero = |v: &[f32; 4]| v.iter().all(|x| x.to_bits() == 0);
+        zero(&self.padding)
+            && zero(&self.border)
+            && zero(&self.cover)
+            && self.text_offset.to_bits() == 0
+            && self.text_item.is_none()
+    }
+
     /// The padding and border Taffy laid the box `slot` out with.
     pub(crate) fn of(
         arena: &crate::arena::NodeArena,
         slot: u32,
         l: taffy::tree::Layout,
+        text_item: Option<Frame>,
     ) -> BoxInset {
         let ltrb = |r: taffy::geometry::Rect<f32>| [r.left, r.top, r.right, r.bottom];
         let [top, right, bottom, left] = crate::kernel::cover_padding(arena, slot);
@@ -196,6 +209,11 @@ impl BoxInset {
             padding: std::array::from_fn(|i| (engine[i] - cover[i]).max(0.0)),
             border: ltrb(l.border),
             cover,
+            text_offset: text_item.map_or_else(
+                || crate::layout::text_item::from_layout(arena, slot, l),
+                |item| item.y,
+            ),
+            text_item,
         }
     }
 }

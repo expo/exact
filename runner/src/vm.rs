@@ -11,7 +11,9 @@
 
 mod column;
 pub use column::Column;
+mod constants;
 mod decoded;
+pub(crate) use constants::Constants;
 mod list_call;
 mod prepared;
 use decoded::Decoded;
@@ -75,8 +77,7 @@ pub struct Frame {
     pub index: Option<usize>,
     /// The `match` binding, when this scope is a `some(x)` arm.
     pub bound: Option<Value>,
-    /// The region this instance belongs to, when this scope is a row or an
-    /// arm that owns slots.
+    /// The region this instance belongs to, including arms with no state.
     pub region: Option<u32>,
     /// The instance's slots, when this scope is a row or an arm owning some.
     pub row: Option<RowSlots>,
@@ -94,6 +95,7 @@ impl Frame {
 }
 
 /// Everything an expression may read.
+#[derive(Clone, Copy)]
 pub struct Env<'a> {
     /// The plan the code belongs to.
     pub plan: &'a Plan,
@@ -296,6 +298,7 @@ pub struct Outcome {
 /// allocation, never a fresh one.
 pub struct Strings {
     cells: Vec<std::cell::OnceCell<Value>>,
+    constants: Option<std::sync::Arc<Constants>>,
 }
 
 impl Strings {
@@ -304,6 +307,14 @@ impl Strings {
         let cells = (0..plan.strings.len()).map(|_| std::cell::OnceCell::new());
         Strings {
             cells: cells.collect(),
+            constants: None,
+        }
+    }
+
+    pub(crate) fn with_constants(plan: &Plan, constants: std::sync::Arc<Constants>) -> Self {
+        Self {
+            constants: (!constants.is_empty()).then_some(constants),
+            ..Self::new(plan)
         }
     }
 
@@ -312,6 +323,7 @@ impl Strings {
     pub fn of(values: impl IntoIterator<Item = Value>) -> Strings {
         Strings {
             cells: values.into_iter().map(std::cell::OnceCell::from).collect(),
+            constants: None,
         }
     }
 
@@ -379,13 +391,38 @@ pub fn instructions(code: &[u8]) -> impl Iterator<Item = Result<Instruction, Tra
         Some(next)
     })
 }
+/// Instructions reachable through at-read rows, each row scanned once.
+/// This is a dependency walk; nested offsets remain local to their bodies.
+pub fn transitive_instructions<'a>(
+    plan: &'a Plan,
+    code: &'a [u8],
+) -> impl Iterator<Item = Result<Instruction, Trap>> + 'a {
+    let mut bodies = vec![code];
+    let mut seen = std::collections::BTreeSet::new();
+    let mut out = Vec::new();
+    while let Some(body) = bodies.pop() {
+        for i in instructions(body) {
+            if let Ok(i) = &i {
+                if i.op == Opcode::LoadDerive {
+                    if let Some(row) = plan.unsettled_body(i.args[0] as u32) {
+                        if seen.insert(i.args[0]) {
+                            bodies.push(plan.code(row.body));
+                        }
+                    }
+                }
+            }
+            out.push(i);
+        }
+    }
+    out.into_iter()
+}
 
 /// Whether `code` is a literal — pushes of values and `Return`, nothing
 /// read — so a binding can be told from an expression without running it
 /// (LLP 1035.002 D5: a row bound by an expression is `dynamic`). Malformed
 /// code is not a literal.
-pub fn is_literal(code: &[u8]) -> bool {
-    instructions(code).all(|i| {
+pub fn is_literal(plan: &Plan, code: &[u8]) -> bool {
+    transitive_instructions(plan, code).all(|i| {
         i.is_ok_and(|i| {
             matches!(
                 i.op,
@@ -396,7 +433,7 @@ pub fn is_literal(code: &[u8]) -> bool {
                     | Opcode::Unit
                     | Opcode::Some
                     | Opcode::Return
-            )
+            ) || i.op == Opcode::LoadDerive && plan.unsettled_body(i.args[0] as u32).is_some()
         })
     })
 }
@@ -511,11 +548,20 @@ fn eval_machine(
         env,
         code,
         allowed_writes,
+        constants: env.strings.constants.as_deref().and_then(|pool| {
+            let base = code
+                .as_ptr()
+                .addr()
+                .checked_sub(env.plan.code.as_ptr().addr())?;
+            (base.checked_add(code.len())? <= env.plan.code.len()).then_some((pool, base))
+        }),
         cursor: Reader::new(code),
         out: Outcome::default(),
         extents: std::mem::take(&mut scratch.extents),
         decoded: std::mem::take(&mut scratch.decoded),
         steps: 0,
+        calls: 0,
+        depth: 0,
     };
     let value = machine::run(&mut run, &mut scratch.machine);
     scratch.machine.pos = 0;
@@ -682,10 +728,13 @@ struct Run<'e, 'a> {
     allowed_writes: &'e [u32],
     /// Where the last instruction was read up to.
     cursor: Reader<'e>,
+    constants: Option<(&'e Constants, usize)>,
     out: Outcome,
     extents: Extents,
     decoded: Decoded,
     steps: u32,
+    calls: u32,
+    depth: u16,
 }
 
 impl Host<Value> for Run<'_, '_> {
@@ -695,6 +744,11 @@ impl Host<Value> for Run<'_, '_> {
     fn fetch(&mut self, pos: usize) -> Result<Option<(Instruction, usize)>, Trap> {
         if pos >= self.code.len() {
             return Ok(None);
+        }
+        if let Some((pool, base)) = self.constants {
+            if let Some(kept) = pool.get(base, pos, self.code.len()) {
+                return Ok(Some(kept));
+            }
         }
         if let Some(kept) = self.decoded.get(pos) {
             return Ok(Some(kept));
@@ -743,6 +797,48 @@ impl Host<Value> for Run<'_, '_> {
     fn load_derive(&mut self, i: u64, pc: usize) -> Result<Value, Trap> {
         let derive = i as usize;
         let env = self.env;
+        if let Some(row) = env.plan.unsettled_body(derive as u32) {
+            self.calls += 1;
+            if self.calls > 65_536 {
+                return Err(Trap::CallLimit { pc });
+            }
+            if self.depth >= 64 {
+                return Err(Trap::CallDepth { pc });
+            }
+            let frames = env
+                .plan
+                .owner_frames(env.frames, row.owner, |f| f.region)
+                .ok_or(Trap::BadScope { pc, depth: 0 })?;
+            let nested_env = Env {
+                frames,
+                params: &[],
+                ..*env
+            };
+            let code = env.plan.code(row.body);
+            let mut nested = Run {
+                env: &nested_env,
+                code,
+                allowed_writes: &[],
+                constants: env
+                    .strings
+                    .constants
+                    .as_deref()
+                    .map(|pool| (pool, row.body.offset as usize)),
+                cursor: Reader::new(code),
+                out: Outcome::default(),
+                extents: std::mem::take(&mut self.extents),
+                decoded: Decoded::default(),
+                steps: self.steps,
+                calls: self.calls,
+                depth: self.depth + 1,
+            };
+            let value = machine::run(&mut nested, &mut Machine::default());
+            self.steps = nested.steps;
+            self.calls = nested.calls;
+            self.extents = nested.extents;
+            self.out.store_dependent |= nested.out.store_dependent;
+            return value;
+        }
         let value = env
             .derives
             .get(derive)
@@ -1014,8 +1110,7 @@ impl Host<Value> for Run<'_, '_> {
         self.out.refreshes.push(r as u32);
     }
 
-    /// Called as each callback item begins: from the first, instructions
-    /// are kept decoded.
+    /// A callback keeps instructions that miss the shared pool locally.
     #[inline]
     fn steps(&mut self, n: usize, pc: usize) -> Result<(), Trap> {
         self.decoded.start(self.code.len());
@@ -1050,3 +1145,20 @@ thread_local! {
 
 #[cfg(test)]
 mod tests;
+
+impl Trap {
+    /// The bound in diagnostic text, after the unchanged trap token.
+    pub fn bound(&self) -> &'static str {
+        match self {
+            Self::IterationLimit { .. } => ": past the 65,536 list steps one evaluation may take",
+            Self::CallLimit { .. } => ": past the 65,536 derive calls one evaluation may take",
+            Self::CallDepth { .. } => ": past 64 derive call levels",
+            Self::StringTooLong { .. } => ": past the 64 MiB a string may hold",
+            Self::ValueTooLarge { .. } => ": past the 16,777,216 nodes or 64 MiB a value may hold",
+            Self::ValueTooDeep { .. } => ": past 64 levels",
+            _ => "",
+        }
+    }
+}
+#[cfg(test)]
+mod unsettled_tests;

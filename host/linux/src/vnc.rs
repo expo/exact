@@ -340,7 +340,10 @@ fn serve(mut stream: TcpStream, shared: Arc<Shared>, key: [u8; 8]) -> io::Result
             }
         }
     })();
-    if buttons & 1 != 0 {
+    // A button the client still held (primary 1, middle 2, right 4) is never
+    // released: the next client starts from none. The cancel releases the
+    // hold whichever button took it.
+    if buttons & 0b111 != 0 {
         push(&shared, InputEvent::Cancel);
     }
     for code in held {
@@ -579,6 +582,27 @@ mod contact_tests {
 
     #[test]
     fn disconnect_while_down_queues_cancel_and_never_a_successful_release() {
+        let events = disconnect_holding(1);
+        assert!(events.contains(&InputEvent::Button(true)));
+        assert_eq!(events.last(), Some(&InputEvent::Cancel));
+        assert!(!events.contains(&InputEvent::Button(false)));
+    }
+
+    /// RFB's middle (2) and right (4) buttons are the web's 4 and 2: a
+    /// disconnect holding either cancels the hold its press took.
+    #[test]
+    fn disconnect_holding_the_middle_or_right_button_cancels_too() {
+        for (rfb, bit) in [(2, 4), (4, 2)] {
+            let events = disconnect_holding(rfb);
+            assert!(events.contains(&InputEvent::Aux(bit, true)), "{rfb}");
+            assert_eq!(events.last(), Some(&InputEvent::Cancel), "{rfb}");
+            assert!(!events.contains(&InputEvent::Aux(bit, false)), "{rfb}");
+        }
+    }
+
+    /// The events a session queues when its client presses the buttons of
+    /// `mask` and disconnects without releasing them.
+    fn disconnect_holding(mask: u8) -> Vec<InputEvent> {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let (wake, _read) = UnixStream::pair().unwrap();
@@ -613,7 +637,7 @@ mod contact_tests {
             u32::from_be_bytes(init[20..24].try_into().unwrap()) as u64,
         )
         .unwrap();
-        client.write_all(&[5, 1, 0, 20, 0, 40]).unwrap();
+        client.write_all(&[5, mask, 0, 20, 0, 40]).unwrap();
         client.shutdown(std::net::Shutdown::Both).unwrap();
         drop(client);
         assert_eq!(
@@ -622,8 +646,6 @@ mod contact_tests {
         );
         worker.join().unwrap();
         let events = shared.events.lock().unwrap();
-        assert!(events.contains(&InputEvent::Button(true)));
-        assert_eq!(events.last(), Some(&InputEvent::Cancel));
-        assert!(!events.contains(&InputEvent::Button(false)));
+        events.clone()
     }
 }

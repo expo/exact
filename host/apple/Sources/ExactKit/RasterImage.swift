@@ -1,5 +1,6 @@
 import Foundation
 import CoreGraphics
+import QuartzCore
 import CExact
 import ImageIO
 import ObjectiveC
@@ -57,10 +58,10 @@ enum RasterVariant {
 /// Metadata is read before allocating pixels. Only the bounded prefix is passed
 /// to ImageIO here; its later internal decoder allocations are not measurable by
 /// our ledger and are not claimed to fit the Exact-owned storage budget.
-struct RasterMetadata: Equatable, Sendable {
+package struct RasterMetadata: Equatable, Sendable {
     static let encodedLimit = 64 * 1024 * 1024
     static let headerLimit = 256 * 1024
-    static let pixelLimit = 64 * 1024 * 1024
+    package static let pixelLimit = 64 * 1024 * 1024
     let sourceWidth: Int
     let sourceHeight: Int
     let orientation: Int
@@ -489,7 +490,7 @@ final class RasterImage: @unchecked Sendable {
 
     static func decode(_ bytes: Data, metadata: RasterMetadata, plan: RasterDecodePlan,
                        charge: any RasterBackingCharge, sourceOwner: (any RasterSourceOwner)? = nil,
-                       url: URL? = nil) throws -> RasterImage {
+                       file: FileHandle? = nil) throws -> RasterImage {
         guard bytes.count == metadata.encodedBytes, bytes.count <= RasterMetadata.encodedLimit else { throw RasterFailure.encodedLimit }
         // A file can change between metadata inspection and worker admission.
         // Recheck the actual bytes before asking ImageIO for any pixel buffer.
@@ -523,7 +524,7 @@ final class RasterImage: @unchecked Sendable {
                 headroom = Self.headroom(of: thumbnail)
                 if headroom > 0, #available(iOS 18, macOS 15, tvOS 18, *), let tagged = CGImageCreateCopyWithContentHeadroom(headroom, image) { image = tagged }
             }
-            let animation = url.flatMap { RasterAnimation.read(source, url: $0, plan: plan, owner: sourceOwner) }
+            let animation = file.flatMap { RasterAnimation.read(source, file: $0, plan: plan, owner: sourceOwner) }
             return RasterImage(image: owner.own(image), natural: metadata.naturalSize, bytes: plan.outputBytes,
                                animation: animation, headroom: headroom)
         }
@@ -707,15 +708,43 @@ enum RasterGeometry {
     /// alpha masks the tint (LLP 1011 §4). The same decoded pixels either way.
     /// A layer composited source-in, not `clip(to:mask:)`, which reads an
     /// image with alpha wrongly (a transparent pixel came back half covered).
-    static func draw(_ ctx: CGContext, _ image: CGImage, in rect: CGRect, tint: CGColor?) {
-        guard let tint else { ctx.draw(image, in: rect); return }
+    static func draw(_ ctx: CGContext, _ image: CGImage, in rect: CGRect, tint: CGColor?, rendering: String? = nil) {
+        ctx.saveGState()
+        defer { ctx.restoreGState() }
+        if rendering == "crisp-edges" { ctx.interpolationQuality = .none }
+        func picture() {
+            if rendering == "pixelated" { pixelated(ctx, image, in: rect) }
+            else { ctx.draw(image, in: rect) }
+        }
+        guard let tint else { picture(); return }
         ctx.saveGState()
         ctx.beginTransparencyLayer(in: rect, auxiliaryInfo: nil)
-        ctx.draw(image, in: rect)
+        picture()
         ctx.setBlendMode(.sourceIn)
         ctx.setFillColor(tint)
         ctx.fill(rect)
         ctx.endTransparencyLayer()
         ctx.restoreGState()
     }
+
+    static func filter(_ layer: CALayer, rendering: String?) {
+        let filter: CALayerContentsFilter = rendering == "crisp-edges" ? .nearest : .linear
+        layer.magnificationFilter = filter
+        layer.minificationFilter = filter
+    }
+
+    private static func pixelated(_ ctx: CGContext, _ image: CGImage, in rect: CGRect) {
+        let t = ctx.ctm
+        let n = RasterTiles.enlargement(image, rect: rect, scale: CGSize(width: hypot(t.a, t.b), height: hypot(t.c, t.d)))
+        ctx.interpolationQuality = .low
+        if n == CGSize(width: 1, height: 1) { ctx.draw(image, in: rect); return }
+        RasterTiles.each(image, rect: rect, visible: ctx.boundingBoxOfClipPath, enlargement: n, tint: nil) { pixels, core, halo in
+            ctx.saveGState()
+            ctx.setShouldAntialias(false)
+            ctx.clip(to: core)
+            ctx.draw(pixels, in: halo)
+            ctx.restoreGState()
+        }
+    }
+
 }

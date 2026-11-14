@@ -195,7 +195,9 @@ final class TextRasterizer {
     func replaceVisible(_ nodes: [NodeView], wait: TimeInterval) -> Bool {
         var jobs: [Paint] = []
         var deferred = false
-        for node in nodes where node.needsTextRaster && node.canRasterText && (node.textRaster != nil || node.textRasterUsesStrips) {
+        // Only a paragraph that has pixels to replace, asked first: most near the port are drawn by AppKit, and
+        // `canRasterText` is the costly question.
+        for node in nodes where (node.textRaster != nil || node.textRasterUsesStrips) && node.needsTextRaster && node.canRasterText {
             let key = key(node)
             if node.textRasterKey == key {
                 if node.textRasterReady && node.textRasterPending { node.presentTextRaster() }

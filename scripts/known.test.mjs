@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { classify, mainNotes, noteOf, publish, report, stoppedEarly } from './known.mjs';
+import { classify, mainNotes, noteOf, publish, report, stoppedEarly, suitesOf } from './known.mjs';
 
 const result = (sha, failures, checks = { ios: { command: 'bun host/apple/build.mjs --test --ios', status: 1 } }) => ({ sha, checks, failures });
 
@@ -34,6 +34,33 @@ test('a failure is known, new or unknown against the nearest note that ran its k
   // A note keeps the part a check ran when it ran only a part
   const part = { ios: { command: 'bun host/apple/build.mjs --test --ios --only Iframe', status: 0, covers: ['xctest:ios:Iframe'] } };
   expect(noteOf(result('c4', [], part), 1).checks.ios.covers).toEqual(['xctest:ios:Iframe']);
+});
+
+test('a failure is sorted only against notes that ran its suite to the end, and its rate counts only those', () => {
+  const ios = (only, status = 0, complete = true) => ({ ios: { command: `bun host/apple/build.mjs --test --ios${only ? ` --only ${only}` : ''}`, status, complete, ...(only ? { covers: [`xctest:ios:${only}`] } : {}) } });
+  const history = [
+    // A part that ran another class, then one that ran Nav but stopped early: neither says anything of Nav.
+    { sha: 'c4', notes: [{ sha: 'c4', tier: 1, at: '2026-11-12T04:00', checks: ios('Iframe'), failures: ['ios: ExactKitTests.Nav pop failed'] }] },
+    { sha: 'c3', notes: [{ sha: 'c3', tier: 1, at: '2026-11-12T03:00', checks: ios('Nav', 1, false), failures: [] }] },
+    { sha: 'c2', notes: [{ sha: 'c2', tier: 1, at: '2026-11-12T02:00', checks: ios(null, 0), failures: [] }] },
+    { sha: 'c1', notes: [{ sha: 'c1', tier: 1, at: '2026-11-12T01:00', checks: ios(null, 1), failures: ['ios: ExactKitTests.Nav pop failed'] }] },
+  ];
+  const local = ['local: ExactKitTests.Nav pop failed', 'local: ExactKitTests.Iframe pinch failed', 'local: ExactKitTests.Odd one failed'];
+  const suites = suitesOf(local, 'xctest', '');
+  expect(suites[local[0]]).toEqual(['xctest:ios:Nav']);
+  const sorted = classify(local, 'xctest', history, { ...suites, [local[2]]: [] });
+  // Nav is new at c2, the nearest note that ran it, and failed in one of the two that did; Iframe is new at c4; a
+  // failure whose suite is not known is sorted against full runs only.
+  expect(sorted.rows.map((r) => [r.verdict, r.sha, r.rate])).toEqual([['new', 'c2', '1 of the last 2 lane runs'], ['new', 'c4', undefined], ['new', 'c2', undefined]]);
+  expect(sorted.at.sha).toBe('c4');
+  expect(report(sorted)[1]).toBe('  new   ExactKitTests.Nav pop failed (failed 1 of the last 2 lane runs; at c2)');
+  // Only partial runs of other suites: unknown. Another Cargo package's partial run says nothing of this one's test.
+  expect(classify(local.slice(0, 1), 'xctest', history.slice(0, 1), suites).rows[0].verdict).toBe('unknown');
+  const cargo = [{ sha: 'r1', notes: [{ sha: 'r1', tier: 1, checks: { test: { command: 'bun scripts/affected.mjs --cargo-tests a', status: 0, complete: true, covers: ['cargo:a'] } }, failures: [] }] }];
+  const mine = ['local: -p b --lib x::y'], own = suitesOf(mine, 'cargo', '');
+  expect(own[mine[0]]).toEqual(['cargo:b']);
+  expect(classify(mine, 'cargo', cargo, own).rows[0].verdict).toBe('unknown');
+  expect(classify(['local: -p a --lib x::y'], 'cargo', cargo, suitesOf(['local: -p a --lib x::y'], 'cargo', '')).rows[0].verdict).toBe('new');
 });
 
 test('the lane publishes a note to origin and another checkout reads it', () => {

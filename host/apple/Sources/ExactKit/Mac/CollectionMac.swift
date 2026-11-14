@@ -150,6 +150,17 @@ final class KnobDrag {
 }
 
 extension Presenter {
+    /// A batch that says only where lists stand (a report's answer that
+    /// moved no view: in a fling, the measurement a slice's rows sent, half
+    /// its batches) and nothing of the page's. It changes no view, so none of
+    /// a batch's passes over the views runs (`apply`): each list takes its
+    /// snapshot and its corrections as in any batch, and its table the rows
+    /// the snapshot places.
+    static func onlySnapshots(_ batch: Batch) -> Bool {
+        !batch.ops.isEmpty && batch.ops.allSatisfy { $0.op == .collections } && batch.error == nil && batch.wakelock == nil
+            && batch.orientation == nil && !batch.layoutProvisional && !batch.controls
+    }
+
     /// Charge the report (decode, layout and apply) to the
     /// rows it created. Cheap rows share those fixed costs in the next report.
     /// Grow at most twofold and retain recent expensive samples conservatively.

@@ -283,3 +283,65 @@ fn a_store_write_asks_no_dependent_whose_arguments_stay() {
     r.act("signIn", vec![]).unwrap();
     assert_eq!(asks(&mut r), [enabled[0] + 1, enabled[1], enabled[2]]);
 }
+
+/// `token()` asks with a GET; its reply's turn draws randomness and answers
+/// outside its shape, so the reply's commit is refused and a later one fails
+/// the resource.
+#[derive(Default)]
+struct Drawn {
+    asks: u32,
+}
+
+impl DataSource for Drawn {
+    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
+        Err(DataError::UnknownSource(source.into()))
+    }
+    fn answer(&mut self, _: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
+        self.asks += 1;
+        Ok(Answer::Later(exact_runner::Request::get(
+            "https://example.test/token",
+        )))
+    }
+    fn parse(
+        &mut self,
+        store: &mut Store,
+        _: &str,
+        _: &[Value],
+        _: exact_runner::Outcome,
+    ) -> Result<Answer, DataError> {
+        store.observe_entropy();
+        Ok(Answer::Now(Value::Number(7.0)))
+    }
+    fn grants(&self) -> &str {
+        "secret.keep session\n"
+    }
+}
+
+/// A refused reply keeps what its turn read, and a turn that only drew
+/// randomness read nothing the store holds: no store write asks it again.
+#[test]
+fn a_refused_reply_that_only_drew_is_asked_again_by_no_store_write() {
+    let src = "component App
+  resource id = token() as shape string else empty()
+  view
+    text id
+";
+    let mut r = Runner::boot(
+        contract::compile(src).unwrap(),
+        Drawn::default(),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    let ticket = r.take_requests()[0].ticket;
+    let reply = exact_runner::Outcome::Response(exact_runner::Response {
+        status: 200,
+        headers: Vec::new(),
+        body: Vec::new(),
+    });
+    r.fulfill(ticket, reply).unwrap();
+    r.store_changed(vec![("session".into(), b"ada".to_vec())])
+        .unwrap();
+    assert_eq!(r.data().asks, 1);
+}

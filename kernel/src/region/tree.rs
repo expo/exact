@@ -26,6 +26,11 @@ impl Derived {
         let mut nodes = HashMap::new();
         let mut stack = vec![root];
         while let Some(s) = stack.pop() {
+            // A closed top-layer box has no block while covered whole, but
+            // remains outside the region publication.
+            if s != root && (arena.blocks.holds(s) || crate::style::top_layer::is_box(arena, s)) {
+                continue;
+            }
             if bounded && slots.len() == REGION_NODES {
                 return Err(LayoutError::ContentRegion("mounted node limit"));
             }
@@ -50,21 +55,26 @@ impl Derived {
             if matches!(arena.node_type(s), NodeType::Text | NodeType::Control) {
                 continue;
             }
+            // An alert's title is its first item, as `rebuild` makes it.
+            let title = arena
+                .has_alert_prefix(s)
+                .then(|| tree.new_alert_prefix(s, arena.grouped_alert(s)));
             let children = if Some(s) == cut {
-                branch
+                title
                     .into_iter()
-                    .filter_map(|b| nodes.get(&b).copied())
+                    .chain(branch.and_then(|b| nodes.get(&b).copied()))
                     .collect()
             } else {
-                let items = arena
+                let authored = arena
                     .children(s)
                     .iter()
-                    .filter_map(|c| Some((arena.style(*c).order, nodes.get(c).copied()?)))
-                    .collect();
+                    .filter_map(|c| Some((arena.style(*c).order, nodes.get(c).copied()?)));
+                let items = title.map(|n| (0, n)).into_iter().chain(authored).collect();
                 crate::layout::order::ordered(arena, s, items)
             };
             tree.set_children(nodes[&s], &children);
         }
+        tree.find_tables(arena, &slots);
         let root = nodes[&root];
         Ok(Self {
             tree,
@@ -154,10 +164,15 @@ impl Derived {
         let mut frames = Vec::with_capacity(self.slots.len());
         let mut offsets = Vec::with_capacity(self.slots.len());
         let mut facts = BoxFacts::default();
-        let mut stack = vec![(root, 0., 0., OWNER, false)];
-        while let Some((s, x, y, parent, hidden)) = stack.pop() {
+        // Each box with the origin it is placed from and its parent's
+        // frame's origin, which differ for a table's parts.
+        let mut stack = vec![(root, (0., 0.), OWNER, false, (0., 0.))];
+        while let Some((s, (x, y), parent, hidden, (px, py))) = stack.pop() {
+            let Some(&node) = self.nodes.get(&s) else {
+                continue;
+            };
             let hidden = hidden || arena.style(s).display == crate::Display::None;
-            let l = self.tree.layout(self.nodes[&s]);
+            let l = self.tree.layout(node);
             let inline = arena.is_inline_run(s);
             let frame = if inline {
                 Frame::default()
@@ -194,7 +209,7 @@ impl Derived {
                     return Err(LayoutError::ContentRegion("mounted node limit"));
                 }
                 let ordinal = frames.len() as u32;
-                facts.record(arena, &self.tree, s, self.nodes[&s], hidden);
+                facts.record(arena, &self.tree, s, node, hidden);
                 frames.push(RegionFrame {
                     node: arena.key(s),
                     frame,
@@ -202,23 +217,29 @@ impl Derived {
                         l.scrollable_overflow_rect.right,
                         l.scrollable_overflow_rect.bottom,
                     ),
-                    height_measured: self.tree.height_measured(self.nodes[&s]),
+                    height_measured: self.tree.height_measured(node),
                 });
                 offsets.push(RegionOffset {
                     parent,
-                    x: l.location.x,
-                    y: l.location.y,
+                    x: x - px + l.location.x,
+                    y: y - py + l.location.y,
                     inline,
                 });
                 ordinal
             };
+            let at = (frame.x, frame.y);
+            let origin = if inline {
+                at
+            } else {
+                self.tree.parts_origin(arena, s, node, (x, y), at)
+            };
             if Some(s) == cut {
                 if let Some(b) = branch {
-                    stack.push((b, frame.x, frame.y, next_parent, hidden))
+                    stack.push((b, origin, next_parent, hidden, at))
                 }
             } else {
                 for &c in arena.children(s).iter().rev() {
-                    stack.push((c, frame.x, frame.y, next_parent, hidden))
+                    stack.push((c, origin, next_parent, hidden, at))
                 }
             }
         }
@@ -247,7 +268,7 @@ impl BoxFacts {
         if let Some(basis) = tree.button_containing_width(n).filter(|_| !hidden) {
             self.button_bases.insert(key, basis);
         }
-        let inset = crate::id::BoxInset::of(arena, s, tree.layout(n));
+        let inset = crate::id::BoxInset::of(arena, s, tree.layout(n), tree.text_item(n));
         if inset != crate::id::BoxInset::default() {
             self.insets.insert(key, inset);
         }
@@ -315,8 +336,7 @@ pub(super) fn shell(
             height_measured: tree.height_measured(n),
         });
         if s != cut {
-            // A popover in the shell is laid out in its block, after the
-            // region (one in the region stays in its trial: imply_blocks).
+            // Each independent subtree is laid out after the region.
             for &c in arena.children(s).iter().rev() {
                 if !arena.blocks.holds(c) {
                     stack.push((c, frame.x, frame.y, hidden))

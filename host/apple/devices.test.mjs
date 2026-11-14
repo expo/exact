@@ -233,6 +233,125 @@ test('a drive shows the software keyboard on a simulator it booted and puts the 
   }
 });
 
+test('an AX launch loads the runtime before launch and restores its setting, including after failure', async () => {
+  const { withAccessibilityRuntime } = await import('./touches.mjs');
+  for (const initial of [undefined, '0', '1']) {
+    for (const fails of [false, true]) {
+      let value = initial;
+      const calls = [];
+      const run = async (udid, args) => {
+        expect(udid).toBe('our-simulator');
+        calls.push(args);
+        const [verb, domain, key] = args;
+        expect([domain, key]).toEqual(['com.apple.Accessibility', 'ApplicationAccessibilityEnabled']);
+        if (verb === 'read') return { status: value == null ? 1 : 0, out: value ?? '', err: value == null ? 'does not exist' : '' };
+        value = verb === 'delete' ? undefined : args.at(-1) === 'true' ? '1' : '0';
+        return { status: 0 };
+      };
+      const launch = async () => { expect(value).toBe('1'); if (fails) throw Error('launch failed'); return 'carrier'; };
+      if (fails) await expect(withAccessibilityRuntime('our-simulator', true, launch, run)).rejects.toThrow('launch failed');
+      else expect(await withAccessibilityRuntime('our-simulator', true, launch, run)).toBe('carrier');
+      expect(value).toBe(initial);
+      expect(calls.map(args => args[0])).toEqual(initial === '1' ? ['read'] : ['read', 'write', initial == null ? 'delete' : 'write']);
+      calls.length = 0;
+      expect(await withAccessibilityRuntime('our-simulator', false, async () => 'plain', run)).toBe('plain');
+      expect(calls).toEqual([]);
+    }
+  }
+  await expect(withAccessibilityRuntime('our-simulator', true, () => { throw Error('must not launch'); }, async () => ({ status: 1, err: 'simulator unavailable' }))).rejects.toThrow('simulator unavailable');
+});
+
+test('AX setup, launch and restoration share the simulator launch lock with ordinary drives', async () => {
+  const { withAccessibilityRuntime } = await import('./touches.mjs');
+  const { simulatorDisplay } = await import('../../scripts/agent-launch.mjs');
+  const udid = `runtime-lock-${process.pid}`;
+  const unlocked = [];
+  const probe = async phase => {
+    try { await simulatorDisplay(udid, () => unlocked.push(phase), { timeout: 0 }); }
+    catch (error) { expect(error.message).toContain("display busy"); }
+  };
+  const run = async (_, args) => {
+    await probe(args[0]);
+    return { status: 0, out: '0' };
+  };
+  for (const ax of [true, false]) {
+    await withAccessibilityRuntime(udid, ax, async () => { await probe(ax ? 'AX launch' : 'ordinary launch'); return 'carrier'; }, run);
+  }
+  expect(unlocked).toEqual([]);
+});
+
+test('an AX restoration failure closes the launched carrier before releasing the app lock', async () => {
+  const { withAccessibilityRuntime } = await import('./touches.mjs');
+  const { exclusiveIOS } = await import('../../scripts/agent-launch.mjs');
+  const udid = `runtime-restore-${process.pid}`;
+  for (const closeFails of [false, true]) {
+    const directory = mkdtempSync(resolve(tmpdir(), 'devices-ax-close-'));
+    let closed = false;
+    const run = async (_, args) => args[0] === 'read' ? { status: 0, out: '0' }
+      : args.at(-1) === 'true' ? { status: 0 } : { status: 1, err: 'restore failed' };
+    try {
+      const launch = () => withAccessibilityRuntime(udid, true, async () => ({
+        async close() {
+          await expect(exclusiveIOS(udid, 'app', () => { throw Error('lock was released'); }, { directory, timeout: 0 })).rejects.toThrow('iOS drive busy');
+          closed = true;
+          if (closeFails) throw Error('close failed');
+        },
+      }), run);
+      const failed = exclusiveIOS(udid, 'app', launch, { directory });
+      await expect(failed).rejects.toThrow(closeFails ? /restore failed.*close failed/ : 'restore failed');
+      expect(closed).toBe(true);
+      const next = await exclusiveIOS(udid, 'app', async () => ({ close() {} }), { directory, timeout: 0 });
+      await next.close();
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  }
+});
+
+test('touch restoration cannot disable accessibility between an AX read and launch', async () => {
+  const { restoreAccessibility, withAccessibilityRuntime } = await import('./touches.mjs');
+  const { simulatorDisplay } = await import('../../scripts/agent-launch.mjs');
+  const udid = `touch-restore-lock-${process.pid}`;
+  let value = '1';
+  const reading = Promise.withResolvers(), finish = Promise.withResolvers();
+  const launch = withAccessibilityRuntime(udid, true, async () => { expect(value).toBe('1'); return 'carrier'; }, async (_, args) => {
+    expect(args[0]).toBe('read');
+    const before = value;
+    reading.resolve();
+    await finish.promise;
+    return { status: 0, out: before };
+  });
+  await reading.promise;
+  const restoration = restoreAccessibility(udid, { ApplicationAccessibilityEnabled: '0' }, async (_, args) => {
+    if (args[2] === 'ApplicationAccessibilityEnabled') value = '0';
+    return { status: 0 };
+  });
+  const settled = Promise.allSettled([restoration, launch]);
+  try {
+    await expect(simulatorDisplay(udid, () => {}, { timeout: 0 })).rejects.toThrow('display busy');
+  } finally { finish.resolve(); }
+  const results = await settled;
+  expect(results).toEqual([{ status: 'fulfilled', value: null }, { status: 'fulfilled', value: 'carrier' }]);
+  expect(value).toBe('0');
+});
+
+test('touch cleanup inside a launch reuses its lock, and delayed cleanup takes the lock again', async () => {
+  const { restoreAccessibility, withAccessibilityRuntime } = await import('./touches.mjs');
+  const { simulatorDisplay } = await import('../../scripts/agent-launch.mjs');
+  const udid = `touch-nested-lock-${process.pid}`;
+  const later = Promise.withResolvers();
+  let delayed;
+  const run = async () => {
+    await expect(simulatorDisplay(udid, () => {}, { timeout: 0 })).rejects.toThrow('display busy');
+    return { status: 0 };
+  };
+  await expect(withAccessibilityRuntime(udid, false, async () => {
+    delayed = later.promise.then(() => restoreAccessibility(udid, {}, run));
+    await restoreAccessibility(udid, {}, run);
+    throw Error('launch failed');
+  })).rejects.toThrow('launch failed');
+  later.resolve();
+  expect(await delayed).toBe(null);
+});
+
 test('a touch session records the accessibility keys it found and puts them back so, or unset after a session that left them on', async () => {
   const { foundAccessibility, restoreAccessibility } = await import('./touches.mjs');
   // What a session found is recorded, and a session after one killed before its end takes that record, not the keys

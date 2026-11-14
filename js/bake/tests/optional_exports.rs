@@ -12,11 +12,12 @@ const CONTRACT: &str =
 const HEAD: &str = "import type { Answer, Overlay } from './app.contract.d.ts';\nexport const grants = '';\nexport const answer: Answer = () => 'answer';\n";
 
 /// Bake `app.ts` (with `files` beside it), load it, and return what its
-/// overlay shows over `"answer"` and what its `ping` tool returns.
+/// overlay shows over `"answer"` and what its named tool returns.
 fn run(
     n: usize,
     tail: &str,
     files: &[(&str, &str)],
+    name: &str,
 ) -> Result<(Option<Value>, Option<String>), String> {
     let dir = std::env::temp_dir().join(format!(
         "exact-optional-exports-{}-{}",
@@ -46,7 +47,7 @@ fn run(
         .unwrap()
         .map(|o| o.value);
     let mut store = Store::new("", vec![]);
-    let tool = match module.answer(&mut store, "tool:ping", &[Value::from("{}")]) {
+    let tool = match module.answer(&mut store, &format!("tool:{name}"), &[Value::from("{}")]) {
         Ok(Answer::Now(value)) => Some(value.as_str().unwrap().to_owned()),
         Ok(Answer::Later(_)) => panic!("the tool answers now"),
         Err(_) => None,
@@ -99,7 +100,7 @@ fn every_export_form_reaches_the_host_and_a_comment_none() {
             true => (Some(Value::from("overlaid")), Some("\"pong\"".to_owned())),
             false => (None, None),
         };
-        match run(n, tail, files) {
+        match run(n, tail, files, "ping") {
             Ok(got) if got == expected => {}
             got => failures.push(format!("{tail}\n  expected {expected:?}\n  got {got:?}")),
         }
@@ -119,7 +120,27 @@ fn an_overlay_is_checked_against_its_type() {
             "overlay.ts",
             "export const overlay = (source: number) => source;\n",
         )],
+        "ping",
     )
     .expect_err("an overlay of the wrong type is refused");
     assert!(refused.contains("not assignable"), "{refused}");
+}
+
+#[test]
+fn tool_handlers_must_be_own_exports() {
+    if !exact_js::ENGINE_LINKED {
+        return;
+    }
+    for (i, name) in ["constructor", "toString"].iter().enumerate() {
+        let (_, tool) = run(200 + i, "export const tools = {};", &[], name).unwrap();
+        assert_eq!(tool, None, "an inherited {name} is no tool handler");
+        let (_, tool) = run(
+            210 + i,
+            &format!("export const tools = {{{name}: () => 'own'}};"),
+            &[],
+            name,
+        )
+        .unwrap();
+        assert_eq!(tool.as_deref(), Some("\"own\""));
+    }
 }

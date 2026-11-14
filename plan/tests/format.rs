@@ -1035,14 +1035,16 @@ fn a_plan_without_compiled_values_keeps_every_other_data_range() {
 /// checks before it boots a plan; declared sources add the `fetches` and
 /// `fetch_parts` tables (LLP 1162.001); the format slot, each strings table's
 /// format data and the format locale a localized roster entry takes last come
-/// with formatting by locale (LLP 1054.000.003 D6). Every plan-reading host
+/// with formatting by locale (LLP 1054.000.003 D6). `formatDate` also admits
+/// day keys alongside epoch milliseconds. Every plan-reading host
 /// needs a new binary, including Apple, web, Linux, Windows, Android and
-/// terminal (LLP 1030 D3a). The digest covers all of `tables/format.json`,
-/// including comments.
+/// terminal (LLP 1030 D3a). Executable instance expressions add `owner` and
+/// `unsettled` to derives; those hosts must also rebuild for the new rows.
+/// The digest covers all of `tables/format.json`, including comments.
 #[test]
 fn the_format_digest_is_pinned() {
     assert_eq!(
-        FORMAT_DIGEST, 0x8b14_235d_0dcd_36d3,
+        FORMAT_DIGEST, 0xcc48_4343_0a69_22f6,
         "the plan format digest moved: if intended, name the break and the hosts that move"
     );
 }

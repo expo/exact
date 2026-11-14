@@ -36,7 +36,37 @@ fn tree(
     })
 }
 
-// Retained dev generations are ordinary immutable files. Quota admission and
+// One reply cannot hold a large tree. A page reads bodies until `limit` bytes
+// and gives null for each remaining file, which the next request names in `paths`.
+fn page(root: &Directory, input: &Value) -> io::Result<Value> {
+    let mut entries = serde_json::Map::new();
+    let mut left = input["limit"].as_u64().unwrap_or(u64::MAX);
+    let mut read = |path: &str, parent: &Directory, leaf: &str| {
+        let value = if left == 0 {
+            Value::Null
+        } else {
+            let body = parent.read(leaf)?;
+            left = left.saturating_sub(body.len() as u64);
+            Value::String(STANDARD.encode(body))
+        };
+        entries.insert(path.to_owned(), value);
+        Ok(())
+    };
+    match input["paths"].as_array() {
+        Some(paths) => {
+            for path in paths {
+                let path = path.as_str().ok_or_else(|| refuse("invalid path"))?;
+                let (parent, leaf) = root.parent(path, false)?;
+                read(path, &parent, &leaf)?;
+            }
+        }
+        None => root.visit_files("", &mut read)?,
+    }
+    Ok(Value::Object(entries))
+}
+
+// Retained dev generations are ordinary immutable files. A blob is a payload
+// under `blobs/`, named by its SHA-256 and shared by every generation. Quota admission and
 // publication share one OS lock; exhaustion never evicts an existing reader.
 fn retained_bytes(dir: &Directory) -> io::Result<u64> {
     let mut bytes = 0u64;
@@ -82,10 +112,15 @@ fn retain(root: &Directory, input: &Value) -> io::Result<Value> {
     {
         return Err(refuse("invalid dev generation path"));
     }
-    let files = input["files"]
-        .as_object()
-        .ok_or_else(|| refuse("missing files"))?;
-    if !files.contains_key("exact.json") {
+    let none = serde_json::Map::new();
+    let blobs = input["blobs"].as_object().unwrap_or(&none);
+    // A request with blobs alone carries part of a generation; its envelope follows.
+    let files = match input["files"].as_object() {
+        Some(files) => files,
+        None if !blobs.is_empty() => &none,
+        None => return Err(refuse("missing files")),
+    };
+    if !files.is_empty() && !files.contains_key("exact.json") {
         return Err(refuse("retained generation needs an envelope"));
     }
     // Only the immediately preceding successful holder can reuse its count.
@@ -113,11 +148,15 @@ fn retain(root: &Directory, input: &Value) -> io::Result<Value> {
             .ok_or_else(|| refuse("retained size overflow"))?,
     };
     let mut candidate = Vec::new();
-    for (name, encoded) in files {
-        let path = format!("{prefix}/{name}");
+    let own = files.iter().map(|(name, body)| (false, name, body));
+    for (blob, name, encoded) in own.chain(blobs.iter().map(|(name, body)| (true, name, body))) {
+        let path = format!("{}/{name}", if blob { "blobs" } else { prefix });
         let body = STANDARD
             .decode(encoded.as_str().ok_or_else(|| refuse("invalid bytes"))?)
             .map_err(|_| refuse("invalid base64"))?;
+        if blob && format!("{:x}", Sha256::digest(&body)) != *name {
+            return Err(refuse("a blob is not named by its digest"));
+        }
         let previous = root
             .parent(&path, false)
             .and_then(|(parent, leaf)| parent.read(&leaf));
@@ -130,10 +169,27 @@ fn retain(root: &Directory, input: &Value) -> io::Result<Value> {
         total = total
             .checked_add(body.len() as u64)
             .ok_or_else(|| refuse("retained size overflow"))?;
-        candidate.push((name == "exact.json", path, body));
+        candidate.push((!blob && name == "exact.json", path, body));
     }
-    if total > quota {
+    // `reserve` is the bytes the publication's later requests carry. Admitting the
+    // whole publication here means a refusal comes before its first blob is written.
+    let reserve = input["reserve"].as_u64().unwrap_or(0);
+    if total.checked_add(reserve).is_none_or(|all| all > quota) {
         return Err(refuse("retained generation cache quota exceeded"));
+    }
+    // A blob can be released between the request that kept it and its envelope.
+    let index = format!("{prefix}/assets.json");
+    if let Some((_, _, index)) = candidate.iter().find(|(_, path, _)| *path == index) {
+        for digest in indexed_blobs(index)? {
+            let kept = blobs.contains_key(&digest)
+                || root
+                    .parent(&format!("blobs/{digest}"), false)
+                    .and_then(|(dir, leaf)| dir.kind(&leaf))
+                    .is_ok();
+            if !kept {
+                return Err(refuse("a retained generation names a missing blob"));
+            }
+        }
     }
     // This is a development cache, not a durable publication stream. Complete
     // immutable payloads precede the envelope; disk flushes are not on the edit
@@ -145,6 +201,84 @@ fn retain(root: &Directory, input: &Value) -> io::Result<Value> {
     }
     lock.complete_retention(root, total)?;
     Ok(json!({"bytes":total, "token":token}))
+}
+
+/// Whether `leaf` in `dir`, reached by the four `parts`, is a stream's head or
+/// lock under another spelling. A lookup can match more than ASCII case: APFS
+/// folds Unicode case (`ſ` is `s`), and NTFS also matches 8.3 short names. So
+/// the files are compared, not the names.
+fn names_stream_file(root: &Directory, dir: &Directory, leaf: &str, parts: &[&str]) -> bool {
+    let same = |a: io::Result<Kind>, b: io::Result<Kind>| matches!((a, b), (Ok(a), Ok(b)) if a.identity == b.identity);
+    parts.len() == 4
+        && same(root.kind(parts[0]), root.kind(".exact"))
+        && ["exact.json", ".lock"]
+            .iter()
+            .any(|guarded| same(dir.kind(leaf), dir.kind(guarded)))
+}
+
+fn digest_name(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn indexed_blobs(index: &[u8]) -> io::Result<Vec<String>> {
+    let unreadable = || refuse("unreadable retained asset index");
+    let index: Value = serde_json::from_slice(index).map_err(|_| unreadable())?;
+    let assets = index["assets"].as_array().ok_or_else(unreadable)?;
+    assets
+        .iter()
+        .map(|asset| {
+            asset["sha256"]
+                .as_str()
+                .filter(|digest| digest_name(digest))
+                .map(str::to_owned)
+                .ok_or_else(unreadable)
+        })
+        .collect()
+}
+
+// A publication refused after some of its blobs were kept releases them: each
+// named blob that no published generation's index names is removed, so an
+// abandoned publication is not charged against the quota.
+fn release(root: &Directory, input: &Value) -> io::Result<Value> {
+    let _lock = Lock::acquire(root, ".retained/.lock", field(input, "token")?)?;
+    let mut named = std::collections::HashSet::new();
+    for epoch in root.names()? {
+        if epoch.len() != 32 || !epoch.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            continue;
+        }
+        let epoch = root.child(&epoch, false)?;
+        for seq in epoch.names()? {
+            let generation = epoch.child(&seq, false)?;
+            if generation.kind("exact.json").is_err() {
+                continue;
+            }
+            match generation.read("assets.json") {
+                Ok(index) => named.extend(indexed_blobs(&index)?),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
+        }
+    }
+    let candidates = input["blobs"]
+        .as_array()
+        .ok_or_else(|| refuse("missing blobs"))?;
+    let mut released = 0;
+    for digest in candidates {
+        let digest = digest
+            .as_str()
+            .filter(|digest| digest_name(digest))
+            .ok_or_else(|| refuse("invalid blob name"))?;
+        if named.contains(digest) {
+            continue;
+        }
+        let (dir, leaf) = root.parent(&format!("blobs/{digest}"), false)?;
+        match dir.unlink(&leaf) {
+            Ok(()) => released += 1,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(json!(released))
 }
 
 fn operate(root: &Directory, input: &Value, locked: Option<&Lock>) -> io::Result<Value> {
@@ -160,6 +294,9 @@ fn operate(root: &Directory, input: &Value, locked: Option<&Lock>) -> io::Result
     }
     if op == "retain" {
         return retain(root, input);
+    }
+    if op == "release" {
+        return release(root, input);
     }
     if op == "inventory" {
         let mut entries = serde_json::Map::new();
@@ -183,6 +320,9 @@ fn operate(root: &Directory, input: &Value, locked: Option<&Lock>) -> io::Result
             Ok(())
         })?;
         return Ok(Value::Object(entries));
+    }
+    if op == "tree" && (input["limit"].is_u64() || input["paths"].is_array()) {
+        return page(root, input);
     }
     if op == "tree" || op == "names" || op == "copy" {
         let mut entries = serde_json::Map::new();
@@ -219,6 +359,11 @@ fn operate(root: &Directory, input: &Value, locked: Option<&Lock>) -> io::Result
             let commit = || {
                 if let Some(lock) = locked {
                     lock.verify(root)?;
+                }
+                if op == "put" && names_stream_file(root, &dir, &leaf, &parts) {
+                    return Err(refuse(
+                        "stream heads require putHead; stream locks are never replaced",
+                    ));
                 }
                 if op == "head" {
                     let lock =

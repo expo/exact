@@ -933,7 +933,9 @@ impl<D: DataSource> Runner<D> {
         let carried = kept.is_some();
         let v = match kept {
             Some(v) => v,
-            None => self.eval(row.init, &[], &[])?,
+            None => self
+                .eval(row.init, &[], &[])
+                .map_err(|e| e.evaluated(|| format!("state {name:?} initializer")))?,
         };
         if !v.conforms(&self.plan, row.ty) {
             return Err(RunnerError::slot_type(&self.plan, &v, row.ty, name));

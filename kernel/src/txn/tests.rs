@@ -186,6 +186,41 @@ fn relative_work(f: impl FnOnce()) -> usize {
 }
 
 #[test]
+fn viewport_resolution_visits_only_changed_bases_and_their_font_dependents() {
+    let mut ops = create(1..=4, NodeType::View);
+    ops.extend([
+        relative_style(2, &[(StyleId::FontSize, "5vw")]),
+        relative_style(3, &[(StyleId::FontSize, "5vh")]),
+        relative_style(4, &[(StyleId::Width, "2em")]),
+        children(2, &[4]),
+        children(1, &[2, 3]),
+        Op::AttachRoot { id: 1 },
+    ]);
+    let mut k = kernel(&ops);
+    k.compute_layout(1, Offer::definite(400.0, 600.0)).unwrap();
+    assert_eq!(
+        relative_work(|| {
+            k.compute_layout(1, Offer::definite(400.0, 800.0)).unwrap();
+        }),
+        1
+    );
+    assert_eq!(
+        relative_work(|| {
+            k.compute_layout(1, Offer::definite(800.0, 800.0)).unwrap();
+        }),
+        2
+    );
+    assert_eq!(
+        relative_work(|| {
+            k.set_env(crate::Env::new(10.0, 0.0, 0.0, 0.0)).unwrap();
+            k.compute_layout(1, Offer::definite(800.0, 800.0)).unwrap();
+            k.apply(0, 2, &[]).unwrap();
+        }),
+        0
+    );
+}
+
+#[test]
 fn unrelated_commits_do_not_resolve_relative_rows() {
     let mut ops = create(1..=1_001, NodeType::View);
     let ramp = format!("-exact-{}", crate::LENGTH_RAMPS[0].0);

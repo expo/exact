@@ -171,7 +171,7 @@ impl Painter {
             return;
         };
         let (key, at) = (node.key, (node.frame.x, node.frame.y));
-        let recorder = Recorder::default();
+        let recorder = Recorder::for_target(&*self.backend);
         let real = std::mem::replace(&mut self.backend, Box::new(recorder.clone()));
         let rows = self.rows_pause();
         // What the frame publishes of its texts and fields stays the walk's:

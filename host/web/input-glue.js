@@ -672,9 +672,13 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
       let list; try { list = [...sheet.cssRules]; } catch { continue; }
       for (const rule of list.flatMap(r => r instanceof CSSMediaRule ? [...r.cssRules] : [r])) {
         if (!rule.selectorText?.includes(`[data-exact-held~="${held.state}"]`) && !rule.selectorText?.includes(`[data-exact-held~=${held.state}]`)) continue;
-        if (!el.matches(rule.selectorText)) continue;
+        const own = el.matches(rule.selectorText);
+        const card = !own && el.matches(':is([data-liststyle],[data-liststyle]>[data-exact-list-item])>section')
+          ? el.querySelector(':scope>div') : null;
+        if (!own && !card?.matches(rule.selectorText)) continue;
+        // The section owns the row and its source; only the shadow's paint target moves.
         // A custom property is the look's own (`--exact-hover-wash`), not a row.
-        for (const prop of rule.style) if (!prop.startsWith("--")) rows.push({ name: prop.replace(/^border-(top|right|bottom|left)-color$/, "border_color_$1").replace(/-/g, "_"), value: rule.style.getPropertyValue(prop).trim(), prop });
+        for (const prop of rule.style) if (!prop.startsWith("--") && (own || prop === "box-shadow")) rows.push({ name: prop.replace(/^border-(top|right|bottom|left)-color$/, "border_color_$1").replace(/-/g, "_"), value: rule.style.getPropertyValue(prop).trim(), prop, target: own ? el : card });
       }
     }
     // A row a token or a role writes (`var(…)`, `light-dark(…)`) says the value it resolves to here, and the token
@@ -684,9 +688,12 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
     const cs = getComputedStyle(el);
     for (const row of rows) {
       const prop = row.prop;
+      const target = row.target ?? el;
       delete row.prop;
+      delete row.target;
+      if (target !== el) row.computed = getComputedStyle(target).getPropertyValue(prop).trim();
       if (!/\b(var|light-dark)\(/.test(row.value)) continue;
-      row.computed = cs.getPropertyValue(prop).trim();
+      row.computed ??= cs.getPropertyValue(prop).trim();
       const token = globalThis.exact.modes?.token?.(el, prop, row.value);
       if (token) row.token = token;
       // Each token reference on its own: one modes.js can't name leaves the answer incomplete, whatever else it named.
@@ -727,6 +734,9 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
   };
   const stillThrough = (els, change) => {
     if (!els.length) return;
+    // A grouped section's state shadow paints on its card (looks.rs).
+    els = [...new Set(els.flatMap(el => el.matches(':is([data-liststyle],[data-liststyle]>[data-exact-list-item])>section')
+      ? [el, ...el.querySelectorAll(':scope>div')] : [el]))];
     const kept = els.map(el => {
       if (!/(?:^|[;{])\s*(?:--exact-)?scale\s*:/.test(looks(el, document.getElementById("exact-looks")))) {
         el.setAttribute("data-exact-snap", "");
@@ -745,7 +755,7 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
       return [el, old, priority];
     });
     change?.();
-    getComputedStyle(els[0]).opacity;
+    for (const el of els) getComputedStyle(el).opacity;
     for (const [el, old, priority] of kept) {
       el.removeAttribute("data-exact-snap");
       if (old === null) continue;

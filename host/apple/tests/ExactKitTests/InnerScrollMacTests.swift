@@ -129,5 +129,50 @@ final class InnerScrollMacTests: XCTestCase {
             }
         }
     }
+
+    /// A right-to-left multi-column scroller's rule sits in the gap between
+    /// its columns' boxes as AppKit draws them, under either scroller style.
+    /// Each 300-point row is unbreakable, so it overflows its 200-point
+    /// column and a legacy vertical scroller shows.
+    func testRightToLeftColumnRulesSitInTheirGap() throws {
+        let restore = try forceScrollerStyle()
+        defer { restore() }
+        let plan = try compile("""
+        component App
+          view
+            view width=300 height=200 overflow="auto" direction="rtl" column-count=2 column-rule="4px solid" testId="columns"
+              view height=300 testId="first"
+              view height=300 testId="second"
+
+        """)
+        let session = ExactApp.shared.makeSession(label: "rtl-column-rules")
+        defer { session.destroy() }
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 400), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let view = ExactView(session: session)
+        window.contentView = view
+        XCTAssertNil(session.boot(plan: plan, size: NSSize(width: 400, height: 400)).error)
+        window.orderFrontRegardless()
+        let p = session.presenter
+        func node(_ name: String) throws -> NodeView { try XCTUnwrap(p.views.values.first { $0.props["testId"] == name }) }
+        for style in [NSScroller.Style.overlay, .legacy] {
+            Self.preferredStyle = style
+            NotificationCenter.default.post(name: NSScroller.preferredScrollerStyleDidChangeNotification, object: nil)
+            for _ in 0..<10 {
+                view.layoutSubtreeIfNeeded()
+                RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+            }
+            let parent = try node("columns"), scroll = try XCTUnwrap(parent.scroll)
+            let gutter = style == .legacy && !ExactEnv.agentMode
+            XCTAssertEqual(scroll.kernelDocumentOrigin.x > 0, gutter, "\(style): the gutter")
+            let first = try node("first"), second = try node("second")
+            let a = first.convert(first.bounds, to: parent), b = second.convert(second.bounds, to: parent)
+            XCTAssertLessThan(b.maxX, a.minX, "\(style): the second column is left of the first")
+            let rules = try XCTUnwrap(parent.layer?.sublayers?.first { $0.name == "exact-column-rules" })
+            let rule = try XCTUnwrap(rules.sublayers?.first)
+            XCTAssertEqual(rule.frame.midX, (b.maxX + a.minX) / 2, accuracy: 0.001, "\(style): the rule is in the gap")
+        }
+    }
 }
 #endif

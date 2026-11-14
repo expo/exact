@@ -130,3 +130,8 @@ test('a media prefer waits in the page for each query it flips before the next s
     expect(await globalThis.__exactMediaHeard.b).toBe(true);
   } finally { globalThis.matchMedia = saved.matchMedia; globalThis.__exactMediaHeard = saved.heard; }
 });
+
+test("an implementation's own source is preferred by its owner-qualified key", () => {
+  const key = 'tracking-consent.trackingAuthorizationStatus#@exact/tracking-consent/apple';
+  expect(preferGroups({ extension: `${key}={"status":"restricted"}` }).extension.extension).toEqual({ [key]: { status: 'restricted' } });
+});

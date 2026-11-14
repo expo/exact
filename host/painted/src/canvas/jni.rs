@@ -629,15 +629,16 @@ macro_rules! canvas_jni {
             }
 
             /// The reader's field `id`, known at `generation`, had real input
-            /// (a finger down, a key down).
+            /// (`kind`: IME 0, pointer 1, hardware keyboard 2).
             #[no_mangle]
             pub unsafe extern "system" fn Java_dev_exact_canvas_Native_fieldInput(
                 _env: *mut JNIEnv,
                 _class: jclass,
                 id: jint,
                 generation: jint,
+                kind: jint,
             ) {
-                with(|h| h.field_input(id as u32, generation as u32));
+                with(|h| h.field_input(id as u32, generation as u32, kind));
             }
 
             /// The reader's field `id` holds `value` after its edit number
@@ -715,6 +716,7 @@ macro_rules! canvas_jni {
                 id: jint,
                 slot: jint,
                 generation: jint,
+                session: jlong,
                 kind: jstring,
                 payload: jstring,
             ) {
@@ -724,7 +726,7 @@ macro_rules! canvas_jni {
                     index: slot as u32,
                     generation: generation as u32,
                 };
-                with(|h| h.module_event(id as u32, key, &kind, payload));
+                with(|h| h.module_event(id as u32, key, session as u64, &kind, payload));
             }
 
             $crate::canvas_jni_scroll!();

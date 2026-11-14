@@ -17,9 +17,9 @@ import { createServer, request } from 'node:http';
 import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, utimesSync, watch, writeFileSync } from 'node:fs';
 import { basename, dirname, relative, resolve } from 'node:path';
 import { acceptsHTML, appDocumentPath, webRequestURL } from '../../scripts/origin.mjs';
-import { compilerWarnings, INPUT_TREE, OUTPUT, listenOn } from '../../scripts/agent-launch.mjs';
+import { compilerWarnings, INPUT_TREE, OUTPUT, listenOn, oneScheme } from '../../scripts/agent-launch.mjs';
 import { builtSettings } from '../../js/bake/src/__exact_env.mjs';
-import { alsoOnIPv6Loopback, appManifestDigest, buildFileCards, listenDelay, replaceBuild, saveTrace, sendStaticBody, watchLauncher, webContentType } from '../web/serve.mjs';
+import { alsoOnIPv6Loopback, appManifestDigest, appSources, buildFileCards, listenDelay, replaceBuild, saveTrace, sendStaticBody, watchLauncher, webContentType } from '../web/serve.mjs';
 import { generationFile, generationPath, servedFile } from '../web/generations.mjs';
 import { besidePattern } from '../web/beside.mjs';
 import { localInstaller } from '../web/local-install.mjs';
@@ -118,7 +118,7 @@ function build(app, dist, keep = () => false, compiler = null, superseded = null
   // The app's `file:` packages as their directories hold them, before the build begins: installed during it, they
   // would be sources moved since it began, and it would be set aside (#115).
   try { installedFileDependencies(app.dir); } catch (error) { return Promise.resolve({ packages: devPackages(stage), error: error.message }); }
-  const began = Date.now();
+  const began = Date.now(), sources = appSources(app.dir, resolve(dist)).digest;
   // The app's own inputs beside its Contract sources, and which were there.
   const own = [designPath(app.dir) ?? resolve(app.dir, 'app.tamber'), resolve(app.dir, 'app.ts'), resolve(app.dir, 'app.json'), resolve(app.dir, '.exact/backend-origin'), resolve(app.dir, '.env.local'), resolve(app.dir, '.env')];
   const there = new Set(own.filter((path) => existsSync(path)));
@@ -169,8 +169,10 @@ function build(app, dist, keep = () => false, compiler = null, superseded = null
           rmSync(stage, { recursive: true, force: true }); done({ error: null, logic, packages, design, designSource, kept: true, warnings: compilerWarnings(log) });
         });
       }
+      // `sources` as host/web/build.mjs records it: null when a file came or went while it built.
+      const after = appSources(app.dir, resolve(dist)).digest;
       writeFileSync(resolve(stage, '.exact-build.json'), JSON.stringify({ exactBuild: 1, target: 'js', app: { id: app.id, name: app.displayName },
-        manifestSha256: appManifestDigest(app), files: buildFileCards(stage), ...builtSettings(stage) }) + '\n');
+        manifestSha256: appManifestDigest(app), files: buildFileCards(stage), sources: after === sources ? after : null, ...builtSettings(stage) }) + '\n');
       // Once more after the watchers' events queued meanwhile are taken.
       setImmediate(() => {
         if (moved()) return setAside();
@@ -272,7 +274,7 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
   let warned = '';
   const warn = (warnings) => {
     if (!warnings || warnings.join('\n') === warned) return;
-    if (warnings.length) console.log(warnings.join('\n'));
+    if (warnings.length) console.log(oneScheme(warnings).join('\n'));
     else console.log('the compiler warns of nothing now');
     warned = warnings.join('\n');
   };
@@ -1079,12 +1081,13 @@ es.onmessage=e=>{const m=JSON.parse(e.data);if(m.kind==='tamber-batch'||m.kind==
       body = body.toString();
       const id = url.searchParams.get('__exactDev'), carried = id && checkpoints.get(id);
       if (carried) {
-        checkpoints.delete(id);
+        // A HEAD or a failed document load must leave the handoff available to a retry. The bounded map evicts it.
+        let text = carried.text;
         if (carried.revision !== String(logicRevision ?? '')) {
-          const c = JSON.parse(carried.text);
-          if (c.carryAnswers || c.answers?.length) { c.carryAnswers = false; c.answers = []; carried.text = JSON.stringify(c); }
+          const c = JSON.parse(text);
+          if (c.carryAnswers || c.answers?.length) { c.carryAnswers = false; c.answers = []; text = JSON.stringify(c); }
         }
-        const checkpoint = `<script type="application/vnd.exact.dev-checkpoint" data-seq="${carried.seq}">${carried.text.replaceAll('<', '\\u003c')}</script><script>const u=new URL(location.href);u.searchParams.delete('__exactDev');history.replaceState(history.state,'',u.pathname+(u.search?'?'+u.searchParams:'')+u.hash)</script>`;
+        const checkpoint = `<script type="application/vnd.exact.dev-checkpoint" data-seq="${carried.seq}">${text.replaceAll('<', '\\u003c')}</script><script>const u=new URL(location.href);u.searchParams.delete('__exactDev');history.replaceState(history.state,'',u.pathname+(u.search?'?'+u.searchParams:'')+u.hash)</script>`;
         body = body.replace('<script type="module"', () => checkpoint + '<script type="module"');
       }
       body += client(seq, logicRevision);

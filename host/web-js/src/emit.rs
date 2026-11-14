@@ -1,6 +1,6 @@
 //! The plan's tables → one ES module.
 //! Module shape:
-//! slots `s_i = sig(init)`, derives `d_i = memo(body)`, resources
+//! slots `s_i = sig(init)`, settled derives `d_i = memo(body)`, resources
 //! `r_i = res(source, args, compiled value, compiled args)`, actions
 //! `a_i = act(body)` (writes land at commit, as the VM's `StoreSlot`
 //! collects them), then the view as nested statements: a node is `h(…)` with
@@ -44,6 +44,8 @@ mod said;
 mod sides;
 #[path = "sites.rs"]
 mod sites;
+#[path = "surfaces.rs"]
+mod surfaces;
 #[path = "timers.rs"]
 mod timers;
 #[path = "trapped.rs"]
@@ -206,19 +208,10 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
             }
         }
     }
-    // A link's `rel` and `target` follow its bound `href`, `rel` or `target` (links.js); a static
-    // link's the template wrote whole (element.rs `props_of`), so a plan without a bound one never
-    // links it (LLP 1047.002 D1).
-    let links = parts.iter().zip(plan.nodes.iter()).any(|(p, n)| {
-        p.as_ref().is_some_and(|p| p.tag == "a")
-            && n.bindings.iter().map(|b| plan.binding(b)).any(|b| {
-                b.kind == BindingKind::Prop
-                    && [PropId::Href, PropId::Rel, PropId::Target]
-                        .iter()
-                        .any(|id| b.id == *id as u16)
-                    && style::literal(plan, plan.code(b.expr)).is_none()
-            })
-    });
+    let links = commands::links(plan, &parts);
+    let iframes = commands::iframes(&parts);
+    let lists = commands::lists(plan);
+    let button_fills = commands::button_fills(plan, &parts);
     let mut em = Em {
         plan,
         sites: &sites,
@@ -360,21 +353,7 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
         }
         root_slot(plan, i, &top, dev_reload, &mut em.uses, &mut body)?;
     }
-    for (i, r) in plan.derives.iter().enumerate() {
-        let f = code::function(plan, plan.code(r.body), &top, 0, &mut em.uses)
-            .map_err(|e| format!("derive {}: {e}", plan.str(r.name)))?;
-        let memo = em.uses.rt("memo");
-        let _ = write!(
-            body,
-            "const d_{i}={memo}({f},{}{});",
-            serde_json::to_string(&type_code(plan, r.ty)).unwrap(),
-            if site_attrs {
-                format!(",{}", serde_json::to_string(plan.str(r.name)).unwrap())
-            } else {
-                String::new()
-            }
-        );
-    }
+    body.push_str(&em.declare_derives(&top, site_attrs)?);
     // The reserved sources facts.js, midi.js and transport.js answer, their declared fields filled by name:
     // installed before any resource, since the boot's settlement asks them (the runner answers them itself).
     let facts = crate::facts::reserved(plan, &mut body)?;
@@ -382,9 +361,18 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
     let transport = timers::transport(&mut em, &mut body)?;
     for (i, r) in plan.resources.iter().enumerate() {
         let mut args = Vec::new();
-        for a in r.args.iter() {
-            let f = code::expression(plan, plan.code(plan.arg(a).expr), &top, &mut em.uses)
-                .map_err(|e| format!("resource {}: {e}", plan.str(r.name)))?;
+        for (k, a) in r.args.iter().enumerate() {
+            let f = code::expression(
+                plan,
+                plan.code(plan.arg(a).expr),
+                &code::evaluation(
+                    &top,
+                    format!("resource {:?} argument {}", plan.str(r.name), k + 1),
+                    false,
+                ),
+                &mut em.uses,
+            )
+            .map_err(|e| format!("resource {}: {e}", plan.str(r.name)))?;
             args.push(f);
         }
         if let Some(each) = each::resource(plan, i, &args, &top, &mut em.uses)? {
@@ -490,7 +478,7 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
         let mut f = code::function(
             plan,
             plan.code(r.body),
-            &scope,
+            &code::evaluation(&scope, format!("action {:?}", plan.str(r.name)), false),
             r.params.len as usize,
             &mut em.uses,
         )
@@ -628,7 +616,6 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
         let project = em.uses.rt("navigationRoots");
         let _ = write!(body, "{project}($navigation);");
     }
-    // The state's getters, for the agent (names live in `names.js`).
     let list = |p: &str, n: usize| {
         (0..n)
             .map(|i| format!("{p}_{i}"))
@@ -645,10 +632,15 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
             .map(|(i, _)| format!("s_{i}"))
             .collect::<Vec<_>>()
             .join(","),
-        list("d", plan.derives.len()),
+        plan.derives
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| !r.unsettled)
+            .map(|(i, _)| format!("d_{i}"))
+            .collect::<Vec<_>>()
+            .join(","),
         list("r", plan.resources.len())
     );
-    // The queues read the state a stalled `next` saw (LLP 1092 D3).
     if (plan.mutations.iter()).any(|m| m.mode == exact_plan::MutationMode::Queue) {
         let queues = em.uses.rt("queues");
         let _ = write!(body, "{queues}($state);");
@@ -709,7 +701,13 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
                 .map(|r| plan.str(r.name))
                 .collect()
         ),
-        names(plan.derives.iter().map(|r| plan.str(r.name)).collect()),
+        names(
+            plan.derives
+                .iter()
+                .filter(|r| !r.unsettled)
+                .map(|r| plan.str(r.name))
+                .collect()
+        ),
         names(plan.resources.iter().map(|r| plan.str(r.name)).collect()),
         types(
             plan.slots
@@ -718,7 +716,13 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
                 .map(|r| r.ty)
                 .collect()
         ),
-        types(plan.derives.iter().map(|r| r.ty).collect()),
+        types(
+            plan.derives
+                .iter()
+                .filter(|r| !r.unsettled)
+                .map(|r| r.ty)
+                .collect()
+        ),
         types(plan.resources.iter().map(|r| r.ty).collect())
     );
     // Each source's parameter and result types, by field name, for a
@@ -796,6 +800,9 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
             (em.follow, "import\"./follow.js\";"),
             (em.media, "import{mediaUse as $media}from\"./media.js\";"),
             (links, "import{linkUse as $links}from\"./links.js\";"),
+            (iframes, "import\"./iframes.js\";"),
+            (lists, "import\"./list-items.js\";"),
+            (button_fills, "import\"./button-fill.js\";"),
             (midi, "import{midi as $midi}from\"./midi.js\";"),
             (transport, "import{sequence as $sequence,transport as $transport}from\"./transport.js\";"),
             (!facts.is_empty(), facts.as_str()),
@@ -1121,80 +1128,7 @@ impl Em<'_> {
         if !virtualized {
             self.end_follow(i, &e, parts.props.get("scrollFollowEnd"));
         }
-        // Its surface's inputs, named or positional (LLP 1009 D2).
-        if let Some(sf) = row.surface {
-            let sf = &plan.surfaces[sf.0 as usize];
-            // A surface the app's GPU module draws (the build names them)
-            // goes to it; any other is a Canvas 2D surface, drawn by the data module and replayed by the web host's own glue.
-            let name = plan.str(sf.name);
-            let gpu = commands::gpu_surfaces().iter().any(|s| s == name);
-            let named = sf.mode == exact_plan::SurfaceArgsMode::Named;
-            if !gpu {
-                // Positional values, their declared types where known, and
-                // the authored names (LLP 1056 D1: a draw's `args`).
-                self.canvas2d.insert(name.to_string());
-                let values = sf
-                    .args
-                    .iter()
-                    .map(|a| {
-                        let a = &plan.surface_args[a.0 as usize];
-                        code::expression(plan, plan.code(a.expr), scope, &mut self.uses)
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                let types: Vec<String> = sf
-                    .args
-                    .iter()
-                    .map(|a| {
-                        let a = &plan.surface_args[a.0 as usize];
-                        crate::faces::arg_type(plan, plan.code(a.expr)).map_or("0".into(), |t| {
-                            serde_json::to_string(&type_code(plan, t)).unwrap()
-                        })
-                    })
-                    .collect();
-                let names: Vec<String> = if named {
-                    sf.args
-                        .iter()
-                        .map(|a| {
-                            serde_json::to_string(plan.str(plan.surface_args[a.0 as usize].name))
-                                .unwrap()
-                        })
-                        .collect()
-                } else {
-                    Vec::new()
-                };
-                let c2 = self.uses.rt("c2");
-                let _ = write!(
-                    self.out,
-                    "{c2}({e},{},()=>[{}],[{}],[{}]);",
-                    serde_json::to_string(name).unwrap(),
-                    values.join(","),
-                    types.join(","),
-                    names.join(",")
-                );
-            } else {
-                let mut values = Vec::new();
-                for a in sf.args.iter() {
-                    let a = &plan.surface_args[a.0 as usize];
-                    let v = code::expression(plan, plan.code(a.expr), scope, &mut self.uses)?;
-                    values.push(if named {
-                        format!("{}:{v}", serde_json::to_string(plan.str(a.name)).unwrap())
-                    } else {
-                        v
-                    });
-                }
-                let gs = self.uses.rt("gs");
-                let body = if named {
-                    format!("({{{}}})", values.join(","))
-                } else {
-                    format!("[{}]", values.join(","))
-                };
-                let _ = write!(
-                    self.out,
-                    "{gs}({e},{},()=>{body});",
-                    serde_json::to_string(name).unwrap()
-                );
-            }
-        }
+        self.surface(i, &e, scope)?;
         self.media |= element == "video" || element == "audio";
         if (element == "video" || element == "audio")
             && parts.props.get("muted").map(String::as_str) == Some("true")
@@ -1252,7 +1186,13 @@ impl Em<'_> {
                     let source = serde_json::to_string(v.as_str().unwrap_or_default()).unwrap();
                     self.markdown(i, &e, &format!("()=>{source}"), plan.code(b.expr));
                 }
-                continue;
+                // Refused SVG literals still run their binding to journal the refusal.
+                if b.kind != BindingKind::Prop
+                    || !exact_runner::bridge::prop_value(b.id, &v)
+                        .is_err_and(|e| crate::svg_lengths::refused(&e))
+                {
+                    continue;
+                }
             }
             let f = self
                 .bound(i, &e, &b, scope)
@@ -1274,6 +1214,10 @@ impl Em<'_> {
                         format!("()=>{{const v=({f})();return v==null?v:!v}}")
                     } else if prop == PropId::GlassGroup {
                         format!("()=>{{const v=({f})();return v===-1?\"auto\":v}}")
+                    } else if let Some(value) =
+                        crate::svg_lengths::binding(&mut self.uses, prop, &f, &e)
+                    {
+                        value
                     } else if matches!(prop, PropId::Wakelock | PropId::Orientationlock) {
                         // The value as computed, which wakelock.js and orientationlock.js journal.
                         let k = ["wake", "orient"][usize::from(prop == PropId::Orientationlock)];
@@ -1330,8 +1274,17 @@ impl Em<'_> {
                 continue;
             }
             let mut args = Vec::new();
-            for a in h.args.iter() {
-                let f = code::expression(plan, plan.code(plan.arg(a).expr), scope, &mut self.uses)?;
+            for (k, a) in h.args.iter().enumerate() {
+                let f = code::expression(
+                    plan,
+                    plan.code(plan.arg(a).expr),
+                    &code::evaluation(
+                        scope,
+                        format!("site {i} {} argument {}", h.event.name(), k + 1),
+                        false,
+                    ),
+                    &mut self.uses,
+                )?;
                 args.push(f);
             }
             match h.event {

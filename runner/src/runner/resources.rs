@@ -62,8 +62,14 @@ impl<D: DataSource> Runner<D> {
 
     /// What an ask of resource `i` read, from the store's counts before it:
     /// any read makes it the device's, and one beyond its draws of
-    /// randomness a reader of what the store holds.
-    pub(super) fn note_reads(&mut self, i: usize, reads_before: usize, draws_before: usize) {
+    /// randomness a reader of what the store holds. Returns whether this ask
+    /// read what the store holds.
+    pub(super) fn note_reads(
+        &mut self,
+        i: usize,
+        reads_before: usize,
+        draws_before: usize,
+    ) -> bool {
         let reads = self.store.reads() - reads_before;
         let draws = self.store.entropy_draws() - draws_before;
         let row = &mut self.resources[i];
@@ -71,6 +77,7 @@ impl<D: DataSource> Runner<D> {
         row.entropy_reader |= draws > 0;
         row.contents_reader |= reads > draws;
         row.reads_known = true;
+        reads > draws
     }
 
     /// What resource `i`'s answer from a rendered page read, which the render

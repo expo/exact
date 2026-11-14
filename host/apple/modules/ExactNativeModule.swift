@@ -737,8 +737,9 @@ public final class ExactRoute {
     /// The route's content scroll view when the hatch was last called: the app's top-edge
     /// selection; else, where the route has a `navigationScroll`, the scroll view of the element
     /// it names, or nil when no element carries the name or it does not scroll; else the scroll
-    /// view of the route's first vertical scroller; else the route's own viewport, which only an
-    /// unpresented route under `interactive-widget="resizes-visual"` has; else nil. A top-edge
+    /// view of the route's first vertical scroller; else the route's own viewport, which an
+    /// unpresented route has when its navigation root scrolls or native chrome uses
+    /// `interactive-widget="resizes-visual"`; else nil. A top-edge
     /// selection or nil made with UIKit's `controller.setContentScrollView(_:for:)` reaches it
     /// when Exact next prepares the route, at the next authored update (after a nil, possibly
     /// within the call), and the hatch is called again then; nil makes the edge automatic, as

@@ -47,7 +47,7 @@ pub(crate) fn placed(plan: &exact_plan::Plan) -> BTreeSet<String> {
             {
                 return None;
             }
-            match exact_runner::vm::instructions(plan.code(binding.expr))
+            match exact_runner::vm::instructions(plan.read_code(plan.code(binding.expr)).0)
                 .collect::<Result<Vec<_>, _>>()
                 .as_deref()
             {

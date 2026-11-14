@@ -804,6 +804,7 @@ fn compute_inner(
     let absolute_position_inset = resolved_border + scrollbar_gutter;
     let absolute_position_area = final_outer_size - absolute_position_inset.sum_axes();
     let absolute_position_offset = Point { x: absolute_position_inset.left, y: absolute_position_inset.top };
+    let clearance = tree.get_core_container_style(node_id).absolute_clearance();
     let absolute_overflow_rect = perform_absolute_layout_on_absolute_children(
         tree,
         node_id,
@@ -811,6 +812,7 @@ fn compute_inner(
         AbsolutePass {
             area_size: absolute_position_area,
             area_offset: absolute_position_offset,
+            clearance,
             direction,
             sizing_mode: SizingMode::ContentSize,
             #[cfg(feature = "content_size")]

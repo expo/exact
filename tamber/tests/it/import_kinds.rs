@@ -769,29 +769,27 @@ fn the_landing_check_keeps_what_holds_and_refuses_axes_that_do_not() {
     lands(design, &i);
 }
 
-/// Stage 10b round 4: a small document that multiplies is refused quickly,
-/// whatever shape multiplies it (each charged against one import's work).
+/// A small document that multiplies exhausts one import's work budget,
+/// whatever shape multiplies it.
 #[test]
 fn a_document_that_multiplies_is_refused_whatever_its_shape() {
+    use exact_tamber::import::{measure_work, WORK_LIMIT};
     use serde_json::json;
     let refused = |files: Vec<(String, String)>| {
-        let started = std::time::Instant::now();
-        let got = dtcg::import(&files, "ds", &parse(EMPTY).unwrap());
-        assert!(
-            started.elapsed().as_secs() < 10,
-            "took {:?}",
-            started.elapsed()
-        );
-        match got {
-            Err(all) => assert!(
-                all.iter().any(|d| d.message.contains("expands past")),
+        for limit in [
+            32 * files.iter().map(|(_, s)| s.len() as u64).sum::<u64>(),
+            WORK_LIMIT,
+        ] {
+            let (got, spent) =
+                measure_work(limit, || dtcg::import(&files, "ds", &parse(EMPTY).unwrap()));
+            assert_eq!(spent, limit);
+            let why = format!("expands past what one import may do ({limit} steps)");
+            let all = got.unwrap_err();
+            assert!(
+                all.iter()
+                    .any(|d| d.id == "tamber-import-source" && d.message.contains(&why)),
                 "{all:?}"
-            ),
-            Ok(i) => assert!(
-                i.unmapped.iter().any(|u| u.why.contains("expands past")),
-                "{:?}",
-                i.unmapped
-            ),
+            );
         }
     };
     // A resolver document whose sets refer eight times to the next, ten deep.

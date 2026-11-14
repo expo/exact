@@ -949,7 +949,7 @@ nonisolated(unsafe) var planRefusal: String?
 func agentReady() {
     guard agentReadable, !readySent else { return }
     readySent = true
-    Agent.reply(["ready": true, "boot": session.bootMs, "views": session.viewCount, "error": planRefusal ?? session.bootError ?? NSNull()])
+    Agent.reply(["ready": true, "boot": session.bootMs, "views": session.viewCount, "error": planRefusal ?? session.bootError ?? session.nativeArtifactFailure ?? NSNull()])
     Agent.startStdio(sessions: [("main", session)])
 }
 app.run()

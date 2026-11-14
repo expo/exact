@@ -104,7 +104,7 @@ pub(crate) enum Refusal {
 /// `touch-action`, `scale`, `transform`, `top` and `left` are in GLUE.
 /// Left inline on purpose, not refused: agent.js and inspect-dev.js read a
 /// lowered node's arm rule (class-aware); dom.js 116 `font-size` is the
-/// render shim's, where lowered rows are written inline; said.js 22
+/// render shim's, where lowered rows are written inline; button-fill.js 14
 /// `background-color` is read on pressable buttons only (R1);
 /// navigation.js 1042 saves and restores `width`/`flex-shrink` around one
 /// synchronous measurement; presence-glue.js 314-318 writes an exiting
@@ -606,7 +606,14 @@ fn run(
     key: &mut Option<Vec<u8>>,
     lits: &mut Vec<Lit>,
 ) -> Result<Option<Lit>, Refusal> {
-    let ins: Vec<_> = instructions(code)
+    if exact_runner::vm::transitive_instructions(plan, code).any(|i| {
+        i.is_ok_and(|i| {
+            i.op == Opcode::LoadDerive && plan.unsettled_body(i.args[0] as u32).is_some()
+        })
+    }) {
+        return Err(Refusal::SidePath);
+    }
+    let ins: Vec<_> = instructions(plan.read_code(code).0)
         .collect::<Result<_, _>>()
         .map_err(|_| Refusal::NonLiteralArm)?;
     let (mut stack, mut locals, mut at, mut steps): (Vec<V>, Vec<V>, usize, usize) =

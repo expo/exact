@@ -101,13 +101,7 @@ pub(super) fn can_start(state: &State, job: &Job) -> bool {
 
 fn take_job(state: &mut State, lane: usize, index: usize) -> Option<(Job, AbortController)> {
     let job = state.jobs[lane].get(index)?;
-    // A module handoff's outcome is the owner's to make; it is charged
-    // what it retains when it completes.
-    let more = if handed_off(job) {
-        0
-    } else {
-        job.limit - job.charge
-    };
+    let more = job.limit - job.charge;
     if more > BYTES[lane].saturating_sub(state.bytes[lane]) {
         return None;
     }

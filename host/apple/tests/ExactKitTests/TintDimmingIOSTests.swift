@@ -42,8 +42,8 @@ final class TintDimmingIOSTests: XCTestCase {
         assertChannels(try shadow(button), green, "the button's shadow")
         assertChannels(try runChannels(label), red, "the button's red label")
         XCTAssertEqual(Array(try runChannels(wide).dropFirst(4)), [1, 1, 0, 0, 1], "the display-p3 label in its own space (`textChannels`' code 1)")
-        assertChannels(try components(symbol.tintColor.cgColor), red, "the icon's colour")
-        XCTAssertEqual(symbol.tintAdjustmentMode, .normal, "UIKit leaves the icon's own colour as it is")
+        try assertSymbolColor(symbol, red)
+        XCTAssertEqual(symbol.tintAdjustmentMode, .dimmed, "the image keeps its ink while its view inherits dimming")
         dim(p, false)
     }
 
@@ -94,9 +94,9 @@ final class TintDimmingIOSTests: XCTestCase {
         assertChannels(try components(inTint.tintColor.cgColor), green, "the symbol in the tint its node inherits")
         dim(p, true)
         XCTAssertEqual(inTint.tintAdjustmentMode, .dimmed, "UIKit dims the symbol in the tint")
-        XCTAssertEqual(own.tintAdjustmentMode, .normal, "and leaves the one in its own colour")
+        XCTAssertEqual(own.tintAdjustmentMode, .dimmed, "the view inherits dimming even with its own ink")
         assertChannels(try components(inTint.tintColor.cgColor), uikitGrey(green, uikitAlpha: true), "the symbol in UIKit's grey")
-        assertChannels(try components(own.tintColor.cgColor), red, "the symbol in its own colour")
+        try assertSymbolColor(own, red)
         dim(p, false)
         assertChannels(try components(inTint.tintColor.cgColor), green, "the symbol in the tint once the dimming ends")
     }
@@ -475,6 +475,19 @@ final class TintDimmingIOSTests: XCTestCase {
 
     private func symbolView(_ node: NodeView?) throws -> UIImageView {
         try XCTUnwrap(node?.symbolView, "the node draws a symbol")
+    }
+
+    private func assertSymbolColor(_ view: UIImageView, _ expected: [Int], file: StaticString = #filePath, line: UInt = #line) throws {
+        assertChannels(try symbolInkChannels(view, original: true), expected, "the original image's sRGB ink", file: file, line: line)
+        let source = try XCTUnwrap(SymbolEffectState.of(view).inkSource)
+        let reference = UIImageView(image: source.withTintColor(color(expected), renderingMode: .alwaysOriginal))
+        reference.frame = view.frame
+        reference.contentMode = view.contentMode
+        view.superview?.addSubview(reference)
+        defer { reference.removeFromSuperview() }
+        for (got, want) in zip(try symbolInkChannels(view), try symbolInkChannels(reference)) {
+            XCTAssertEqual(got, want, accuracy: 2, "the owned ink renders as a native original image", file: file, line: line)
+        }
     }
 
     /// The channels paragraph `node` paints run `index` in, as the run carries them

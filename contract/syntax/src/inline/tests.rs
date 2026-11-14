@@ -10,6 +10,151 @@ use std::collections::BTreeMap;
 const NAMES: [&str; 4] = ["a", "b", "o", "p"];
 
 #[test]
+fn a_repeated_computed_prop_is_evaluated_once_per_binding() {
+    let file = crate::parse(
+        r#"component App
+  state n = 3
+  view
+    Counted(values=range(n))
+component Counted
+  props
+    values: number[]
+  view
+    text `${values.length}/${values.length > 0}`
+"#,
+    )
+    .unwrap();
+
+    let view = super::inline(&file).unwrap();
+    let evaluations: usize = crate::Node::walk(&view)
+        .flat_map(crate::Node::exprs)
+        .map(|e| call_count(e, "range"))
+        .sum();
+    assert_eq!(evaluations, 1, "the two reads share their computed value");
+}
+
+fn range_calls(src: &str) -> usize {
+    let view = super::inline(&crate::parse(src).unwrap()).unwrap();
+    crate::Node::walk(&view)
+        .flat_map(crate::Node::exprs)
+        .map(|e| call_count(e, "range"))
+        .sum()
+}
+
+#[test]
+fn a_forwarded_argument_shares_its_repeated_prop_reads() {
+    let calls = range_calls(
+        r#"component App
+  state n = 3
+  view
+    Box(values=range(n))
+component Box
+  props
+    values: number[]
+  view
+    Counted(count=values.length + values.length)
+component Counted
+  props
+    count: number
+  view
+    text `${count}/${count}`
+"#,
+    );
+    assert_eq!(calls, 1, "the argument and its reads share one evaluation");
+}
+
+#[test]
+fn an_inject_read_twice_in_one_binding_is_evaluated_once() {
+    let calls = range_calls(
+        r#"component App
+  state n = 3
+  provide
+    values = range(n)
+  view
+    Counted()
+component Counted
+  inject
+    values: number[]
+  view
+    text `${values.length}/${values.length}`
+"#,
+    );
+    assert_eq!(calls, 1);
+}
+
+fn call_count(e: &Expr, wanted: &str) -> usize {
+    usize::from(matches!(e, Expr::Call(name, _, _) if name == wanted))
+        + e.operands().map(|e| call_count(e, wanted)).sum::<usize>()
+}
+
+#[test]
+fn prop_sharing_keeps_handlers_and_clock_readers_inline() {
+    let file = crate::parse(
+        r#"fn stamp(): number = performanceNow()
+component App
+  state n = 3
+  derive time = performanceNow()
+  action save(value: number)
+    n = value
+  view
+    Cell(value=n * 2, direct=performanceNow() + 0, indirect=stamp() + 0, derived=time + 0, go=save)
+component Cell
+  props
+    value: number
+    direct: number
+    indirect: number
+    derived: number
+    go: action
+  derive twice = value + value
+  view
+    column
+      text `${twice}`
+      text `${direct}/${direct}/${indirect}/${indirect}/${derived}/${derived}`
+      button press=go(value + value)
+        text "save"
+"#,
+    )
+    .unwrap();
+    let view = super::inline(&file).unwrap();
+    let expressions: Vec<_> = crate::Node::walk(&view)
+        .flat_map(crate::Node::exprs)
+        .collect();
+    assert_eq!(
+        expressions
+            .iter()
+            .map(|e| call_count(e, "performanceNow"))
+            .sum::<usize>(),
+        2
+    );
+    assert_eq!(
+        expressions
+            .iter()
+            .map(|e| call_count(e, "stamp"))
+            .sum::<usize>(),
+        2
+    );
+    let handler = crate::Node::walk(&view)
+        .find_map(|node| match node {
+            crate::Node::Element { tag, attrs, .. } if tag == "button" => {
+                attrs.iter().find(|a| a.name == "press").map(|a| &a.value)
+            }
+            _ => None,
+        })
+        .unwrap();
+    let Expr::Call(_, args, _) = handler else {
+        panic!("handler: {handler:?}")
+    };
+    assert!(matches!(&args[0], Expr::Binary(BinOp::Add, a, b, _)
+        if matches!(**a, Expr::Binary(BinOp::Mul, ..)) && matches!(**b, Expr::Binary(BinOp::Mul, ..))));
+    assert!(expressions.iter().any(|e| matches!(e, Expr::Let { .. })));
+    let clock = expressions
+        .iter()
+        .find(|e| call_count(e, "performanceNow") > 0)
+        .unwrap();
+    assert!(!clock.walk().any(|e| matches!(e, Expr::Let { .. })));
+}
+
+#[test]
 fn expansion_refuses_a_file_without_a_component() {
     for src in [
         "",
@@ -235,6 +380,8 @@ fn run(e: &Expr, env: &BTreeMap<String, V>, bodies: &BTreeMap<String, Expr>) -> 
     };
     Ok(match e {
         Expr::Number(n, _) => V::Num(*n),
+        Expr::Some(x, _) => V::Opt(Some(Box::new(run(x, env, bodies)?))),
+        Expr::None(_) => V::Opt(None),
         Expr::Ident(n, _) => match env.get(n) {
             Some(v) => v.clone(),
             None => run(bodies.get(n).ok_or(())?, env, bodies)?,
@@ -277,6 +424,46 @@ fn run(e: &Expr, env: &BTreeMap<String, V>, bodies: &BTreeMap<String, Expr>) -> 
         }
         other => unreachable!("not generated: {other:?}"),
     })
+}
+
+#[test]
+fn shared_prop_reads_preserve_substitution_under_branches_and_binders() {
+    let mut rng = Rng(0x6a09_e667_f3bc_c909);
+    let names = NAMES.iter().map(|n| n.to_string()).collect();
+    let empty = BTreeMap::new();
+    let records = Default::default();
+    let mut shared = 0;
+    for _ in 0..3_000 {
+        let e = expr(&mut rng, 4);
+        let replacements = NAMES
+            .iter()
+            .map(|n| {
+                let value = if rng.below(4) == 0 {
+                    Expr::Call("fail".into(), Vec::new(), Span::default())
+                } else {
+                    expr(&mut rng, 2)
+                };
+                (n.to_string(), value)
+            })
+            .collect();
+        let bound = super::derives::share_props(&e, &names);
+        shared += bound
+            .walk()
+            .filter(|e| matches!(e, Expr::Let { .. }))
+            .count();
+        let expected = substituted(&e, &replacements, &records);
+        let actual = substituted(&bound, &replacements, &records);
+        let env = NAMES
+            .iter()
+            .map(|n| (n.to_string(), value(&mut rng)))
+            .collect();
+        assert_eq!(
+            run(&actual, &env, &empty),
+            run(&expected, &env, &empty),
+            "{e:?} under {replacements:?} became {actual:?}"
+        );
+    }
+    assert!(shared > 100, "{shared} repeated prop reads were bound");
 }
 
 #[test]

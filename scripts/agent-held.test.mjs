@@ -96,6 +96,28 @@ test('a look that answers past the bound counts nothing', async () => {
   expect(performance.now() - started).toBeLessThan(140);
 });
 
+test('a wait leaves no timer behind: the process exits when it returns, not at its bound', async () => {
+  // In a child, so what keeps the process alive is seen: a won look's losing deadline did, until the bound.
+  const script = `
+    import { heldClock } from ${JSON.stringify(new URL('./agent-held.mjs', import.meta.url).href)};
+    for (const [counts, bound] of [[[0, 0, 1], '5s'], [[0], '300ms']]) {
+      let i = 0;
+      const s = { now: 7, carrier: { host: 'web' }, async op(req) {
+        if (req.op === 'tags') return {};
+        const n = counts[Math.min(i++, counts.length - 1)];
+        return { held: [{ name: 'item', ticket: 1, held: true }], heldReplies: { item: n } };
+      }, async clock() { return { settled: true }; } };
+      console.log(JSON.stringify(await heldClock(s, [bound])));
+    }`;
+  const started = performance.now();
+  const child = Bun.spawn([process.execPath, '-e', script], { stdout: 'pipe', stderr: 'pipe' });
+  const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect(err).toBe('');
+  expect(code).toBe(0);
+  expect(out.trim().split('\n').map((line) => JSON.parse(line).settled)).toEqual([true, false]);
+  expect(performance.now() - started).toBeLessThan(3000);
+}, 10_000);
+
 /** A session whose `gateway.state` is `before` until `after` ms of real time have passed since it was made, then
  * `ready`; it records every op, so a test sees that the clock never moved. */
 function flipping(after, host = 'web', { slow = 0 } = {}) {

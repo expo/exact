@@ -491,7 +491,8 @@ const guarded = {
     if (typeof callback !== 'function') throw new TypeError('setTimeout(): the callback must be a function; a string of code is never run');
     return arm('setTimeout()', callback, Math.max(Number(delay) | 0, 0), args); // `long`, as WebIDL converts it
   },
-  clearTimeout: disarm, setInterval: noTimers('setInterval()'), AbortSignal: GuardedAbortSignal,
+  clearTimeout(id) { disarm(Number(id) | 0); }, // `long` too: a handle's string or a boxed number clears it
+  setInterval: noTimers('setInterval()'), AbortSignal: GuardedAbortSignal,
   requestAnimationFrame: noTimers('requestAnimationFrame()'), requestIdleCallback: noTimers('requestIdleCallback()'),
   clearInterval() {}, cancelAnimationFrame() {}, cancelIdleCallback() {},
   performance: Object.freeze({ now: () => refuse('performance.now()') }),

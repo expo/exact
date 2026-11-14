@@ -16,7 +16,7 @@ pub(crate) struct CatalogSnapshot {
     collection: fontique::Collection,
     files: Arc<HashMap<u64, Arc<std::path::Path>>>,
     locale: String,
-    families: Vec<FamilyChoice>,
+    families: Vec<Vec<FamilyChoice>>,
     declared: HashMap<(u16, u16, bool), catalog::FaceId>,
     sans: String,
 }
@@ -35,7 +35,7 @@ pub(super) struct Recipe {
     collection: fontique::Collection,
     files: Arc<HashMap<u64, Arc<std::path::Path>>>,
     locale: String,
-    families: Vec<FamilyChoice>,
+    families: Vec<Vec<FamilyChoice>>,
     declared: HashMap<(u16, u16, bool), catalog::FaceId>,
     sans: String,
     pub cost: CaptureCost,

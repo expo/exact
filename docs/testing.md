@@ -105,6 +105,10 @@ its time counts too.
   hidden page. A check that something did *not* happen should wait until the
   work it watches has ended (a count of operations in flight, a join) and then
   check.
+- **An iOS XCTest that hangs fails at its time allowance.** `build.mjs --test --ios`
+  sets the default per-test execution time allowance to 600 s: a test still
+  running at its allowance fails with "Test exceeded execution time allowance",
+  and the run goes on with the next test in a new process.
 - **Keep waits simple.** A wait reads as one condition and one bound. If
   observing an event needs a new hook, the hook is small and read-only (for
   example `Module::storage_in_flight`).

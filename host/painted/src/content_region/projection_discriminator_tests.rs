@@ -79,9 +79,10 @@ impl Backend for ObservedRaster {
         clips: &[Shape],
         t: Transform,
         tint: Option<[u8; 4]>,
+        rendering: exact_kernel::ImageRendering,
     ) {
         self.shape("image", &Shape::rect(dst), t, &[]);
-        self.raster.image(i, dst, clips, t, tint);
+        self.raster.image(i, dst, clips, t, tint, rendering);
     }
     fn text(
         &mut self,
@@ -410,6 +411,74 @@ fn projection_discriminator_integer_control() {
 fn projection_discriminator_fractional_border_padding_scroll() {
     current_case(true);
 }
+
+#[test]
+fn padded_region_flow_matches_ordinary_paint_after_inset_and_shape_changes() {
+    let _service = crate::content_region::test_service();
+    let plan = crate::test_plan(
+        r##"component App
+  state top = 10
+  state left = 0
+  action pad
+    top = top + 20
+  action move
+    left = 100
+  view
+    column width=400 height=600
+      view id="owner" width=400 height=200 overflow-x="hidden" overflow-y="hidden"
+        view id="content" width=400 height=200 position="relative"
+          text "One two three four five six seven eight nine ten. One two three four five six seven eight nine ten. One two three four five six seven eight nine ten." testId="paragraph" width=400 height=180 box-sizing="border-box" padding-left="10%" padding-top=top border-width=3 border-style="solid" font-size=16 color="#123456"
+          view position="absolute" left=left top=30 width=40 height=40 wrap-flow="both" shape-outside="circle()" background-color="#ff0000"
+        text "" id="pending" position="absolute"
+      button press=pad testId="pad" height=24
+        text "Pad"
+      button press=move testId="move" height=24
+        text "Move"
+"##,
+    );
+    let mut ordinary = fixture(&plan, false);
+    let mut region = fixture(&plan, true);
+    for action in [None, Some("move"), Some("pad"), Some("pad")] {
+        if let Some(action) = action {
+            for p in [&mut ordinary, &mut region] {
+                assert!(p
+                    .host
+                    .dispatch_at(id(p, action), Event::Press, 1.)
+                    .is_none());
+                assert!(p.after_commit().is_none());
+            }
+            ready(&mut region);
+        }
+        let expected = ordinary.frame();
+        let actual = region.frame();
+        assert!(ordinary.last_frame_succeeded && region.last_frame_succeeded);
+        assert_eq!(
+            expected
+                .data()
+                .iter()
+                .zip(actual.data())
+                .filter(|(a, b)| a != b)
+                .count(),
+            0,
+            "ordinary and region pixels differ after {action:?}"
+        );
+        let key = region
+            .host
+            .kernel()
+            .node(id(&region, "paragraph"))
+            .unwrap()
+            .key;
+        let snapshot = region
+            .host
+            .content_region()
+            .unwrap()
+            .text_snapshot(key)
+            .unwrap();
+        assert!(snapshot.current);
+        assert!(!snapshot.paragraph.fragments().is_empty());
+    }
+}
+
 #[test]
 fn projection_discriminator_retained_a_moves_while_b_is_pending() {
     let _service = crate::content_region::test_service();

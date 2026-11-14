@@ -359,3 +359,194 @@ fn inline_frame_is_unavailable_for_an_unmounted_virtual_row() {
     tap(&mut p, "measure");
     assert_eq!(slot(&p, "result"), true);
 }
+
+/// The line starts in Chrome 156's anonymous-text fixtures, with the
+/// paragraph's fixture-font glyph metrics kept by painting and hit testing.
+#[test]
+fn anonymous_text_placement_paints_and_hits_the_same_lines() {
+    let text = "text \"X\" id=\"run\" href=\"/word\"";
+    let mut plain = boot(&app(text, "width=100 height=100", "", &["run"]));
+    let reference = relative(&mut plain, 0);
+    for (attrs, down) in [
+        ("display=\"flex\" align-items=\"center\"", 40.),
+        ("display=\"grid\" align-items=\"center\"", 40.),
+        ("display=\"grid\" align-items=\"end\"", 80.),
+        (
+            "display=\"grid\" align-items=\"center\" grid-template-rows=\"10px\"",
+            -5.,
+        ),
+        (
+            "display=\"grid\" align-items=\"center\" grid-template-rows=\"calc(100% - 40px)\"",
+            20.,
+        ),
+        (
+            "display=\"flex\" align-items=\"center\" padding-bottom=20 overflow=\"clip\"",
+            40.,
+        ),
+        ("display=\"grid\" align-content=\"center\"", 40.),
+        (
+            "display=\"grid\" align-items=\"center\" grid-template-rows=\"60px\"",
+            20.,
+        ),
+        (
+            "display=\"flex\" flex-direction=\"column\" justify-content=\"center\"",
+            40.,
+        ),
+    ] {
+        let mut p = boot(&app(
+            text,
+            &format!("width=100 height=100 {attrs}"),
+            "",
+            &["run"],
+        ));
+        let r = relative(&mut p, 0);
+        close(
+            r,
+            [
+                reference[0],
+                reference[1] + down,
+                reference[2],
+                reference[3],
+            ],
+            0.01,
+        );
+        let id = view(&p, "paragraph");
+        let b = p.rect_of(id).unwrap();
+        assert_eq!(
+            p.run_link(id, b.0 + 5., b.1 + down as f32 + 10.).as_deref(),
+            Some("/word")
+        );
+    }
+
+    for (ratio, height, align, first_x, first_y, last_x, last_y) in [
+        ("5/6", 60, "center", 0., 20., 120., 0.),
+        ("1", 60, "center", 0., 10., 120., 0.),
+        ("5/6", 40, "center", 120., 0., 240., 0.),
+        ("1", 40, "center", 120., 0., 240., 0.),
+        ("5/6", 60, "flex-end", 120., 0., 240., 0.),
+    ] {
+        let source = app(
+        "text \"one\\ntwo\\n\" id=\"first\" testId=\"first\" href=\"/first\"\ntext \"three\\nfour\" id=\"last\" testId=\"last\" href=\"/last\"",
+        &format!("width=100 aspect-ratio=\"{ratio}\" display=\"flex\" flex-direction=\"column\" justify-content=\"{align}\" white-space=\"pre\" color=\"#000000\""),
+        &format!("width=220 column-count=2 column-gap=20 height={height} column-fill=\"auto\""),
+        &["first", "last"],
+    ).replace("      column width=220", "      view width=220");
+        let mut p = boot(&source);
+        let first = relative(&mut p, 0);
+        let last = relative(&mut p, 1);
+        close(
+            [first[0], first[1], last[0], last[1]],
+            [
+                first_x,
+                reference[1] + first_y,
+                last_x,
+                reference[1] + last_y,
+            ],
+            0.01,
+        );
+        let id = view(&p, "paragraph");
+        let b = p.rect_of(id).unwrap();
+        assert_eq!(
+            p.run_link(id, b.0 + first_x as f32 + 5., b.1 + first_y as f32 + 10.)
+                .as_deref(),
+            Some("/first")
+        );
+        assert_eq!(
+            p.run_link(id, b.0 + last_x as f32 + 5., b.1 + last_y as f32 + 10.)
+                .as_deref(),
+            Some("/last")
+        );
+        assert_eq!(p.run_link(id, b.0 + 110., b.1 + 10.), None);
+        let first = view(&p, "first");
+        let last = view(&p, "last");
+        assert_eq!(
+            p.hit(b.0 + first_x as f32 + 5., b.1 + first_y as f32 + 10.),
+            Some(first)
+        );
+        assert_eq!(
+            p.hit(b.0 + last_x as f32 + 5., b.1 + last_y as f32 + 10.),
+            Some(last)
+        );
+        assert_ne!(p.hit(b.0 + 110., b.1 + 10.), Some(id));
+        let frame = p.frame();
+        let ink = |x: u32, y: u32, height: u32| {
+            (0..height).any(|dy| {
+                (0..40).any(|dx| {
+                    let pixel = frame
+                        .pixel(b.0 as u32 + x + dx, b.1 as u32 + y + dy)
+                        .unwrap()
+                        .demultiply();
+                    pixel.red() < 128 || pixel.green() < 128 || pixel.blue() < 128
+                })
+            })
+        };
+        assert!(ink(first_x as u32, first_y as u32, 20));
+        assert!(ink(first_x as u32, first_y as u32 + 20, 20));
+        assert!(ink(last_x as u32, last_y as u32, 20));
+        assert!(ink(last_x as u32, last_y as u32 + 20, 20));
+        if height == 40 {
+            assert!(!ink(0, 0, 20) && !ink(0, 20, 20));
+            assert_eq!(p.run_link(id, b.0 + 5., b.1 + 25.), None);
+        } else {
+            assert!(!ink(last_x as u32, 40, 20));
+        }
+        if ratio == "1" && height == 60 {
+            assert!(!ink(0, 50, 10), "the third line belongs to the next column");
+            assert_eq!(p.run_link(id, b.0 + 5., b.1 + 55.), None);
+        }
+    }
+}
+
+/// Chrome: the 50px anonymous grid item wraps and draws 25px into its 100px container.
+#[test]
+fn anonymous_grid_text_paints_and_hits_at_its_track_width() {
+    for fragmented in [false, true] {
+        let (text, attrs, around, first_y, last_x, last_y) = if fragmented {
+            ("text \"one two \" id=\"first\" testId=\"first\" href=\"/first\"\ntext \"three four\" id=\"last\" testId=\"last\" href=\"/last\"",
+             "width=100 aspect-ratio=\"5/6\"", "width=220 height=60 column-count=2 column-gap=20 column-fill=\"auto\"", 20., 145., 0.)
+        } else {
+            ("text \"one \" id=\"first\" testId=\"first\" href=\"/first\"\ntext \"two\" id=\"last\" testId=\"last\" href=\"/last\"",
+             "width=100 height=100", "", 30., 25., 50.)
+        };
+        let source = app(text, &format!("{attrs} display=\"grid\" grid-template-columns=\"50px\" justify-content=\"center\" align-items=\"center\" color=\"#000000\""), around, &["first", "last"])
+            .replace("      column width=220", "      view width=220");
+        let mut p = boot(&source);
+        let first = relative(&mut p, 0);
+        let last = relative(&mut p, 1);
+        assert_eq!(first[0], 25.0);
+        assert_eq!(last[0], last_x);
+        assert!(
+            (last[1] - first[1] - (last_y - first_y)).abs() < 0.01,
+            "{first:?} {last:?}"
+        );
+        let id = view(&p, "paragraph");
+        let b = p.rect_of(id).unwrap();
+        for (x, y, href, target) in [
+            (25., first_y, "/first", "first"),
+            (last_x, last_y, "/last", "last"),
+        ] {
+            let (x, y) = (b.0 + x as f32 + 5., b.1 + y as f32 + 10.);
+            assert_eq!(p.run_link(id, x, y).as_deref(), Some(href));
+            assert_eq!(p.hit(x, y), Some(view(&p, target)));
+        }
+        assert_eq!(p.run_link(id, b.0 + 5., b.1 + first_y as f32 + 10.), None);
+        let frame = p.frame();
+        for (x, y) in [(25., first_y), (last_x, last_y)] {
+            for line in 0..if fragmented { 2 } else { 1 } {
+                assert!(
+                    (0..20).any(|dy| (0..40).any(|dx| {
+                        let pixel = frame
+                            .pixel(
+                                b.0 as u32 + x as u32 + dx,
+                                b.1 as u32 + y as u32 + line * 20 + dy,
+                            )
+                            .unwrap()
+                            .demultiply();
+                        pixel.red() < 128 || pixel.green() < 128 || pixel.blue() < 128
+                    })),
+                    "every assigned grid line paints"
+                );
+            }
+        }
+    }
+}

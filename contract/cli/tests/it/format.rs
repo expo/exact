@@ -36,6 +36,46 @@ fn text(r: &Runner<NoData>, id: &str) -> String {
 }
 
 #[test]
+fn a_date_input_s_day_key_has_a_label() {
+    let src = r#"fn label(day: string): string = formatDate(day, -420, "medium")
+component App
+  state due = "2026-10-16"
+  action pick(day: string)
+    due = day
+  view
+    column
+      input type="date" value=due change=pick
+      text label(due) testId="due"
+      text formatDate(due, 840, "iso") testId="key"
+"#;
+    let plan = contract::compile(src).unwrap();
+    let mut r = Runner::boot(
+        plan,
+        NoData,
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    assert_eq!(text(&r, "due"), "Oct 16, 2026");
+    assert_eq!(text(&r, "key"), "2026-10-16");
+    r.act("pick", vec![Value::str("2024-02-29")]).unwrap();
+    assert_eq!(text(&r, "due"), "Feb 29, 2024");
+    r.act("pick", vec![Value::str("2026-02-29")]).unwrap();
+    assert_eq!(text(&r, "due"), "");
+    for call in [
+        r#"formatDate(true, 0, "medium")"#,
+        r#"formatDate(["2026-10-16"], 0, "medium")"#,
+        r#"formatDate(some("2026-10-16"), 0, "medium")"#,
+        r#"formatTime("2026-10-16", 0, "short")"#,
+    ] {
+        let err =
+            contract::compile(&format!("component A\n  view\n    text {call}\n")).unwrap_err();
+        assert_eq!(err.id, "type-argument", "{call}: {err}");
+    }
+}
+
+#[test]
 fn a_post_s_date_and_count_are_formatted_in_the_view() {
     let plan = contract::compile(SRC).unwrap();
     assert_eq!(exact_runner::uses(&plan).to_string(), "format");
@@ -143,7 +183,7 @@ fn the_roster_names_are_the_roster_s() {
     assert_eq!(e.id, "type-arity", "{e}");
     assert!(
         e.message
-            .contains(r#"formatDate(number, number, "medium" | "month-year" | "iso")"#),
+            .contains(r#"formatDate(number | string, number, "medium" | "month-year" | "iso")"#),
         "{e}"
     );
 }

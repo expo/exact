@@ -119,22 +119,35 @@
       });
     });
   }
-  var Native = global.Intl && global.Intl.NumberFormat, hasCompact, roundsEven, probed = false;
+  var Native = global.Intl && global.Intl.NumberFormat, hasCompact, roundsEven, ignoresSign, probed = false;
   if (!Native) return;
-  // One formatter answers both: an engine without compact formats 1000
-  // in full, and one that rounds to even prints 0.125 as `0.12`; one that
-  // refuses it is left alone. It is made at the first number formatted,
-  // not as the prelude runs: Apple's engine reads every locale's name and
-  // makes an NSNumberFormatter for it, which an app that formats no number
-  // should not keep.
+  // One formatter answers all three: an engine without compact formats
+  // 1000 in full, one that rounds to even prints 0.125 as `0.12`, and one
+  // that ignores signDisplay prints no plus; one that refuses it is left
+  // alone. It is made at the first number formatted, not as the prelude
+  // runs: Apple's engine reads every locale's name and makes an
+  // NSNumberFormatter for it, which an app that formats no number should
+  // not keep.
   function probe() {
     if (probed) return;
     probed = true;
     try {
-      var formatter = new Native("en-US", { notation: "compact", maximumFractionDigits: 2 });
-      hasCompact = formatter.format(1000) === "1K";
-      roundsEven = formatter.format(0.125) === "0.12";
-    } catch (e) { hasCompact = true; roundsEven = false; }
+      var formatter = new Native("en-US", { notation: "compact", maximumFractionDigits: 2, signDisplay: "always" });
+      var thousand = formatter.format(1000);
+      hasCompact = thousand.replace(/^\+/, "") === "1K";
+      ignoresSign = thousand.charAt(0) !== "+";
+      roundsEven = formatter.format(0.125).replace(/^\+/, "") === "0.12";
+    } catch (e) { hasCompact = true; roundsEven = ignoresSign = false; }
+  }
+  // An engine formatter for these options. One that ignores signDisplay
+  // refuses "negative" (ECMA-402 2023), so it is made with "auto" in its
+  // place, and its `format` applies the formatter's own (`signed`).
+  function engineFormat(locales, options, target) {
+    var sign = ignoresSign && options != null && options.signDisplay !== undefined ? String(options.signDisplay) : "auto";
+    if (sign === "negative") options = Object.create(options, { signDisplay: { value: "auto", enumerable: true } });
+    var format = target ? Reflect.construct(Native, [locales, options], target) : Native(locales, options);
+    if (ignoresSign) stateOf(format).sign = sign;
+    return format;
   }
   var MODES = ["ceil", "floor", "expand", "trunc", "halfCeil", "halfFloor", "halfExpand", "halfTrunc", "halfEven"];
   function modeOf(options) {
@@ -238,9 +251,14 @@
     if (!s) state.set(format, (s = { mode: "halfExpand" }));
     return s;
   }
+  // What a compact formatter reads from its options after construction.
+  var compactOptions = ["maximumSignificantDigits", "minimumSignificantDigits", "maximumFractionDigits", "minimumFractionDigits", "signDisplay"];
   function Compact(locales, options) {
-    this.native = new Native(locales, options);
-    this.options = options;
+    this.native = engineFormat(locales, options, Native);
+    // Options are read once, here, as ECMA-402's constructor reads them: a
+    // later change to the caller's object changes nothing.
+    this.options = {};
+    for (var i = 0; i < compactOptions.length; i++) this.options[compactOptions[i]] = options[compactOptions[i]];
     this.mode = modeOf(options);
     if (roundsEven) stateOf(this.native).mode = this.mode;
     var resolved = this.native.resolvedOptions();
@@ -250,6 +268,34 @@
       runtimeLine("Intl.NumberFormat: notation \"compact\" (" + (options.compactDisplay || "short") + ", " + resolved.style + ") in " +
         resolved.locale + " is not available on this host; numbers are formatted in full");
     }
+  }
+  // The sign `signDisplay` gives a number (ECMA-402 GetNumberFormatPattern):
+  // `zero` says it rounded to zero, and -0 counts as negative.
+  function signOf(display, negative, zero) {
+    if (display === "never" || (zero && (display === "exceptZero" || display === "negative"))) return "";
+    if (negative) return "-";
+    return display === "always" || display === "exceptZero" ? "+" : "";
+  }
+  // `n` formatted by the engine's `bound` with the sign the formatter's
+  // signDisplay gives it, as ICU derives its plus pattern: the engine's
+  // negative form with its minus replaced, or where that form has none
+  // (an accounting `($0.50)`) the unsigned form after a plus. A number is
+  // zero when its digits are those of 0, and NaN takes only "always"'s
+  // plus. Apple's engine prints NaN and ∞ as bare symbols (`NaN`, `+∞`, no
+  // currency or percent), so they are a zero formatted with the same sign,
+  // its digits replaced.
+  function signed(bound, s, n) {
+    var big = typeof n === "bigint", x = big ? n : Number(n), display = s.sign || "auto";
+    var negative = x < 0 || (!big && x === 0 && 1 / x < 0), finite = big || isFinite(x);
+    var y = finite ? x : negative ? -0 : 0, text = bound(negative ? -y : y);
+    if (s.zero === undefined) s.zero = bound(0);
+    var sign = x !== x ? (display === "always" ? "+" : "") : signOf(display, negative, finite && text === s.zero);
+    if (sign === "-") text = bound(y);
+    else if (sign === "+") {
+      var minus = bound(-y);
+      text = /[-\u2212]/.test(minus) ? minus.replace(/[-\u2212]/, "+") : "+" + text;
+    }
+    return finite ? text : text.replace(/\p{Nd}(?:.*\p{Nd})?/u, x !== x ? bound(NaN) : "∞");
   }
   Compact.prototype = Object.create(Native.prototype);
   Compact.prototype.constructor = Compact;
@@ -296,11 +342,16 @@
       while (text.indexOf(".") >= 0 && text.split(".")[1].length > least && /0$/.test(text)) text = text.slice(0, -1);
     text = text.replace(/\.$/, "");
     var fraction = (text.split(".")[1] || "").length, value = Number(text);
-    // Grouping as compact's (`min2`): only from five integer digits.
+    var sign = signOf(o.signDisplay, n < 0 || (n === 0 && 1 / n < 0), value === 0);
+    // Grouping as compact's (`min2`): only from five integer digits. The
+    // engine prints its locale's minus; Apple's ignores signDisplay, so a
+    // plus takes the minus's place, as ICU derives its plus pattern.
     var digits = partsOf(new Native(this.native.resolvedOptions().locale, {
-      minimumFractionDigits: fraction, maximumFractionDigits: fraction,
-      useGrouping: value >= 10000, signDisplay: o.signDisplay,
-    }), n < 0 || (n === 0 && 1 / n < 0) ? -value : value);
+      minimumFractionDigits: fraction, maximumFractionDigits: fraction, useGrouping: value >= 10000,
+    }), sign ? -value : value);
+    if (sign === "+") digits = digits.map(function (p) {
+      return { type: p.type === "minusSign" ? "plusSign" : p.type, value: p.value.replace(/[-\u2212]/, "+") };
+    });
     if (!s.cell) return digits;
     var suffix = s.cell.suffix, space = /^[\s  ]*/.exec(suffix)[0], tail = /[‎‏]*$/.exec(suffix)[0];
     var word = suffix.slice(space.length, suffix.length - tail.length);
@@ -364,11 +415,14 @@
       configurable: true,
       get: function () {
         probe();
-        if (!roundsEven) return bind.call(this);
+        if (!roundsEven && !ignoresSign) return bind.call(this);
         var s = stateOf(this), self = this;
         if (s.format) return s.format;
         var bound = bind.call(this);
-        return (s.format = function (n) { return bound(roundFor(self, s, n)); });
+        return (s.format = function (n) {
+          var x = roundsEven ? roundFor(self, s, n) : n;
+          return ignoresSign ? signed(bound, s, x) : bound(x);
+        });
       },
     });
     Object.defineProperty(Native.prototype, "resolvedOptions", {
@@ -377,6 +431,7 @@
         probe();
         var r = resolve.call(this);
         if (roundsEven) r.roundingMode = stateOf(this).mode;
+        if (ignoresSign) r.signDisplay = stateOf(this).sign || "auto";
         return r;
       },
     });
@@ -384,7 +439,7 @@
   function NumberFormat(locales, options) {
     probe();
     if (!hasCompact && options && options.notation === "compact") return new Compact(locales, options);
-    var format = new.target ? Reflect.construct(Native, [locales, options], new.target) : Native(locales, options);
+    var format = engineFormat(locales, options, new.target);
     if (roundsEven) stateOf(format).mode = modeOf(options);
     return format;
   }

@@ -1,23 +1,15 @@
 // The element tree: elements built or adopted from a rendered page, their props and styles, and view ids.
 import { markdownText } from './markdown.js';
 import { oneActivation, suppressedInvocation, releaseAsset as rel } from './elements.js';
-import {
-  listRow,
-  listItem,
-  syncListItemRoles,
-  listOwner,
-  commitGuestOrigin,
-  pageGivenFiles,
-  renderMarkup,
-} from './navigation.js';
+import { listRow, listOwner, renderMarkup } from './navigation.js';
 import { Docs } from './document.js';
 import { Refusal } from './shape.js';
 import { regions } from './regions.js';
-import './said.js';
 import { backdropValue as backdropCss } from './backdrop.js';
-import { onEnd, effect, say, inflight, data, After, Paint, Probes, Media, Links, Scrolls, Selects } from './rt.js';
+import { onEnd, effect, say, inflight, After, Paint, Probes, Media, Links, Scrolls, Selects } from './rt.js';
 import { Adopt, adopting } from './mount.js';
 import { input } from './pieces.js';
+import { autofocusProp } from './focus.js';
 const SVG = 'http://www.w3.org/2000/svg';
 /** An element under `p`: its static class, attributes and text. */
 export function h(p, tag, cls, attrs, text, ns) {
@@ -26,7 +18,7 @@ export function h(p, tag, cls, attrs, text, ns) {
   if (Adopt) {
     const e = adopt(p, tag, cls, attrs);
     if (tag === 'video' || tag === 'audio') Media.media(e, attrs);
-    if (tag === 'iframe') frame(e, attrs?.['data-app-src']);
+    if (tag === 'iframe') Hooks.frame(e, attrs?.['data-app-src']);
     if (tag === 'button') oneActivation(e);
     return e;
   }
@@ -41,6 +33,7 @@ export function h(p, tag, cls, attrs, text, ns) {
   if (attrs) {
     for (const k in attrs)
       if (NOT_DOM.test(k)) e['$' + k] = attrs[k];
+      else if (k === 'autofocus') autofocusProp(e, attrs[k] !== 'false');
       else {
         e.setAttribute(k, rel(k, attrs[k]));
         if (k === 'data-exact-f' || k.startsWith('data-exact-f-')) bits |= Number(attrs[k]);
@@ -51,9 +44,9 @@ export function h(p, tag, cls, attrs, text, ns) {
   }
   if (Paint) e.$paintFacts = bits;
   if (text !== 0) e.textContent = text;
-  if (tag === 'iframe') frame(e, attrs?.['data-app-src']);
+  if (tag === 'iframe') Hooks.frame(e, attrs?.['data-app-src']);
   if (tag === 'button') oneActivation(e);
-  p.append(owner ? listItem(e, owner) : e);
+  p.append(owner ? Hooks.listItem(e, owner) : e);
   // an `audio` is the same media host (LLP 1042 §8)
   if (tag === 'video' || tag === 'audio') Media.media(e, attrs);
   Paint?.list(e);
@@ -112,6 +105,7 @@ function adopt(p, tag, cls, attrs) {
     for (const k in attrs) {
       const v = rel(k, attrs[k]);
       if (NOT_DOM.test(k)) e['$' + k] = v;
+      else if (k === 'autofocus') autofocusProp(e, v !== 'false');
       else if (e.getAttribute(k) !== v) e.setAttribute(k, v);
     }
     if (tag === 'a') Links?.made(e, attrs, rendered);
@@ -181,74 +175,14 @@ function writeValue(e, v) {
   Held.delete(e);
   if (e.value !== v) e.value = v;
 }
-const navigable = (v, e) => {
-    try {
-      const p = new URL(v, document.baseURI).protocol;
-      return (
-        ['http:', 'https:', 'mailto:', 'tel:'].includes(p) || (p === 'data:' && e?.localName === 'iframe' && opaque(e))
-      );
-    } catch {
-      return false;
-    }
-  },
-  // a frame also shows a `data:` document in an opaque sandbox (navigation.js `frameURL`)
-  opaque = e =>
-    e.hasAttribute('sandbox') &&
-    !e
-      .getAttribute('sandbox')
-      .toLowerCase()
-      .split(/[\t\n\f\r ]+/)
-      .includes('allow-same-origin');
-function frame(e, v) {
-  commitGuestOrigin(e);
-  // an app file, or a page of the app's origin whose query may name one (LLP 1020.001 D7; picker-glue.js decides)
-  const app = !!v?.startsWith('app:/') || pageGivenFiles(v ?? '');
-  if (app) e.setAttribute('data-app-src', v);
-  else e.removeAttribute('data-app-src');
-  if (globalThis.__exactRender) return app;
-  if (!e.$frame) {
-    e.$frame = true;
-    e.addEventListener(
-      'load',
-      ev => {
-        // Else the src that loaded, for the agent's tree, which loads after boot and cannot read another origin's
-        // readiness.
-        if (e.exactAppFrame && !e.exactAppFrame.url) ev.stopImmediatePropagation();
-        else e.exactLoaded = e.getAttribute('src');
-      },
-      true,
-    );
-    onEnd(() => e.exactAppFrame?.dispose());
+// a URL that navigates (navigation.js `navigableURL`); an iframe's is iframes.js's
+const navigable = v => {
+  try {
+    return ['http:', 'https:', 'mailto:', 'tel:'].includes(new URL(v, document.baseURI).protocol);
+  } catch {
+    return false;
   }
-  if (e.exactAppFrame?.path === v) return true;
-  e.exactAppFrame?.dispose();
-  e.exactAppFrame = null;
-  if (!app) return false;
-  const s = (e.exactAppFrame = {
-    path: v,
-    live: true,
-    url: null,
-    dispose() {
-      this.live = false;
-      if (this.url) URL.revokeObjectURL(this.url);
-    },
-  });
-  e.removeAttribute('src');
-  inflight.n++;
-  globalThis.exact ??= {};
-  import(new URL('./picker-glue.js', import.meta.url).href)
-    .then(m =>
-      m.appFrame(
-        e,
-        s,
-        data.appId,
-        () => commitGuestOrigin(e),
-        u => e.setAttribute('src', navigable(u, e) ? u : 'about:blank'),
-      ),
-    )
-    .finally(() => inflight.n--);
-  return true;
-}
+};
 /** A dynamic prop, by the DOM name the live host uses (`applyProps`). */
 export function P(e, name, f) {
   if (name === 'aria-keyshortcuts') input();
@@ -256,16 +190,10 @@ export function P(e, name, f) {
   effect(() => {
     let v = f();
     v = rel(name, v == null ? null : typeof v === 'boolean' ? String(v) : String(v));
-    const sandboxChanged = name === 'sandbox' && e.localName === 'iframe' && e.getAttribute(name) !== v;
     if (name === 'tabindex') e.exactAuthoredTabIndex = v;
-    // A URL that navigates is written only if the web host's policy takes it (navigation.js `navigableURL`,
-    // `frameURL`): a refused link loses its `href`, an iframe shows about:blank and keeps its source for its sandbox to
-    // decide.
-    if (name === 'src' && e.localName === 'iframe') {
-      e.$src = v;
-      if (frame(e, v)) return;
-      if (v != null && !navigable(v, e)) v = 'about:blank';
-    } else if (name === 'href' && v != null && (!navigable(v) || v === '')) v = null;
+    // A URL that navigates is written only if the web host's policy takes it (navigation.js `navigableURL`): a refused
+    // link loses its `href`. An iframe's `src` and `sandbox` are iframes.js's `PropHooks`.
+    if (name === 'href' && v != null && (!navigable(v) || v === '')) v = null;
     // no material, cleared as the runner clears it (bridge.rs `prop_value`)
     if (name === 'backgroundMaterial' && v === 'none') v = null;
     if (PropHooks[name]?.(e, v)) return;
@@ -290,15 +218,12 @@ export function P(e, name, f) {
       if (v != null) (Scrolls.get(e) ?? Scrolls.set(e, {}).get(e))[name] = Number(v);
     } else if (BOOL.test(name)) {
       if (name === 'inert') e.authoredInert = v === 'true';
-      e.toggleAttribute(name, v === 'true');
+      if (name === 'autofocus') autofocusProp(e, v === 'true');
+      else e.toggleAttribute(name, v === 'true');
       // HTML focus fixup, now, for a control only (glue.js)
       if (name === 'disabled' && v === 'true' && document.activeElement === e && e.matches(':disabled')) e.blur();
       if (name === 'checked') e.checked = e.$checked = v === 'true';
       if (name === 'muted') e.muted = v === 'true';
-      if (name === 'autofocus') {
-        if (v === 'true') e.removeAttribute('data-autofocus');
-        else e.setAttribute('data-autofocus', 'false');
-      }
     } else if (v == null) {
       if (e.hasAttribute(name) || suppressedInvocation(e, name)) {
         e.removeAttribute(name);
@@ -308,19 +233,9 @@ export function P(e, name, f) {
       e.setAttribute(name, v);
       if (name.startsWith('data-exact-')) Paint?.facts(e);
     }
-    if (name === 'role') syncListItemRoles(e);
-    else if (name === 'popover' && e.parentElement?.hasAttribute('data-exact-list-item')) listItem(e);
+    if (name === 'role') Hooks.listRoles?.(e);
+    else if (name === 'popover' && e.parentElement?.hasAttribute('data-exact-list-item')) Hooks.listItem(e);
     if (e.localName === 'a' && (name === 'rel' || name === 'target' || name === 'href')) Links?.prop(e, name, v);
-    // a new sandbox takes effect on navigation, even to the same source; a literal source stays in src, a refused
-    // `data:` source in $src
-    if (name === 'sandbox' && e.localName === 'iframe' && !e.exactAppFrame) {
-      const source = e.$src ?? e.getAttribute('src');
-      if (source != null) {
-        const s = navigable(source, e) ? source : 'about:blank';
-        if (sandboxChanged || e.getAttribute('src') !== s) e.setAttribute('src', s);
-      }
-    }
-    if ((name === 'src' || name === 'sandbox') && e.localName === 'iframe') commitGuestOrigin(e);
   });
 }
 /** A reader uses built pieces; new text loads the parser on demand. */
@@ -423,23 +338,12 @@ export function css(e, prop, unit, v, rendered) {
     if (t == null ? !now : same(now) === (normal(prop, t) || 'unset')) return;
   }
   if (t == null) return e.style.removeProperty(prop);
-  // A value the browser took before (`Normal`, read back after its first write) is written once; one it refused falls
-  // to `unset` at once. Only a value not yet seen pays the remove before the write that lets the read-back tell a
-  // refusal from an earlier value (LLP 1071.001 A8). Every property takes `unset`: one that reads back empty is a
-  // property this browser does not have (Chrome's `-moz-osx-font-smoothing`), not a refusal.
-  const k = prop + '\0' + t,
-    known = prop.startsWith('--') || t === 'unset' || Normal.get(k);
-  if (known) return e.style.setProperty(prop, t);
-  if (known === undefined) {
-    e.style.removeProperty(prop);
-    e.style.setProperty(prop, t);
-    const got = same(e.style.getPropertyValue(prop));
-    Normal.set(k, got);
-    if (Normal.size > 4096) Normal.clear();
-    if (got) return;
-  }
-  e.style.setProperty(prop, 'unset');
-  say(`unset ${prop}: ${JSON.stringify(v)} is not a value it takes`);
+  // A value not yet seen is probed on the detached style `normal` keeps, so the live node gets only the final write
+  // (LLP 1071.001 A8). Every property takes `unset`: one that reads back empty is a property this browser does not
+  // have (Chrome's `-moz-osx-font-smoothing`), not a refusal.
+  const valid = prop.startsWith('--') || t === 'unset' || normal(prop, t);
+  e.style.setProperty(prop, valid ? t : 'unset');
+  if (!valid) say(`unset ${prop}: ${JSON.stringify(v)} is not a value it takes`);
 }
 /** `S` for a row that can reference an element (`url(#…)`): an authored id
  * names the node the kernel's `resolve_id` would, the nearest in the tree
@@ -480,7 +384,8 @@ export function Sr(e, prop, unit, f) {
 export const backdropValue = (v, report = true) =>
   backdropCss(v, report ? why => say(`unset backdrop-filter: ${why}`) : undefined);
 /** Loaded pieces' hooks: `style(e, prop, value)` takes a dynamic row's write on a node the motion piece holds
- * (motion.js); `image(e)` an image built or adopted with a symbol or `app:/` source (symbols.js). */
+ * (motion.js); `image(e)` an image built or adopted with a symbol or `app:/` source (symbols.js); `frame(e, v)` an
+ * iframe's app file (iframes.js); `listItem(e, owner)` and `listRoles(e)` a List's row and its role (list-items.js). */
 export const Hooks = {};
 /** `S` on a node the motion engine follows (`mo`): while a hold owns it, a
  * write goes to the authored style the hold restores. */

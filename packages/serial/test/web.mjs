@@ -33,10 +33,18 @@ const fake = () => {
       this.options = options;
       this.streams();
     }
-    async close() { this.options = null; this.readable = null; this.writable = null; }
+    // Asked out of order, these fail: close while the readable is locked, as Web Serial's close() cancels the
+    // readable; forget while the port is open, which the implementation must close first.
+    async close() {
+      if (this.readable?.locked) throw new TypeError('the readable is locked');
+      this.options = null; this.readable = null; this.writable = null;
+    }
     async setSignals(s) { this.signals.push(s); }
     async getSignals() { return { dataCarrierDetect: true, clearToSend: false, ringIndicator: false, dataSetReady: true }; }
-    async forget() { this.forgotten = true; }
+    async forget() {
+      if (this.options) throw new DOMException('the port is open', 'InvalidStateError');
+      this.forgotten = true;
+    }
     /** The device sends `bytes`, in pieces the size of a read. */
     feed(bytes) {
       for (let i = 0; i < bytes.length; i += chunk) this.queue.push(bytes.slice(i, i + chunk));
@@ -172,9 +180,11 @@ const queued = await s.eval(async (connection) => {
 const third = await s.call('open', { port: other.id, baudRate: 9600 });
 await s.call('write', { connection: third.connection, data: b64(Buffer.from('three')) });
 check('writes queued before close are aborted, and the next connection gets only its own', queued[0].every((r) => r?.error === 'AbortError') && queued[1] === null && Buffer.from(await s.eval(() => __ports[1].written)).toString() === 'three', JSON.stringify(queued));
-await s.call('close', { connection: third.connection });
-await s.call('forget', { port: other.id });
-check('forget forgets the port', (await s.eval(() => __ports[1].forgotten)) === true && !(await s.call('getPorts')).some((p) => p.id === other.id));
+// Forgetting a port with an open connection closes the port first.
+const forgotten = await s.call('forget', { port: other.id });
+check('forget closes an open connection, then forgets the port', forgotten === null && (await s.eval(() => __ports[1].forgotten && __ports[1].options === null))
+  && (await s.call('serialConnection', { connection: third.connection })).open === false && !(await s.call('getPorts')).some((p) => p.id === other.id),
+  JSON.stringify(forgotten));
 check('the readers of the list were asked again', (await s.eval(() => __changed)).includes('serial.getPorts'));
 
 await s.close();

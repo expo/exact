@@ -9,6 +9,7 @@ mod upload;
 mod visibility;
 pub(crate) use scene::snap as trace_snap;
 use scene::Scene;
+pub(crate) use visibility::ParentChanges;
 
 // The same feed algorithm runs against the GPU and the recording test backend.
 /// Pages in one transform write: 2 MiB, so the queue's staging buffer fits a
@@ -24,7 +25,7 @@ pub(crate) trait Writes {
         _: &World,
         _: bool,
         _: bool,
-        _: bool,
+        _: Option<&visibility::ParentChanges>,
         _: bool,
     ) {
     }
@@ -110,7 +111,7 @@ impl<const ASSETS: bool> Writes for crate::renderer::RendererWithAssets<ASSETS> 
         w: &World,
         initial: bool,
         tick: bool,
-        parent: bool,
+        chains: Option<&visibility::ParentChanges>,
         models: bool,
     ) {
         if ASSETS {
@@ -123,7 +124,7 @@ impl<const ASSETS: bool> Writes for crate::renderer::RendererWithAssets<ASSETS> 
                         .map(|(name, model)| (name.clone(), model.digest)),
                 );
             }
-            a.feed(w, initial, tick, parent, models);
+            a.feed(w, initial, tick, chains, models);
         }
     }
     fn model(&self, name: &str) -> Option<crate::models::Draws<'_>> {
@@ -1192,7 +1193,7 @@ impl Feed {
             w,
             initial,
             initial || self.tick != w.tick(),
-            parent_changed,
+            parent_changed.then_some(&self.parent_changes),
             initial || next.assets != old.assets,
         );
         if material {
@@ -1224,7 +1225,7 @@ impl Feed {
             initial || self.tick != w.tick(),
             moved,
             next.live != old.live || next.membership != old.membership,
-            parent_changed,
+            parent_changed.then_some(&self.parent_changes),
         );
         self.tick = w.tick();
         self.versions = Some(next);

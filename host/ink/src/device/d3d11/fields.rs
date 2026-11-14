@@ -1,7 +1,8 @@
 //! Window-thread editor state, drawn by Ink and drained by the presenter.
 //! @ref LLP 1115.004 D7. Callbacks never borrow the presenter.
 use super::{rich_edit::RichEdit, *};
-use std::cell::RefCell;
+use crate::device::composing;
+use std::cell::{Cell, RefCell};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 pub struct Field<'a> {
@@ -46,7 +47,11 @@ struct Fields {
     editors: BTreeMap<u32, Editor>,
     focused: Option<u32>,
 }
-thread_local! { static FIELDS: RefCell<Fields> = RefCell::new(Fields::default()); }
+thread_local! {
+    static FIELDS: RefCell<Fields> = RefCell::new(Fields::default());
+    /// An end of composition that arrived while the fields were held.
+    static ENDED: Cell<bool> = const { Cell::new(false) };
+}
 
 pub fn enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -264,8 +269,16 @@ fn message(raw: *const std::ffi::c_void) -> bool {
         // Synchronous IME messages can nest a callback. The document callbacks
         // record changes only; a nested pump must not take a second mutable borrow.
         let Ok(mut fields) = fields.try_borrow_mut() else {
+            if message.message == composing::END {
+                ENDED.set(true);
+            }
             return false;
         };
+        if ENDED.take() {
+            for editor in fields.editors.values_mut() {
+                editor.composing = false;
+            }
+        }
         if fields
             .window
             .as_ref()
@@ -340,20 +353,17 @@ fn message(raw: *const std::ffi::c_void) -> bool {
         } else {
             message.lParam.0
         };
-        if kind == WM_IME_STARTCOMPOSITION {
-            editor.composing = true;
-        }
         let confirming = editor.composing && keyboard && message.wParam.0 == 13;
-        let handled = match editor.edit.dispatch(kind, message.wParam.0, lparam) {
+        let dispatched = editor.edit.dispatch(kind, message.wParam.0, lparam);
+        editor.composing =
+            composing::after(editor.composing, kind, dispatched.is_ok(), ENDED.take());
+        let handled = match dispatched {
             Ok(handled) => handled,
             Err(error) => {
                 eprintln!("exact-windows: RichEdit input: {error}");
                 return false;
             }
         };
-        if kind == WM_IME_ENDCOMPOSITION {
-            editor.composing = false;
-        }
         if let Ok(value) = editor.edit.text() {
             editor.value = value;
         }

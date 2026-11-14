@@ -38,10 +38,12 @@ import {
   Restoring,
   Sched,
   Origin,
+  Invocation,
 } from './rt.js';
 import { checkpoint, READER, keptAnswer } from './mount.js';
 /** Resource instances, including list members; list aggregates have no entry. */
 export const Resources = [];
+let ResourceIndex = 0;
 export let Ticket = 0;
 export const ticket = () => Ticket,
   nextTicket = () => ++Ticket;
@@ -51,7 +53,7 @@ const again = t => {
     if (t.again) {
       t.again = false;
       say(`${t.r.name}: asked again, what it reads changed while ticket ${t.id} was in flight`);
-      R(t.r);
+      R(t.r, true);
     }
   },
   openEnded = t => !!(t.stream || t.req?.stream || t.req?.longPoll || t.call?.held > 0),
@@ -64,12 +66,15 @@ const again = t => {
     for (const r of Resources) if (reads(r) && r.ticket && !openEnded(r.ticket)) r.ticket.again = true;
   },
   lateIdle = () => {
-    for (const r of Resources) if (reads(r) && (!r.ticket || openEnded(r.ticket))) R(r);
+    for (const r of Resources) if (reads(r) && (!r.ticket || openEnded(r.ticket))) R(r, true);
   };
 export { lateReaders, lateIdle };
 const sameReq = (a, b) =>
   a &&
   b &&
+  !a.canvas &&
+  !b.canvas &&
+  a.scope === b.scope &&
   a.storage === b.storage &&
   a.method === b.method &&
   a.url === b.url &&
@@ -80,7 +85,7 @@ const sameReq = (a, b) =>
   JSON.stringify(a.longPoll) === JSON.stringify(b.longPoll);
 const send = (t, land) => sendRequest(t, land, Out, data, inflight, say);
 
-function ask(source, args, name, mutation, forced) {
+function ask(source, args, name, mutation, forced, owner = mutation) {
   checkArguments(name, args);
   if (mutation) mutation.requests++;
   if (['startActivity', 'updateActivity', 'endActivity'].includes(source))
@@ -89,7 +94,7 @@ function ask(source, args, name, mutation, forced) {
   try {
     a = data.reserved?.[source]
       ? (v => (v?.then ? v : { v }))(data.reserved[source](source, args, name, forced))
-      : data.answer(source, args, Store, name, !!mutation, forced);
+      : data.answer(source, args, Store, name, !!mutation, forced, owner);
   } catch (e) {
     // what a resource's source sent before it threw goes if the commit stands (ts-data.js)
     Out.push(...(data.thrown?.() ?? []));
@@ -108,7 +113,7 @@ function reply(t, name, source, held, f, next, gone) {
   // what the answer's module calls read (ts-data.js `__exact_module`); not `call.held`, held.js's count of its held
   // fetches
   if (t.call) t.call.wanted = held;
-  return o => {
+  return o => Origin.run(t.askOrigin, () => Invocation.run(t.invocation, () => {
     if (
       commit(
         () => {
@@ -116,7 +121,7 @@ function reply(t, name, source, held, f, next, gone) {
           let p;
           try {
             if (o.error !== undefined) throw new Failed(o.error, o.code, o.reason);
-            p = o.v !== undefined ? { v: o.v } : data.parse(source, t.args, o, Store);
+            p = o.v !== undefined ? { v: o.v } : data.parse(source, t.args, o, Store, t.req);
           } catch (e) {
             throw e instanceof Failed ? e : new Failed(String(e?.message ?? e), failureCode(e), failureReason(e));
           }
@@ -140,7 +145,7 @@ function reply(t, name, source, held, f, next, gone) {
     recommit(() => {
       if (t.r) again(t);
     }, 'a failed request');
-  };
+  }));
 }
 // runner lines.rs
 const revalidated = (name, same) =>
@@ -170,6 +175,7 @@ export function res(
   if (kept) [initialArgs, initial] = kept;
   // `marks`: the uploads it asked, `context`: how many of its last arguments are its `with` context (uploads.js)
   const r = {
+    index: ResourceIndex++,
     name,
     source,
     type,
@@ -196,6 +202,7 @@ export function res(
     },
     release = () => {
       if (r.ticket) {
+        Invocation.letGo(r.ticket);
         say(`forget ticket ${r.ticket.id} (${name})`);
         r.ticket = null;
       }
@@ -276,6 +283,8 @@ export function res(
                 id: ++Ticket,
                 name,
                 owner: r,
+                invocation: t.invocation,
+                askOrigin: t.askOrigin,
                 args: t.args,
                 forced: t.forced,
                 req,
@@ -335,7 +344,9 @@ export function res(
         if (Restoring) return (flag(fail, failure()), r.value);
         // `reconciling`: asked after a write ended, a refusal fails it (overlay.js); `mk`: an upload asked at these
         // arguments, not asked again (LLP 1016.000 D10), and none at non-finite ones (settlement.rs `valid_args`)
-        const forced = r.forced,
+        // `forced` 2: a device re-ask's
+        const forced = r.forced > 0,
+          reasking = r.forced > 1,
           waited = r.launch,
           rev = r.rev,
           reconciling = r.reconciling,
@@ -371,8 +382,11 @@ export function res(
         Inspections.begin(r);
         // the launch's own ask is sent as an ordinary one (LLP 1162.000 D1; `Runner::launch` in the runner)
         const refresh = forced && waited !== true;
+        // Device re-asks keep the reader's last ask origin, but belong to no invocation (LLP 1133.023 D7): a call's ask
+        // they let go, however they answer, supersedes the call.
+        const invocation = reasking ? 0 : Invocation.id, origin = reasking ? r.askOrigin ?? 'app' : Origin.now();
         try {
-          ans = ask(source, a, name, false, refresh);
+          ans = Origin.run(origin, () => Invocation.run(invocation, () => ask(source, a, name, false, refresh, r)));
           // what its source sent on a socket goes once this commit stands (LLP 1016.000 D7, amended 2026-10-18)
           Out.push(...(ans?.effects ?? []));
         } catch (e) {
@@ -383,7 +397,7 @@ export function res(
           if (e.refuse && !reconciling) throw new Failed(`resource ${name}: ${e.message}`);
           if (globalThis.__exactRender) hold();
           // its newest ask failed: an older one in flight is let go
-          return fails(a, String(e?.message ?? e), failureCode(e), failureReason(e));
+          return Invocation.run(invocation, () => fails(a, String(e?.message ?? e), failureCode(e), failureReason(e)));
         }
         // a fresh answer's topics replace the last's (LLP 1016.002 D2), a later turn's joining them
         if (ans && ans.store) r.store = true;
@@ -394,9 +408,10 @@ export function res(
             take(ans.v, a, Ov.tick());
           } catch (e) {
             if (!reconciling) throw e;
-            return fails(a, String(e?.message ?? e), 'shape');
+            return Invocation.run(invocation, () => fails(a, String(e?.message ?? e), 'shape'));
           }
           if (r.ticket) {
+            Invocation.run(invocation, () => Invocation.letGo(r.ticket));
             say(`forget ticket ${r.ticket.id} (${name})`);
             r.ticket = null;
           }
@@ -424,10 +439,12 @@ export function res(
             id: ++Ticket,
             name,
             owner: r,
+            invocation,
+            askOrigin: origin,
             args: a,
             forced: refresh,
             // The origin of the commit that asked it (LLP 1133.036 D6), which the host sends it as.
-            req: ans.req && { ...ans.req, forced: refresh, origin: Origin.now() },
+            req: ans.req && { ...ans.req, forced: refresh, origin },
             promise: ans.promise,
             call: ans.call,
             stream: ans.stream,
@@ -438,8 +455,12 @@ export function res(
             generation: r.inspection?.request,
           };
           if (t.call) t.call.ticket = t;
+          r.askOrigin = origin;
           if (baked) say(`${name} shows its build-time answer until its source answers`);
-          if (r.ticket) say(`forget ticket ${r.ticket.id} (${name})`);
+          if (r.ticket) {
+            Invocation.run(invocation, () => Invocation.letGo(r.ticket));
+            say(`forget ticket ${r.ticket.id} (${name})`);
+          }
           r.ticket = t;
           flag(pend, true);
           send(t, land(t));
@@ -508,6 +529,7 @@ export function res(
       r.slept,
       r.watches,
       r.launch,
+      r.askOrigin,
     ],
     restore: x => {
       [r.value, r.settled, r.ticket] = x;
@@ -533,12 +555,13 @@ export function res(
       r.slept = x[21];
       r.watches = x[22];
       r.launch = x[23];
+      r.askOrigin = x[24];
       write(pend.n, x[19]);
       // and what it shows is read again, from what was put back
       write(ver.n, ver.n.v + 1);
     },
-    force: undo => {
-      r.forced = true;
+    force: (undo, reasking) => {
+      r.forced = reasking ? 2 : true;
       r.launch = false;
       flag(ver, ver.n.v + 1, undo);
     },
@@ -587,6 +610,7 @@ export function mut(name, slot, refreshes, type, mode) {
   const pend = sig(false),
     fail = sig(null);
   const m = {
+    index: Mutations.length,
     name,
     requests: 0,
     ticket: null,
@@ -647,7 +671,7 @@ export function mut(name, slot, refreshes, type, mode) {
         if (p.req) {
           const req = { ...p.req, origin: t.req?.origin };
           if (o.more) {
-            const n = { id: ++Ticket, source: t.source, args: t.args, req, write: t.write, send: t.send };
+            const n = { id: ++Ticket, name, owner: m, invocation: t.invocation, askOrigin: t.askOrigin, source: t.source, args: t.args, req, write: t.write, send: t.send };
             if (m.parallel) m.tickets = [...m.tickets.filter(x => x !== t), n];
             else m.ticket = n;
             send(n, land(n));
@@ -696,6 +720,7 @@ export function mut(name, slot, refreshes, type, mode) {
       undo?.push([fail.n, fail.n.v]);
       write(fail.n, null);
       if (m.ticket && !keeps()) {
+        Invocation.letGo(m.ticket, true);
         say(`forget ticket ${m.ticket.id} (${name})`);
         m.ticket = null;
         undo.push([pend.n, pend.n.v]);
@@ -760,6 +785,8 @@ export function mut(name, slot, refreshes, type, mode) {
           id: ++Ticket,
           name: m.name,
           owner: m,
+          invocation: Invocation.id,
+          askOrigin: Origin.now(),
           source,
           args,
           req: a.req && { ...a.req, origin: Origin.now() },
@@ -771,7 +798,10 @@ export function mut(name, slot, refreshes, type, mode) {
         };
         if (t.call) t.call.ticket = t;
         if (m.parallel) m.tickets = [...m.tickets, t];
-        else m.ticket = t;
+        else {
+          Invocation.letGo(m.ticket, true);
+          m.ticket = t;
+        }
         undo.push([pend.n, pend.n.v]);
         write(pend.n, true);
         send(t, land(t));

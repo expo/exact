@@ -158,6 +158,7 @@ final class AnimatedRasters {
 
     private func present(_ p: Player) {
         guard let view = p.view else { return }
+        if view.style["image_rendering"]?.string == "pixelated" { view.applyImageLayer(); return }
         #if os(iOS) || os(tvOS)
         if let layer = view.imageLayer {
             CATransaction.begin(); CATransaction.setDisableActions(true)

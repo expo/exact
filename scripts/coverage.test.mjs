@@ -66,3 +66,17 @@ test('a bun step that ran no test is a failure', () => {
   expect(failures('web-build-test', 'bun test v1.4.2\nerror: regex "x" matched 0 tests. Searched 1 file\n', 0)).toEqual(['web-build-test: ran no tests']);
   expect(failures('glue', 'bun test v1.4.2\n 3 pass\n 0 fail\nRan 3 tests across 1 file.\n', 0)).toEqual([]);
 });
+
+test("the tests a crashed XCTest process took down are one failure, and a test that failed is named", () => {
+  const log = [
+    "Test case 'PushedTitleIOSTests.testAPush()' failed on 'Clone 1 of iPhone 18 Pro - xctest (83259)' (0.000 seconds)",
+    "Test case 'NavigationCollapseIOSTests.testADrag()' failed on 'Clone 1 of iPhone 18 Pro - xctest (83440)' (0.000 seconds)",
+    "Test case 'NavigationCollapseIOSTests.testAnInset()' failed on 'Clone 1 of iPhone 18 Pro - xctest (52457)' (5.465 seconds)",
+    "Test case 'PushedTitleIOSTests.testASwap()' failed on 'Clone 1 of 2026-11-13 05:03:35.751 xcodebuild[47825:30582401] [MT] elapsed",
+  ].join('\n');
+  expect(failures('ios', log, 1).sort()).toEqual([
+    'ios: ExactKitTests.NavigationCollapseIOSTests testAnInset failed',
+    'ios: ExactKitTests.PushedTitleIOSTests testASwap failed',
+    'ios: a test process crashed',
+  ]);
+});

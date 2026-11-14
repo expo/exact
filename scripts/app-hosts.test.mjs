@@ -322,3 +322,37 @@ test.skipIf(process.platform === 'win32')("a native build that fails under a car
     assert.ok(built.stderr.includes(`exact: ${brew}/cargo is not rustup's cargo and refuses +${pin}: put ${proxy} before ${brew} on PATH`), built.stderr);
   } finally { rmSync(scratch, { recursive: true, force: true }); }
 }, 120000);
+
+// `test` runs each file in turn and goes on past a failing one, but a signal passed to a file's drive ends the run:
+// no later file starts, and the exit code is the signal's.
+test('a signal during one test file stops the run; a failing file does not', async () => {
+  const root = mkdtempSync(resolve(tmpdir(), 'exact-test-signal-')), sdk = resolve(root, 'sdk'), dir = resolve(root, 'app');
+  mkdirSync(resolve(sdk, 'scripts'), { recursive: true });
+  mkdirSync(dir);
+  // The drive says which file it started; `wait.test.contract` waits to be stopped, `fail.test.contract` fails.
+  writeFileSync(resolve(sdk, 'scripts/agent.mjs'), `const file = process.argv[process.argv.indexOf('--test') + 1];
+    console.log('STARTED ' + file.split('/').at(-1));
+    if (file.endsWith('wait.test.contract')) setInterval(() => {}, 1000); else process.exit(file.endsWith('fail.test.contract') ? 1 : 0);`);
+  writeFileSync(resolve(sdk, 'scripts/verify.mjs'), 'export const appServer = () => null;\nexport const withAppServer = (dir, fn) => fn(null);\n');
+  const driver = resolve(root, 'driver.mjs');
+  writeFileSync(driver, `import { run } from ${JSON.stringify(resolve(import.meta.dir, 'app-cli.mjs'))};\nprocess.exit(await run({ dir: ${JSON.stringify(dir)}, name: 'app', exact2: ${JSON.stringify(sdk)}, args: process.argv.slice(2) }));\n`);
+  const files = (...names) => names.map((name) => resolve(dir, `${name}.test.contract`));
+  const env = { ...process.env, EXACT_FEEDBACK: '0' };
+  try {
+    for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143]]) {
+      const child = Bun.spawn([process.execPath, driver, 'test', ...files('wait', 'pass'), '--web-dist', dir], { cwd: dir, env, stdout: 'pipe', stderr: 'ignore' });
+      const reader = child.stdout.pipeThrough(new TextDecoderStream()).getReader();
+      let said = '';
+      while (!said.includes('STARTED wait')) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        said += value;
+      }
+      child.kill(signal);
+      for (let read; !(read = await reader.read()).done;) said += read.value;
+      expect([signal, await child.exited, said.includes('STARTED pass')]).toEqual([signal, code, false]);
+    }
+    const failed = spawnSync(process.execPath, [driver, 'test', ...files('fail', 'pass'), '--web-dist', dir], { cwd: dir, encoding: 'utf8', env });
+    expect([failed.status, failed.stdout.includes('STARTED pass')]).toEqual([1, true]);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+}, 30_000);

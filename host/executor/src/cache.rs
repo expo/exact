@@ -193,8 +193,7 @@ impl Cache {
 }
 
 impl Core {
-    /// Keep an HTTP cache for the app's reads; the render host leaves its
-    /// core uncached (LLP 1162 D4).
+    /// Keep a private HTTP cache for the app's reads (LLP 1162 D4).
     pub fn enable_http_cache(&self) {
         self.shared.state.lock().unwrap().cache = Some(Cache::new(self.grants.clone()));
     }
@@ -837,7 +836,7 @@ pub(super) fn header_bytes(headers: &Headers) -> usize {
             .map(|(k, v)| k.capacity() + v.capacity())
             .sum::<usize>()
 }
-fn end_to_end(headers: &Headers) -> Headers {
+pub(super) fn end_to_end(headers: &Headers) -> Headers {
     let connection: Vec<_> = values(headers, "connection")
         .flat_map(list)
         .map(str::trim)
@@ -931,7 +930,7 @@ fn epoch(time: SystemTime) -> u64 {
         .as_secs()
 }
 
-fn format_date(seconds: u64) -> String {
+pub(super) fn format_date(seconds: u64) -> String {
     let days = (seconds / 86400) as i64;
     let z = days + 719468;
     let era = z.div_euclid(146097);
@@ -956,7 +955,7 @@ fn format_date(seconds: u64) -> String {
 }
 
 // RFC 9110 §5.6.7: recipients accept IMF-fixdate and both obsolete forms.
-fn http_date(value: &str) -> Option<u64> {
+pub(super) fn http_date(value: &str) -> Option<u64> {
     let parts: Vec<_> = value.split_ascii_whitespace().collect();
     let (day, month, year, time) = match parts.as_slice() {
         [_, day, month, year, time, "GMT"] => (*day, *month, year.parse::<i64>().ok()?, *time),

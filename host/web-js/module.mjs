@@ -1,5 +1,5 @@
 // An app's Rust data source as a standalone logic module (LLP 1029.000,
-// ABI 9) for the JS runtime, when the app declares none of its own: a
+// ABI 12) for the JS runtime, when the app declares none of its own: a
 // generated crate exporting the same DataSource the web build bakes with
 // (`contract::bake` or `exact_js_bake::build_mixed_with` in web/build.rs).
 // usage: bun host/web-js/module.mjs <app> [--out <dir>] → <dir>/app.module.wasm
@@ -163,30 +163,75 @@ function module(manifest, name, out, label) {
   return done;
 }
 
-/** The Rust source selected by a web bake, before generating its ABI crate. */
-export function bakedRustSource(dir) {
-  const path = resolve(dir, 'web/build.rs');
-  if (!existsSync(path)) return null;
-  const build = readFileSync(path, 'utf8').replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*|"(?:\\.|[^"\\])*"/g, m => m.startsWith('"') ? m : ' ');
-  const code = build.replace(/"(?:\\.|[^"\\])*"/g, m => ' '.repeat(m.length));
-  const mixed = /exact_js_bake::build_mixed_with\s*\(/.exec(code);
-  if (!mixed) return code.includes('contract::bake(')
-    ? { call: 'contract::bake', expr: /contract::bake\(\s*plan,\s*([\w:]+(?:::(?:default|new)\(\))?)\s*\)/.exec(build)?.[1] }
-    : null;
-  // Split only top-level arguments: the app path and source constructor may contain calls and strings.
-  const start = mixed.index + mixed[0].length;
-  let depth = 0, argument = 0, from = start, source;
-  for (const token of build.slice(start).matchAll(/"(?:\\.|[^"\\])*"|[()[\]{},]/g)) {
+/** Rust's string and character literals, to blank before reading a call's structure (a `,` or `)` in one splits
+ * nothing). A lifetime (`'a`) has no closing quote and is left. Raw strings are not read. */
+const QUOTED = /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])'/g;
+const blank = (text) => text.replace(QUOTED, (s) => ' '.repeat(s.length));
+
+/** The top-level arguments of the call whose `(` ends at `start` in `build`, each as written and trimmed, and the
+ * index of its closing `)` (`{ args, end }`), or null when the call is not closed. `code` is `build` with its literals
+ * blanked, index for index. A comma before the `)` (rustfmt's, when it breaks a call across lines) ends no argument. */
+function callArguments(build, code, start) {
+  const args = [];
+  let depth = 0, from = start;
+  for (const token of code.slice(start).matchAll(/[()[\]{},]/g)) {
     const c = token[0], at = start + token.index;
-    if (c.startsWith('"')) continue;
     if ((c === ',' || c === ')') && depth === 0) {
-      if (argument++ === 2) { source = build.slice(from, at).trim(); break; }
+      const text = build.slice(from, at).trim();
+      if (c === ',' || text) args.push(text);
+      if (c === ')') return { args, end: at };
       from = at + 1;
-      if (c === ')') break;
     } else if ('([{'.includes(c)) depth++;
     else if (')]}'.includes(c)) depth--;
   }
-  return { call: 'exact_js_bake::build_mixed_with', expr: /^&\s*([\w:]+(?:::(?:default|new)\(\))?)$/.exec(source ?? '')?.[1] };
+  return null;
+}
+
+/** A Rust literal the generated module can copy: a number (with `_`, a fraction, an exponent, a type suffix), a
+ * string, a character or a boolean. */
+const LITERAL = /^(?:-?\d[\d_]*(?:\.\d[\d_]*)?(?:[eE][+-]?\d[\d_]*)?(?:[iuf](?:8|16|32|64|128|size))?|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])'|true|false)$/;
+
+/** A source the generated module can copy, `{ ty, expr }`, or null: a crate path to a type's value (a unit struct),
+ * or `Type::new(…)`, `Type::default()` or a tuple struct `Type(…)` whose arguments are literals, since the module
+ * has none of build.rs's `use`s and locals. Another function may make a source for the bake alone (one that answers
+ * nothing at build), not the one the app runs. `ty`, the type `export!` names, must be crate-qualified and
+ * capitalised, not a constant's capitals. The call must be the whole expression: `Type::new(1).with(2)` would lose
+ * its `.with(2)`. */
+export function copyableSource(text) {
+  const m = /^((?:[A-Za-z_]\w*\s*::\s*)+[A-Za-z_]\w*)\s*([\s\S]*)$/.exec(text.trim());
+  if (!m) return null;
+  const path = m[1].replace(/\s+/g, ''), rest = m[2];
+  let args = [];
+  if (rest) {
+    if (!rest.startsWith('(')) return null;
+    const call = callArguments(rest, blank(rest), 1);
+    if (!call || call.end !== rest.length - 1 || !call.args.every((a) => LITERAL.test(a))) return null;
+    args = call.args;
+  }
+  const segments = path.split('::'), method = rest && /^[a-z_]/.test(segments.at(-1));
+  // Only the constructors that make the source the app runs: a bake's own (`Type::for_bake()`) may answer nothing.
+  if (method && !['new', 'default'].includes(segments.at(-1))) return null;
+  const ty = method ? segments.slice(0, -1) : segments;
+  if (ty.length < 2 || !/^[A-Z]/.test(ty.at(-1)) || /^[A-Z][A-Z0-9_]+$/.test(ty.at(-1))) return null;
+  return { ty: ty.join('::'), expr: rest ? `${path}(${args.join(', ')})` : path };
+}
+
+/** The Rust source selected by a web bake, before generating its ABI crate: the second argument of
+ * `contract::bake(…)`, or the third of `exact_js_bake::build_mixed_with(…)` (written `&<source>`), as
+ * `{ call, ty, expr }` with `ty` and `expr` undefined when the module cannot copy it (`copyableSource`). */
+export function bakedRustSource(dir) {
+  const path = resolve(dir, 'web/build.rs');
+  if (!existsSync(path)) return null;
+  // Comments blanked; literals kept, a character's quote (`'"'`) opening no string.
+  const build = readFileSync(path, 'utf8').replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])'/g, m => /^["']/.test(m) ? m : ' '.repeat(m.length));
+  const code = blank(build);
+  const mixed = /exact_js_bake::build_mixed_with\s*\(/.exec(code), bake = /contract::bake\s*\(/.exec(code);
+  const call = mixed ?? bake;
+  if (!call) return null;
+  const args = callArguments(build, code, call.index + call[0].length)?.args ?? [];
+  const written = mixed ? /^&\s*([\s\S]+)$/.exec(args[2] ?? '')?.[1] : args[1];
+  const source = written === undefined ? null : copyableSource(written);
+  return { call: mixed ? 'exact_js_bake::build_mixed_with' : 'contract::bake', ty: source?.ty, expr: source?.expr };
 }
 
 export function buildModule(app, out = resolve(MODULES, app), draw = false, dir = resolve(root, 'apps', app)) {
@@ -195,11 +240,11 @@ export function buildModule(app, out = resolve(MODULES, app), draw = false, dir 
   // The source is copied as written into a generated crate whose one dependency is the data crate, where build.rs's
   // `use`s and locals are not. A call it cannot copy, outside comments and strings, is named rather than taken for none.
   if (!expr && source?.call === 'contract::bake') {
-    throw new Error(`${app}: ${resolve(dir, 'web/build.rs')} passes contract::bake a source the web build does not copy into the module it generates. It copies \`contract::bake(plan, <data crate>::<Type>)\`, \`<data crate>::<Type>::default()\` or \`<data crate>::<Type>::new()\` with no arguments, written with no comma after the source (rustfmt adds one when it breaks the call across lines). For anything else, write a crate that exports the source (\`exact_logic_abi::export!(<Type>, <constructor>)\`, as apps/update-lab/logic does) and name it in app.json's rust.module.package`);
+    throw new Error(`${app}: ${resolve(dir, 'web/build.rs')} passes contract::bake a source the web build does not copy into the module it generates. It copies a path to the data crate's source (\`<data crate>::<Type>\`), or its \`::default()\` or \`::new(…)\` whose arguments are literals (\`<data crate>::<Type>::new(true)\`), as the module has none of build.rs's \`use\`s and locals. For anything else, write a crate that exports the source (\`exact_logic_abi::export!(<Type>, <constructor>)\`, as apps/update-lab/logic does) and name it in app.json's rust.module.package`);
   }
-  if (!expr && source) throw new Error(`${app}: ${resolve(dir, 'web/build.rs')} passes ${source.call} a Rust source the web build cannot copy. Use a data-crate type's value, ::default() or ::new() with no arguments, or export it in app.json's rust.module.package`);
+  if (!expr && source) throw new Error(`${app}: ${resolve(dir, 'web/build.rs')} passes ${source.call} a Rust source the web build cannot copy. Use a path to a data-crate value, or its ::default() or ::new(…) whose arguments are literals, or export it in app.json's rust.module.package`);
   if (!expr) return ownModule(app, out, dir);
-  const ty = expr.replace(/::(default|new)\(\)$/, '');
+  const ty = source.ty;
   const dataToml = readFileSync(resolve(dir, 'data/Cargo.toml'), 'utf8');
   const pkg = /^name\s*=\s*"([^"]+)"/m.exec(dataToml)[1];
   const crate = resolve(out, 'crate');
@@ -248,7 +293,7 @@ function ownModule(app, out, dir) {
 export async function moduleGrants(path) {
   const { instance } = await WebAssembly.instantiate(readFileSync(path), {}), e = instance.exports;
   const abi = e.exact_logic_abi();
-  if (abi !== 9) throw new Error(`${path}: Rust module ABI ${abi} is not 9; rebuild it with this checkout`);
+  if (abi !== 12) throw new Error(`${path}: Rust module ABI ${abi} is not 12; rebuild it with this checkout`);
   const session = e.exact_logic_create(), request = new Uint8Array(5), p = e.exact_logic_alloc(request.length);
   new DataView(request.buffer).setUint32(0, abi, true);
   new Uint8Array(e.memory.buffer, p, request.length).set(request);

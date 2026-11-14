@@ -258,19 +258,34 @@ pub(super) fn quit(shared: &Shared, grace_ms: f64) {
     *ESCALATING.0.lock().unwrap() += 1;
     os::wait_at_exit(wait_for_escalations);
     let path = records(shared);
-    let spawned = std::thread::Builder::new()
-        .name("exact-child-quit".into())
-        .spawn(move || {
-            escalate(&live);
-            prune(path.as_deref());
-            let mut n = ESCALATING.0.lock().unwrap();
-            *n -= 1;
-            ESCALATING.1.notify_all();
-        });
-    if spawned.is_err() {
-        let mut n = ESCALATING.0.lock().unwrap();
-        *n -= 1;
+    let (owned, owned_path) = (live.clone(), path.clone());
+    // Without the thread nothing else would `SIGKILL` these groups, which are
+    // no longer `LIVE`: the caller waits out their grace instead.
+    if quit_thread(move || finish_quit(&owned, owned_path.as_deref())).is_err() {
+        finish_quit(&live, path.as_deref());
     }
+}
+
+/// Start the thread that finishes a quit. A test process whose environment
+/// names `EXACT_TEST_FAIL_QUIT_THREAD` fails it, as the thread limit would.
+fn quit_thread(body: impl FnOnce() + Send + 'static) -> std::io::Result<()> {
+    #[cfg(test)]
+    if std::env::var_os("EXACT_TEST_FAIL_QUIT_THREAD").is_some() {
+        return Err(std::io::Error::other("injected thread spawn failure"));
+    }
+    std::thread::Builder::new()
+        .name("exact-child-quit".into())
+        .spawn(body)
+        .map(drop)
+}
+
+/// Escalate a quit's groups, prune their records, and stop counting it.
+fn finish_quit(live: &[(i32, String, f64)], path: Option<&Path>) {
+    escalate(live);
+    prune(path);
+    let mut n = ESCALATING.0.lock().unwrap();
+    *n -= 1;
+    ESCALATING.1.notify_all();
 }
 
 /// Drop this process's entries whose groups have ended.

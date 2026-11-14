@@ -281,6 +281,8 @@ package enum AudioSession {
                 do {
                     if let failure = nextHoldFailure { nextHoldFailure = nil; throw failure }
                     let session = AVAudioSession.sharedInstance()
+                    // The session is the capture's now: speech after it applies its own configuration again.
+                    spoken = nil
                     try session.setCategory(.playAndRecord, mode: mode, options: options)
                     try session.setActive(true)
                 } catch {
@@ -308,10 +310,7 @@ package enum AudioSession {
     private static func restoreAfterCaptures() {
         guard !inCall else { return }
         let session = AVAudioSession.sharedInstance()
-        if !speeches.isEmpty {
-            spoken = nil
-            if holders.isEmpty { return composeSpeech() }
-        }
+        if !speeches.isEmpty, holders.isEmpty { return composeSpeech() }
         if holders.isEmpty {
             try? apply(resting)
             if players.isEmpty { try? session.setActive(false, options: .notifyOthersOnDeactivation) }

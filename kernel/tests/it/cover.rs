@@ -3,6 +3,8 @@
 //! whose heading the bar shows takes no space, and clearing either lays the
 //! route out as authored again.
 
+mod sizing;
+
 use exact_kernel::{Env, HostCover, Kernel, NodeType, Offer, Op, StyleId, StyleProps, StyleValue};
 
 fn style(rows: &[(StyleId, StyleValue)]) -> StyleProps {
@@ -91,6 +93,68 @@ fn frame(kernel: &mut Kernel, id: u32) -> (f32, f32, f32, f32) {
         .unwrap();
     let f = kernel.node(id).unwrap().frame;
     (f.x, f.y, f.width, f.height)
+}
+
+#[test]
+fn an_absolute_sheet_sizes_against_the_box_inside_the_cover() {
+    exact_kernel::link_segments();
+    let mut failures = Vec::new();
+    for (row, value, expected) in [
+        (StyleId::Height, "100%", 902.0),
+        (
+            StyleId::MaxHeight,
+            "calc(100% - env(viewport-segment-top 0 1))",
+            402.0,
+        ),
+    ] {
+        let mut kernel = route();
+        kernel
+            .set_segments(
+                1,
+                2,
+                vec![
+                    exact_kernel::Rect::new(0.0, 0.0, 390.0, 451.0),
+                    exact_kernel::Rect::new(0.0, 500.0, 390.0, 451.0),
+                ],
+            )
+            .unwrap();
+        kernel
+            .apply(
+                1,
+                2,
+                &[
+                    Op::SetStyle {
+                        id: 4,
+                        patch: Box::new(style(&[
+                            (StyleId::PositionType, StyleValue::Text("absolute".into())),
+                            (StyleId::Bottom, StyleValue::Number(0.0)),
+                            (StyleId::Left, StyleValue::Number(0.0)),
+                            (StyleId::Height, StyleValue::Number(2000.0)),
+                            (row, StyleValue::Text(value.into())),
+                        ])),
+                    },
+                    Op::SetChildren {
+                        id: 2,
+                        children: vec![4],
+                    },
+                ],
+            )
+            .unwrap();
+        for bottom in [0.0, 49.0, 83.0, 49.0, 0.0] {
+            kernel
+                .set_host_cover(2, Some(HostCover::Edges([0.0, 0.0, bottom, 0.0])))
+                .unwrap();
+            kernel
+                .compute_layout(1, Offer::definite(390.0, 951.0))
+                .unwrap();
+            let f = kernel.node(4).unwrap().frame;
+            let height = expected + 49.0 - bottom;
+            if f.height != height || f.y + f.height != 951.0 - bottom {
+                failures.push(format!("{value}, cover {bottom}: {f:?}, height {height}"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 /// LLP 1123 D3: the route pads `env(safe-area-inset-top)` itself, so its
@@ -263,7 +327,7 @@ fn an_absolute_footer_in_a_covered_route_clears_the_bar_it_rests_on() {
         "the scroller reaches the bottom edge"
     );
     assert_eq!(frame(&mut kernel, 5), (0.0, 721.0, 390.0, 40.0));
-    // A percentage inset is the author's to resolve; it stays as written.
+    // A percentage inset resolves against the same cleared box as sizes.
     kernel
         .apply(
             0,
@@ -276,7 +340,7 @@ fn an_absolute_footer_in_a_covered_route_clears_the_bar_it_rests_on() {
         .unwrap();
     kernel.set_host_cover(4, None).unwrap();
     let (_, y, _, _) = frame(&mut kernel, 5);
-    assert!((y - (844.0 - 84.4 - 40.0)).abs() < 0.5, "{y}");
+    assert!((y - (761.0 - 76.1 - 40.0)).abs() < 0.5, "{y}");
 }
 
 #[test]
@@ -598,7 +662,7 @@ fn an_inset_scroller_keeps_the_box_its_sizes_give_it() {
     // definite sizes give it. Under `content-box`: a height (an arranged pane
     // fills its allocation with `height: 100%`), a minimum, a maximum, a flex
     // basis, and a share of the column, which Taffy floors at the box's
-    // padding and border (insets laid out as padding take 525, not 438).
+    // padding and border.
     // Under both sizings: a height too small for the padding and the insets,
     // whose box stays with an empty content box, and the width an aspect
     // ratio gives.
@@ -757,11 +821,11 @@ fn a_multi_column_scroller_lays_its_columns_out_inside_its_gutters() {
     assert_eq!(kernel.node(4).unwrap().content.1, 670.0, "844 - 174");
     // A vertical scrollbar's gutter is at the end edge, which is the left in
     // right-to-left text; there the first row starts at the client box's
-    // right edge. Points are from the border box's left (AppKit's
-    // `kernelDocumentOrigin` takes a left gutter off), so the client box's
-    // right edge is 375 left to right and 390 right to left, and an empty
-    // list's extent ends there.
-    for (direction, right) in [("ltr", 375.0), ("rtl", 390.0)] {
+    // right edge, and the column records clear the gutter as their rows do.
+    // Points are from the border box's left (AppKit's `kernelDocumentOrigin`
+    // takes a left gutter off), so the client box's right edge is 375 left
+    // to right and 390 right to left, and an empty list's extent ends there.
+    for (direction, start, right) in [("ltr", 0.0, 375.0), ("rtl", 390.0, 390.0)] {
         let mut kernel = columns(
             &[full.clone(), (StyleId::Direction, text(direction))],
             &[100.0],
@@ -769,10 +833,22 @@ fn a_multi_column_scroller_lays_its_columns_out_inside_its_gutters() {
         kernel
             .set_host_cover(4, Some(HostCover::Gutter([15.0, 0.0])))
             .unwrap();
-        if direction == "rtl" {
-            let row = frame(&mut kernel, 20);
-            assert_eq!(row.0 + row.2, 390.0, "rtl: the first row's start");
-        }
+        let first = frame(&mut kernel, 20);
+        let edge = if direction == "rtl" {
+            first.0 + first.2
+        } else {
+            first.0
+        };
+        assert_eq!(edge, start, "{direction}: the first row's start");
+        let records = &kernel.columns(kernel.node(4).unwrap().key).unwrap().columns;
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].x, first.0, "{direction}: column and row align");
+        assert_eq!(records[0].width, 179.5);
+        assert_eq!(
+            records[1].x,
+            if direction == "rtl" { 15.0 } else { 195.5 },
+            "{direction}: the last column clears the gutter"
+        );
         kernel
             .apply(
                 3,
@@ -784,11 +860,35 @@ fn a_multi_column_scroller_lays_its_columns_out_inside_its_gutters() {
             )
             .unwrap();
         frame(&mut kernel, 4);
+        assert!(kernel
+            .columns(kernel.node(4).unwrap().key)
+            .unwrap()
+            .columns
+            .iter()
+            .all(|c| !c.holds));
         assert_eq!(
             kernel.node(4).unwrap().content.0,
             right,
             "{direction}: the client box's right edge"
         );
+
+        // Two rows balance into a row per column; each record is where its
+        // row is.
+        let mut paired = columns(
+            &[full.clone(), (StyleId::Direction, text(direction))],
+            &[20.0, 20.0],
+        );
+        paired
+            .set_host_cover(4, Some(HostCover::Gutter([15.0, 0.0])))
+            .unwrap();
+        let first = frame(&mut paired, 20);
+        let second = frame(&mut paired, 21);
+        let records = paired.columns(paired.node(4).unwrap().key).unwrap();
+        assert_eq!(records.columns.len(), 2);
+        assert!(records.columns.iter().all(|c| c.holds));
+        assert_eq!(records.columns[0].x, first.0);
+        assert_eq!(records.columns[1].x, second.0);
+        assert_eq!((first.0 - second.0).abs() - first.2, records.gap);
     }
     // Six 20-point rows under an 80-point cap: the columns end above the
     // bottom gutter, 33 points tall, so each holds one row and they run on
@@ -1057,7 +1157,7 @@ fn a_box_moved_onto_the_chain_or_off_it_re_derives_the_route() {
 }
 
 /// Round 2 (Astra, Grok): a footer attached, or moved away, after the
-/// route's cover has settled is placed past it, or no longer; a box that
+/// route's cover has settled is placed past it; a box that
 /// clips across (`overflow-x: hidden`, so its `visible` height scrolls as
 /// the engine computes it) is a scroller the chain stops at; and the
 /// padding the route reports is what layout pads.
@@ -1094,8 +1194,8 @@ fn a_footer_attached_late_a_clipping_box_and_the_reported_padding() {
         844.0 - 83.0 - 20.0,
         "attached late, on the bar"
     );
-    // Moved into the header, which no bar covers: placed as written, at the
-    // foot of its containing block (the positioned route), under the bar.
+    // The static header does not contain the footer: it still rests at the
+    // foot of the positioned route's cleared containing block.
     let moved = [
         Op::SetChildren {
             id: 2,
@@ -1109,8 +1209,8 @@ fn a_footer_attached_late_a_clipping_box_and_the_reported_padding() {
     kernel.apply(1, 3, &moved).unwrap();
     assert_eq!(
         frame(&mut kernel, 8).1,
-        844.0 - 20.0,
-        "no longer past a cover"
+        844.0 - 83.0 - 20.0,
+        "the same containing block through a static parent"
     );
     // The route's own padding at its bottom, as layout pads it: the
     // authored 16, none of the bar's.

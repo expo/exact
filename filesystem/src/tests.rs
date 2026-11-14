@@ -177,6 +177,127 @@ fn retained_generation_quota_is_atomic_and_never_prunes() {
 }
 
 #[test]
+fn retained_blobs_are_stored_once_and_named_by_their_digest() {
+    let fixture = Fixture::new();
+    let root = fixture.dir("cache");
+    let digest = format!("{:x}", Sha256::digest("payload"));
+    let request = |seq, files: Value, blobs: Value| {
+        let mut input = json!({"op":"retain", "path":format!("{}/{seq}", "e".repeat(32)),
+            "quota":1024, "token":TOKEN, "blobs":blobs});
+        if !files.is_null() {
+            input["files"] = files;
+        }
+        operate(&root, &input, None)
+    };
+    let envelope = json!({"exact.json":STANDARD.encode("envelope")});
+    let blob = json!({ digest.as_str(): STANDARD.encode("payload") });
+    // Blobs may precede the envelope in a request of their own.
+    let part = request(1, Value::Null, blob.clone()).unwrap()["bytes"]
+        .as_u64()
+        .unwrap();
+    assert_eq!(part, 68 + 7);
+    assert!(!fixture
+        .path(&format!("cache/{}/1", "e".repeat(32)))
+        .exists());
+    let first = request(1, envelope.clone(), blob.clone()).unwrap()["bytes"]
+        .as_u64()
+        .unwrap();
+    let second = request(2, envelope, blob).unwrap()["bytes"]
+        .as_u64()
+        .unwrap();
+    assert_eq!((first, second), (part + 8, part + 16));
+    assert_eq!(
+        fs::read(fixture.path(&format!("cache/blobs/{digest}"))).unwrap(),
+        b"payload"
+    );
+    let wrong = json!({ digest.as_str(): STANDARD.encode("other") });
+    assert!(request(3, Value::Null, wrong)
+        .unwrap_err()
+        .to_string()
+        .contains("digest"));
+    assert!(request(3, Value::Null, json!({}))
+        .unwrap_err()
+        .to_string()
+        .contains("missing files"));
+    assert!(
+        request(3, json!({"app.plan":STANDARD.encode("plan")}), json!({}))
+            .unwrap_err()
+            .to_string()
+            .contains("envelope")
+    );
+}
+
+#[test]
+fn a_publication_is_admitted_whole_and_releases_the_blobs_it_abandons() {
+    let fixture = Fixture::new();
+    let root = fixture.dir("cache");
+    let retain = |seq, extra: Value| {
+        let mut input = json!({"op":"retain", "path":format!("{}/{seq}", "f".repeat(32)),
+            "quota":400, "token":TOKEN});
+        for (key, value) in extra.as_object().unwrap() {
+            input[key] = value.clone();
+        }
+        operate(&root, &input, None)
+    };
+    let (a, b) = (
+        format!("{:x}", Sha256::digest("aaaa")),
+        format!("{:x}", Sha256::digest("bbbb")),
+    );
+    let blob = |digest: &str| fixture.path(&format!("cache/blobs/{digest}"));
+    let generation = |digest: &str| {
+        let index = json!({"assets":[{"sha256":digest}]}).to_string();
+        json!({"assets.json":STANDARD.encode(index), "exact.json":STANDARD.encode("envelope")})
+    };
+    // The first batch fits alone, not with the bytes still to come: nothing is written.
+    let first = json!({"blobs":{ a.as_str(): STANDARD.encode("aaaa") }, "reserve":400});
+    assert!(retain(1, first)
+        .unwrap_err()
+        .to_string()
+        .contains("quota exceeded"));
+    assert!(!blob(&a).exists());
+    let published =
+        json!({"blobs":{ a.as_str(): STANDARD.encode("aaaa") }, "files":generation(&a)});
+    retain(1, published).unwrap();
+    retain(2, json!({"blobs":{ b.as_str(): STANDARD.encode("bbbb") }})).unwrap();
+    // Only the blob no published generation names is released.
+    let release = json!({"op":"release", "token":TOKEN, "blobs":[a, b]});
+    assert_eq!(operate(&root, &release, None).unwrap(), json!(1));
+    assert!(blob(&a).exists() && !blob(&b).exists());
+    // An envelope whose index names a released blob is refused.
+    assert!(retain(2, json!({"files":generation(&b)}))
+        .unwrap_err()
+        .to_string()
+        .contains("missing blob"));
+    assert!(!fixture
+        .path(&format!("cache/{}/2/exact.json", "f".repeat(32)))
+        .exists());
+}
+
+#[test]
+fn a_tree_page_reads_to_its_limit_and_names_the_rest() {
+    let fixture = Fixture::new();
+    let root = fixture.dir("tree");
+    fixture.dir("tree/nested");
+    for (name, body) in [("a", "12345"), ("nested/b", "678"), ("nested/c", "9")] {
+        fs::write(fixture.path(&format!("tree/{name}")), body).unwrap();
+    }
+    let first = operate(&root, &json!({"op":"tree", "limit":6}), None).unwrap();
+    assert_eq!(
+        first,
+        json!({"a":STANDARD.encode("12345"), "nested/b":STANDARD.encode("678"), "nested/c":null})
+    );
+    let rest = operate(
+        &root,
+        &json!({"op":"tree", "limit":6, "paths":["nested/c"]}),
+        None,
+    )
+    .unwrap();
+    assert_eq!(rest, json!({"nested/c":STANDARD.encode("9")}));
+    assert!(operate(&root, &json!({"op":"tree", "paths":["../tree/a"]}), None).is_err());
+    assert!(operate(&root, &json!({"op":"tree", "paths":["absent"]}), None).is_err());
+}
+
+#[test]
 fn retained_payload_failure_never_publishes_the_envelope() {
     let fixture = Fixture::new();
     let root = fixture.dir("cache");
@@ -520,4 +641,32 @@ fn puts_cannot_replace_case_variants_of_a_stream_head_or_lock() {
         }
     }
     operate(&root, &json!({"op":"put", "path":".exact/blobs/abc", "bytes":STANDARD.encode("blob"), "immutable":true, "token":TOKEN}), None).unwrap();
+}
+
+/// A spelling the volume's lookup folds onto the head or lock (APFS folds
+/// `ſ` to `s` and the Kelvin sign to `k`; NTFS matches 8.3 short names) is
+/// the same file, and a put of it is refused. On a volume that does not fold,
+/// the put is a file of its own.
+#[test]
+fn puts_cannot_replace_a_stream_head_or_lock_by_a_folded_spelling() {
+    let fixture = Fixture::new();
+    let root = fixture.dir("origin");
+    let cohort = fixture.path("origin/.exact/prod/cohort");
+    fs::create_dir_all(&cohort).unwrap();
+    fs::write(cohort.join("exact.json"), "head").unwrap();
+    fs::write(cohort.join(".lock"), "lock").unwrap();
+    for name in ["exact.j\u{17f}on", ".loc\u{212a}"] {
+        let folds = cohort.join(name).exists();
+        let put = operate(
+            &root,
+            &json!({"op":"put", "path":format!(".exact/prod/cohort/{name}"), "bytes":STANDARD.encode("forged"), "token":TOKEN}),
+            None,
+        );
+        assert_eq!(put.is_err(), folds, "{name}: {put:?}");
+        assert_eq!(
+            fs::read_to_string(cohort.join("exact.json")).unwrap(),
+            "head"
+        );
+        assert_eq!(fs::read_to_string(cohort.join(".lock")).unwrap(), "lock");
+    }
 }

@@ -159,7 +159,7 @@ final class Canvas2DKept {
     var start: Canvas2DReplayState?
     /// A list since `start` drew something a recording draws differently.
     var refused = false
-    var recording = false
+    var recording: Canvas2DRecordLayer.Frame?
 
     /// The most kept, in bytes and lists: a canvas that never covers itself
     /// would otherwise record all it ever drew, every frame.

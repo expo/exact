@@ -6,9 +6,12 @@
 //! Kernel validation precedes every write; a refusal leaves the kernel untouched.
 mod admission;
 mod advance;
+mod capture;
 mod native_timers;
+mod retirement;
 pub use native_timers::NativeTimer;
 use native_timers::Timer;
+pub use retirement::{ModuleIdentity, ModuleInstance};
 mod background;
 mod commit;
 mod console;
@@ -18,6 +21,8 @@ mod errors;
 mod reply;
 #[cfg(test)]
 mod request_set_tests;
+#[cfg(test)]
+mod shared_plan_tests;
 pub use errors::RunnerError;
 mod event;
 pub mod faults;
@@ -250,6 +255,7 @@ enum Seed<'a> {
 /// answers, and the arguments it was asked with (what `parse` sees).
 #[derive(Clone)]
 struct PendingReq {
+    module: Option<ModuleInstance>,
     inspection_generation: u64,
     refusal: Option<(&'static str, bool)>,
     /// The host refused this ordered request before execution (LLP 1041 §8.4).
@@ -410,6 +416,11 @@ pub struct Runner<D: DataSource> {
     reuse: bool,
     /// The 2D canvases (LLP 1056 D4), when Canvas 2D is linked.
     canvases: Option<Box<dyn canvas2d::CanvasEngine>>,
+    canvas_owner: std::sync::Arc<()>,
+    canvas_captures: Vec<(
+        crate::Request,
+        std::sync::Weak<std::sync::Mutex<crate::canvas_capture::CaptureState>>,
+    )>,
     /// Requests in flight (LLP 1016): at most one per resource or mutation.
     pending: Vec<PendingReq>,
     /// This commit let a request go: `conclude` tells the source what is still in flight.
@@ -426,6 +437,7 @@ pub struct Runner<D: DataSource> {
     /// for this answer to reject it in a module turn, so a refused aborting
     /// commit still delivers it on the next pump.
     module_aborts: Vec<u64>,
+    failed_tickets: std::collections::BTreeMap<u64, String>,
     /// The tickets answered aborted, until the host cancels their requests
     /// whatever their method ([`Runner::take_explicit_aborts`]).
     explicit_aborts: Vec<u64>,
@@ -655,7 +667,7 @@ impl<D: DataSource> Runner<D> {
     #[allow(clippy::too_many_arguments)] // the host boot facts
     fn boot_inner(
         links: RunnerLinks,
-        plan: Plan,
+        plan: impl Into<crate::Program>,
         mut data: D,
         mut kernel: Kernel,
         seed: Seed<'_>,
@@ -665,6 +677,8 @@ impl<D: DataSource> Runner<D> {
         mut viewport: crate::Viewport,
         launch: &str,
     ) -> Result<Runner<D>, RunnerError> {
+        let program = plan.into();
+        let plan = &*program;
         viewport.device_pixel_ratio = kernel
             .reported_display_scale()
             .map(f64::from)
@@ -708,6 +722,15 @@ impl<D: DataSource> Runner<D> {
             return Err(RunnerError::AppMismatch {
                 plan: plan.app_id.clone(),
                 host: data.app_id().to_string(),
+                fix: format!(
+                    "the plan names {plan:?} and this binary's data source {host:?}. If the plan is this app's own \
+                     (baked from its app.json), the data source is wrong: a Rust data crate's `fn app_id` (one copied \
+                     from a sample keeps the sample's) or app.ts's `appId` must say {plan:?}, or remove that \
+                     `fn app_id` to take app.json's. If the plan came from elsewhere (another app's dev server, \
+                     update or link), the plan is the wrong one: change nothing in the app",
+                    plan = plan.app_id,
+                    host = data.app_id()
+                ),
             });
         }
         let roots = plan
@@ -731,13 +754,13 @@ impl<D: DataSource> Runner<D> {
             return Err(RunnerError::RootRegion);
         }
         let same_logic = carried.is_none_or(|c| c.data_revision.as_deref() == data.revision());
-        data.bind(&plan);
+        data.bind(plan);
         // A cold boot forgets the kept answers no resource seeds (`kept::obsolete`); an
         // app granting Health forgets them all, at every boot (LLP 1069.008.000 D7).
         let private = crate::device::keeps_no_answers(data.grants());
         let obsolete_kept = match carried {
             _ if private => kept::all(snapshot.iter().map(|(name, _)| name)),
-            None => kept::obsolete(&plan, snapshot.iter().map(|(name, _)| name)),
+            None => kept::obsolete(plan, snapshot.iter().map(|(name, _)| name)),
             Some(_) => Vec::new(),
         };
         let mut store = Store::new_linked(data.grants(), snapshot, links.grants);
@@ -794,18 +817,23 @@ impl<D: DataSource> Runner<D> {
             })
             .collect();
         let router = match links.router {
-            Some(routing) => routing(&plan)?,
+            Some(routing) => routing(plan)?,
             None => None,
         };
         let launched_place = crate::time::launch_place();
+        let sites = program.sites(links.keyframes);
+        let strings = program.strings();
+        // Its own buffers before its role overrides, which forget the token
+        // edits keyed on them: a dropped runner's edits may key the same addresses.
+        let plan = program.into_plan();
         // Its own role overrides (LLP 1121 stage 5): bound while it boots, installed once it has.
         let roles = exact_kernel::style::roles::Roles::new(crate::bridge::role_overrides(&plan));
         let booting = exact_kernel::style::roles::bind(&roles);
         root_font::bold_text_facts(&mut kernel, &plan, viewport.preferences.bold_text); // LLP 1115.000 D12.3
         let viewport_geometry = crate::viewport::Geometry::of(&kernel);
         let mut runner = Runner {
-            sites: crate::instance::SiteIndex::linked(&plan, links.keyframes),
-            strings: vm::intern(&plan),
+            sites,
+            strings,
             failed_mut: vec![None; plan.mutations.len()],
             transport: crate::transport::Transport::new(&plan),
             midi: crate::runner::midi::queue(&plan, &data),
@@ -861,6 +889,8 @@ impl<D: DataSource> Runner<D> {
             shown: Default::default(),
             reuse: false,
             canvases: links.canvas.map(|engine| engine()),
+            canvas_owner: std::sync::Arc::new(()),
+            canvas_captures: Vec::new(),
             pending: Vec::new(),
             pending_mut: Vec::new(),
             announced: Default::default(),
@@ -873,10 +903,11 @@ impl<D: DataSource> Runner<D> {
             background: Default::default(),
             module_work: Default::default(),
             mapper_turns: Default::default(),
-            picked_count: 0,
+            picked_count: carried.map_or(0, |c| c.picked_count),
             forgot: false,
             heard_aborts: Vec::new(),
             module_aborts: Vec::new(),
+            failed_tickets: Default::default(),
             explicit_aborts: Vec::new(),
             retired_fetches: Vec::new(),
             uploads: Default::default(),
@@ -1054,6 +1085,7 @@ impl<D: DataSource> Runner<D> {
         let receipt = runner.apply(ops)?;
         runner.samples_stood();
         runner.publish_surfaces(surfaces);
+        runner.pin_canvas_captures();
         let line = lines::boot(carried.is_some(), runner.kernel.live_count(), receipt.epoch);
         runner.log(line);
         runner.persist_boot();

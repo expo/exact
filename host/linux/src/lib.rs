@@ -164,3 +164,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod executor_tests;

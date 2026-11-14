@@ -589,6 +589,8 @@ impl Batch {
             exact_runner::SurfaceRequest::Restore { name, bytes } => {
                 ("restore", name, Some(bytes.as_slice()))
             }
+            // `Host::surface_work` sends a capture as `canvas_capture`.
+            exact_runner::SurfaceRequest::Canvas { .. } => return,
         };
         let mut s = format!(
             "{{\"op\":\"surfaceWork\",\"ticket\":{},\"mode\":\"{mode}\",\"name\":",
@@ -606,6 +608,25 @@ impl Batch {
         }
         s.push('}');
         self.ops.push(s);
+    }
+
+    /// `{"op":"surfaceWork","mode":"canvas","ticket","id","lifetime","generation","w","h"}`:
+    /// the presenter encodes that canvas's bitmap (`canvas_capture.rs`); with
+    /// none, `"refused":true`, which it hands straight back.
+    pub fn canvas_capture(
+        &mut self,
+        ticket: u64,
+        c: Option<&exact_runner::canvas_capture::CanvasCapture>,
+    ) {
+        self.ops.push(match c {
+            Some(c) => format!(
+                "{{\"op\":\"surfaceWork\",\"mode\":\"canvas\",\"ticket\":{ticket},\"id\":{},\"lifetime\":{},\"generation\":{},\"sequence\":{},\"w\":{},\"h\":{}}}",
+                c.view, c.lifetime, c.generation, c.sequence, c.width, c.height
+            ),
+            None => format!(
+                "{{\"op\":\"surfaceWork\",\"mode\":\"canvas\",\"ticket\":{ticket},\"refused\":true}}"
+            ),
+        });
     }
 
     /// Prepend these ops to an already finished batch from the same writer.

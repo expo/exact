@@ -82,11 +82,11 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     private var playingCopy: Map<Int, android.graphics.drawable.AnimatedImageDrawable>? = null
     private var heldCopy: Map<Int, android.graphics.RenderNode>? = null
     /** Nodes exact2's reader animates, sampled every frame while any plays. */
-    private val layers: Layers = Layers({ node, ops, ox, oy, memo ->
-        // A layer whose dash phase moved: only its path is recorded again, read once.
+    private val layers: Layers = Layers({ node, ops, ox, oy, memo, scale ->
+        // A layer recorded again (a dash phase, a colour, a pixelated image's scale): its paths are read once.
         val c = node.beginRecording()
-        main.memo = memo
-        try { main.replayAt(c, IntBuffer.wrap(ops), 0, ops.size, ox, oy) } finally { main.memo = null }
+        main.memo = memo; main.layerScale = scale
+        try { main.replayAt(c, IntBuffer.wrap(ops), 0, ops.size, ox, oy) } finally { main.memo = null; main.layerScale = 1f }
         node.endRecording()
     }) { fonts[it] }.also { if (skipOffscreen) it.rowShows = Layers.RowShows { row -> rowShows(row) } }
     /** layerbounds=0: layers' nodes cover everything, unclipped (each move or fade damages the window), to compare. */
@@ -110,6 +110,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     private val slots = Slots(Player(fonts).also { p -> p.image = { images[it] }; p.animated = { animated[it] } },
         { images.containsKey(it) }).also { it.changed = { heldCopy = null } }
     private val worker = java.util.concurrent.Executors.newSingleThreadExecutor()
+    private val completions = android.os.Handler(Looper.getMainLooper())
     private val async = (context as Activity).intent.getStringExtra("async") != "0"
     /** Timers, and the paint a scroll owes once it pauses (only then the collection pass it left behind). */
     private val timer = Runnable { if (prefetch && Native.owed()) Native.refine(-1, 0f); pump() }
@@ -220,8 +221,9 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
             return
         }
         val frames = android.view.Choreographer.getInstance()
+        moduleTouches.stopped()
         scrolling.stopped()
-        removeCallbacks(held)
+        hold(null)
         frames.removeFrameCallback(turn); turnPosted = false
         frames.removeFrameCallback(sampler); samplerPosted = false
         frames.removeFrameCallback(holder); holdFrom = 0L
@@ -240,90 +242,43 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     private var heldX = 0f
     private var heldY = 0f
     private var heldTool = 0
+    private var heldAt = 0L
     private val held = Runnable {
+        heldAt = 0L
         Exact.touched = android.os.SystemClock.uptimeMillis(); forward(4, heldX, heldY, heldTool, -1L)
-        // A long press a node took (its context menu) presses nothing when it lifts, a module's button included:
-        // exact2's count of them, asked behind the long press, says whether this one was taken.
-        if (moduleTap != 0 || moduleAwaiting > 0) {
-            val serial = moduleSerial
-            moduleAwaiting++
-            ask(heldX, heldY) { words ->
-                if (serial != moduleSerial) return@ask
-                val at = 3 + 11 * words.getOrElse(1) { 0 }
-                if (words.getOrElse(at + 7) { moduleLongPresses } != moduleLongPresses) moduleTap = 0
-                answered()
-            }
-        }
+        moduleTouches.longPressed(heldX, heldY)
     }
     internal fun hold(e: MotionEvent?) {
         removeCallbacks(held)
+        heldAt = 0L
         if (e == null) return
         heldX = e.x; heldY = e.y; heldTool = e.getToolType(0)
-        postDelayed(held, android.view.ViewConfiguration.getLongPressTimeout().toLong())
+        heldAt = e.eventTime + android.view.ViewConfiguration.getLongPressTimeout()
+        postDelayed(held, maxOf(0L, heldAt - android.os.SystemClock.uptimeMillis()))
     }
 
-    private var moduleTap = 0
-    private var moduleSlot = 0
-    private var moduleGeneration = 0
-    /** exact2's answers this contact still waits for: its down's, then a long press's. */
-    private var moduleAwaiting = 0
-    private var moduleLongPresses = 0
-    private var moduleReleased: MotionEvent? = null
-    private var moduleSerial = 0
-    private var moduleX = 0f
-    private var moduleY = 0f
-    private var moduleDownX = 0f
-    private var moduleDownY = 0f
-
-    private fun forgetModuleTap(replayRelease: Boolean = false) {
-        moduleTap = 0; moduleAwaiting = 0; moduleSerial++
-        moduleReleased?.let { release ->
-            moduleReleased = null
-            forward(if (replayRelease) 1 else 3, release.x, release.y, release.getToolType(0), -1L)
-            release.recycle()
-        }
+    /** A queued contact's long press belongs before the first event past its deadline. */
+    internal fun replayTouch(e: MotionEvent) {
+        if (heldAt > 0L && e.eventTime >= heldAt) { removeCallbacks(held); held.run() }
+        onTouchEvent(e)
     }
 
-    private fun releaseModuleTap(e: MotionEvent) {
-        val clicked = moduleTap != 0 && natives?.click(moduleTap, moduleSlot, moduleGeneration, moduleX, moduleY) == true
-        forgetModuleTap()
-        forward(if (clicked) 3 else 1, e.x, e.y, e.getToolType(0), -1L)
-    }
-
-    private fun answered() {
-        if (--moduleAwaiting > 0) return
-        moduleReleased?.let { release ->
-            moduleReleased = null
-            releaseModuleTap(release)
-            release.recycle()
-        }
-    }
+    private val moduleTouches = ModuleTouches(this)
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(e: MotionEvent): Boolean {
+        if (moduleTouches.queued(e)) return true
         val down = e.actionMasked == MotionEvent.ACTION_DOWN
         if (down) {
-            // A new contact cannot borrow the previous contact's delayed hit answer.
-            forgetModuleTap(replayRelease = true)
-            moduleDownX = e.x; moduleDownY = e.y
+            moduleTouches.begin(e)
             fingers.began(e)
         }
         // A touch that scrolls is the reader's and exact2 hears no more of it; any other goes on to exact2.
-        if (started && scrolling.touch(e)) { forgetModuleTap(); hold(null); return true }
-        if (e.actionMasked == MotionEvent.ACTION_MOVE && (Math.abs(e.x - moduleDownX) > slop || Math.abs(e.y - moduleDownY) > slop)) {
-            forgetModuleTap()
-        }
-        if (e.actionMasked == MotionEvent.ACTION_UP && (moduleAwaiting > 0 || moduleTap != 0)) {
-            hold(null)
-            Exact.touched = e.eventTime
-            if (moduleAwaiting > 0) {
-                // As Fields does, keep a completed contact until exact2 identifies its target.
-                moduleReleased = MotionEvent.obtain(e)
-            } else releaseModuleTap(e)
-            return true
-        }
+        if (started && scrolling.touch(e)) { moduleTouches.cancel(); hold(null); return true }
+        if (e.actionMasked == MotionEvent.ACTION_MOVE) moduleTouches.moved(e, slop)
+        if (e.actionMasked == MotionEvent.ACTION_UP && moduleTouches.release(e)) return true
         if (e.actionMasked == MotionEvent.ACTION_CANCEL || e.actionMasked == MotionEvent.ACTION_UP ||
-            e.actionMasked == MotionEvent.ACTION_POINTER_DOWN || e.actionMasked == MotionEvent.ACTION_POINTER_UP) forgetModuleTap()
+            e.actionMasked == MotionEvent.ACTION_POINTER_DOWN || e.actionMasked == MotionEvent.ACTION_POINTER_UP) moduleTouches.cancel()
         // A touch in a hosted text field's box is held for the field, and is the field's own once exact2 says the
         // field is what is under it ([Fields], LLP 1115.001 D8): exact2 hears of the focus, not of the touch.
         val hosted = fields
@@ -343,21 +298,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         }
         if (action == 1) Exact.touched = e.eventTime
         fingers.forward(e, action)
-        if (down && started) {
-            val serial = moduleSerial
-            moduleAwaiting = 1
-            under(e.x, e.y) { words ->
-                if (serial != moduleSerial) return@under
-                val at = 3 + 11 * words.getOrElse(1) { 0 }
-                if (words.size >= at + 8) {
-                    moduleTap = words[at]
-                    moduleX = Float.fromBits(words[at + 1]); moduleY = Float.fromBits(words[at + 2])
-                    moduleSlot = words[at + 5]; moduleGeneration = words[at + 6]
-                    moduleLongPresses = words[at + 7]
-                }
-                answered()
-            }
-        }
+        if (down && started) moduleTouches.down(e)
         return true
     }
 
@@ -365,13 +306,13 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
      * slop the reader knows which scrollers it could move and which axes exact2's own gestures claim. [then]: with
      * the answer, after the scrolling has it and before it takes what came of the touch meanwhile
      * ([Scrolling.caughtUp]), so that a hosted field gets what it held up to where a scroll takes the touch. */
-    private fun under(x: Float, y: Float, then: (IntArray) -> Unit) {
+    internal fun under(x: Float, y: Float, then: (IntArray) -> Unit) {
         val serial = scrolling.serial
-        ask(x, y) { scrolling.under(serial, it); then(it); scrolling.caughtUp(serial) }
+        ask(x, y) { scrolling.under(serial, it); then(it); scrolling.caughtUp(serial); moduleTouches.drain() }
     }
 
     /** [Native.under], on exact2's thread when it has one, behind what was sent to it before. */
-    private fun ask(x: Float, y: Float, then: (IntArray) -> Unit) {
+    internal fun ask(x: Float, y: Float, then: (IntArray) -> Unit) {
         val o = owner
         if (o != null) o.under(x, y, then) else then(Native.under(x, y))
     }
@@ -505,7 +446,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
 
     /** What the owner published, drawn; whether there was any. */
     internal fun publish(): Boolean {
-        if (!started) return false
+        if (!started || worker.isShutdown) return false
         if (!takeOwned()) return false
         if (moved || quiet) ticker?.invalidate() else invalidate()
         return true
@@ -531,15 +472,18 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     /** wait=N: a release waits N ms for exact2's answer (Exact.WAIT_MS by default), to compare. */
     internal val releaseWait = (context as Activity).intent.getStringExtra("wait")?.toLongOrNull() ?: Exact.WAIT_MS
     override fun onDetachedFromWindow() {
-        forgetModuleTap()
+        moduleTouches.stopped()
+        running(false, host = false)
         scrolling.stopped()
+        val frames = android.view.Choreographer.getInstance()
+        for (callback in listOf(laterFrame, regroupFrame, turn, sampler, holder)) frames.removeFrameCallback(callback)
+        laterPosted = false; regrouping = false; turnPosted = false; samplerPosted = false; holdFrom = 0L
         warmer.destroy()
         worker.shutdown()
         wakes?.close()
         wakes = null
         super.onDetachedFromWindow()
     }
-
     /** warm=0: a press that changes nothing draws no frame, to compare. */
     private val warm = (context as Activity).intent.getStringExtra("warm") != "0"
 
@@ -910,6 +854,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
      * references them: it stands). */
     private val regroupFrame = android.view.Choreographer.FrameCallback {
         regrouping = false
+        if (worker.isShutdown) return@FrameCallback
         val b = ops
         if (b != null && done.isNotEmpty()) {
             var i = 0
@@ -1046,24 +991,20 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         if (prefetch && ++steps % 3 == 0) { removeCallbacks(refiner); post(refiner) }
     }
     private var steps = 0
-
     private val prefetch = (context as Activity).intent.getStringExtra("prefetch") != "0"
     private val refiner = Runnable {
         android.os.Trace.beginSection("exact prefetch")
         if (Native.refine(-1, 0f) and 1 != 0) pump()
         android.os.Trace.endSection()
     }
-
     /** A wake (a reply, a picture, a timer): draw only when the stream changed. */
     internal fun pump() {
         if (owner != null || !running) return // the owner publishes what a key or a reply changed
         if (take()) { if (moved) ticker?.invalidate() else { taken = true; invalidate() } } else schedule()
     }
-
     /** exact2 wants another turn: at the next vsync, ask it, and draw only if the stream changed. */
     private val turn = android.view.Choreographer.FrameCallback { turnPosted = false; Native.displayFrame(); pump() }
     private var turnPosted = false
-
     /** While a layer plays: each vsync, sample them and draw a frame (the ticker: nothing is recorded again). */
     private val sampler = android.view.Choreographer.FrameCallback { t ->
         samplerPosted = false
@@ -1079,11 +1020,9 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     private var samplerPosted = false
     /** latesample=0: layers sampled at the frame's vsync always, to compare. */
     private val lateSample = (context as Activity).intent.getStringExtra("latesample") != "0"
-
     private fun playLayers() {
         if (running && !samplerPosted && layers.playing()) { samplerPosted = true; android.view.Choreographer.getInstance().postFrameCallback(sampler) }
     }
-
     private fun schedule() {
         // What this turn asked of the platform (a press's haptic, the keyboard for a field it focused).
         asking()
@@ -1104,9 +1043,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         removeCallbacks(timer)
         if (due >= 0) postDelayed(timer, due.toLong().coerceAtLeast(0))
     }
-
     private fun f(b: IntBuffer, i: Int) = java.lang.Float.intBitsToFloat(b.get(i))
-
     /** Faces, pictures and rows announced in a new stream, made once. */
     private fun ingest(b: IntBuffer, from: Int, n: Int) {
         var i = from
@@ -1131,9 +1068,11 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
                     images.remove(b.get(i + 1))?.let { bmp ->
                         picturesCopy = null
                         main.forget(bmp)
-                        // Java's reference only (API 26+): recorded rows keep the pixels until they are done with
-                        // them. After the worker's queue, which may still be recording with it.
-                        if (async) worker.execute { background.forget(bmp); post { bmp.recycle() } } else bmp.recycle()
+                        // Recycle after queued recordings. After shutdown, drop only our reference: an active
+                        // recording may still use the bitmap, so leave its pixels to the last owner.
+                        if (!worker.isShutdown) {
+                            if (async) worker.execute { background.forget(bmp); completions.post { bmp.recycle() } } else bmp.recycle()
+                        }
                     }
                     i += 2
                 }
@@ -1288,7 +1227,6 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
             rows.put(id, into)?.let { if (it !== into) it.discardDisplayList() }
         }
     }
-
     /** A row out of view whose making waits ([ingest]): op 15 at [at] in [b], then its slots' and layers' sets from
      * [sets] to [end]. [made]: made, or freed before it was. */
     private class Later(val b: IntBuffer, val at: Int, val sets: Int) {
@@ -1318,6 +1256,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     private var streamFrame = false
     private val laterFrame: android.view.Choreographer.FrameCallback = android.view.Choreographer.FrameCallback {
         laterPosted = false
+        if (worker.isShutdown) return@FrameCallback
         makeSoon()
         if (streamFrame) {
             streamFrame = false
@@ -1403,10 +1342,10 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         if (later.isNotEmpty() && !laterPosted) { laterPosted = true; android.view.Choreographer.getInstance().postFrameCallback(laterFrame) }
         android.os.Trace.endSection()
     }
-
     /** A row recorded on the worker: its ops copied, the pictures it draws resolved now. Until it is made, the row it
      * replaces draws in its place. */
     private fun record(id: Int, previous: Int, node: android.graphics.RenderNode, b: IntBuffer, body: Int, end: Int) {
+        if (worker.isShutdown) return
         val copy = IntArray(end - body)
         for (k in copy.indices) copy[k] = b.get(body + k)
         val pictures = picturesCopy ?: HashMap(images).also { picturesCopy = it }
@@ -1420,6 +1359,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         val replacing = previous != 0
         if (!replacing) awaited.add(id)
         worker.execute {
+            if (worker.isShutdown) return@execute
             android.os.Trace.beginSection(if (replacing) "exact row again" else "exact row new")
             background.image = { pictures[it] }
             background.animated = { playing[it] }
@@ -1430,7 +1370,8 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
             background.replay(c, IntBuffer.wrap(copy), 0, copy.size)
             node.endRecording()
             android.os.Trace.endSection()
-            post {
+            completions.post {
+                if (worker.isShutdown) { node.discardDisplayList(); return@post }
                 pending.remove(id)
                 if (cancelled.remove(id)) node.discardDisplayList() else rows.put(id, node)?.discardDisplayList()
                 // A new row its group could not draw yet: the groups drawing it are recorded again before the next
@@ -1448,17 +1389,17 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         }
     }
 
-    /**
-     * hw=1: each picture moves to GPU memory (a hardware bitmap, as Coil's are), made on the worker; the slots drawing it
+    /** hw=1: each picture moves to GPU memory (a hardware bitmap, as Coil's are), made on the worker; the slots drawing it
      * are recorded again with it. Without, a picture is a heap bitmap plus the texture HWUI uploads from it.
      */
     private val hardware = (context as Activity).intent.getStringExtra("hw") == "1"
-
     private fun harden(id: Int, bmp: Bitmap) {
+        if (worker.isShutdown) return
         worker.execute {
+            if (worker.isShutdown) return@execute
             val hw = bmp.copy(Bitmap.Config.HARDWARE, false) ?: return@execute
-            post {
-                if (images[id] !== bmp) { hw.recycle(); return@post } // freed (or replaced) meanwhile
+            completions.post {
+                if (worker.isShutdown || images[id] !== bmp) { hw.recycle(); return@post } // freed (or replaced) meanwhile
                 images[id] = hw
                 picturesCopy = null
                 rootSig = null

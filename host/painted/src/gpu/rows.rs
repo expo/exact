@@ -8,6 +8,13 @@ pub(super) enum Op {
     Pop,
     Mask(Shape, Result<GradientPaint, [u8; 4]>, Transform),
     Backdrop(Shape, exact_kernel::style::BackdropFilter, Transform),
+    Pixelated {
+        image: Arc<Bitmap>,
+        dst: Rect4,
+        clips: Vec<Shape>,
+        ts: Transform,
+        tint: Option<[u8; 4]>,
+    },
     Slot(u32),
     Layer(Rc<Drawing>, Affine, f32),
 }
@@ -261,6 +268,20 @@ impl Gpu {
                 Op::Backdrop(shape, filter, own) => {
                     self.filter_backdrop(shape, filter, ts.pre_concat(*own))
                 }
+                Op::Pixelated {
+                    image,
+                    dst,
+                    clips,
+                    ts: own,
+                    tint,
+                } => self.image(
+                    image,
+                    *dst,
+                    clips,
+                    ts.pre_concat(*own),
+                    *tint,
+                    exact_kernel::ImageRendering::Pixelated,
+                ),
                 Op::Slot(id) => {
                     if let Some(slot) = slots.get(id) {
                         self.replay(&slot.drawing, slots, offset);

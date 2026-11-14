@@ -420,14 +420,15 @@ fn an_authored_min_height_reaches_the_presenter() {
 
 /// A percentage minimum has no basis for an in-flow grouped row: its
 /// containing block is its section's card, as tall as its rows, so the
-/// kernel lays the row out as it would without one (CSS 2.2 §10.7), and the
+/// kernel treats it as zero (CSS 2.2 §10.7), replacing the sheet's row
+/// floor. The Mac's block padding can hide that difference. The
 /// host, reading the crossed percentage against 0, leaves UIKit's cell its
 /// own height.
 #[test]
 fn a_percentage_min_height_on_a_list_row_has_no_basis() {
-    let frame = |min: &str| {
+    let frame = |min: &str, padding: &str| {
         let plan = contract::compile(&format!(
-            "component App\n  view\n    column height=\"100%\"\n      list appearance=\"auto\" listStyle=\"inset-grouped\" height=400\n        section\n          button \"Row\" {min}testId=\"row\"\n"
+            "component App\n  view\n    column height=\"100%\"\n      list appearance=\"auto\" listStyle=\"inset-grouped\" height=400\n        section\n          button \"Row\" {min}{padding}testId=\"row\"\n"
         ))
         .unwrap();
         let (host, first) = Host::boot(
@@ -442,10 +443,19 @@ fn a_percentage_min_height_on_a_list_row_has_no_basis() {
         let crossed = op(&first, row).contains("\"min_height\":{\"pct\":50}");
         (host.runner().kernel().node(row).unwrap().frame, crossed)
     };
-    let (none, _) = frame("");
-    let (half, crossed) = frame("min-height=\"50%\" ");
-    assert_eq!(half, none, "laid out as it is without a minimum");
-    assert!(crossed, "the percentage crosses as written");
+    for padding in ["", "padding=0 "] {
+        let (none, _) = frame("", padding);
+        let (zero, _) = frame("min-height=0 ", padding);
+        let (half, crossed) = frame("min-height=\"50%\" ", padding);
+        assert_eq!(half, zero, "an unresolved percentage minimum is zero");
+        assert!(crossed, "the percentage crosses as written");
+        if !padding.is_empty() {
+            assert!(
+                half.height < none.height,
+                "the authored row replaces the platform floor"
+            );
+        }
+    }
 }
 
 #[test]
@@ -480,8 +490,9 @@ try {
       [false,true].map(host => appleArtifacts(a,{destination,composition,trust,host})))));
   for (const key of ['products','binary']) assert.equal(new Set(forms.map(p => p[key])).size, forms.length, key);
   for (const key of ['scratch','embed']) assert.equal(new Set(forms.map(p => p[key])).size, forms.length / 2, key);
-  // One Swift compile per destination, whatever the app, composition, trust or product.
-  assert.equal(new Set(forms.map(p => p.swift)).size, 3);
+  // One Swift compile per destination and trust (production compiles whole-module or for size),
+  // whatever the app, composition or product.
+  assert.equal(new Set(forms.map(p => p.swift)).size, 6);
   assert.equal(appleArtifacts(b).swift, first.swift);
   assert.equal(new Set(forms.map(p => p.lock)).size, 1);
   assert.equal(appleArtifacts(a,{trust:'production'}).bundle, first.bundle);
@@ -667,12 +678,19 @@ put(lock, ['kernel', 'vendored'].map(n => `[[package]]\nname = "${n}"\nversion =
 assert.deepEqual([...registryPackages(lock)].sort(), ['over-plain', 'plain']);
 const TRIPLE = 'aarch64-apple-darwin/host-dev', HOST = 'host-dev', then = new Date(Date.now() - 3_600_000);
 // What Cargo leaves for one compiled unit: its fingerprint, its files, rustc's dep-info naming the target directory.
+// rustc's dep-info names itself first, then the unit's other outputs.
+const depInfo = (file, outputs, source) => [file, ...outputs].map(output => `${output}: ${source}\n`).join('\n');
 const unit = (target, dir, pkg, hash, build = false) => {
   const at = resolve(target, dir), lib = pkg.replaceAll('-', '_');
   put(resolve(at, '.fingerprint', `${pkg}-${hash}`, `lib-${lib}`), hash, then);
   put(resolve(at, 'deps', `lib${lib}-${hash}.rlib`), `${pkg} compiled in ${target}`, then);
-  put(resolve(at, 'deps', `${lib}-${hash}.d`), `${at}/deps/lib${lib}-${hash}.rlib: /registry/${pkg}/src/lib.rs\n`, then);
-  if (build) { put(resolve(at, 'build', `${pkg}-${hash}`, 'output'), 'cargo:rustc-cfg=x\n', then); put(resolve(at, 'build', `${pkg}-${hash}`, `build_script_build-${hash}.d`), `${at}/build/${pkg}-${hash}/build_script_build-${hash}: /registry/${pkg}/build.rs\n`, then); }
+  const deps = resolve(at, 'deps', `${lib}-${hash}.d`);
+  put(deps, depInfo(deps, [`${at}/deps/lib${lib}-${hash}.rlib`], `/registry/${pkg}/src/lib.rs`), then);
+  if (build) {
+    const script = resolve(at, 'build', `${pkg}-${hash}`, `build_script_build-${hash}`);
+    put(resolve(at, 'build', `${pkg}-${hash}`, 'output'), 'cargo:rustc-cfg=x\n', then);
+    put(`${script}.d`, depInfo(`${script}.d`, [script], `/registry/${pkg}/build.rs`), then);
+  }
 };
 const A = '0'.repeat(15), kept = (lockFile = lock) => keptCrates({root: run, env: {HOME: home, RUSTUP_TOOLCHAIN: '1.0.0'}, profile: 'host-dev'});
 const store = resolve(home, '.cache/exact/apple-crates/1.0.0-host-dev/app'), generations = () => existsSync(store) ? readdirSync(store).filter(n => n.startsWith('gen-')).sort() : [];
@@ -1209,4 +1227,36 @@ fn a_cleared_pressed_paint_sends_no_row() {
         "{cleared}"
     );
     assert!(!cleared.contains("\"press_opacity\":"), "{cleared}");
+}
+
+#[test]
+fn image_rendering_reaches_images_when_their_ancestor_changes() {
+    let plan = contract::compile(
+        r#"component App
+  state mode = "pixelated"
+  action change
+    mode = "crisp-edges"
+  view
+    column image-rendering=mode
+      button "Change" press=change testId="change"
+      image "sprite.png" testId="inherited"
+      image "sprite.png" image-rendering="auto" testId="own"
+"#,
+    )
+    .unwrap();
+    let (mut host, first) = Host::boot(
+        &plan.encode(),
+        NoData,
+        Box::new(MonospaceMeasurer::default()),
+        320.,
+        200.,
+    )
+    .unwrap();
+    let image = view(&host, "inherited");
+    let own = view(&host, "own");
+    assert!(op(&first, image).contains("\"image_rendering\":\"pixelated\""));
+    assert!(op(&first, own).contains("\"image_rendering\":\"auto\""));
+    let batch = host.dispatch(view(&host, "change"), Event::Press);
+    assert!(op(&batch, image).contains("\"image_rendering\":\"crisp-edges\""));
+    assert!(!batch.contains(&format!("\"op\":\"style\",\"id\":{own},")));
 }

@@ -691,7 +691,7 @@ impl<D: DataSource> Presenter<D> {
                 let shown = self.host.kernel().select_chosen(node.id);
                 let label = shown.map(|c| c.label).unwrap_or_else(value);
                 let mut flags = flag::CLICK | flag::EXPANDABLE;
-                if self.menu == Some(node.id) {
+                if self.menu == Some(node.id) || self.select_surface() == Some(node.id) {
                     flags |= flag::EXPANDED;
                 }
                 (role::DROPDOWN, flags, [0.0; 3], label)

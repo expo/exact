@@ -7,6 +7,16 @@ pub fn bake_declaration(platform: &str, app_dir: &str) {
     bake(platform, app_dir);
 }
 
+/// Bake a game without a data crate for the Apple shell such games share
+/// (`exact-game-apple`, game/app/apple), which its crate depends on: the entry
+/// only defines the plan and compat.json that shell reads, so the game's own
+/// Apple crate compiles no host. A game the shared entry does not fit bakes as
+/// `bake_declaration` does.
+pub fn bake_shared_declaration(app_dir: &str) {
+    require_declaration(app_dir);
+    bake_source("apple", app_dir, (), "()", "Default::default()", true);
+}
+
 /// Bake a host with an ordinary linked data source wrapped by host storage.
 pub fn bake_data_declaration<D: contract::DataSource + Default>(
     platform: &str,
@@ -16,7 +26,14 @@ pub fn bake_data_declaration<D: contract::DataSource + Default>(
     require_declaration(app_dir);
     let wrapped = format!("exact_data_host::Storage<{data_type}>");
     let constructor = format!("exact_data_host::Storage::new({data_type}::default())");
-    bake_source(platform, app_dir, D::default(), &wrapped, &constructor);
+    bake_source(
+        platform,
+        app_dir,
+        D::default(),
+        &wrapped,
+        &constructor,
+        false,
+    );
 }
 
 fn require_declaration(app_dir: &str) {
@@ -35,7 +52,7 @@ fn require_declaration(app_dir: &str) {
 /// Bake the app named by the generated shell, with no JS or Rust module.
 /// `apple` selects macOS or iOS from Cargo's target OS.
 pub fn bake(platform: &str, app_dir: &str) {
-    bake_source(platform, app_dir, (), "()", "Default::default()");
+    bake_source(platform, app_dir, (), "()", "Default::default()", false);
 }
 
 fn bake_source<D: contract::DataSource>(
@@ -44,6 +61,7 @@ fn bake_source<D: contract::DataSource>(
     data: D,
     data_type: &str,
     constructor: &str,
+    shared: bool,
 ) {
     let platform = if platform == "apple" {
         if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("ios") {
@@ -137,15 +155,23 @@ fn bake_source<D: contract::DataSource>(
     );
     let host = match platform {
         "web" => "exact_web::host!(AppData, PLAN, COMPAT, app_data);",
-        "macos" | "ios" => {
-            "exact_apple::host!(AppData, PLAN, COMPAT, None, std::ptr::null(), app_data);"
-        }
+        "macos" | "ios" => &apple_host("PLAN", "COMPAT"),
         "linux" => &linux,
         // canvas_jni! embeds OUT_DIR's plan and compat itself.
         "android" => "exact_painted::canvas_jni!(crate::AppData);",
         "windows" => &windows,
         _ => panic!("unsupported game app platform: {platform}"),
     };
+    // The shared shell holds this game's host when the entry it would compile names
+    // nothing of the game but its app id (`SHARED_ENTRY`); otherwise (a production link
+    // set by plan, preloads) the game compiles its own, and exact-game-apple goes unused.
+    if shared
+        && empty_entry(constructor, &compat.inputs, "app_id()")
+            .is_ok_and(|e| format!("{e}\n{}\n", apple_host("plan()", "compat()")) == SHARED_ENTRY)
+    {
+        fs::write(out.join("entry.rs"), SHARED_SHELL).unwrap();
+        return;
+    }
     let embedded = if platform == "android" {
         ""
     } else {
@@ -167,6 +193,26 @@ const COMPAT: &str = include_str!(concat!(env!("OUT_DIR"), "/compat.json"));"#
     .unwrap();
 }
 
+/// The Apple host's exports over `AppData`, with the plan and compat.json
+/// named by the Rust expressions `plan` and `compat`.
+fn apple_host(plan: &str, compat: &str) -> String {
+    format!("exact_apple::host!(AppData, {plan}, {compat}, None, std::ptr::null(), app_data);")
+}
+
+/// exact-game-apple's entry: a game's own, with the app id read from its compat.json.
+const SHARED_ENTRY: &str = include_str!("../apple/src/entry.rs");
+
+/// A shared-shell game's own Apple crate: the plan and compat.json that
+/// `exact-game-apple` reads, and that crate, which holds the host.
+const SHARED_SHELL: &str = r#"extern crate exact_game_apple;
+/// The game's baked plan, which `exact-game-apple` reads.
+#[export_name = "exact_game_plan"]
+pub static EXACT_GAME_PLAN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/app.plan"));
+/// The game's compat.json, which `exact-game-apple` reads.
+#[export_name = "exact_game_compat"]
+pub static EXACT_GAME_COMPAT: &str = include_str!(concat!(env!("OUT_DIR"), "/compat.json"));
+"#;
+
 fn runtime_entry(
     data_type: &str,
     constructor: &str,
@@ -179,16 +225,23 @@ fn runtime_entry(
     let app = inputs["app"]
         .as_str()
         .ok_or("game runtime needs an app id")?;
-    let entry = contract::rust_entry("ExactEmptyData", constructor, "off", inputs)?;
+    empty_entry(constructor, inputs, &format!("{app:?}"))
+}
+
+/// The entry over a game's empty data source, which names the app by `app`, a
+/// Rust expression of type `&str`.
+fn empty_entry(constructor: &str, inputs: &serde_json::Value, app: &str) -> Result<String, String> {
+    let entry =
+        contract::rust_entry_naming("ExactEmptyData", constructor, "off", inputs, Some(app))?;
     Ok(format!(
         r#"#[derive(Default)]
 struct ExactEmptyData;
-impl exact_logic::exact_runner::DataSource for ExactEmptyData {{
-    fn app_id(&self) -> &str {{ {app:?} }}
-    fn query(&mut self, source: &str, args: &[exact_logic::exact_runner::Value])
-        -> Result<exact_logic::exact_runner::Value, exact_logic::exact_runner::DataError>
+impl exact_runner::DataSource for ExactEmptyData {{
+    fn app_id(&self) -> &str {{ {app} }}
+    fn query(&mut self, source: &str, args: &[exact_runner::Value])
+        -> Result<exact_runner::Value, exact_runner::DataError>
     {{
-        exact_logic::exact_runner::DataSource::query(&mut (), source, args)
+        exact_runner::DataSource::query(&mut (), source, args)
     }}
 }}
 {entry}"#
@@ -208,6 +261,12 @@ mod tests {
             });
             let entry = runtime_entry("()", "Default::default()", &inputs).unwrap();
             assert!(entry.contains("fn app_id(&self) -> &str { \"dev.exact.kept-game\" }"));
+            if platform == "web" {
+                assert!(
+                    !entry.contains("exact_logic::"),
+                    "web shells do not link exact-logic"
+                );
+            }
             assert!(
                 entry.contains("AppData, ExactEmptyData,")
                     || entry.contains("type AppData = ExactEmptyData;")
@@ -217,6 +276,17 @@ mod tests {
                 contract::rust_entry("Source", "source()", "off", &inputs).unwrap()
             );
         }
+    }
+
+    /// exact-game-apple's entry is what a development game's own entry would be,
+    /// with the app id read from its compat.json: when the generated entry moves,
+    /// this fails rather than every game quietly compiling its own host again.
+    #[test]
+    fn the_shared_shell_is_the_generated_entry() {
+        let inputs = serde_json::json!({"app": "dev.exact.kept-game", "platform": "ios"});
+        let entry = empty_entry("Default::default()", &inputs, "app_id()").unwrap();
+        let host = apple_host("plan()", "compat()");
+        assert_eq!(SHARED_ENTRY, format!("{entry}\n{host}\n"));
     }
 
     #[test]
@@ -243,7 +313,7 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
     #[test]
-    fn empty_v5_call_binds_every_surface_default() {
+    fn empty_named_call_binds_every_surface_default() {
         #[derive(Default)]
         struct Defaults;
         impl exact_gpu::Surface for Defaults {
@@ -283,7 +353,7 @@ mod tests {
         let plan =
             contract::compile("component App\n  view\n    canvas surface=arena()\n").unwrap();
         let bytes = plan.encode();
-        assert_eq!(&bytes[4..8], &5u32.to_le_bytes());
+        assert_eq!(&bytes[4..8], &exact_plan::FORMAT_VERSION.to_le_bytes());
         let plan = exact_plan::Plan::decode(&bytes).unwrap();
         assert_eq!(plan.surfaces[0].mode, exact_plan::SurfaceArgsMode::Named);
         let mut runner = exact_runner::Runner::boot(

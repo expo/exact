@@ -42,7 +42,7 @@ pub fn vocab() -> Vocab {
         .filter_map(|name| {
             use exact_kernel::style::relative::{parse, MEDIUM};
             let (unit, n) = parse(name)?;
-            let px = f64::from(unit.basis(MEDIUM, MEDIUM, 1.0) * n);
+            let px = f64::from(unit.basis(MEDIUM, MEDIUM, 1.0, &exact_kernel::Env::default()) * n);
             Some((name.clone(), px.to_string()))
         })
         .collect();

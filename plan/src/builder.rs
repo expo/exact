@@ -591,8 +591,21 @@ impl PlanBuilder {
     /// A derive.
     pub fn derive(&mut self, name: &str, ty: TypesId, body: Code) -> DerivesId {
         let name = self.str(name);
-        self.plan.derives.push(DerivesRow { name, ty, body });
+        self.plan.derives.push(DerivesRow {
+            name,
+            ty,
+            body,
+            owner: None,
+            unsettled: false,
+        });
         DerivesId(self.plan.derives.len() as u32 - 1)
+    }
+
+    /// Mark an executable derive row that evaluates at each read in its owner's frame.
+    pub fn set_derive_unsettled(&mut self, id: DerivesId, owner: Option<ArmsId>) {
+        let row = &mut self.plan.derives[id.0 as usize];
+        row.unsettled = true;
+        row.owner = owner;
     }
 
     /// A resource: a data source name, argument expressions, its shape, and

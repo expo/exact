@@ -64,11 +64,15 @@ impl<D: DataSource> Host<D> {
 pub(crate) struct LaunchLayout {
     pub root_font_size: Option<f32>,
     pub display_scale: Option<f32>,
+    /// The scale Canvas 2D backs its bitmaps at (`exact_canvas_display`):
+    /// the session's latest, told before or after a boot, for every boot.
+    pub canvas_scale: Option<f64>,
 }
 impl LaunchLayout {
     pub const NONE: Self = Self {
         root_font_size: None,
         display_scale: None,
+        canvas_scale: None,
     };
     pub fn prepare(self, kernel: &mut Kernel) -> Result<(), HostError> {
         if let Some(size) = self.root_font_size {

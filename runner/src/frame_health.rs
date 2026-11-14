@@ -333,16 +333,17 @@ impl Collector {
 
     /// Record one frame's work, from its start to its finish, against its deadline. Work may begin after its
     /// deadline, as the screen's does when its update waited past it.
-    fn worked(&mut self, start: u64, deadline: u64, finished: u64) {
+    fn worked(&mut self, start: u64, deadline: u64, finished: u64) -> bool {
         if start == 0 || finished < start {
-            return;
+            return false;
         }
         let s = &mut self.snapshot;
         let duration = finished - start;
         s.worked = s.worked.saturating_add(1);
         s.work_through_ns = finished;
         let mut saturated = !self.work.duration(duration, 24_000_000);
-        if finished > deadline {
+        let late = finished > deadline;
+        if late {
             s.late = s.late.saturating_add(1);
             saturated |= !self.late_by.duration(finished - deadline, 12_000_000);
         }
@@ -351,6 +352,7 @@ impl Collector {
             self.maxima.slowest_ns = duration;
             self.maxima.budget_ns = deadline.saturating_sub(start);
         }
+        late
     }
 
     /// Close the requested-slot grid. A held callback's slot is final now: no frame can start in it.
@@ -465,7 +467,11 @@ pub fn record_at(
 
 /// Record the finish of a `PENDING` frame's work, once the owner work it sent has landed.
 pub fn worked(id: u32, start: u64, deadline: u64, finished: u64) {
-    with(id, |c| c.worked(start, deadline, finished));
+    with(id, |c| {
+        if c.worked(start, deadline, finished) {
+            c.history.worked(start, deadline, finished);
+        }
+    });
 }
 
 /// Return and reset the per-read maxima. Only the card's sampler takes them.

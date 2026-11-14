@@ -8,13 +8,13 @@ use exact_plan::{
 use exact_runner::{
     Answer, CacheMode, DataError, DataSource, FailureKind, HttpScheduling, LongPoll, Outcome,
     Overlaid, Redirect, Request, Response, Socket, SocketCall, SocketOp, Store, SurfaceOutcome,
-    SurfaceRequest, Write,
+    SurfaceRequest, Target, Write,
 };
 
 pub mod draw;
 
 /// Seam version, independent of the plan format version.
-pub const ABI: u32 = 9;
+pub const ABI: u32 = 12;
 /// Maximum request or response bytes, enforced on both sides.
 pub const MAX_MESSAGE: usize = exact_runner::MAX_HOST_WORK_BYTES;
 
@@ -109,8 +109,9 @@ pub fn bind_request(plan: &[u8]) -> Result<Vec<u8>, String> {
 pub fn activate_request() -> Vec<u8> {
     header(2).into_vec()
 }
-/// Encode an answer or parse operation with a grant-filtered snapshot.
+/// Encode an answer or parse operation with its target and grant-filtered snapshot.
 pub fn call_request(
+    target: Option<Target>,
     store: &Store,
     source: &str,
     args: &[Value],
@@ -119,6 +120,24 @@ pub fn call_request(
     let mut w = header(if outcome.is_some() { 4 } else { 3 });
     w.string(source);
     Value::list(args.to_vec()).encode(&mut w);
+    // No target (query/answer/parse), resource, mutation, or parallel send.
+    // Row indices are u32; a parallel send's sequence is u64.
+    match target {
+        None => w.u8(0),
+        Some(Target::Resource(i)) => {
+            w.u8(1);
+            w.u32(u32::try_from(i).map_err(error)?);
+        }
+        Some(Target::Mutation(i)) => {
+            w.u8(2);
+            w.u32(u32::try_from(i).map_err(error)?);
+        }
+        Some(Target::Sent(i, send)) => {
+            w.u8(3);
+            w.u32(u32::try_from(i).map_err(error)?);
+            w.u64(send);
+        }
+    }
     w.u32(store.granted().len() as u32);
     for name in store.granted() {
         w.string(name);
@@ -469,13 +488,17 @@ fn encode_result(w: &mut Writer, result: Result<Answer, DataError>) {
                 "an idle timeout cannot cross the Rust module seam".into(),
             )),
         ),
-        // Nor a held mark (LLP 1016.000 D9): refused, never silently waited on.
-        Ok(Answer::Later(r)) if r.held => encode_result(
-            w,
-            Err(DataError::Unavailable(
-                "a held request cannot cross the Rust module seam yet".into(),
-            )),
-        ),
+        Ok(Answer::Later(r))
+            if r.held
+                && (r.storage.is_some() || r.continuation.is_some() || r.surface.is_some()) =>
+        {
+            encode_result(
+                w,
+                Err(DataError::Unavailable(
+                    "a held mark is HTTP-only at the Rust module seam".into(),
+                )),
+            )
+        }
         // Nor an upload's progress: refused, never sent as a plain stream.
         Ok(Answer::Later(r)) if r.upload_progress => encode_result(
             w,
@@ -542,6 +565,11 @@ fn encode_result(w: &mut Writer, result: Result<Answer, DataError>) {
                     w.string(name);
                     bytes(w, payload);
                 }
+                SurfaceRequest::Canvas { name, path, .. } => {
+                    w.u8(16);
+                    w.string(name);
+                    w.string(path);
+                }
             }
             w.u8(u8::from(r.grants.is_some()));
             w.string(r.grants.as_deref().unwrap_or(""));
@@ -570,6 +598,11 @@ fn encode_result(w: &mut Writer, result: Result<Answer, DataError>) {
             // A stream (tag 9) is always independent (LLP 1016.000); a long
             // poll (tag 10, D8) is a stream with its terms after the body; a
             // two-way socket (tag 11, LLP 1016.003) is a stream.
+            // A held mark (LLP 1016.000 D9, tag 15) wraps the HTTP result
+            // and its other markers; hosts without it reject it before effects.
+            if r.held {
+                w.u8(15);
+            }
             // Prefetch wraps the HTTP result and its other markers (LLP 1162.000 D5).
             if r.prefetch {
                 w.u8(14);
@@ -645,6 +678,13 @@ fn encode_result(w: &mut Writer, result: Result<Answer, DataError>) {
 }
 fn read_result(r: &mut Reader<'_>) -> Result<Result<Answer, DataError>, String> {
     let mut tag = r.u8().map_err(error)?;
+    let held = tag == 15;
+    if held {
+        tag = r.u8().map_err(error)?;
+        if !matches!(tag, 1 | 6 | 9..=14) {
+            return Err("invalid held HTTP result tag".into());
+        }
+    }
     let prefetch = tag == 14;
     if prefetch {
         tag = r.u8().map_err(error)?;
@@ -687,8 +727,13 @@ fn read_result(r: &mut Reader<'_>) -> Result<Result<Answer, DataError>, String> 
             };
             Ok(Answer::Later(request))
         }
-        tag @ (7 | 8) => {
+        tag @ (7 | 8 | 16) => {
             let name = r.string().map_err(error)?;
+            let path = if tag == 16 {
+                Some(r.string().map_err(error)?)
+            } else {
+                None
+            };
             let payload = if tag == 8 {
                 Some(read_bytes(r)?.to_vec())
             } else {
@@ -696,9 +741,10 @@ fn read_result(r: &mut Reader<'_>) -> Result<Result<Answer, DataError>, String> 
             };
             let present = r.u8().map_err(error)?;
             let scope = r.string().map_err(error)?;
-            let mut request = match payload {
-                Some(bytes) => Request::restore_surface(name, bytes),
-                None => Request::capture_surface(name),
+            let mut request = match (payload, path) {
+                (Some(bytes), _) => Request::restore_surface(name, bytes),
+                (None, Some(path)) => Request::capture_canvas(name, path),
+                (None, None) => Request::capture_surface(name),
             };
             request.grants = match present {
                 0 => None,
@@ -718,6 +764,9 @@ fn read_result(r: &mut Reader<'_>) -> Result<Result<Answer, DataError>, String> 
             return Err(why.into());
         }
     }
+    if let (true, Ok(Answer::Later(request))) = (held, &mut answer) {
+        request.held = true;
+    }
     if prefetch {
         let Ok(Answer::Later(request)) = &mut answer else {
             return Err("invalid prefetch HTTP result".into());
@@ -734,6 +783,7 @@ fn read_result(r: &mut Reader<'_>) -> Result<Result<Answer, DataError>, String> 
 /// terms after its body (LLP 1016.000 D8), a two-way socket's (LLP 1016.003).
 fn read_http(r: &mut Reader<'_>, tag: u8) -> Result<Request, String> {
     let mut request = Request {
+        module: None,
         stream: tag >= 9,
         socket: tag == 11,
         bytes: false,
@@ -842,6 +892,10 @@ pub fn call_reply(data: &[u8], store: &mut Store) -> Result<Answer, DataError> {
             1 => true,
             _ => return Err("invalid read flag".into()),
         };
+        let topics = (0..r.count().map_err(error)?)
+            .map(|_| r.string().map_err(error))
+            .collect::<Result<Vec<_>, _>>()?;
+        let entropy = r.u32().map_err(error)?;
         let count = r.count().map_err(error)?;
         let mut writes = Vec::new();
         for _ in 0..count {
@@ -849,26 +903,43 @@ pub fn call_reply(data: &[u8], store: &mut Store) -> Result<Answer, DataError> {
             if name.starts_with(Store::KEPT) || !store.granted().contains(&name) {
                 return Err(format!("module wrote ungranted secret {name}"));
             }
-            let value = match r.u8().map_err(error)? {
-                0 => None,
+            // Bit 0: a value follows (else the name is forgotten); bit 1: the
+            // module persisted it under an exclusive lease (`set_durable`).
+            let tag = r.u8().map_err(error)?;
+            if tag > 3 {
+                return Err("invalid write tag".into());
+            }
+            let value = match tag & 1 {
                 1 => Some(r.string().map_err(error)?),
-                _ => return Err("invalid write tag".into()),
+                _ => None,
             };
-            writes.push((name, value));
+            writes.push((name, value, tag & 2 != 0));
         }
         let sockets = read_socket_ops(&mut r)?;
         let result = read_result(&mut r)?;
         end(&r)?;
-        Ok((observed, writes, sockets, result))
+        Ok((observed, topics, entropy, writes, sockets, result))
     };
-    let (observed, writes, (ops, overload), result) = decode().map_err(DataError::Unavailable)?;
+    let (observed, topics, entropy, writes, (ops, overload), result) =
+        decode().map_err(DataError::Unavailable)?;
     if observed {
         store.observe_external_read();
     }
-    for (name, value) in writes {
-        match value {
-            Some(value) => store.set(&name, &value)?,
-            None => store.forget(&name)?,
+    // What the answer watched and drew, as an embedded source's store
+    // records it: the runner takes them after the reply (LLP 1016.002, LLP
+    // 1069.005 D2).
+    for topic in &topics {
+        store.observe_topic(topic);
+    }
+    for _ in 0..entropy {
+        store.observe_entropy();
+    }
+    for (name, value, durable) in writes {
+        match (value, durable) {
+            (Some(value), false) => store.set(&name, &value)?,
+            (Some(value), true) => store.set_durable(&name, &value)?,
+            (None, false) => store.forget(&name)?,
+            (None, true) => store.forget_durable(&name)?,
         };
     }
     // What the module staged, through the same checks on the turn the
@@ -936,6 +1007,16 @@ impl<D: DataSource> Session<D> {
                 let Value::List(args) = Value::decode(&mut r).map_err(error)? else {
                     return Err("arguments must be a list".into());
                 };
+                let target = match r.u8().map_err(error)? {
+                    0 => None,
+                    1 => Some(Target::Resource(r.u32().map_err(error)? as usize)),
+                    2 => Some(Target::Mutation(r.u32().map_err(error)? as usize)),
+                    3 => Some(Target::Sent(
+                        r.u32().map_err(error)? as usize,
+                        r.u64().map_err(error)?,
+                    )),
+                    _ => return Err("invalid call target tag".into()),
+                };
                 let count = r.count().map_err(error)?;
                 let scope = (0..count)
                     .map(|_| {
@@ -953,12 +1034,13 @@ impl<D: DataSource> Session<D> {
                 };
                 read_socket_turn(&mut r, &mut store)?;
                 end(&r)?;
-                let result = store.with_grants(&scope, |store| {
-                    if let Some(outcome) = outcome {
-                        self.data.parse(store, &source, &args, outcome)
-                    } else {
-                        self.data.answer(store, &source, &args)
+                let result = store.with_grants(&scope, |store| match (target, outcome) {
+                    (Some(target), Some(outcome)) => {
+                        self.data.parse_for(target, store, &source, &args, outcome)
                     }
+                    (Some(target), None) => self.data.answer_for(target, store, &source, &args),
+                    (None, Some(outcome)) => self.data.parse(store, &source, &args, outcome),
+                    (None, None) => self.data.answer(store, &source, &args),
                 });
                 // An answer that read a locked presence name with `get` fails,
                 // as it does in process (LLP 1133.010 D5).
@@ -967,11 +1049,17 @@ impl<D: DataSource> Session<D> {
                     None => result,
                 };
                 w.u8(u8::from(store.reads() > 0));
+                let topics = store.take_topics();
+                w.u32(topics.len() as u32);
+                for topic in &topics {
+                    w.string(topic);
+                }
+                w.u32(store.entropy_draws() as u32);
                 let writes = store.take_writes();
                 w.u32(writes.len() as u32);
                 for write in writes {
                     w.string(&write.name);
-                    w.u8(u8::from(write.value.is_some()));
+                    w.u8(u8::from(write.value.is_some()) | u8::from(write.durable) << 1);
                     if let Some(value) = write.value {
                         store_value(&mut w, &value);
                     }

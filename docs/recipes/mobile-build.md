@@ -2,7 +2,7 @@
 
 Run in the app directory. `--json` reports the artifact's absolute `path`,
 `target`, `trust` and (Apple) `signing`; failures report `code` and `error`.
-Logs go to stderr. Releases omit the agent; no `--run`, `--prebuild` or `--test`.
+Logs: stderr. Releases omit the agent; no `--run`, `--prebuild` or `--test`.
 
 Production bakes with updates need `deploy.signing.keys` and
 `EXACT_UPDATE_RECEIPT` (authenticated receipt) or `EXACT_UPDATE_GENESIS=1`
@@ -25,7 +25,7 @@ private key, and profile covering its UDID, bundle id and entitlements:
 DEVELOPMENT_TEAM=<team-id> bun exact.mjs ios --device --phone <udid> --release --no-install --json
 ```
 
-The team selects an installed profile and identity. `EXACT_PROFILE=<file.mobileprovision>`
+The team picks an installed profile and identity. `EXACT_PROFILE=<file.mobileprovision>`
 and `EXACT_IDENTITY=<certificate-sha1>` override them. If no profile covers
 this app and phone, use Xcode's automatic signing for that bundle id and team.
 
@@ -37,8 +37,8 @@ bun exact.mjs ios --device --release --unsigned --json
 
 No profile, identity or icon needed. `--unsigned --run` refuses: stock iPhones
 cannot launch it. `--archive .exact/app.ipa` adds an IPA for re-signing and
-requires a square AppIcon of at least 512 px; the archive path is relative
-to the working directory. iOS optimizes for size (games: speed);
+requires a square AppIcon of at least 512 px; its path is relative to the
+working directory. iOS optimizes for size (games: speed);
 `--optimize speed` overrides.
 
 **Android APK**, no adb contact:
@@ -47,21 +47,21 @@ to the working directory. iOS optimizes for size (games: speed);
 EXACT_UPDATE_TRUST=production bun exact.mjs android --release --no-install --json
 ```
 
-Omit `--no-install` to install on an available device (`ANDROID_SERIAL`
-selects one). Maven modules need `--write-locks` once; keep the generated
+Omit `--no-install` to install on a device (`ANDROID_SERIAL` selects
+one). Maven modules need `--write-locks` once; keep the generated
 lock/verification files. Missing locks name the command before compiling.
 
 **Android App Bundle:** supply all four upload-key variables:
 `EXACT_KEYSTORE` (file path), `EXACT_KEYSTORE_PASSWORD`, `EXACT_KEY_ALIAS`
-and `EXACT_KEY_PASSWORD`. An APK also uses them when supplied.
+and `EXACT_KEY_PASSWORD`. An APK uses them too.
 `EXACT_VERSION` sets `versionName` (default `0.1.0`); `EXACT_BUILD_NUMBER`
-sets `versionCode` (default `1`, integer 1–2100000000). Increase it per upload.
+sets `versionCode` (default `1`, integer 1–2100000000). Raise it per upload.
 
 ```sh
 bun exact.mjs android --bundle --json
 ```
 
-This selects release and production trust, with no adb installation.
+Release and production trust, no adb installation.
 Under `target/android/app/outputs/`, the bundle is
 `bundle/release/app-release.aab`; the APK is `apk/release/app-release.apk`.
 
@@ -70,5 +70,6 @@ you supply the upload key. Google holds the app signing key and signs the
 APKs delivered to users. This command uploads nothing to Play; submission
 remains unverified.
 
-For toolchains, SDK packages and scoped setup checks, see
+Before a first build, `bun <exact2>/scripts/exact.mjs setup --check --platform ios`
+(or `android`) names what it lacks; CI:
 [native CI preparation](../reference.md#native-ci-preparation).

@@ -6,6 +6,8 @@ use exact_plan::Value;
 /// the clock. A logic edit re-asks resources rather than preserving old answers.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Carried {
+    /// Picked paths survive reloads, including copies still being imported.
+    pub picked_count: u64,
     /// Router slot name and its value decoded through the old plan's shapes.
     /// @ref LLP 1038 D5 — preserves named params when their field order changes.
     pub router: Option<(String, exact_route::Router)>,
@@ -53,6 +55,7 @@ impl<D: super::DataSource> super::Runner<D> {
     /// Everything a reload keeps.
     pub fn carry(&self) -> Carried {
         Carried {
+            picked_count: self.picked_count,
             router: self.carry_router(),
             data_revision: self.data.revision().map(str::to_owned),
             keeps_answers: self.keeping.on,

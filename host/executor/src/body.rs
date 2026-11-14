@@ -9,17 +9,18 @@
 //!
 //! Memory: the file is read whole into the request, as a byte body would
 //! have been, at most 64 MiB, on a reader thread of its own. At most
-//! [`MAX_READERS`] readers run at once in a process, each counted until its
-//! thread ends, so readers stuck on a stalled disk after their requests were
+//! [`MAX_READERS`] readers run at once in a process, each counted through its
+//! I/O, so readers stuck on a stalled disk after their requests were
 //! settled refuse new file bodies rather than pile up.
 //!
-//! Time: the request's deadline is armed before the read. The worker
+//! Time: root creation and opening share the read's reader limit, deadline
+//! and abort. The request's deadline is armed before any of them. The worker
 //! watches it and the abort while the reader runs: either settles the
 //! request at once and nothing is sent; the reader is told, stops at its
 //! next 1 MiB chunk, and its bytes are dropped.
 use exact_runner::{FailureKind, Outcome, Request, MAX_BODY_FROM_BYTES};
 use ibex2::stdlib::app_fs::AppDirectories;
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
 /// The app's `app:/data`, `app:/cache` and `app:/tmp` handles, opened once,
 /// at the first request whose body is an app file (or why they would not
@@ -31,8 +32,12 @@ pub(super) type Roots<'a> = Option<&'a Result<AppDirectories, String>>;
 /// symlink to another app's tree, say) is not followed, as `readFile`'s
 /// handles do not follow it. A root that is a symbolic link when first
 /// opened is refused for the same reason.
-pub(super) fn open(roots: &[PathBuf; 3]) -> Result<AppDirectories, String> {
-    // All three are looked at before any is made, so a refusal makes nothing.
+pub(super) fn open(
+    roots: &[PathBuf; 3],
+    #[cfg(test)] checked: Option<std::sync::Arc<dyn Fn() + Send + Sync>>,
+) -> Result<AppDirectories, String> {
+    // Reject existing links before creating any root. AppDirectories also
+    // refuses links introduced after this check.
     let link = |root: &&PathBuf| std::fs::symlink_metadata(root).is_ok_and(|m| m.is_symlink());
     if let Some(root) = roots.iter().find(link) {
         return Err(format!(
@@ -40,10 +45,37 @@ pub(super) fn open(roots: &[PathBuf; 3]) -> Result<AppDirectories, String> {
             root.display()
         ));
     }
+    #[cfg(test)]
+    if let Some(checked) = checked {
+        checked();
+    }
     for root in roots {
         std::fs::create_dir_all(root).map_err(|e| format!("app storage: {e}"))?;
     }
     AppDirectories::new(&roots[0], &roots[1], &roots[2]).map_err(|e| e.to_string())
+}
+
+/// Acquire the lazy roots on a bounded reader, so a stalled first open or
+/// a wait for another opener cannot hold a request past its deadline or abort.
+pub(super) fn prepare(
+    shared: &Arc<super::Shared>,
+    request: &Request,
+    stop: &dyn Fn() -> Option<Outcome>,
+) -> Result<Option<Result<AppDirectories, String>>, Outcome> {
+    if request
+        .body_from
+        .as_ref()
+        .or(request.body_to.as_ref())
+        .is_none()
+        || shared.root_paths.get().is_none()
+    {
+        return Ok(None);
+    }
+    if let Some(roots) = shared.roots.get() {
+        return stop().map_or_else(|| Ok(Some(roots.clone())), Err);
+    }
+    let shared = shared.clone();
+    acquire(&READERS, move |_| Ok(shared.app_roots().cloned()), stop)
 }
 
 /// Read `request.body_from` into `request.body` under `grants` (the app's,
@@ -76,49 +108,59 @@ pub(super) fn resolve(
 }
 
 /// Reads still running in this process, each holding a thread, a descriptor
-/// and up to [`MAX_BODY_FROM_BYTES`], counted until its thread ends, whether
+/// and up to [`MAX_BODY_FROM_BYTES`], counted through its I/O, whether
 /// or not its request is still waiting; past [`MAX_READERS`] (a stalled
 /// disk) a new file body is refused rather than piled up.
-pub(super) struct Readers(std::sync::atomic::AtomicUsize);
+pub(super) struct Readers {
+    running: std::sync::atomic::AtomicUsize,
+    #[cfg(test)]
+    pub(super) replied: std::sync::Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+}
 impl Readers {
     pub(super) const fn new() -> Readers {
-        Readers(std::sync::atomic::AtomicUsize::new(0))
+        Readers {
+            running: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(test)]
+            replied: std::sync::Mutex::new(None),
+        }
     }
     #[cfg(test)]
     pub(super) fn running(&self) -> usize {
-        self.0.load(std::sync::atomic::Ordering::Acquire)
+        self.running.load(std::sync::atomic::Ordering::Acquire)
     }
 }
-static READERS: Readers = Readers::new();
+pub(super) static READERS: Readers = Readers::new();
 /// The most file reads at once, across this process's executors: memory
 /// at most this many times 64 MiB.
 pub(super) const MAX_READERS: usize = 4;
 /// What one step of a read takes before it looks whether its request ended.
 const CHUNK: usize = 1 << 20;
 
-/// Releases a reader's place when its thread ends.
+/// Releases a reader's place when its I/O ends.
 struct Reader(&'static Readers);
 impl Drop for Reader {
     fn drop(&mut self) {
-        self.0 .0.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+        self.0
+            .running
+            .fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
     }
 }
 
 /// Run `read` off this thread and wait for it, or for `stop` to end the
 /// request first. A read that loses is told (`cancel`, which it checks
 /// between chunks), and its result dropped; it keeps its place in `readers`
-/// until its thread ends.
-pub(super) fn acquire(
+/// until its I/O ends.
+pub(super) fn acquire<T: Send + 'static>(
     readers: &'static Readers,
-    read: impl FnOnce(&std::sync::atomic::AtomicBool) -> Result<Vec<u8>, Outcome> + Send + 'static,
+    read: impl FnOnce(&std::sync::atomic::AtomicBool) -> Result<T, Outcome> + Send + 'static,
     stop: &dyn Fn() -> Option<Outcome>,
-) -> Result<Vec<u8>, Outcome> {
+) -> Result<T, Outcome> {
     use std::sync::atomic::{AtomicBool, Ordering};
     if let Some(ended) = stop() {
         return Err(ended);
     }
     if readers
-        .0
+        .running
         .try_update(Ordering::AcqRel, Ordering::Acquire, |n| {
             (n < MAX_READERS).then_some(n + 1)
         })
@@ -135,8 +177,16 @@ pub(super) fn acquire(
     std::thread::Builder::new()
         .name("exact-body-from".into())
         .spawn(move || {
-            let _place = place;
-            let _ = done.send(read(&told));
+            let result = read(&told);
+            drop(place);
+            let _ = done.send(result);
+            #[cfg(test)]
+            {
+                let hook = readers.replied.lock().unwrap().clone();
+                if let Some(hook) = hook {
+                    hook();
+                }
+            }
         })
         .map_err(|e| refused(format!("exactBodyFrom: the read could not start: {e}")))?;
     let ended = |outcome| {
@@ -331,7 +381,7 @@ pub(super) fn reader(
 ) -> Result<std::thread::JoinHandle<()>, Outcome> {
     use std::sync::atomic::Ordering;
     if READERS
-        .0
+        .running
         .try_update(Ordering::AcqRel, Ordering::Acquire, |n| {
             (n < MAX_READERS).then_some(n + 1)
         })

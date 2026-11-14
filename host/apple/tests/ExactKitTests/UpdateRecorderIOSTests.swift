@@ -317,7 +317,11 @@ final class UpdateRecorderIOSTests: XCTestCase {
         let inventory = FrameSampler.renderInventory(in: window, scroller: scroll)
         let rows = try XCTUnwrap(inventory["rows"] as? [[Any]])
         func row(_ kind: String, _ place: String) -> [Any]? { rows.first { $0[0] as? String == kind && $0[1] as? String == place } }
-        XCTAssertEqual(try XCTUnwrap(row("backdrop", "content"))[3] as? Double, 1200, "the scrolled blur at its content offset")
+        // The blur's row ends at its content offset's bottom. Since iOS 26, the
+        // scroller's top edge effect is a backdrop of the content too, at the
+        // port's top (500), so the row starts there.
+        let backdrop = try XCTUnwrap(row("backdrop", "content"))
+        XCTAssertEqual((backdrop[3] as? Double ?? 0) + (backdrop[4] as? Double ?? 0), 1280, "the scrolled blur at its content offset")
         XCTAssertEqual(try XCTUnwrap(row("shadow", "content"))[3] as? Double, 400, "the shadow without a path")
         XCTAssertEqual(try XCTUnwrap(row("backdrop", "fixed"))[3] as? Double, 760, "the bar's blur in the window")
         XCTAssertEqual(rows.filter { $0[0] as? String == "shadow" }.count, 1, "not the hidden one")

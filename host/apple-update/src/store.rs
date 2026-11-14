@@ -530,9 +530,9 @@ fn fetch_one(
 
 /// Pin the staged generation for app-wide preparation, without committing it.
 pub fn prepare() -> u32 {
-    let client = lock(&CLIENT);
+    let mut client = lock(&CLIENT);
     let result = client
-        .as_ref()
+        .as_mut()
         .ok_or_else(|| "no store is open".to_string())
         .and_then(Client::prepare_activation);
     match result {

@@ -33,6 +33,9 @@ function request(input, init, redirect, protocols) {
   // (a Request's own body comes along when `init` names none: a long poll has none)
   if (init.exactLongPoll !== undefined && request?.body != null && init.body == null)
     throw new TypeError('exactLongPoll: a long poll is a GET with no body');
+  // A Request's own body is a ReadableStream, which this transport cannot send, as it cannot a stream `init.body`.
+  if (request?.body != null && init.body == null)
+    throw new TypeError("fetch: a Request's body is a ReadableStream, which a stream cannot send; pass its bytes as init.body (await request.arrayBuffer())");
   const upload = uploadOf(init, method, url, redirect), timeoutMs = upload ? init.exactTimeout : undefined;
   if (timeoutMs !== undefined && (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 3600000))
     throw new TypeError('exactTimeout must be an integer number of milliseconds from 1 to 3600000');

@@ -211,7 +211,8 @@ export function implementation({ changed, agent, now, log, audioSession, foregro
     /** Utterances whose reply was dropped: never the app's (D2). */
     dispose(ids) {
       advance();
-      for (const id of ids) {
+      // The speaking one last: ending it begins the next queued, which must not be one dropped with it.
+      for (const id of [...ids.filter(id => id !== current), ...ids.filter(id => id === current)]) {
         const u = utterances.get(id);
         if (!u || u.state === 'ended') continue;
         say(`${id}: its reply was dropped`);

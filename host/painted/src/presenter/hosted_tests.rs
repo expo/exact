@@ -762,12 +762,95 @@ fn a_finger_on_a_hosted_field_puts_android_back_in_touch_mode() {
     let mut p = boot(FORM);
     p.serve_requests();
     p.reader_fields(1.0);
-    (p.brush.touch_mode, p.brush.keyless) = (true, false);
+    (p.brush.touch_mode, p.brush.pointer_modality) = (true, false);
     p.set_pointer_kind(crate::presenter::PointerKind::Touch);
-    p.reader_field_focused(id(&p, "name"), 0, true, 1.0);
-    assert!(p.brush.keyless);
+    let field = id(&p, "name");
+    p.reader_field_input(field, 0, 1);
+    p.reader_field_focused(field, 0, true, 1.0);
+    assert!(p.brush.pointer_modality);
     // The app moving the focus from the field shows no ring there.
     let jump = id(&p, "jump");
     assert!(p.set_focus(Some(jump), 2.0).is_none());
     assert_eq!(p.brush.ringless, Some(jump));
+    p.reader_field_input(field, 0, 2);
+    assert!(
+        !p.brush.pointer_modality,
+        "hardware input leaves touch mode"
+    );
+    p.reader_field_focused(field, 0, true, 3.0);
+    assert!(
+        !p.brush.pointer_modality,
+        "a focus report preserves modality"
+    );
+    p.reader_field_input(field, 0, 1);
+    assert!(
+        p.brush.pointer_modality,
+        "a touch in an already focused field"
+    );
+    p.reader_field_input(field, 0, 0);
+    assert!(p.brush.pointer_modality, "the IME keeps touch mode");
+    p.reader_field_input(field, 1, 2);
+    assert!(
+        p.brush.pointer_modality,
+        "stale field input changes nothing"
+    );
+}
+
+/// A hosted edit is told after the platform's field made it: its
+/// `beforeinput` runs first, and one it prevents never reaches the app, so
+/// the next statement answers the edit with the text from before, which
+/// the reader's field takes. A caret the person moves is a `selectionchange`.
+#[test]
+fn a_hosted_edit_asks_beforeinput_and_a_caret_move_is_a_selectionchange() {
+    let (_shell, _hosting) = shell();
+    let mut p = boot(
+        r#"component Guarded
+  state body = "ab"
+  state heard = ""
+  action before(e: InputEvent)
+    heard = `${heard}(${e.inputType} ${match e.data { case some(data) => data, case none => "null" }} ${e.cancelable})`
+    if e.data == some("x")
+      preventDefault()
+  action edited(value: string)
+    body = value
+  action moved(e: InputEvent)
+    heard = `${heard}<${e.selectionStart}-${e.selectionEnd}>`
+  view
+    column width=320 height=480
+      input testId="field" value=body beforeinput=before input=edited selectionchange=moved
+      text heard testId="log" height=20
+"#,
+    );
+    p.serve_requests();
+    p.reader_fields(1.0);
+    let field = id(&p, "field");
+    p.reader_field_focused(field, 0, true, 1.0);
+    p.run_commands(<()>::default);
+    let heard = log(&p);
+    p.reader_field_edited(field, (0, 1), "abc", (3, 3), 2.0);
+    p.run_commands(<()>::default);
+    assert_eq!(p.field_text(field), "abc");
+    assert_eq!(log(&p), format!("{heard}(insertText c true)<3-3>"));
+    p.reader_field_edited(field, (0, 2), "abxc", (3, 3), 3.0);
+    p.run_commands(<()>::default);
+    assert_eq!(
+        p.field_text(field),
+        "abc",
+        "a prevented edit reaches no one"
+    );
+    let after = told(&mut p);
+    assert_eq!((after[0].seq, after[0].value.as_str()), (2, "abc"));
+    p.reader_field_edited(field, (0, 3), "ac", (1, 1), 4.0);
+    p.run_commands(<()>::default);
+    assert_eq!(p.field_text(field), "ac");
+    let heard = format!(
+        "{heard}(insertText c true)<3-3>(insertText x true)(deleteContentBackward null true)<1-1>"
+    );
+    assert_eq!(log(&p), heard);
+    // The caret moves with the text unchanged, told either way.
+    p.reader_field_selected(field, 0, (0, 0), 5.0);
+    p.run_commands(<()>::default);
+    p.reader_field_edited(field, (0, 4), "ac", (2, 2), 6.0);
+    p.run_commands(<()>::default);
+    assert_eq!(log(&p), format!("{heard}<0-0><2-2>"));
 }

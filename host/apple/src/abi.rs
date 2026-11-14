@@ -311,7 +311,7 @@ impl<D: DataSource> Bridge<D> {
                     let refusal = oversized
                         .then(|| "surface restore exceeds 16 MiB".to_string())
                         .or_else(|| r.request.check_surface_grant(&admitted).err());
-                    presenter.surface_work(&r, refusal.as_deref());
+                    h.surface_work(&mut presenter, &r, refusal.as_deref());
                     continue;
                 }
                 let dispatch = match r.request.continuation {
@@ -379,6 +379,13 @@ impl<D: DataSource> Bridge<D> {
         })
     }
 
+    /// The presenter owns this capture's pixels, before asynchronous encoding.
+    pub fn canvas_snapshotted(&mut self, ticket: u64) -> bool {
+        self.host
+            .as_mut()
+            .is_some_and(|host| host.canvas_snapshotted(ticket))
+    }
+
     /// A surface operation completed on the presenter thread.
     pub fn fulfill_surface(&mut self, ticket: u64, kind: u32, len: usize, now_ms: f64) -> u32 {
         let body = self.input[..len.min(self.input.len())].to_vec();
@@ -387,6 +394,11 @@ impl<D: DataSource> Bridge<D> {
                 Outcome::Surface(SurfaceOutcome::Captured(body))
             }
             7 if body.is_empty() => Outcome::Surface(SurfaceOutcome::Restored),
+            8 if self.host.is_some() => self
+                .host
+                .as_mut()
+                .expect("booted")
+                .canvas_captured(ticket, &body),
             2..=4 => Outcome::Failed {
                 kind: match kind {
                     2 => FailureKind::Refused,
@@ -742,7 +754,7 @@ impl<D: DataSource> Bridge<D> {
         // session takes the granted platform snapshot before its first query,
         // just like boot_fresh; neither path releases effects until commit.
         let launch_store = self.links.io.and_then(|io| (io.preloads)()).map(|launch| {
-            launch.watch_store(|| {
+            launch.watch_store(&|| {
                 carried.is_some() && self.host.as_ref().is_some_and(Host::launch_store_pending)
             })
         });
@@ -1276,12 +1288,16 @@ impl<D: DataSource> Bridge<D> {
         self.emit(out)
     }
 
-    /// The display for Canvas 2D (LLP 1056 D4): its scale and memory, for
-    /// every session; a booted host redraws its canvases at the new scale.
+    /// The display for Canvas 2D (LLP 1056 D4): this session's scale, which
+    /// its later boots keep, and the device's memory, for every session; a
+    /// booted host redraws its canvases at the new scale.
     pub fn canvas_display(&mut self, scale: f64, memory: f64) -> u32 {
-        crate::host::canvas2d::set_display(scale, memory);
+        crate::host::canvas2d::set_memory(memory);
+        if let Some(scale) = crate::host::canvas2d::usable_scale(scale) {
+            self.launch_layout.canvas_scale = Some(scale);
+        }
         let out = match self.host.as_mut() {
-            Some(h) => h.canvas_display(),
+            Some(h) => h.canvas_display(scale),
             None => "{\"ops\":[],\"timers\":false,\"motion\":false}".to_string(),
         };
         self.emit(out)
@@ -1403,6 +1419,10 @@ mod executor_order_tests;
 #[cfg(test)]
 #[path = "collection_tests.rs"]
 mod collection_tests;
+
+#[cfg(test)]
+#[path = "abi/canvas_scale_tests.rs"]
+mod canvas_scale_tests;
 
 #[path = "abi_collections.rs"]
 mod collections;

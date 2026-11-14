@@ -153,4 +153,5 @@ name, not a chapter. `bun exact.mjs contract vocab <name> …` answers for any t
 function or recipe in one call (`contract vocab head select table media`); `contract vocab`
 alone prints the card, every name on one page. `bun exact.mjs docs <heading words>` prints the
 one section of the long guides that answers a question. Recipes: `website`, `web-look` and `responsive-columns` (wide layouts), `select`,
-`fetch-loading-error`, `rest-backend`, `tamber` (a brand), `tests`.
+`fetch-loading-error`, `rest-backend`, `tamber` (a brand), `tools` (what a browser's agent may
+call, through WebMCP), `tests`.

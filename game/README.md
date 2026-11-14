@@ -1008,7 +1008,11 @@ storage work starts after first pixel. This linked composition uses `rust: false
 Keep saves, scores and settings in app storage (SQLite or files under `app:/data`,
 with `exact-data.workspace = true`), not under `secret.keep`, which is for secrets;
 `docs/reference.md`, "Rust data sources", has the requests and a best-times example.
-Games without `game.data` add no data-source dependency.
+Games without `game.data` add no data-source dependency. Their Apple builds take one shared host
+(`game/app/apple`, `exact-game-apple`), and the game's own Apple crate holds only its plan and
+compat.json. Two cases keep the game's own host: a `Cargo.lock` captured before that crate existed,
+and a game whose entry differs from the generated one, for example because it has preloads. Games reuse
+the compiled host only when their builds share a build directory (`CARGO_BUILD_BUILD_DIR`, below).
 
 [Tennis](games/tennis/README.md) uses one for HTTP: the world publishes a numbered
 question, `resource plan = jev(hud.ask)` posts it, and the answer returns as a
@@ -1084,7 +1088,8 @@ six core checks.
 
 Put models, sprite PNGs and WAV or Ogg Vorbis sounds under `art/`;
 [the baker](bake/README.md) produces validated `.model`, `.tex` and `.sound` assets,
-each texture as RGBA8, BC and ASTC files of which a device fetches one
+each texture as RGBA8, BC and ASTC files of which a device fetches one, and an
+Apple bundle holds only its devices' family
 ([texture payloads](bake/README.md#texture-payloads)). Name the authored `x.tex`
 everywhere. Declare simulation dependencies in `Game::ASSETS`; setup waits for them.
 Put everything else the game shows in `Game::STREAMED`: those are fetched from the

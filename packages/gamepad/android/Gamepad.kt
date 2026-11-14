@@ -88,7 +88,8 @@ class GamepadModule(context: ExtensionContext) : ExactExtension(context) {
         main.post {
             instances.add(this)
             told = context.pads.list().map { (i, d) -> i to d.id }
-            context.pads.list().forEach { (_, d) -> hatch?.invoke(d.id) }
+            // A pad connected before the module came is named on its disconnect as one that came after is.
+            context.pads.list().forEach { (i, d) -> shape(i, d, false); hatch?.invoke(d.id) }
             context.pads.watch(this) { padsChanged() }
         }
     }
@@ -217,7 +218,8 @@ class GamepadModule(context: ExtensionContext) : ExactExtension(context) {
     /** As the other hosts' recorders write a magnitude: 1 and 0.5. */
     private fun number(x: Double) = if (x == Math.floor(x)) x.toLong().toString() else x.toString()
 
-    private fun amplitude(m: Double) = (m * 255).toInt().coerceIn(0, 255)
+    /** A positive magnitude's amplitude: `createOneShot` refuses 0, so one below 1/255 is the weakest, 1. */
+    private fun amplitude(m: Double) = (m * 255).toInt().coerceIn(1, 255)
 
     private fun vibrate(pad: PadDevice, strong: Double, weak: Double, ms: Long) {
         if (ms <= 0) return

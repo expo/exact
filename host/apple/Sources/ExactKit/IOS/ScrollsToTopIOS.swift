@@ -55,6 +55,7 @@ extension NodeView {
     /// the pump leads as it does any scroll. The tap is the reader's move of
     /// the list (`CollectionHost.readerMoves`).
     @objc package func scrollViewShouldScrollToTop(_ scrollView: UIScrollView) -> Bool {
+        presenter?.elementScrolls.userScrolled(scrollView)
         guard scrollView === self.scrollView, let collections = presenter?.collections,
               let entry = collections.entries[id], !entry.snapshot.horizontal else { return true }
         collections.readerMoves(id)
@@ -86,6 +87,15 @@ extension Presenter {
         return nil
     }
 }
+
+#if os(iOS)
+extension RouteController {
+    func scrollViewShouldScrollToTop(_ scrollView: UIScrollView) -> Bool {
+        host?.presenter.elementScrolls.userScrolled(scrollView)
+        return true
+    }
+}
+#endif
 
 extension NavigationHost {
     /// Native selection wins over `navigationScroll`, then the first vertical scroller

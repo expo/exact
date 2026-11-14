@@ -134,21 +134,25 @@ fn opened(
             Ok(b) if is_socket(&request.url) => open_socket(&b, request, &abort).map(|s| (s, b)),
             // A body from an app file, read as the stream opens (LLP 1108 D6 R2).
             Ok(b) => {
-                super::body::resolve(shared.roots_for(&request), grants, &mut request, &|| {
+                let ended = || {
                     abort
                         .signal()
                         .aborted()
                         .then(|| failed(FailureKind::Aborted, "native request aborted"))
-                })
-                .and_then(|()| {
-                    // An upload's place in the budget, held until its
-                    // exchange ends (`open` reads it whole), is its body's.
-                    if let Some(held) = held.as_mut() {
-                        held.keep(request.body.len().saturating_mul(COPIES));
-                    }
-                    open(Ok(&b), request, forced, &abort, sent, shared)
-                })
-                .map(|opened| (opened, b))
+                };
+                super::body::prepare(shared, &request, &ended)
+                    .and_then(|roots| {
+                        super::body::resolve(roots.as_ref(), grants, &mut request, &ended)
+                    })
+                    .and_then(|()| {
+                        // An upload's place in the budget, held until its
+                        // exchange ends (`open` reads it whole), is its body's.
+                        if let Some(held) = held.as_mut() {
+                            held.keep(request.body.len().saturating_mul(COPIES));
+                        }
+                        open(Ok(&b), request, forced, &abort, sent, shared)
+                    })
+                    .map(|opened| (opened, b))
             }
             Err(message) => Err(failed(FailureKind::Refused, message)),
         }
@@ -541,7 +545,8 @@ fn read_events(
 /// in, dispatched events out. Lines end at CR, LF, or CRLF, even split
 /// across reads; `data` lines join with LF; `id` persists as the cursor;
 /// comments and `retry` are read and dropped (the host never reconnects).
-/// One event, or one line, over `limit` bytes is refused, never truncated.
+/// An event whose data is over `limit` bytes, or a line over `limit` and 64
+/// more, is refused, never truncated.
 pub struct EventStream {
     line: Vec<u8>,
     after_cr: bool,
@@ -629,7 +634,10 @@ impl EventStream {
         };
         match field {
             "data" => {
-                if self.data.len() + value.len() + 1 > self.limit {
+                // The line feed stored after a value is the event's only
+                // when another field follows, so it is counted then, as part
+                // of `self.data`.
+                if self.data.len() + value.len() > self.limit {
                     return Err("an event exceeds the response ceiling");
                 }
                 self.data.push_str(value);

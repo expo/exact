@@ -67,6 +67,10 @@ impl<D: DataSource> Runner<D> {
         outcome: Outcome,
         timing: Option<crate::CompletionTiming>,
     ) -> Result<Option<CommitReceipt>, RunnerError> {
+        self.hear_aborted();
+        if let Some(message) = self.failed_tickets.remove(&ticket) {
+            return self.executor_failed(ticket, message);
+        }
         if self.is_background(ticket) {
             // Its own path (LLP 1097 D5): no commit, no `then`, no update.
             self.background_landed(outcome);
@@ -326,8 +330,8 @@ impl<D: DataSource> Runner<D> {
             // A read in a later turn (after an `await`) makes a store reader
             // as one in the first does (LLP 1146 §2.3).
             if self.store.reads() > reads_before {
-                self.note_reads(i, reads_before, draws_before);
-                self.module_work.reply_reader = Some(i);
+                let contents = self.note_reads(i, reads_before, draws_before);
+                self.module_work.reply_reader = Some((i, contents));
             }
             // A module's source that data code read: the answer is asked
             // again when that source's answer changes (LLP 1133.002 D14).

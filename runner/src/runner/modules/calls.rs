@@ -137,6 +137,7 @@ impl<D: DataSource> Runner<D> {
     pub(in crate::runner) fn step_calls(&mut self) -> (Vec<CommitReceipt>, Option<RunnerError>) {
         let mut receipts = Vec::new();
         loop {
+            self.expire_waiting_calls();
             if let Some(call) = self.extensions.calls.current.as_ref() {
                 let (id, at) = (call.id, call.dispatched.unwrap_or(self.now_ms));
                 if self.now_ms >= at + BOUND {
@@ -148,16 +149,8 @@ impl<D: DataSource> Runner<D> {
                 }
                 continue;
             }
-            let Some(next) = self.extensions.calls.waiting.front() else {
-                break;
-            };
-            if self.wake_running() || !self.data.ready() {
-                if self.now_ms >= next.arrived + WAIT {
-                    let call = self.extensions.calls.waiting.pop_front().expect("front");
-                    self.extensions.calls.current = Some(call);
-                    self.end_call("refused", "none", "busy", Json::Null);
-                    continue;
-                }
+            if self.extensions.calls.waiting.is_empty() || self.wake_running() || !self.data.ready()
+            {
                 break;
             }
             let call = self.extensions.calls.waiting.pop_front().expect("front");
@@ -169,6 +162,24 @@ impl<D: DataSource> Runner<D> {
             }
         }
         (receipts, None)
+    }
+
+    /// Refuse `busy` each waiting call whose [`WAIT`] has run out, whether
+    /// a wake, another call or the data source held it.
+    fn expire_waiting_calls(&mut self) {
+        let now = self.now_ms;
+        let waiting = |r: &mut Self| {
+            r.extensions
+                .calls
+                .waiting
+                .pop_front_if(|c| now >= c.arrived + WAIT)
+        };
+        while let Some(call) = waiting(self) {
+            let name = self.plan.str(self.plan.tools[call.tool].name).to_owned();
+            let message = "a wake or another call is running";
+            self.log(format!("tool {name}: refused, busy ({message})"));
+            self.finish_call(call, "refused", "none", "busy", json!(message));
+        }
     }
 
     /// Validate the current call and run its action (module doc).
@@ -412,16 +423,18 @@ impl<D: DataSource> Runner<D> {
     /// When the host should next advance for the calls.
     pub(in crate::runner) fn call_due(&self) -> Option<f64> {
         let calls = &self.extensions.calls;
+        let waited = calls.waiting.front().map(|c| c.arrived + WAIT);
         if let Some(call) = calls.current.as_ref() {
             let deadline = call.dispatched.unwrap_or(self.now_ms) + BOUND;
-            return Some(match self.invocation_owns(call.id) {
+            let due = match self.invocation_owns(call.id) {
                 true => deadline,
                 false => self.now_ms,
-            });
+            };
+            return Some(waited.map_or(due, |w| due.min(w)));
         }
-        let next = calls.waiting.front()?;
+        let waited = waited?;
         Some(match self.wake_running() || !self.data.ready() {
-            true => next.arrived + WAIT,
+            true => waited,
             false => self.now_ms,
         })
     }

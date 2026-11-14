@@ -12,7 +12,7 @@
 //     {"history":n} | mouse | dblclick | contextmenu | auxclick | clicks <1-3> (each [at <x> <y>] [modifiers
 //     <Shift+Meta…>]) | modifiers <Shift+Meta…> | pinch <scale> [at <x> <y>] | mediasession <action> [seconds] |
 //     pictureinpicture minimize|back|close|hover (Exact's picture-in-picture window, macOS) | drag <dx> <dy> [from <x>
-//     <y>] [mouse] [modifiers <M>] [press <ms>] [over <ms>] [hold <ms>] [during "<op>" …, inside the hold under --touch
+//     <y>] [mouse] [modifiers <M>] [press <ms>] [over <ms>] [hold <ms>] [into keyboard] [during "<op>" …, inside the hold under --touch
 //     platform] [then <dx> <dy> over <ms> hold <ms> during "<op>" …: another leg, same iOS touch] | drag to <target>
 //     [at <x> <y>] […]] | type <target> <text…> (the navigation root: a path or a deep link) | type <target> key <Name>
 //     | type <target> copy|cut|paste <text…> | type <target> paste --file <path…> | type <target> paste --image <png>
@@ -127,6 +127,17 @@ export { open, clockSpan } from './agent-session.mjs';
 export { runTests, textOf } from './agent-test.mjs';
 export { Cdp, browserDiagnosticNoise };
 /** The hosts `open` carries a drive on. */
+/** How long a test runs before `test` says where it is, and how often after. */
+export const HEARTBEAT_MS = 30000;
+
+/** Where a long test is: its line of its last, how long it has run, and, at a drag, why a drag is slow. Not a
+ * `test "…":` line, which conform.mjs reads as a result. */
+export const heartbeat = ({ name, line, last, op, since }, now) => {
+  const s = Math.round((now - since) / 1000), took = s < 60 ? `${s}s` : `${Math.floor(s / 60)}m${String(s % 60).padStart(2, '0')}s`;
+  const drag = op === 'drag' ? '; a drag past the viewport is several strokes, each landing before the next' : '';
+  return `still running test "${name}": ${took}, at line ${line} of ${last} (${op})${drag}`;
+};
+
 export const DRIVEN_HOSTS = ['web', 'macos', 'mac', 'ios', 'linux', 'android', 'windows', 'host', 'host-ios'];
 export async function main(argv, injected = {}) {
   const { flags, rest } = parseFlags(argv);
@@ -140,6 +151,13 @@ export async function main(argv, injected = {}) {
     console.error(`agent: no host \`${host}\`; name one of ${DRIVEN_HOSTS.join(', ')}`);
     return 2;
   }
+  if (flags.live) {
+    if (!['macos', 'mac'].includes(host) || flags.test)
+      throw new Error('--live requires a macOS drive without --test');
+    if (flags.timing && flags.timing !== 'platform')
+      throw new Error('--live keeps the platform clock; --timing agent is incompatible');
+    flags.timing = 'platform';
+  }
   const browser = flags.browser ?? (host === 'web' ? process.env.EXACT_WEB_BROWSER : undefined),
     help = argv.includes('--help') || argv.includes('-h'); // help before any work
   if (host && flags.test && !help) {
@@ -149,10 +167,28 @@ export async function main(argv, injected = {}) {
       throw new Error(
         `--touch ${flags.touch} is not taken with --test: a test's \`drag\` is a real gesture by itself on an iOS simulator; --touch platform makes every tap one too (LLP 1080.000)`,
       );
+    // Each test's line as it ends, and, while one runs past HEARTBEAT_MS, where it is every HEARTBEAT_MS: a run of
+    // long tests (a few hundred drags) said nothing after the server's line until the last test ended.
+    const said = new Set(),
+      report = (t) => {
+        said.add(t);
+        console.log(`test "${t.name}": ${t.skipped ? `skipped on ${host} (${t.skipped})` : t.failures.length ? 'FAIL' : 'ok'}`);
+        for (const f of t.failures) console.error('  ' + f);
+        for (const n of t.notes ?? []) console.error(`  note: ${n}`);
+      };
+    let at = null;
+    const atLine = (step) => { at = at?.index === step.index ? { ...at, ...step } : { ...step, since: Date.now() }; };
+    const every = injected.heartbeatMs ?? HEARTBEAT_MS,
+      beat = setInterval(() => {
+        if (at && Date.now() - at.since >= every) console.error(heartbeat(at, Date.now()));
+      }, every);
+    beat.unref?.();
     return (await import('./verify.mjs')).withAppServer(
       resolveApp(flags.app).dir,
       async () => {
         const r = await (injected.runTests ?? runTests)({
+          atLine,
+          atResult: (t) => { at = null; report(t); },
           host,
           browser,
           file: flags.test,
@@ -174,14 +210,8 @@ export async function main(argv, injected = {}) {
           chrome: flags.chrome,
           scale: flags.scale,
           port: flags.port,
-        });
-        for (const t of r.results) {
-          console.log(
-            `test "${t.name}": ${t.skipped ? `skipped on ${host} (${t.skipped})` : t.failures.length ? 'FAIL' : 'ok'}`,
-          );
-          for (const f of t.failures) console.error('  ' + f);
-          for (const n of t.notes ?? []) console.error(`  note: ${n}`);
-        }
+        }).finally(() => clearInterval(beat));
+        for (const t of r.results) if (!said.has(t)) report(t);
         console.log(`${r.passed} passed, ${r.failed} failed${r.skipped ? `, ${r.skipped} skipped` : ''}`);
         // The run, against the build it used (LLP 1146 D2: `bun scripts/evidence.mjs`).
         (await import('./evidence.mjs')).recordRun(flags.app, {
@@ -226,7 +256,7 @@ export async function main(argv, injected = {}) {
   if (!host || !ops.length) {
     console.error(
       [
-        'usage: bun scripts/agent.mjs <web|macos|ios|linux|android|windows|host|host-ios> [--browser chrome|firefox|webkit] [--app <name>] [--plan <file> | --url <url>] [--world <file>] [--device] [--phone <name|udid>] [--session <label>] [--open <document>] [--storage <name>] [--seed <n>] [--locale <tag>] [--format-locale <tag>] [--time-zone <zone>] [--epoch <ISO|ms>] [--timing platform] [--touch platform] [--chrome platform] [--size <w>x<h>] [--scale <n>] [--port <n>] [--json] <op> [<op> …]',
+        'usage: bun scripts/agent.mjs <web|macos|ios|linux|android|windows|host|host-ios> [--browser chrome|firefox|webkit] [--app <name>] [--plan <file> | --url <url>] [--world <file>] [--device] [--phone <name|udid>] [--session <label>] [--open <document>] [--storage <name>] [--seed <n>] [--locale <tag>] [--format-locale <tag>] [--time-zone <zone>] [--epoch <ISO|ms>] [--live] [--timing platform] [--touch platform] [--chrome platform] [--size <w>x<h>] [--scale <n>] [--port <n>] [--json] <op> [<op> …]',
         '  desktop carriers open 420x900 unless --size names another viewport; a target is a testId, a view id, or a view\'s exact label or text (`tap "Sky off"`); tap and type scroll a target out of view into it first; web defaults to chrome; EXACT_WEB_BROWSER selects the same option. Install the other engines outside the repo: bunx playwright@1.64.1 install firefox webkit',
         '  ' +
           [
@@ -266,7 +296,7 @@ export async function main(argv, injected = {}) {
             'pinch <scale> [at <x> <y>]',
             'mediasession <action> [seconds]',
             "pictureinpicture minimize|back|close|hover (Exact's picture-in-picture window, macOS)",
-            'drag <dx> <dy> [from <x> <y>] [mouse: the left button, desktop pointers] [modifiers <M>] [press <ms>] [over <ms>] [hold <ms>] [during "<op>" …: after the move, the finger down; inside the hold under --touch platform] [then <dx> <dy> [over <ms>] [hold <ms>] [during "<op>" …]: another leg, same iOS touch]',
+            'drag <dx> <dy> [from <x> <y>] [mouse: the left button, desktop pointers] [modifiers <M>] [press <ms>] [over <ms>] [hold <ms>] [into keyboard: iOS --touch platform, keyboard up; end above the screen bottom safe area] [during "<op>" …: after the move, the finger down; inside the hold under --touch platform] [then <dx> <dy> [over <ms>] [hold <ms>] [during "<op>" …]: another leg, same iOS touch]',
             'drag to <target> [at <x> <y>: from its top left] [same options]]',
             'tap <target> down [at <x> <y>] [modifiers <M>], then tap move [by] <x> <y> [over <ms>] [modifiers <M>]',
             'tap hold <ms>',
@@ -296,6 +326,7 @@ export async function main(argv, injected = {}) {
             'pass fetch <url-prefix> (LLP 1103: a matching fetch fails as a refused connection; --fail-fetch <url-prefix> arms one before the first data load)',
             "call <tool> <json> [--door <door>] (a system's call of a tool, as its door hands it, LLP 1133.023 §10: state.intents lists the tools and the calls, state intents.entities <kind> [<text>] answers as the content index's query; --call '<tool> <json>' is a cold one at launch)",
             'perf [<target>] [during "<op>" …]',
+            'perf world:<surface> [during "<op>" …] (tick spans; during refuses a remount, restore or recording replacement)',
             'perf frames [late <n>]',
             'perf frames health [app|scroll|window] [during "<op>" …]',
             'perf frames capture start [ms]|stop|clear',
@@ -342,7 +373,9 @@ export async function main(argv, injected = {}) {
       return await (injected.open ?? open)({
         host,
         browser,
+        ax: ops.some(line => /^\s*tree\s+--ax(?:\s|$)/.test(line)),
         env: {
+          ...(flags.live ? { EXACT_AGENT: 'live' } : {}),
           ...(fresh ? { EXACT_AGENT_STORAGE_FRESH: '1' } : {}),
           ...(flags.login ? { EXACT_LOGIN_LAUNCH: flags.login } : {}),
         },

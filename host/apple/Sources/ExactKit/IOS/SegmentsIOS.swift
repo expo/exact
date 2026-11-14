@@ -39,6 +39,7 @@ class LabelledSegmentedControl: UISegmentedControl {
     }
     var segmentLabels: [String?] = [] { didSet { if segmentLabels != oldValue { setNeedsLayout() } } }
     var segmentIDs: [String?] = [] { didSet { if segmentIDs != oldValue { setNeedsLayout() } } }
+    var segmentOwners: [UInt32] = []
     var segmentUnavailable: [Bool] = [] { didSet { if segmentUnavailable != oldValue { setNeedsLayout() } } }
     override func layoutSubviews() {
         super.layoutSubviews()
@@ -64,6 +65,12 @@ class LabelledSegmentedControl: UISegmentedControl {
 }
 
 extension UISegmentedControl {
+    func segmentOwner(of view: UIView, owners: [UInt32]) -> UInt32? {
+        guard let index = segmentViews.firstIndex(where: { view === $0 || view.isDescendant(of: $0) }),
+              owners.indices.contains(index) else { return nil }
+        return owners[index]
+    }
+
     /// The segment views (`UISegment`, two containers down on iOS 27), in
     /// segment order: left to right, reversed right to left.
     var segmentViews: [UIView] {
@@ -623,6 +630,7 @@ final class SegmentHost: NSObject, UIGestureRecognizerDelegate, UITabBarDelegate
         control.accessibilityIdentifier = owner.props["testId"]
         control.segmentLabels = tabs.map(Self.segmentLabel)
         control.segmentIDs = tabs.map { $0.props["testId"] }
+        control.segmentOwners = tabs.map(\.id)
         control.segmentUnavailable = tabs.map { $0.disabled || $0.ariaUnavailable }
         let selected = tabs.firstIndex(where: Self.chosen) ?? UISegmentedControl.noSegment
         // A choice the finger made and the control has not reported yet

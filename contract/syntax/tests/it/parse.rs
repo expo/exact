@@ -265,6 +265,18 @@ fn a_template_expression_balances_match_braces_and_string_braces() {
 }
 
 #[test]
+fn a_template_literal_ends_on_its_own_line() {
+    // A `${…}` fragment never holds a line break: the literal that would
+    // carry one is refused before its expression is parsed.
+    let error = parse(
+        "component A\n  state count = 1\n  state extra = 2\n  view\n    text `total ${count\n+ extra}`\n",
+    )
+    .unwrap_err();
+    assert_eq!(error.id, "syntax-unterminated-template", "{error}");
+    assert_eq!(error.span.line, 5, "{error}");
+}
+
+#[test]
 fn if_when_and_their_explicit_else_need_non_empty_blocks() {
     let cases = [
         (

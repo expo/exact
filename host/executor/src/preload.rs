@@ -733,11 +733,7 @@ pub(super) fn reserve_front(state: &mut State) -> bool {
         return true;
     }
     let job = state.jobs[0].front().expect("a preload waiter");
-    let more = if handed_off(job) {
-        0
-    } else {
-        job.limit - job.charge
-    };
+    let more = job.limit - job.charge;
     if more > BYTES[0].saturating_sub(state.bytes[0]) {
         return false;
     }

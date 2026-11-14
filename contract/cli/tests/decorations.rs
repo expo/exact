@@ -53,6 +53,9 @@ component App
         text "Replace"
 "##
     );
+    let plan = contract::compile(&source).unwrap();
+    let entry = contract::web_linked(&plan, &serde_json::json!({}));
+    assert!(entry.contains("shadows"), "{entry}");
     let mut runner = boot(&source);
     let first = prop(&runner, "editor", PropId::Decorations);
     assert_eq!(

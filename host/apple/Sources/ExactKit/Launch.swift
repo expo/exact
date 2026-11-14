@@ -205,9 +205,9 @@ public final class ExactLaunch: NSObject {
         scheduleEvaluate()
     }
 
-    /// Records a batch that changed the screen (`Batch.changesScreen`).
-    func applied(_ session: ExactSession, _ batch: Batch) {
-        guard session === launchSession, ttiOutcome == nil, batch.changesScreen else { return }
+    /// Records a batch that changed the screen, including an orientation change the presenter resolved.
+    func applied(_ session: ExactSession, _ batch: Batch, orientationChanged: Bool = false) {
+        guard session === launchSession, ttiOutcome == nil, batch.changesScreen || orientationChanged else { return }
         // Nothing outstanding, but the screen still changing: TTI waits for
         // a frame with no change, so this is what holds it then (a fresh
         // answer replacing a kept one, a fade). Its span: first to last.

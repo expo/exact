@@ -232,6 +232,7 @@ export const pageFile = (name) => (path, grants) => (globalThis.exact[name] ? Pr
 // @ref LLP 1043.000 §3 D7/D8 — optional executor, absent from ordinary boots.
 host.textflow = null;
 host.flowLoading = null;
+host.flowFailed = false;
 host.flowContexts = [];
 host.flowDue = null;
 host.flowLanding = false;
@@ -598,9 +599,9 @@ export function letGo() {
 }
 export const HOST_WORK_BYTES = 16 * 1024 * 1024, HOST_WORK_BASE64 = 4 * Math.ceil(HOST_WORK_BYTES / 3);
 export function surfaceGranted(op) {
-  const admitted = host.grants.map((g) => g.trim()).filter(Boolean), scoped = op.scope == null ? admitted : op.scope.split("\n").map((g) => g.trim()).filter(Boolean);
+  const scoped = scopedGrantSet(host.grantSet, op.scope);
   const need = `surface.${op.mode === "capture" ? "read" : "write"} ${op.name}`;
-  return scoped.every((g) => admitted.includes(g)) && scoped.includes(need);
+  return scoped?.entries.some(([, source]) => source === need) ?? false;
 }
 function fulfill(requestIncarnation, ticket, kind, status, headersText, body, elapsedMs) {
   // Boot reuses ticket IDs; an old incarnation's completion must not land.

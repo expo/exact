@@ -167,6 +167,62 @@ fn windows_system_menu_chord_does_not_choose_a_dialog_button() {
     }
 }
 
+/// Material's menu, where the shell makes its window (Android), is held to
+/// the window's room less Material's 48 above and below; its rows scroll
+/// under a finger and come into view under the arrows.
+#[test]
+fn a_material_menu_taller_than_its_window_scrolls() {
+    let mut p = windowed();
+    assert!(p.resize(360., 260.).is_none());
+    p.frame();
+    invoke(&mut p, "native-cmd");
+    fn menu(p: &Presenter<()>) -> &Open {
+        p.top.open.as_ref().unwrap()
+    }
+    let offset = |p: &Presenter<()>| menu(p).layout.menu_scroll().unwrap().0;
+    assert!(
+        menu(&p).layout.size.1 <= 260. - 96.,
+        "{:?}",
+        menu(&p).layout.size
+    );
+    assert_eq!(offset(&p), 0.);
+    let in_view = |p: &Presenter<()>, index: usize| {
+        let (_, top, _, height) = menu(p).layout.menu_clip().unwrap();
+        let (_, y, _, h) = menu(p).layout.targets[index].rect;
+        y >= top - 0.01 && y + h <= top + height + 0.01
+    };
+    let last = menu(&p).layout.targets.len() - 1;
+    assert!(!in_view(&p, last));
+    for _ in 0..=last {
+        p.surface_key("ArrowDown", 1.);
+    }
+    assert!(
+        in_view(&p, last),
+        "the arrows bring the focused row into view"
+    );
+    assert!(offset(&p) > 0.);
+    // A finger drags the rows back down: the menu scrolls, and no row is chosen.
+    let serial = menu(&p).serial;
+    p.surface_event(serial, 0, 40., 40., 2.);
+    p.surface_event(serial, 2, 40., 44., 3.);
+    assert!(offset(&p) > 0., "within the touch slop nothing scrolls");
+    p.surface_event(serial, 2, 40., 400., 4.);
+    p.surface_event(serial, 1, 40., 400., 5.);
+    assert_eq!(offset(&p), 0.);
+    assert!(in_view(&p, 0));
+    assert!(p.surface().is_some(), "a drag chooses no row");
+    assert_eq!(p.host().runner().slot("said"), Some(&Value::str("nothing")));
+    // A tap still chooses.
+    let (x, y) = {
+        let (x, y, w, h) = menu(&p).layout.targets[0].rect;
+        (x + w / 2., y + h / 2.)
+    };
+    p.surface_event(serial, 0, x, y, 6.);
+    p.surface_event(serial, 1, x, y, 7.);
+    p.run_commands(|| ());
+    assert_eq!(p.host().runner().slot("said"), Some(&Value::str("renamed")));
+}
+
 #[test]
 fn desktop_menu_overflow_keeps_focus_pointer_and_accessibility_inside_the_window() {
     for scale in [1., 2.25] {

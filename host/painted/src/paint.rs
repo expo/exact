@@ -55,6 +55,7 @@ pub(crate) use lift::{Ghost, Lift};
 mod alert;
 pub(crate) mod inline;
 pub(crate) mod inline_frame;
+pub(crate) mod inline_opacity;
 mod layer;
 mod lift;
 pub(crate) mod look;
@@ -91,6 +92,16 @@ pub use svg::{resolve_with, Ink, SvgPaint};
 // Only an explicit row makes a raster a template; motion may supply its ink.
 // `currentcolor` is the node's `color` (feed F1).
 fn image_tint(node: &NodeRef<'_>, presented: &Presented, dark: bool) -> Option<[u8; 4]> {
+    // Icon lowering supplies a currentcolor tint for symbol sources. A
+    // non-template icon keeps the file's paint, as on the web.
+    if node
+        .props
+        .str(PropId::ImageSource)
+        .and_then(crate::image::file_icon)
+        .is_some()
+    {
+        return None;
+    }
     let style = node.style;
     style.mask.has(StyleId::TintColor).then(|| {
         presented
@@ -241,14 +252,8 @@ impl BoxPaint {
         // The outer shadows, the list's first on top: by the backend's blur
         // where it has one, else as bands.
         for s in self.shadows.iter().rev().filter(|s| !s.inset()) {
-            if let Some((color, sigma, shape)) = s.blurred(&geometry.outer) {
-                if backend.blurred_shadow(&shape, color, sigma, &geometry.outer, ts) {
-                    continue;
-                }
-            }
-            for band in s.fills(&geometry.outer, self.widths) {
-                backend.fill_border(&band, ts);
-            }
+            let bands = || s.fills(&geometry.outer, self.widths);
+            backend.box_shadow(s.blurred(&geometry.outer), &geometry.outer, &bands, ts);
         }
         // @ref LLP 1053.000 D2 — the backdrop filters under the background.
         if !self.backdrop.is_none() {
@@ -428,6 +433,8 @@ pub use frame::Frame;
 
 /// The painter: the walk over one backend.
 pub struct Painter {
+    /// Module replies from a replaced kernel must not name its new allocations.
+    pub(crate) native_session: u64,
     pub(crate) split: Option<crate::presenter::split::Split>,
     pub(crate) window_canvas: Option<ViewId>,
     pub(crate) direct_canvases: std::collections::BTreeSet<ViewId>,
@@ -481,14 +488,15 @@ pub struct Painter {
     decoration_warning: bool,
     /// The node a 3D island paints flat, its own transform being the warp's (LLP 1077 D8).
     pub(crate) flatten: Option<ViewId>,
-    /// The focused node that shows no ring until a key (LLP 1115.001 D7.6).
+    /// The current focus's visibility decision, separate from the last input's modality.
     pub(crate) ringless: Option<ViewId>,
     /// The focus visual follows WinUI's input tracking, not Chrome's `:focus-visible` (LLP
-    /// 1115.004 D9.2): no ring for a focus the app moves before any key (`keyless`), and a key
+    /// 1115.004 D9.2): pointer movement counts as input, and a key
     /// held with Ctrl, Alt or the Windows key counts as keyboard input.
     pub(crate) winui_focus: bool,
-    pub(crate) keyless: bool,
-    /// Android's touch mode (LLP 1115.001 D7.6): a finger or a pen sets `keyless` again.
+    /// The last input was a pointer; Windows and Android start in this mode.
+    pub(crate) pointer_modality: bool,
+    /// Android's touch mode (LLP 1115.001 D7.6): a finger or pen also hides the current ring.
     pub(crate) touch_mode: bool,
     /// Whose shapes a symbol role takes: the process's (`look::symbols`).
     pub(crate) symbols: exact_kernel::SymbolSet,
@@ -558,6 +566,7 @@ impl Painter {
     }
 
     pub(crate) fn replaced(&mut self) {
+        self.native_session = native::new_session();
         // A fresh kernel can reuse both epochs and node keys.
         self.paint_epoch = None;
         self.svg_warned.clear();
@@ -568,6 +577,7 @@ impl Painter {
     /// A painter over a backend.
     pub fn new(text: Shared, scale: f32, backend: Box<dyn Backend>) -> Painter {
         Painter {
+            native_session: native::new_session(),
             split: None,
             window_canvas: None,
             direct_canvases: Default::default(),
@@ -603,7 +613,7 @@ impl Painter {
             flatten: None,
             ringless: None,
             winui_focus: cfg!(windows),
-            keyless: cfg!(windows) || cfg!(target_os = "android"),
+            pointer_modality: cfg!(windows) || cfg!(target_os = "android"),
             touch_mode: cfg!(target_os = "android"),
             symbols: look::symbols(),
             feedback: (None, None),
@@ -803,7 +813,9 @@ impl Painter {
         self.viewport = viewport;
         self.backend.page(page_color(self.dark));
         let partial = if let Some(previous) = self.damage.pixels.as_ref().filter(|_| {
-            !self.damage.next.is_empty() && self.top_surface.is_none() && !self.scrollbars.enabled
+            !self.damage.next.is_empty()
+                && self.top_surface.is_none()
+                && (!self.scrollbars.enabled || self.split.is_some())
         }) {
             self.backend.begin_damage(
                 viewport.0,
@@ -897,6 +909,7 @@ impl Painter {
                     .any(|p| !p.fragments().is_empty())
         });
         self.damage.dark = self.dark;
+        self.damage.scrollbars = self.scrollbars.ink();
         self.damage.focus_ink = damage::field_focus_ink(scene.kernel, scene.focus);
         Ok(Frame {
             pixmap,
@@ -1065,6 +1078,13 @@ impl Painter {
         let mut paint = BoxPaint::capture(node, walk.scene.kernel, self.dark)
             .presented(&shown.colors)
             .states(node, &shown, self.dark);
+        if let Some(section) = walk.scene.kernel.grouped_card_section(node.id) {
+            if let Some(owner) = walk.scene.kernel.node(section) {
+                paint = paint.section_shadow(&owner, &(walk.scene.presented)(section), self.dark);
+            }
+        } else if walk.scene.kernel.grouped_section_card(node.id).is_some() {
+            paint.shadows.clear();
+        }
         self.split_row(node, &mut paint);
         if self.bare(node) {
             paint.background = [0; 4];
@@ -1129,7 +1149,7 @@ impl Painter {
                 if node
                     .props
                     .str(exact_kernel::PropId::ImageSource)
-                    .is_some_and(|s| s.starts_with("symbol:"))
+                    .is_some_and(crate::image::is_symbol)
                 {
                     // Its `color` as presented, through a transition or a press (LLP 1081
                     // stage 2), unless the platform's sheet tinted it: a grouped row's leading

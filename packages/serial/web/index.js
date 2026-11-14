@@ -63,6 +63,15 @@ export function implementation({ changed }) {
     changed('serial.serialInput');
   }
 
+  /** `c` closed: its reader canceled, its queued writes ended, then its port. */
+  async function shut(c) {
+    c.open = false;
+    c.wake?.();
+    try { await c.reader?.cancel(); } catch { /* the port went away */ }
+    await c.writer;
+    try { await c.port.close(); } catch { /* already closed */ }
+  }
+
   const connection = args => {
     const c = connections.get(args?.connection);
     if (!c) return { error: { error: 'InvalidStateError', message: 'no such connection' } };
@@ -164,18 +173,19 @@ export function implementation({ changed }) {
       if (error) return error;
       // An unplugged connection still closes; a closed one is done, and its port may be another connection's.
       if (!c.open) return { error: 'InvalidStateError', message: 'the connection is closed' };
-      c.open = false;
-      c.wake?.();
-      try { await c.reader?.cancel(); } catch { /* the port went away */ }
-      await c.writer;
-      try { await c.port.close(); } catch { /* already closed */ }
+      await shut(c);
       announce();
       return null;
     },
     async forget(args) {
       const port = ports.get(args?.port);
       if (!port) return null;
-      for (const [handle, c] of connections) if (c.port === port) { c.open = false; c.wake?.(); connections.delete(handle); }
+      // An open port cannot be forgotten: each connection on it is closed first.
+      for (const [handle, c] of connections) {
+        if (c.port !== port) continue;
+        if (c.open) await shut(c);
+        connections.delete(handle);
+      }
       try { await port.forget?.(); } catch (e) { return failure(e); }
       ports.delete(args.port);
       ids.delete(port);

@@ -25,7 +25,7 @@ const VALUES: usize = 18;
 /// Frames whose work waits on a publication's ingest, at most: past it the oldest is lost,
 /// and counted, while the main thread stalls behind more streams than this.
 const PENDING: usize = 8;
-const COLUMNS: [&str; 23] = [
+const COLUMNS: [&str; 24] = [
     "sequence",
     "capture",
     "generation",
@@ -49,6 +49,7 @@ const COLUMNS: [&str; 23] = [
     "apply_finished_offset_us",
     "work_target_offset_us",
     "operations",
+    "frame_start_offset_us",
 ];
 
 /// What a source is: its name and evidence, and what it leaves unobserved.
@@ -203,6 +204,7 @@ impl Health {
         if !self.collecting() || ended == 0 {
             return;
         }
+        self.expire(ended);
         let mut deadline = 0;
         for slot in &mut self.pending {
             let Some(p) = *slot else { continue };
@@ -616,7 +618,8 @@ impl Health {
                 when(work, stored(w.began_us)),
                 when(work, stored(w.finished_us)),
                 when(work, stored(w.target_us)),
-                when(work, json!(w.operations))
+                when(work, json!(w.operations)),
+                stored(e.frame_start_us)
             ]));
         }
         let offset = |v: u64| {

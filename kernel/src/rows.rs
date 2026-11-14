@@ -67,14 +67,17 @@ pub(crate) fn prop_changed(
     let rows: Vec<u32> = match prop {
         // A cell's spans move its table's grid (`layout/table.rs`), and a
         // table's or a description list's tag brings its UA sheet's layout
-        // (`style/table.rs`).
+        // (`style/table.rs`), as leaving a table part's tag takes it away.
         PropId::ColSpan | PropId::RowSpan => {
             if let Some(node) = arena.taffy(slot) {
                 layout.restyle(arena, slot, node);
             }
             return true;
         }
-        PropId::SemanticTag if crate::style::table::styled(arena, slot) => {
+        PropId::SemanticTag
+            if crate::style::table::styled(arena, slot)
+                || layout.tree_ref().is_some_and(|t| t.in_table(slot)) =>
+        {
             if let Some(node) = arena.taffy(slot) {
                 layout.restyle(arena, slot, node);
             }

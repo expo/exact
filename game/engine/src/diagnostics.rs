@@ -6,6 +6,17 @@ mod ring;
 mod trace;
 use std::{cell::RefCell, fmt::Write, panic::Location, rc::Rc};
 
+/// A position in one world's host-only span recording; never saved or hashed.
+#[derive(Clone, Default, crate::Data)]
+pub struct SpanCursor {
+    /// Identifies the engine world, including replacements made by restore.
+    pub incarnation: String,
+    /// Advances when the world's span recording is armed or reset.
+    pub generation: u64,
+    /// Completed ticks in that recording.
+    pub ticks: u64,
+}
+
 struct Row {
     name: &'static str,
     at: &'static Location<'static>,
@@ -20,6 +31,8 @@ struct Open {
 }
 #[derive(Default)]
 pub(crate) struct Spans {
+    incarnation: String,
+    generation: u64,
     clock: Option<fn() -> f64>,
     rows: Vec<Row>,
     open: Vec<Open>,
@@ -42,14 +55,27 @@ impl Spans {
         self.rows[row].value += (now - self.last).max(0.);
         self.last = now;
     }
-    pub(crate) fn arm(&mut self, clock: fn() -> f64, reset: bool) {
+    pub(crate) fn arm(&mut self, clock: fn() -> f64, reset: bool, namespace: &str) {
         if self.clock.is_some() && !reset {
             return;
         }
         let next = self.next;
+        let incarnation = if self.incarnation.is_empty() {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static NEXT: AtomicU64 = AtomicU64::new(1);
+            format!("{namespace}:{}", NEXT.fetch_add(1, Ordering::Relaxed))
+        } else {
+            std::mem::take(&mut self.incarnation)
+        };
+        let generation = self
+            .generation
+            .checked_add(1)
+            .expect("span recording generation exhausted");
         let mut total = Ring::default();
         total.arm(false);
         *self = Self {
+            incarnation,
+            generation,
             total,
             next,
             clock: Some(clock),
@@ -110,9 +136,17 @@ impl Spans {
     pub(crate) fn trace_json(&self) -> String {
         self.trace.json()
     }
-    pub(crate) fn json(&self, since: Option<u64>) -> String {
+    pub(crate) fn json(&self, since: Option<SpanCursor>) -> String {
+        if let Some(cursor) = &since {
+            if cursor.incarnation != self.incarnation {
+                return "{\"error\":\"perf world: world incarnation changed (remount, restart or restore); no difference is defined\"}".into();
+            }
+            if cursor.generation != self.generation {
+                return "{\"error\":\"perf world: recording generation changed; no difference is defined\"}".into();
+            }
+        }
         let window = since.is_some();
-        let since = since.unwrap_or(0);
+        let since = since.map_or(0, |cursor| cursor.ticks);
         if since > self.ticks || window && self.ticks - since > 16384 {
             return "{\"error\":\"perf world: span window expired or counters went back\"}".into();
         }
@@ -124,7 +158,9 @@ impl Spans {
         let count = (self.ticks - first) as usize;
         let total = distribution(&self.total, count, 0);
         let mut out = format!(
-            "{{\"armed\":{},\"spanTicks\":{},\"tickMs\":{},\"spans\":[",
+            "{{\"incarnation\":{},\"generation\":{},\"armed\":{},\"spanTicks\":{},\"tickMs\":{},\"spans\":[",
+            crate::values::quote(&self.incarnation),
+            self.generation,
             self.clock.is_some(),
             self.ticks,
             crate::json::to_string(&total).unwrap()

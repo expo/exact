@@ -78,10 +78,12 @@ class GeofencingModule(context: ExtensionContext) : ExactExtension(context) {
     /** The transition being delivered now: one at a time. */
     private var delivering = false
     private var said: String? = null
+    /** The store's wake listener, kept here: the store holds it only weakly, for as long as this module lives. */
+    private val delivery: () -> Unit = ::deliver
 
     init {
         if (!context.agent) {
-            ExactRegions.listen(::deliver)
+            ExactRegions.listen(delivery)
             // Every launch re-arms the store's fences without an initial trigger (D14, Re-arming), and delivers what
             // the store kept undelivered.
             arm(app, store.list(), initial = false) { e -> if (e != null) context.log("geofencing: re-arm failed: $e") }
@@ -208,9 +210,13 @@ class GeofencingModule(context: ExtensionContext) : ExactExtension(context) {
 
     /** The store's undelivered transitions, raised one at a time as wakes; each is forgotten only when its
      * invocation completes, so an expired one stays for the next launch. */
-    private fun deliver() {
+    private fun deliver() = next(emptySet())
+
+    /** The pass's next undelivered transition but those of [skipped], whose wakes this pass raised and which did not
+     * complete: the pass goes on past them, as Apple's does, and the next arrival or launch tries them again. */
+    private fun next(skipped: Set<String>) {
         if (delivering) return
-        val region = store.pending().firstOrNull() ?: return
+        val region = store.pending().firstOrNull { it.getString("name") !in skipped } ?: return
         val pending = region.getJSONObject("pending")
         val name = region.getString("name")
         val enter = pending.getString("event") == "enter"
@@ -225,7 +231,9 @@ class GeofencingModule(context: ExtensionContext) : ExactExtension(context) {
             if (outcome == "completed" || outcome == "unheard") {
                 store.delivered(name)
                 context.changed("geofencing.geofences")
-                deliver()
+                next(skipped)
+            } else {
+                next(skipped + name)
             }
         }
     }

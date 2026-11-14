@@ -397,7 +397,7 @@ fn a_space_break_after_soft_hyphen_does_not_paint_the_hyphen() {
 
 #[test]
 fn css_normal_transforms_segment_breaks_and_collapses_runs() {
-    let text = "alpha\n \t\r\n\u{85}\u{2028}\u{2029}beta";
+    let text = "alpha\n \t\r\nbeta";
     let p = Prepared::new(text, Options::default(), &mut |r: std::ops::Range<
         usize,
     >| {
@@ -412,6 +412,34 @@ fn css_normal_transforms_segment_breaks_and_collapses_runs() {
     assert_eq!(got[0].width, 80.0);
     assert!(!got[0].hard_break);
     assert_eq!(got[0].end.byte, text.len());
+}
+
+#[test]
+fn form_feeds_and_unicode_breaks_are_text_where_white_space_collapses() {
+    use exact_textflow::WhiteSpace;
+    let text = "alpha\u{c}\u{c}\u{85}\u{2028}\u{2029} beta";
+    for white_space in [WhiteSpace::Normal, WhiteSpace::Nowrap, WhiteSpace::PreLine] {
+        // The shape path keeps all five, so the flowed line measures each.
+        let shaped = exact_textflow::collapse(&[text], white_space);
+        assert!(shaped.is_none(), "{white_space:?}: {shaped:?}");
+        let p = Prepared::new(
+            text,
+            Options {
+                white_space,
+                ..Options::default()
+            },
+            &mut |r: std::ops::Range<usize>| 8.0 * text[r].chars().count() as f32,
+        );
+        let got = lines(&p, 1000.0);
+        assert_eq!(got.len(), 1, "{white_space:?}");
+        assert_eq!(
+            got[0].width,
+            8.0 * text.chars().count() as f32,
+            "{white_space:?}"
+        );
+        assert!(!got[0].hard_break, "{white_space:?}");
+        assert_eq!(p.paint_range(text, 0..text.len()), 0..text.len());
+    }
 }
 
 #[test]

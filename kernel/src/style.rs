@@ -20,11 +20,16 @@ mod engine;
 pub use crate::gradient::link as link_gradients;
 pub use effects::link as link_effects;
 mod grid;
+pub use crate::corner::link as link_corners;
 pub use grid::link as link_grid;
 pub use grid::{
     GridFitContent, GridLine, GridPlacement, GridRepeat, GridRepeatCount, GridTrack,
     GridTrackComponent, GridTrackMax, GridTrackMin, GridTracks,
 };
+pub use shadow::link as link_shadows;
+pub use space::link as link_rotate;
+pub use stroke::link as link_text_stroke;
+pub use symbols::link as link_symbol_palette;
 pub mod calc;
 mod floor;
 mod handles;
@@ -435,6 +440,25 @@ impl StyleValue<'_> {
         }
     }
 
+    pub(crate) fn auto_i32(&self, style: StyleId) -> Result<Option<i32>, StyleValueError> {
+        match self {
+            StyleValue::Auto => Ok(None),
+            StyleValue::Text(t) if t.trim().eq_ignore_ascii_case("auto") => Ok(None),
+            StyleValue::Text(t) => {
+                t.trim()
+                    .parse()
+                    .map(Some)
+                    .map_err(|_| StyleValueError::WrongKind {
+                        style,
+                        expected: "integer or auto",
+                    })
+            }
+            _ => self
+                .int(style, i32::MIN as f64, i32::MAX as f64)
+                .map(|n| Some(n as i32)),
+        }
+    }
+
     /// A CSS-valued row's text: text as given, a number (`aspect-ratio: 2`),
     /// a percentage (`transform-origin: 25%`) or `auto` as CSS spells it.
     pub(crate) fn css_text(&self, style: StyleId) -> Result<Cow<'_, str>, StyleValueError> {
@@ -615,7 +639,7 @@ impl StyleValue<'_> {
 
 /// Whether `set_dynamic` reads any text on row `style` besides the CSS-wide
 /// keywords [`StyleValue::unsets`] clears a row with. A number row with no
-/// text arm (`opacity`, `flex-grow`, `z-index`, `font-weight`) refuses every
+/// text arm (`opacity`, `flex-grow`, `font-weight`) refuses every
 /// computed string, where a browser applies one (`opacity: 0.5`), so the
 /// compiler refuses a string-typed binding of such a row as it refuses the
 /// literal (LLP 1017 P1a). The rows listed are those whose conversion has a
@@ -667,7 +691,7 @@ fn absolute_length(token: &str) -> Option<Dimension> {
     number(n).map(|v| Dimension::Points(v * scale))
 }
 
-fn parse_pixel_length(token: &str) -> Option<f32> {
+pub(crate) fn parse_pixel_length(token: &str) -> Option<f32> {
     let pixels = token
         .get(token.len().saturating_sub(2)..)
         .is_some_and(|unit| unit.eq_ignore_ascii_case("px"));
@@ -687,7 +711,7 @@ fn parse_pixel_length(token: &str) -> Option<f32> {
 }
 
 /// A finite CSS number token, before a property's unit conversion and range check.
-fn parse_css_number(number: &str) -> Option<f64> {
+pub(crate) fn parse_css_number(number: &str) -> Option<f64> {
     // Rust floats accept spellings outside CSS number tokens. Check the
     // decimal/exponent grammar before the range-preserving conversion.
     let unsigned = number.strip_prefix(['+', '-']).unwrap_or(number);

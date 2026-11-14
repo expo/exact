@@ -122,16 +122,22 @@ fn caltrain_builds_in_the_terminal_and_refuses_activity_sends_at_runtime() {
     let mut host =
         crate::host::Host::boot(plan, data, crate::host::Mode::Fullscreen, 80, 24).unwrap();
     assert!(host.runner.resource("activities").is_some());
+    host.act("startTracking");
+    let refused = |host: &crate::host::Host<_>, send: &str| {
+        host.runner
+            .journal()
+            .any(|line| line.contains(&format!("{send} is not linked into this artifact")))
+    };
+    assert!(refused(&host, "startActivity"));
+    assert!(!host.runner.has_pending());
+    // With the start refused nothing is followed, so Delay and End name no
+    // activity and send nothing.
     for (action, send) in [
-        ("startTracking", "startActivity"),
         ("delayTrain", "updateActivity"),
         ("endTracking", "endActivity"),
     ] {
         host.act(action);
-        assert!(host
-            .runner
-            .journal()
-            .any(|line| line.contains(&format!("{send} is not linked into this artifact"))));
+        assert!(!refused(&host, send));
         assert!(!host.runner.has_pending());
     }
 }

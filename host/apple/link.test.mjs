@@ -1,7 +1,8 @@
 import { capturePrivacyManifest } from './privacy.mjs';
-import { test } from 'bun:test';
+import { test, spyOn } from 'bun:test';
+import * as appleToolchain from './toolchain.mjs';
 import assert from 'node:assert/strict';
-import {copyFileSync, cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync} from 'node:fs';
+import {copyFileSync, cpSync, existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, writeFileSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import { encodePng } from '../../scripts/png.mjs';
@@ -9,9 +10,88 @@ import { useXcode } from './devices.mjs';
 import { spawnSync } from 'node:child_process';
 import { assertActivityRefusals } from './activities.mjs';
 import { resolveApp } from '../../scripts/app.mjs';
-import { appleComposition, assertCapabilityFrameworks, assertLinkedSdk, compiledTargets, deploymentTargets, iosSimulatorTarget, loadedDylibs } from './link.mjs';
+import { appleComposition, assertCapabilityFrameworks, assertLinkedSdk, compiledTargets, deploymentTargets, iosSimulatorTarget, loadedDylibs, recordMinimumOS } from './link.mjs';
 import { composedModule, moduleSeam, systemFrameworks } from './compose.mjs';
 import { writeDataKeys } from './data-keys.mjs';
+import { appleImplementations } from '../../js/bake/src/typescript.mjs';
+
+test.skipIf(process.platform !== 'darwin')('credential members load before their owner and stay in their session', () => {
+  useXcode();
+  const root = resolve(import.meta.dir, '../..'), dir = mkdtempSync(resolve(root, 'target/credential-members-'));
+  const run = args => {
+    const result = spawnSync('xcrun', ['--sdk', 'macosx', 'swiftc', '-swift-version', '5', ...args], { encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+  };
+  const write = (name, text) => { const path = resolve(dir, name); writeFileSync(path, text); return path; };
+  try {
+    const packages = appleImplementations(resolve(root, 'apps/auth-fixture'), 'macos', { passkeys: '@exact/passkeys', 'sign-in': '@exact/sign-in' });
+    assert.deepEqual(packages.find(p => p.extension === 'sign-in').credentialMembers, ['passkeys#get.identity']);
+    run(['-parse-as-library', '-emit-library', '-emit-module', '-module-name', 'ExactPackage',
+      resolve(root, 'host/apple/modules/ExactPackage.swift'), '-o', resolve(dir, 'libExactPackage.dylib')]);
+    const owner = write('Owner.swift', `import Foundation
+import ExactPackage
+public final class Owner: ExactPackage {
+    let context: ExactPackageContext
+    public init(context: ExactPackageContext) { self.context = context }
+    public func later(_ name: String, _ args: [String: Any], preferred: Any?, reply: @escaping ([String: Any]) -> Void) {
+        do { reply(try context.credentials.request("passkeys#get.identity", args: args).answer(NSObject())!) }
+        catch { reply(["error": "missing-member"]) }
+    }
+    public func call(_ name: String, _ args: [String: Any]) throws -> [String: Any] { [:] }
+}`);
+    const member = write('Member.swift', `import Foundation
+import ExactPackage
+public final class Member: ExactPackage, ExactCredentialMember {
+    let context: ExactPackageContext
+    public init(context: ExactPackageContext) {
+        self.context = context
+        context.credentials.register("passkeys#get.identity", member: self)
+    }
+    public func credentialRequest(_ args: [String: Any]) throws -> ExactCredentialRequest {
+        ExactCredentialRequest(requests: [NSObject()]) { [context] _ in ["session": context.session, "identity": args["identity"]!] }
+    }
+    public func later(_ name: String, _ args: [String: Any], preferred: Any?, reply: @escaping ([String: Any]) -> Void) { reply([:]) }
+    public func call(_ name: String, _ args: [String: Any]) throws -> [String: Any] { [:] }
+}`);
+    for (const [name, path] of [['Owner', owner], ['Member', member]]) run(['-parse-as-library', '-emit-library', '-emit-module',
+      '-I', dir, '-L', dir, '-lExactPackage', '-module-name', name, path, '-o', resolve(dir, `lib${name}.dylib`)]);
+    const composed = write('ExactComposed.swift', composedModule([
+      { extension: 'passkeys', module: 'Owner', className: 'Owner' },
+      { extension: 'sign-in', module: 'Member', className: 'Member', credentialMembers: packages.find(p => p.extension === 'sign-in').credentialMembers },
+    ], false));
+    const keys = resolve(dir, 'ExactDataKeys.swift');
+    writeDataKeys(resolveApp(resolve(root, 'apps/native-fixture')), keys, 'macos');
+    const main = write('main.swift', `import Foundation
+var answer: [String: Any] = [:]
+func session() -> ExactModule {
+    ExactComposedModule(context: ExactModuleContext(json: [:], host: nil, changed: { _, _, _ in }, now: { _ in 0 }))
+}
+func ask(_ module: ExactModule, _ value: String) -> String {
+    let reply = ExactReply(ctx: UnsafeMutableRawPointer(bitPattern: 1)) { _, status, bytes, count in
+        precondition(status == 200)
+        answer = try! JSONSerialization.jsonObject(with: Data(bytes: bytes!, count: count)) as! [String: Any]
+    }
+    precondition(ExactExtensions.later(module, ["extension": "passkeys", "send": "get", "args": ["publicKey": [:], "identity": value]], reply: reply))
+    precondition(answer["identity"] as? String == value)
+    return answer["session"] as! String
+}
+let first = session(), second = session()
+let a = ask(first, "first"), b = ask(second, "second")
+precondition(a != b)
+precondition(ask(first, "again") == a)
+ExactExtensions.destroy(first)
+precondition(ask(second, "survives") == b)
+ExactExtensions.destroy(second)
+print("credential member loading and isolation passed")
+`);
+    const binary = resolve(dir, 'members');
+    run(['-I', dir, '-L', dir, '-lExactPackage', '-lOwner', '-lMember', '-Xlinker', '-rpath', '-Xlinker', dir,
+      ...moduleSeam(resolve, root), keys, composed, main, '-o', binary]);
+    const result = spawnSync(binary, [], { encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /credential member loading and isolation passed/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 60_000);
 
 for (const [sdk, ios, tv] of [['appletvsimulator', true, true], ['iphonesimulator', true, false], ['macosx', false, false]]) {
   test.skipIf(process.platform !== 'darwin')(`native-fixture's Apple module typechecks for ${sdk}`, async () => {
@@ -335,6 +415,21 @@ test('production links what the plan uses, the manifest names and the grants ope
   assert.equal(appleComposition(undefined, false).link, 'all');
 });
 
+// The production hello bake that `metrics.mjs --long` measures (`IOS_HELLO_BYTES`), when one is on disk:
+// `EXACT_UPDATE_TRUST=production EXACT_UPDATE_GENESIS=1 bun host/apple/build.mjs hello-apple --ios`.
+const helloBake = () => {
+  const clients = resolve(import.meta.dir, '../../target/clients');
+  if (!existsSync(clients)) return [];
+  return readdirSync(clients).map((d) => join(clients, d, 'com.exact.hello/ios-simulator/aarch64-apple-ios-sim/embedded/production/standalone/Hello.dSYM/Contents/Resources/DWARF/Hello')).filter(existsSync);
+};
+// The executor's cache, which parses URLs and grants, and the process's launch work stay out of it.
+test.skipIf(process.platform !== 'darwin' || helloBake().length === 0)('an app whose plan and grants open no I/O links no launch preloads (LLP 1047.001)', () => {
+  for (const symbols of helloBake()) {
+    const names = spawnSync('nm', [symbols], { encoding: 'utf8', maxBuffer: 1 << 28 }).stdout;
+    assert.deepEqual(names.split('\n').filter((s) => /14exact_executor5cache|15launch_preloads6Launch/.test(s)), []);
+  }
+});
+
 test('the load commands are read from the file, each slice of a universal one; a binary with no capability framework passes the check', () => {
   assert.ok(loadedDylibs('/bin/ls').includes('/usr/lib/libSystem.B.dylib'));
   assert.doesNotThrow(() => assertCapabilityFrameworks('/bin/ls', []));
@@ -521,7 +616,15 @@ test('outside production trust the SDK compiles for iOS 17.0, and the app keeps 
   assert.deepEqual(compiledTargets(app, 'production'), { ios: '18.0', macos: '15.0' });
   assert.deepEqual(compiledTargets({ manifest: {} }, 'development'), deploymentTargets({ manifest: {} }));
   const launching = { manifest: { launch: ['player'], host: { ios: { minimumOS: '18.0' } } } };
-  assert.deepEqual(compiledTargets(launching, 'development'), deploymentTargets(launching), 'launch Swift compiles in the host package at the app minimum');
+  assert.deepEqual(compiledTargets(launching, 'development', 'darwin'), deploymentTargets(launching), 'on a Mac, launch Swift compiles in the host package at the app minimum');
+  // The native build system (the Linux cross build) gives the launch modules and the executable that imports them
+  // the app's own target, so the host keeps the floor.
+  assert.deepEqual(compiledTargets(launching, 'development', 'linux'), { ...deploymentTargets(launching), ios: '17.0' });
+
+  // One spelling per version, so apps that write it differently share one Swift scratch (expo/exact-build#94).
+  for (const minimumOS of ['18', '18.0', '18.0.0', 18]) assert.equal(deploymentTargets({ manifest: { host: { ios: { minimumOS } } } }).ios, '18.0', String(minimumOS));
+  assert.equal(deploymentTargets({ manifest: { host: { ios: { minimumOS: '18.4.1' } } } }).ios, '18.4.1');
+  assert.equal(deploymentTargets({ manifest: { host: { macos: { minimumOS: '15' } } } }).macos, '15.0');
 });
 
 test.skipIf(process.platform !== 'darwin' || !['clang', 'codesign', 'sips', 'dsymutil', 'nm'].every(tool => Bun.which(tool))).each([false, true])('production iOS bundles keep symbols and owning privacy declarations (disk-space service: %s)', async diskService => {
@@ -583,16 +686,39 @@ test.skipIf(process.platform !== 'darwin' || !['clang', 'codesign', 'sips', 'dsy
       const clipBin = resolve(binDir, 'clip', 'Clip');
       mkdirSync(resolve(binDir, 'clip'));
       copyFileSync(bin, clipBin);
-      const result = assembleIOS({ app, library, paths: { bundle, executable: 'ExactClip', capture }, binDir, bin, device,
+      const options = { app, library, paths: { bundle, executable: 'ExactClip', capture }, binDir, bin, device,
         clipBin, production, distribution: archived, ipa, bakedCompat: compat, bakedPlan: plan, buildReceipt: build,
         libDir: capture, gpuArtifacts: [gpu], looseArms: [[true, dylib, ...pairs[0]]],
         modulesBuilt: dylib, modulesLoadName: pairs[1][0], hasSvg: true, svgBuilt: dylib, svgLoadName: pairs[2][0],
         canvasGpuBuilt: dylib, canvasGpuLoadName: pairs[3][0], serviceDylibs: [{ built: service, load: pairs[4][0], framework: pairs[4][1] }],
-        args: [], unsigned: true, sha1: '-', linkRoot: binDir, sdkName: 'iphoneos' }, {
+        args: [], unsigned: true, sha1: '-', linkRoot: binDir, sdkName: 'iphoneos' };
+      const helpers = {
         runApple: run, infoPlist: () => plistFile({ CFBundleIdentifier: app.id, CFBundleExecutable: 'ExactClip', CFBundlePackageType: 'APPL' }),
         copyAppleStaticTrees() {}, writeUsageStrings() {}, assertAppleIdentity() {}, distributionKeys: () => ({}),
         receipt: () => whole, shippedReceipt, copyAppleGpuProducts, entitlements: () => plistFile({}), appClip: () => ({ id: app.id + '.Clip', name: 'Clip', executable: 'Clip' }),
-      });
+      };
+      if (!production) {
+        // Inspect the app after AlarmKit's plist writes, before compiling its separate extension.
+        const { appleMetadataProblem } = await import('./plist.mjs');
+        const metadataWritten = new Error('alarm metadata inspected');
+        const execute = appleToolchain.spawnSync;
+        const probe = spyOn(appleToolchain, 'spawnSync').mockImplementation((command, args, opts) => {
+          const result = execute(command, args, opts);
+          if (command === 'plutil' && args[0] === '-replace' && args[1] === 'ExactAlarmCountdown') {
+            probe.mockRestore();
+            const metadata = JSON.parse(run('plutil', ['-convert', 'json', '-o', '-', resolve(bundle, 'Info.plist')]).stdout);
+            for (const key of ['NSSupportsLiveActivities', 'ExactAlarmCountdown']) {
+              assert.equal(metadata[key], true);
+              assert.match(appleMetadataProblem(`host.ios.infoPlist.${key}: not a known key`), /Exact writes this key itself from its declarations.*cannot be set here/);
+            }
+            throw metadataWritten;
+          }
+          return result;
+        });
+        try { assert.throws(() => assembleIOS({ ...options, alarm: {} }, helpers), error => error === metadataWritten); }
+        finally { probe.mockRestore(); }
+      }
+      const result = assembleIOS(options, helpers);
       for (const owner of [bundle, resolve(bundle, 'AppClips/Clip.app'), ...(production ? [...pairs, [null, 'ExactGpu']].map(([, name]) => resolve(bundle, 'Frameworks', `${name}.framework`)) : [])]) {
         const privacy = resolve(owner, 'PrivacyInfo.xcprivacy'); assert.equal(run('plutil', ['-lint', privacy]).status, 0);
         const usesDisk = diskService && (owner.endsWith('/ExactService.framework') || (!production && owner.endsWith('.app')));
@@ -638,3 +764,39 @@ test.skipIf(process.platform !== 'darwin' || !['clang', 'codesign', 'sips', 'dsy
     }
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }, 60_000);
+
+test('the app minimum is written into every slice after a link for the floor, leaving the SDK and the rest as linked (expo/exact-build#176)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'exact-minos-'));
+  const thin = (minos, sdk) => {
+    const b = Buffer.alloc(56);
+    b.writeUInt32LE(0xfeedfacf, 0); b.writeUInt32LE(1, 16); b.writeUInt32LE(24, 20);
+    b.writeUInt32LE(0x32, 32); b.writeUInt32LE(24, 36); b.writeUInt32LE(2, 40);
+    b.writeUInt32LE(minos, 44); b.writeUInt32LE(sdk, 48);
+    return b;
+  };
+  const path = join(dir, 'App');
+  const v = (major, minor, patch = 0) => (major << 16) | (minor << 8) | patch;
+  try {
+    writeFileSync(path, thin(v(17, 0), v(26, 4)));
+    recordMinimumOS(path, '18');
+    const thinOut = readFileSync(path);
+    assert.equal(thinOut.readUInt32LE(44), v(18, 0));
+    assert.equal(thinOut.readUInt32LE(48), v(26, 4));
+    assert.equal(thinOut.readUInt32LE(40), 2);
+    assert.doesNotThrow(() => assertLinkedSdk(path, '26.4'));
+    recordMinimumOS(path, '18.2.1');
+    assert.equal(readFileSync(path).readUInt32LE(44), v(18, 2, 1));
+    // Every slice of a universal file.
+    const header = Buffer.alloc(8 + 2 * 20); header.writeUInt32BE(0xcafebabe, 0); header.writeUInt32BE(2, 4);
+    header.writeUInt32BE(48, 16); header.writeUInt32BE(56, 20); header.writeUInt32BE(104, 36); header.writeUInt32BE(56, 40);
+    writeFileSync(path, Buffer.concat([header, thin(v(17, 0), v(26, 4)), thin(v(17, 0), v(26, 4))]));
+    recordMinimumOS(path, '19.1');
+    const fatOut = readFileSync(path);
+    assert.equal(fatOut.readUInt32LE(48 + 44), v(19, 1)); assert.equal(fatOut.readUInt32LE(104 + 44), v(19, 1));
+    // No LC_BUILD_VERSION, or not a version: refused, the file unchanged.
+    const none = thin(v(17, 0), v(26, 4)); none.writeUInt32LE(0x1b, 32); writeFileSync(path, none);
+    assert.throws(() => recordMinimumOS(path, '18'), /no single LC_BUILD_VERSION/);
+    assert.throws(() => recordMinimumOS(path, 'eighteen'), /not a minimum OS version/);
+    assert.deepEqual(readFileSync(path), none);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

@@ -1353,6 +1353,15 @@ list appearance="auto" listStyle="inset-grouped" flex=1
       text "Who can see you."
 ```
 
+A section's `box-shadow`, written directly or in its `class`, belongs to the
+card around its rows, with the platform's corners. It excludes the header and
+footer. State overrides and the shadow’s transition follow the card. On iOS
+the rows remain UIKit list cells. A section without its card
+(`background-color="transparent"`) takes no shadow. Keyframe shadow animation
+on a grouped section is not supported yet and fails the build; use a shadow
+`transition` instead. On iPad, pointer hover over a grouped section does not
+activate its `:hover` shadow yet.
+
 Row buttons and their detail accessories stay bare by default, preserving the
 cell's title and action. Explicit `appearance="auto"` makes one a custom native control.
 

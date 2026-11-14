@@ -379,7 +379,7 @@ fn staged_binary_recipe_preserves_a_declared_face() {
     };
     catalog
         .families
-        .push(FamilyChoice::Declared("ExactPlanStack8".into()));
+        .push(vec![FamilyChoice::Declared("ExactPlanStack8".into())]);
     catalog.declared_faces.insert((8, 400, false), id);
     let recipe = super::catalog_recipe::CatalogSnapshot::capture(&catalog)
         .unwrap()
@@ -949,3 +949,150 @@ fn current_system_catalog_generation_preserves_all_glyphs_and_rgba() {
 mod prepared_ink;
 
 mod font_admission;
+
+#[test]
+fn moving_region_exclusions_retain_flowed_worker_geometry_and_source_runs() {
+    let mut engine = TextEngine::with_catalog(fixture_catalog());
+    let (recipe, raster) = freeze_catalog(&engine).unwrap();
+    let catalog = recipe.catalog_label();
+    let (mut kernel, _) = request(catalog, 400.);
+    let mut paragraph = StyleProps::default();
+    paragraph
+        .set_dynamic(StyleId::Width, &StyleValue::Number(400.))
+        .unwrap();
+    paragraph
+        .set_dynamic(StyleId::Height, &StyleValue::Number(180.))
+        .unwrap();
+    let mut ball = StyleProps::default();
+    for (id, value) in [
+        (StyleId::PositionType, StyleValue::Text("absolute".into())),
+        (StyleId::WrapFlow, StyleValue::Text("both".into())),
+        (StyleId::ShapeOutside, StyleValue::Text("circle()".into())),
+        (StyleId::Width, StyleValue::Number(120.)),
+        (StyleId::Height, StyleValue::Number(120.)),
+        (StyleId::Top, StyleValue::Number(0.)),
+        (StyleId::Left, StyleValue::Number(40.)),
+    ] {
+        ball.set_dynamic(id, &value).unwrap();
+    }
+    kernel
+        .apply(
+            0,
+            0,
+            &[
+                Op::SetStyle {
+                    id: 4,
+                    patch: Box::new(paragraph),
+                },
+                Op::SetProp {
+                    id: 4,
+                    prop: PropId::Text,
+                    value: "one two three four five six seven eight nine ten "
+                        .repeat(8)
+                        .into(),
+                },
+                Op::CreateView {
+                    id: 6,
+                    node_type: NodeType::View,
+                },
+                Op::SetStyle {
+                    id: 6,
+                    patch: Box::new(ball),
+                },
+                Op::SetChildren {
+                    id: 3,
+                    children: vec![4, 6],
+                },
+            ],
+        )
+        .unwrap();
+    let layout = |kernel: &mut Kernel| {
+        kernel
+            .compute_region_layout(
+                1,
+                Offer::definite(400., 300.),
+                RegionInputs {
+                    catalog,
+                    consumer_revision: 1,
+                },
+            )
+            .unwrap()
+    };
+    let mut source = None;
+    let mut worker = FontWorker::new(recipe.clone()).unwrap();
+    let mut accepted = Vec::new();
+    for left in [40., 100., 180.] {
+        let mut moved = StyleProps::default();
+        moved
+            .set_dynamic(StyleId::Left, &StyleValue::Number(left))
+            .unwrap();
+        kernel
+            .apply(
+                0,
+                0,
+                &[Op::SetStyle {
+                    id: 6,
+                    patch: Box::new(moved),
+                }],
+            )
+            .unwrap();
+        let mut receipt = layout(&mut kernel);
+        for _ in 0..64 {
+            if receipt.current {
+                break;
+            }
+            let request = kernel.region_text_request().unwrap().clone();
+            let input = prepare(
+                &recipe,
+                request.clone(),
+                PaintContext::new(1.).unwrap(),
+                source.as_ref(),
+            )
+            .unwrap();
+            source = Some(input.source().clone());
+            let output = worker.execute(input.clone()).unwrap();
+            let adopted = Rc::new(adopt(output, &input, &raster).unwrap());
+            assert!(kernel
+                .resolve_region_text(&request, adopted.metrics(), adopted)
+                .unwrap());
+            receipt = layout(&mut kernel);
+        }
+        assert!(receipt.current);
+        let RegionSelection::Accepted(publication) = receipt.selection else {
+            panic!("accepted region")
+        };
+        let artifact = publication
+            .paint_artifact(kernel.node(4).unwrap().key)
+            .unwrap();
+        let adopted = artifact.payload::<AdoptedText>().unwrap();
+        let p = adopted.paragraph().unwrap();
+        assert!(
+            !p.fragments().is_empty(),
+            "accepted workers must keep their flowed fragments"
+        );
+        let expected = artifact.request().with_request(|r| {
+            engine.paragraph_flow(&Spec::from_request(r), 400., r.exclusions, None)
+        });
+        assert_eq!(p.fragments(), expected.fragments());
+        assert_eq!(glyphs(p), glyphs(&expected));
+        assert_eq!(pixels(&mut engine, p), pixels(&mut engine, &expected));
+        accepted.push(publication);
+    }
+    let leaf = kernel.node(4).unwrap().key;
+    let paragraphs: Vec<_> = accepted
+        .iter()
+        .map(|p| {
+            p.paint_artifact(leaf)
+                .unwrap()
+                .payload::<AdoptedText>()
+                .unwrap()
+                .paragraph()
+                .unwrap()
+        })
+        .collect();
+    assert_ne!(paragraphs[0].fragments(), paragraphs[1].fragments());
+    assert_ne!(paragraphs[1].fragments(), paragraphs[2].fragments());
+    assert!(paragraphs
+        .windows(2)
+        .all(|pair| Arc::ptr_eq(&pair[0].source.data, &pair[1].source.data)));
+}

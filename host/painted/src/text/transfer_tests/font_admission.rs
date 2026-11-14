@@ -32,7 +32,9 @@ fn catalog_with_bad(missing: bool) -> catalog::Catalog {
 fn runtime_installed_family_uses_first_available_fallback() {
     let mut catalog = catalog::Catalog::from_bytes(&[GOOD], "DejaVu Sans");
     catalog.install_runtime(8, &["Missing, 'DejaVu Sans', monospace".into()]);
-    assert!(matches!(&catalog.families[8], FamilyChoice::Declared(name) if name == "DejaVu Sans"));
+    assert!(
+        matches!(catalog.families[8].as_slice(), [FamilyChoice::Declared(name), FamilyChoice::Monospace] if name == "DejaVu Sans")
+    );
     catalog.install_runtime(
         8,
         &[
@@ -40,7 +42,10 @@ fn runtime_installed_family_uses_first_available_fallback() {
             "ui-monospace".into(),
         ],
     );
-    assert!(matches!(catalog.families[9], FamilyChoice::Monospace));
+    assert!(matches!(
+        catalog.families[9].as_slice(),
+        [FamilyChoice::Monospace]
+    ));
 }
 
 #[test]
@@ -66,7 +71,9 @@ fn a_foreseen_paragraph_is_reshaped_after_its_family_is_registered() {
 fn quoted_generic_looks_up_an_installed_name_before_the_fallback() {
     let mut catalog = catalog::Catalog::from_bytes(&[GOOD], "DejaVu Sans");
     catalog.install_runtime(8, &["'monospace', DejaVu Sans".into()]);
-    assert!(matches!(&catalog.families[8], FamilyChoice::Declared(name) if name == "DejaVu Sans"));
+    assert!(
+        matches!(catalog.families[8].as_slice(), [FamilyChoice::Declared(name)] if name == "DejaVu Sans")
+    );
 }
 
 fn admitted(bytes: Vec<u8>) -> Option<fontique::FontInfo> {
@@ -100,7 +107,7 @@ fn failed_font_admission_continues_to_good_fallback() {
             .family_by_name("DejaVu Sans")
             .unwrap();
         assert_eq!(family.fonts().len(), 1, "the damaged copy was not admitted");
-        catalog.families[0] = FamilyChoice::Declared("Broken Face".into());
+        catalog.families[0] = vec![FamilyChoice::Declared("Broken Face".into())];
         let mut engine = TextEngine::with_catalog(catalog);
         let mut spec = crate::paint::text_spec(&StyleProps::default(), "office café");
         spec.runs[0].size = 13.;
@@ -218,7 +225,7 @@ fn real_thread_code_transfer_matches_ordinary_geometry_glyphs_and_pixels() {
     // Only two owned font sources; this tests the real transfer path without
     // making a full system-font capture prerequisite for a small regression.
     let mut catalog = catalog_with_bad(true);
-    catalog.families[5] = FamilyChoice::Declared("Broken Face".into());
+    catalog.families[5] = vec![FamilyChoice::Declared("Broken Face".into())];
     let mut engine = TextEngine::with_catalog(catalog);
     let (recipe, raster) = freeze_catalog(&engine).unwrap();
     let (mut k, _) = request(recipe.catalog_label(), 572.);

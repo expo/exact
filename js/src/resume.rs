@@ -32,19 +32,36 @@ impl Module {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn resume_fetch(
         &mut self,
-        mut store: Option<&mut Store>,
+        store: Option<&mut Store>,
         target: Option<Target>,
         fetch: Option<u64>,
         source: &str,
         args: &[Value],
         outcome: Outcome,
     ) -> Result<Option<Answer>, DataError> {
+        self.resume_request(store, target, fetch, None, source, args, outcome)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn resume_request(
+        &mut self,
+        mut store: Option<&mut Store>,
+        target: Option<Target>,
+        fetch: Option<u64>,
+        continuation: Option<u64>,
+        source: &str,
+        args: &[Value],
+        outcome: Outcome,
+    ) -> Result<Option<Answer>, DataError> {
+        let key = Module::key(target, source, args);
+        if let Some(error) = self.retired_reply() {
+            return Err(error);
+        }
         if self.engine.is_none() {
             return Err(DataError::Unavailable(
                 "exact-js: the engine is not loaded".into(),
             ));
         }
-        let key = Module::key(target, source, args);
         // A stream's mapper call parked on its key is resumed first: the
         // runner delivers no message while one is out (`mapper_turns.rs`).
         let turn = self.parked.iter().any(|(k, _)| *k == key);
@@ -55,13 +72,24 @@ impl Module {
         ) {
             return self.message(store, source, key, outcome).map(Some);
         }
-        let exact = fetch.and_then(|fetch| {
-            self.parked
-                .iter()
-                .position(|(k, p)| *k == key && p.ticket == fetch)
-        });
+        let exact = continuation
+            .and_then(|call| {
+                self.parked
+                    .iter()
+                    .position(|(k, p)| *k == key && p.call == call)
+            })
+            .or_else(|| {
+                fetch.and_then(|fetch| {
+                    self.parked
+                        .iter()
+                        .position(|(k, p)| *k == key && p.ticket == fetch)
+                })
+            });
         let pos = exact
             .or_else(|| {
+                if continuation.is_some() {
+                    return None;
+                }
                 let stream = self.streams.iter().any(|(k, _)| *k == key);
                 self.parked.iter().position(|(k, p)| {
                     *k == key
@@ -70,8 +98,7 @@ impl Module {
                 })
             })
             .or_else(|| {
-                fetch
-                    .is_none()
+                (continuation.is_none() && fetch.is_none())
                     .then(|| self.parked.iter().position(|(k, _)| *k == key))
                     .flatten()
             });
@@ -160,6 +187,9 @@ impl Module {
             Ok(Module::step(sig, engine, source, reply, self.host.baking))
         })();
         self.host.store = None;
+        if let Some(error) = self.retire_oom() {
+            return Err(error);
+        }
         // What this turn of an answer sent (D7, the amendment of 2026-10-18).
         let answer_ops = std::mem::take(&mut self.host.answer_ops);
         if let (Some(store), false) = (store, answer_ops.is_empty()) {
@@ -222,7 +252,7 @@ impl Module {
         };
         // No store: a let-go call's file writes land and its Store writes do not (LLP 1097).
         self.finish_let_go();
-        answer
+        self.after_oom(answer)
     }
 
     /// Park a call on the request it waits for. A stream's call is not
@@ -335,6 +365,9 @@ impl Module {
             Ok(Module::step(sig, engine, source, reply, self.host.baking))
         })();
         self.host.store = None;
+        if let Some(error) = self.retire_oom() {
+            return Err(error);
+        }
         self.host.binary = Vec::new();
         // The replies the mapper staged answering this frame (LLP 1016.000
         // D7), staged on the store however the call ended: the runner sends

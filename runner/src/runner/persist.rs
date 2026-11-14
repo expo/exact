@@ -152,7 +152,14 @@ fn type_name(plan: &Plan, ty: TypesId) -> String {
     let elem = || t.elem.map(|e| type_name(plan, e)).unwrap_or_default();
     match t.kind {
         TypeKind::Number => "number".into(),
-        TypeKind::String => "string".into(),
+        TypeKind::String if t.fields.is_empty() => "string".into(),
+        // An enum's members are its string type's fields.
+        TypeKind::String => {
+            let members: Vec<String> = (t.fields.iter())
+                .map(|f| format!("{:?}", plan.str(plan.field(f).name)))
+                .collect();
+            format!("enum<{}>", members.join(", "))
+        }
         TypeKind::Bool => "bool".into(),
         TypeKind::Option => format!("option<{}>", elem()),
         TypeKind::List => format!("{}[]", elem()),

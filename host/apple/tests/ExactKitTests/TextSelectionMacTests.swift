@@ -10,12 +10,12 @@ import XCTest
 /// into a field, on another pressable or on the ground still clears it (#132).
 final class TextSelectionMacTests: XCTestCase {
     private var window: NSWindow!
-    private var session: ExactSession?
+    var session: ExactSession?
     override func tearDown() { window?.makeFirstResponder(nil); window?.close(); window = nil; session?.destroy(); session = nil }
 
     /// `measured`: a session's presenter, whose text engine lays the text
     /// out, so a point finds the word under it (a bare one finds offset 0).
-    private func fixture(measured: Bool = false) -> Presenter {
+    func fixture(measured: Bool = false) -> Presenter {
         _ = NSApplication.shared
         if measured { session = ExactApp.shared.makeSession(label: "text-selection") }
         let p = session?.presenter ?? Presenter()
@@ -145,27 +145,6 @@ final class TextSelectionMacTests: XCTestCase {
         XCTAssertTrue(boxes.suffix(2).allSatisfy(\.isEmpty))
     }
 
-    func testSelectionRectanglesFollowColumnFragments() throws {
-        let p = fixture(measured: true), node = try XCTUnwrap(p.views[2])
-        node.props = ["id": "p", "text": "Alpha\nbeta\ngamma\ndelta"]
-        let arial = CTFontDescriptorCreateWithNameAndSize("ArialMT" as CFString, 16)
-        session?.text.catalog = [9: [RegisteredFace(family: "Arial", generic: nil, weight: 400, italic: false, descriptor: arial)]]
-        p.apply(wireBatch([
-            ["op": "style", "id": 2, "style": ["font_family": 9.0, "font_size": 16.0, "line_height": "24px", "white_space": "pre"]],
-            ["op": "frame", "id": 2, "x": 8, "y": 29, "w": 220, "h": 48],
-            ["op": "fragments", "id": 2, "fragments": [[0, 0, 100, 48, 0, 2, 0, 0], [120, 0, 100, 48, 2, 4, 120, -48]]],
-        ]))
-        var boxes: [CGRect] = []
-        p.onSelectionChange = { _, _, _, _, rects in boxes = rects }
-        p.fieldSelections.setSelectionRange(["p", 11, 16])
-        let rect = try XCTUnwrap(boxes.first)
-        XCTAssertEqual(boxes.count, 1)
-        // Chrome: the third line starts the second 100px column, after a 20px gap.
-        XCTAssertEqual(rect.minX, 128, accuracy: 1)
-        XCTAssertEqual(rect.minY, 32, accuracy: 1)
-        XCTAssertEqual(rect.maxY, 49, accuracy: 1)
-    }
-
     func testCommandResolvesInlineTextSourceRange() throws {
         let p = fixture(measured: true), node = try XCTUnwrap(p.views[2])
         node.props = [:]
@@ -213,7 +192,7 @@ final class TextSelectionMacTests: XCTestCase {
         XCTAssertEqual(p.selection.selectedText(), "world")
     }
 
-    private func mouse(_ type: NSEvent.EventType, _ point: NSPoint, clicks: Int = 1, flags: NSEvent.ModifierFlags = [], in window: NSWindow? = nil) -> NSEvent {
+    func mouse(_ type: NSEvent.EventType, _ point: NSPoint, clicks: Int = 1, flags: NSEvent.ModifierFlags = [], in window: NSWindow? = nil) -> NSEvent {
         NSEvent.mouseEvent(with: type, location: point, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
                            windowNumber: (window ?? self.window).windowNumber, context: nil, eventNumber: 1, clickCount: clicks, pressure: type == .leftMouseUp ? 0 : 1)!
     }

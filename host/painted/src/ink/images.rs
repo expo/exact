@@ -118,6 +118,7 @@ impl Ink {
         clips: &[Shape],
         ts: Transform,
         tint: Option<[u8; 4]>,
+        sampling: (exact_kernel::ImageRendering, [u32; 2]),
     ) {
         if dst.2 <= 0. || dst.3 <= 0. {
             return;
@@ -127,6 +128,22 @@ impl Ink {
         }
         let mut instance = Instance::new(Kind::RoundedRect, Brush::Image, rect(dst));
         instance.xform = affine(self.device_transform(ts));
+        let (rendering, size) = sampling;
+        match rendering {
+            exact_kernel::ImageRendering::Auto => {}
+            exact_kernel::ImageRendering::CrispEdges => instance.flags |= flags::NEAREST,
+            exact_kernel::ImageRendering::Pixelated => {
+                instance.flags |= flags::PIXELATED;
+                // Virtual nearest-neighbour grid; the shader samples it without allocating it.
+                let dev = self.device_transform(ts);
+                instance.param[0] = (dst.2 * dev.sx.hypot(dev.ky) / size[0] as f32)
+                    .round()
+                    .max(1.);
+                instance.param[1] = (dst.3 * dev.kx.hypot(dev.sy) / size[1] as f32)
+                    .round()
+                    .max(1.);
+            }
+        }
         if let Some(tint) = tint {
             instance.flags |= flags::TINT;
             instance.color = color(tint);

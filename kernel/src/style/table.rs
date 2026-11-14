@@ -19,7 +19,7 @@
 //! to 0.5 px (fixture `table`).
 
 use crate::arena::NodeArena;
-use crate::generated::{Direction, NodeType, PropId, StyleId, VerticalAlign};
+use crate::generated::{Direction, Display, NodeType, PropId, StyleId, VerticalAlign};
 use crate::style::{cells, Dimension};
 use taffy::prelude::{auto, length, zero, Rect};
 
@@ -94,19 +94,79 @@ pub(crate) fn lays_out(arena: &NodeArena, table: u32) -> bool {
     !arena.style(table).mask.has(StyleId::Display)
 }
 
-/// The table that lays `slot` out among its grid items, when `slot` is a
+/// The formatting context of a table, or of a row group or row that is
+/// not a table part: a table with an authored `display`, an item of a flex
+/// or grid one (blockified before anonymous tables are generated, CSS
+/// Flexbox §4, Grid §6), or a part with its own non-`none` `display` in a
+/// block one. Inside a table laid out as one, a part's `display` is not read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Context {
+    Table,
+    Block,
+    Items,
+}
+
+pub(crate) fn context(arena: &NodeArena, slot: u32) -> Option<Context> {
+    let own = || {
+        if matches!(arena.style(slot).display, Display::Flex | Display::Grid) {
+            Context::Items
+        } else {
+            Context::Block
+        }
+    };
+    match Part::of(arena, slot)? {
+        Part::Table if lays_out(arena, slot) => Some(Context::Table),
+        Part::Table => Some(own()),
+        Part::Group | Part::Row => match context(arena, arena.parent(slot)?)? {
+            Context::Items => Some(own()),
+            Context::Block
+                if arena.style(slot).mask.has(StyleId::Display)
+                    && arena.style(slot).display != Display::None =>
+            {
+                Some(own())
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Anonymous tables inherit the table's cell spacing, including inside a
+/// blockified row group or row.
+pub(crate) fn grid_spacing(arena: &NodeArena, slot: u32) -> (f32, f32) {
+    let mut at = slot;
+    while Part::of(arena, at) != Some(Part::Table)
+        && !arena.style(at).mask.has(StyleId::BorderSpacing)
+    {
+        let Some(parent) = arena.parent(at) else {
+            break;
+        };
+        at = parent;
+    }
+    spacing(arena.style(at), &arena.env_of(at))
+}
+
+/// The grid owner that lays `slot` out, when `slot` is a
 /// part standing where HTML's content model puts it: a caption or row group
 /// in the table, a row in it or in its row group, a cell in such a row. A
-/// table that is another box (an authored `display`) still lays its parts
-/// out, in an anonymous table (`layout/table.rs`).
+/// block table uses an anonymous table; a flex or grid table's blockified
+/// row groups and rows each own their anonymous table (`layout/table.rs`).
 pub(crate) fn table_of(arena: &NodeArena, slot: u32) -> Option<u32> {
+    if context(arena, slot).is_some() {
+        return None;
+    }
     let parent = arena.parent(slot)?;
     let table = match (Part::of(arena, slot)?, Part::of(arena, parent)?) {
-        (Part::Caption | Part::Group | Part::Row, Part::Table) => parent,
+        (Part::Caption | Part::Group | Part::Row, Part::Table) => {
+            (context(arena, parent) != Some(Context::Items)).then_some(parent)?
+        }
+        (Part::Row, Part::Group) if context(arena, parent) == Some(Context::Block) => parent,
+        (Part::Row, Part::Group) if context(arena, parent) == Some(Context::Items) => return None,
         (Part::Row, Part::Group) => {
             let table = arena.parent(parent)?;
             (Part::of(arena, table) == Some(Part::Table)).then_some(table)?
         }
+        (Part::Cell, Part::Row) if context(arena, parent) == Some(Context::Block) => parent,
         (Part::Cell, Part::Row) => return table_of(arena, parent),
         _ => return None,
     };
@@ -150,10 +210,15 @@ pub(crate) fn apply(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
         Part::Table => lays_out(arena, slot).then_some(slot),
         _ => table_of(arena, slot),
     };
+    let env = &*arena.env_of(slot);
     let Some(table) = table else {
+        // The UA sheet's `td, th` padding has no context: a cell that is a
+        // block or an item keeps it (Chrome).
+        if part == Part::Cell {
+            cell_padding(style, env, s);
+        }
         return;
     };
-    let env = &*arena.env_of(slot);
     match part {
         Part::Table => {
             s.display = taffy::style::Display::Grid;
@@ -192,8 +257,6 @@ pub(crate) fn apply(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
             // but inside a border the table has, where CSS's is outside it
             // too. An authored margin is from that box's edge, as CSS's is
             // from the table's.
-            // An anonymous table, which holds the parts of a table that is
-            // another box, has no padding of its own.
             let t = arena.style(table);
             let padded = lays_out(arena, table);
             // The table's lengths in the table's environment, the caption's
@@ -223,9 +286,19 @@ pub(crate) fn apply(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
             let from = |(p, v): (f32, f32), at: f32| {
                 Dimension::Calc(p, v + p / 100.0 * (left + right) - at).to_lpa(env)
             };
-            let start = said(StyleId::MarginLeft, style.margin_left.clone());
-            let end = said(StyleId::MarginRight, style.margin_right.clone());
-            let above = said(StyleId::MarginTop, style.margin_top.clone());
+            let start = said(
+                StyleId::MarginLeft,
+                style.margin_left.spaced(env, cells::COLUMN),
+            );
+            let end = said(
+                StyleId::MarginRight,
+                style.margin_right.spaced(env, cells::COLUMN),
+            );
+            let above = said(StyleId::MarginTop, style.margin_top.spaced(env, cells::ROW));
+            let below = said(
+                StyleId::MarginBottom,
+                style.margin_bottom.spaced(env, cells::ROW),
+            );
             if let Some(m) = start {
                 s.margin.left = from(m, left);
             }
@@ -234,6 +307,9 @@ pub(crate) fn apply(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
             }
             if let Some(m) = above {
                 s.margin.top = from(m, inset(t.padding_top.clone()));
+            }
+            if let Some(m) = below {
+                s.margin.bottom = from(m, 0.0);
             }
             // Unsized, it is as wide as that box less its margins and asks the
             // columns for none of its width, so a long caption wraps where
@@ -260,16 +336,7 @@ pub(crate) fn apply(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
         }
         Part::Cell => {
             s.margin = zero();
-            for (id, side, cell) in [
-                (StyleId::PaddingLeft, &mut s.padding.left, cells::COLUMN),
-                (StyleId::PaddingRight, &mut s.padding.right, cells::COLUMN),
-                (StyleId::PaddingTop, &mut s.padding.top, cells::ROW),
-                (StyleId::PaddingBottom, &mut s.padding.bottom, cells::ROW),
-            ] {
-                if !style.mask.has(id) {
-                    *side = length(cells::gap(env, CELL_PADDING, cell));
-                }
-            }
+            cell_padding(style, env, s);
             least(style, env, s);
             // `vertical-align: middle`, the UA's for a cell; any other
             // keyword aligns a cell at its baseline (CSS 2.1 §17.5.4), its
@@ -283,6 +350,20 @@ pub(crate) fn apply(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
                     _ => AlignContent::SAFE_CENTER,
                 });
             }
+        }
+    }
+}
+
+/// HTML's UA padding of a `th` or `td`, on each side its author left unsaid.
+fn cell_padding(style: &crate::StyleProps, env: &crate::style::Env, s: &mut taffy::style::Style) {
+    for (id, side, cell) in [
+        (StyleId::PaddingLeft, &mut s.padding.left, cells::COLUMN),
+        (StyleId::PaddingRight, &mut s.padding.right, cells::COLUMN),
+        (StyleId::PaddingTop, &mut s.padding.top, cells::ROW),
+        (StyleId::PaddingBottom, &mut s.padding.bottom, cells::ROW),
+    ] {
+        if !style.mask.has(id) {
+            *side = length(cells::gap(env, CELL_PADDING, cell));
         }
     }
 }

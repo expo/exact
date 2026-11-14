@@ -1124,7 +1124,7 @@ final class FrameHealthMetricsTests: XCTestCase {
         XCTAssertEqual(row[6] as? UInt32, 10_000, "the work, from the update's start to its last commit")
         XCTAssertTrue(row[8] is NSNull && row[9] is NSNull, "its next frame was not seen")
         let exactReport = FrameHealthReport.snapshot(health: exact, session: nil)
-        XCTAssertEqual((exactReport["columns"] as? [String])?.count, 23)
+        XCTAssertEqual((exactReport["columns"] as? [String])?.count, 24)
         let exactCore = exactReport["coreSinceReload"] as? [String: Any] ?? [:]
         XCTAssertEqual(exactCore["frameIntervals"] as? String, "0")
     }

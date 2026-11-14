@@ -84,6 +84,22 @@ final class LaunchServiceTests: XCTestCase {
         XCTAssertEqual(launch.marks[.interactive], candidate)
     }
 
+    func testAnInertOrientationRequestKeepsTheSettledVsync() throws {
+        let (launch, session, candidate) = try settlingLaunch("settled-orientation")
+        var batch = wireBatch([])
+        batch.orientation = .init()
+        batch.orientation?.types = 1
+        session.applyUnlessEmpty(batch)
+        launch.applied(session, batch)
+        launch.workEnded(session)
+        waitForMainQueue("the evaluation after the orientation request")
+        XCTAssertEqual(session.presenter.orientationLock.mask, 0)
+        XCTAssertFalse(session.presenter.orientationLock.locked)
+        XCTAssertEqual(launch.candidate, candidate)
+        launch.frame(Vsync(at: candidate, interval: 1.0 / 60))
+        XCTAssertEqual(launch.marks[.interactive], candidate)
+    }
+
     /// A batch that changes the screen with no ops, such as a control's
     /// viewless contents, moves the mark to the vsync that shows it, as a
     /// batch with ops does.

@@ -1,8 +1,9 @@
 // Info.plist rows that `build.mjs`'s `infoPlist` and `macInfoPlist` write from the manifest, the grants and the app's
 // packages.
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { grantLines } from '../../scripts/grant-advice.mjs';
 import { appleImplementations } from '../../js/bake/src/typescript.mjs';
 
 // Python's standard plistlib handles Apple's XML and binary encodings on a Linux builder.
@@ -248,4 +249,149 @@ export function withPackageKeys(dict, reach) {
     dict[key] = value;
   }
   return dict;
+}
+
+/** Native tags that must be available before the first frame, from the qualified module roster. */
+export const firstFrameKeys = (roster, tv = false) => {
+  const tags = Object.keys(roster).filter(tag => tag.includes('-') && roster[tag].firstFrame === true);
+  return tags.length && !tv ? { ExactFirstFrameModules: tags } : {};
+};
+
+/** AlarmKit's countdown is a Live Activity on iOS. */
+export const alarmKeys = (alarm, tv = false) => alarm && !tv ? { NSSupportsLiveActivities: true, ExactAlarmCountdown: true } : {};
+
+let metadataOwners;
+/** Known derived keys; only advice exercised through the bake and platform writers names an owner. */
+export function appleMetadataOwners() {
+  if (metadataOwners) return metadataOwners;
+  const hosts = Object.fromEntries(['ios', 'macos'].map(platform => [platform, { infoPlist: new Map(), entitlements: new Map() }]));
+  const add = (map, keys, owner) => {
+    for (const key of keys) map.set(key, [...new Set([...(map.get(key) ?? []), ...(owner ? [owner] : [])])]);
+  };
+  const groups = [
+    [['ios', 'macos'], ['CFBundleIdentifier']],
+    [['ios', 'macos'], ['CFBundleName', 'CFBundleDisplayName', 'CFBundleExecutable']],
+    [['ios', 'macos'], ['CFBundleShortVersionString']],
+    [['ios', 'macos'], ['CFBundleVersion']],
+    [['ios', 'macos'], ['CFBundlePackageType']],
+    [['ios'], [ 'DTCompiler', 'DTPlatformBuild', 'DTPlatformVersion', 'DTSDKBuild', 'DTSDKName', 'DTXcode', 'DTXcodeBuild', 'BuildMachineOSBuild']],
+    [['ios'], ['CFBundleSupportedPlatforms', 'DTPlatformName', 'CADisableMinimumFrameDurationOnPhone', 'UIApplicationSceneManifest', 'UIRequiredDeviceCapabilities']],
+    [['macos'], ['NSHighResolutionCapable']],
+    [['ios'], ['MinimumOSVersion']],
+    [['macos'], ['LSMinimumSystemVersion']],
+    [['ios'], ['UIDeviceFamily']],
+    [['ios'], ['UISupportedInterfaceOrientations', 'UISupportedInterfaceOrientations~ipad']],
+    [['ios'], ['UIUserInterfaceStyle']],
+    [['macos'], ['ExactUserInterfaceStyle']],
+    [['ios', 'macos'], ['NSAppTransportSecurity']],
+    [['ios'], ['LSApplicationQueriesSchemes']],
+    [['ios'], ['com.apple.developer.nfc.readersession.iso7816.select-identifiers']],
+    [['ios'], ['com.apple.developer.nfc.readersession.felica.systemcodes']],
+    [['ios'], ['UIBackgroundModes']],
+    [['ios', 'macos'], ['ExactModuleConfig']],
+    [['ios'], ['ExactAudioSession']],
+    [['ios', 'macos'], ['CFBundleDocumentTypes', 'UTExportedTypeDeclarations']],
+    [['ios'], ['LSSupportsOpeningDocumentsInPlace', 'UTImportedTypeDeclarations']],
+    [['ios', 'macos'], ['ExactProtocolHandlers', 'CFBundleURLTypes']],
+    [['ios', 'macos'], ['CFBundleURLTypes']],
+    [['ios', 'macos'], ['ExactOpenURLSchemes']],
+    [['ios', 'macos'], ['ExactDevelopmentURLScheme', 'ExactDevelopmentOrigins', 'ExactDevelopmentToken']],
+    [['ios', 'macos'], ['ExactOrigin']],
+    [['ios', 'macos'], ['ExactStartURL']],
+    [['macos'], ['ExactLaunchMode']],
+    [['ios', 'macos'], ['ExactUpdateActivate']],
+    [['ios', 'macos'], ['ExactUpdateCheckInterval']],
+    [['ios', 'macos'], ['LSApplicationCategoryType']],
+    [['ios', 'macos'], ['LSSupportsGameMode']],
+    [['ios'], ['GCSupportsGameMode']],
+    [['ios'], ['UIApplicationShortcutItems']],
+    [['macos'], ['ExactShortcutItems']],
+    [['ios'], ['NSAppClip']],
+    [['ios', 'macos'], ['ExactAppGroup', 'ExactAppIdentifier', 'ExactWidgetKinds', 'ExactWidgetTypeScript', 'ExactWidgetGeneration', 'ExactKeychainAccessGroup']],
+    [['ios'], ['NSSupportsLiveActivities', 'NSSupportsLiveActivitiesFrequentUpdates']],
+    [['macos'], ['ExactWidgetRequiresSecrets']],
+    [['ios', 'macos'], ['ExactFirstFrameModules']],
+    [['macos'], ['LSUIElement']],
+    [['macos'], ['ExactWindow']],
+    [['macos'], ['ExactDisplayOverride']],
+    [['macos'], ['NSAutoFillRequiresTextContentTypeForOneTimeCodeOnMac']],
+    [['macos'], ['CFBundleIconFile']],
+    [['ios'], ['CFBundleIcons', 'CFBundleIcons~ipad']],
+    [['macos'], ['CFBundleIconName']],
+    [['ios', 'macos'], ['NSAccentColorName']],
+    [['ios'], ['UILaunchScreen', 'ExactLaunchColor', 'ExactLaunchImageSource', 'ExactLaunchImageSHA256']],
+    [['ios', 'macos'], ['CFBundleDevelopmentRegion', 'CFBundleLocalizations']],
+    [['ios', 'macos'], ['NSBonjourServices']],
+    [['ios', 'macos'], ['ExactShareTarget', 'ExactShareGroup']],
+    [['ios', 'macos'], ['ExactFrameHealthMode']],
+    [['ios', 'macos'], ['ExactReleaseNotes']],
+    [['ios', 'macos'], ['ExactDevMenu']],
+    [['ios', 'macos'], ['ExactDistributionRevision']],
+    [['ios'], ['ITSAppUsesNonExemptEncryption']],
+    [['ios', 'macos'], ['ExactBuildTime', 'ExactBuildKind', 'ExactBuildHost', 'ExactBuildXcode', 'ExactCommit', 'ExactCommitDirty', 'ExactBranch', 'ExactAppCommit', 'ExactAppCommitDirty', 'ExactAppBranch', 'ExactMetalSources']],
+    [['ios', 'macos'], ['NSLocationTemporaryUsageDescriptionDictionary']],
+  ];
+  for (const [platform, { infoPlist }] of Object.entries(hosts)) {
+    for (const [platforms, keys] of groups) if (platforms.includes(platform)) add(infoPlist, keys);
+    for (const [key, { platforms }] of PLIST_KEYS) if (platforms.includes(platform)) add(infoPlist, [key]);
+  }
+  add(hosts.macos.infoPlist, ['ExactWidgetSecretsAvailable']);
+  add(hosts.ios.infoPlist, ['ExactAlarmCountdown', 'NSSupportsLiveActivities']);
+  for (const [platform, keys] of [
+    ['ios', ['application-identifier', 'com.apple.developer.team-identifier', 'keychain-access-groups', 'get-task-allow',
+      'com.apple.security.application-groups', 'com.apple.developer.parent-application-identifiers',
+      'com.apple.developer.associated-domains', 'com.apple.developer.web-browser', MEMORY_ENTITLEMENT,
+      'com.apple.developer.applesignin', 'com.apple.developer.in-app-payments']],
+    ['macos', ['com.apple.application-identifier', 'com.apple.developer.team-identifier', 'com.apple.security.application-groups',
+      'com.apple.developer.associated-domains', 'keychain-access-groups', 'com.apple.security.app-sandbox',
+      'com.apple.security.network.client', 'com.apple.security.get-task-allow']],
+  ]) add(hosts[platform].entitlements, keys);
+  const table = readFileSync(new URL('../../runner/src/device.rs', import.meta.url), 'utf8');
+  const advice = grant => `write ${grantLines([grant], table)[0].map(line => `\`${line}\``).join(' beside ')}`;
+  for (const [, name, row] of table.matchAll(/name: "([^"]+)",([\s\S]*?)\.\.ROW/g)) {
+    const keys = field => [...(new RegExp(`\\b${field}: &\\[([^\\]]*)\\]`).exec(row)?.[1] ?? '').matchAll(/"([^"]+)"/g)].map(m => m[1]);
+    for (const [platform, { infoPlist }] of Object.entries(hosts)) {
+      const usage = keys(platform);
+      const companion = usage.length ? [...row.matchAll(/companion: Some\("([^"\n]+)"\)/g)].map(m => m[1]) : [];
+      add(infoPlist, [...usage, ...companion], advice(`device.${name}`));
+      if (platform === 'ios') add(infoPlist, keys('ios_flags'));
+    }
+    if (keys('ios_modes').length) add(hosts.ios.infoPlist, ['UIBackgroundModes']);
+    if (keys('ios_tasks').length) add(hosts.ios.infoPlist, ['BGTaskSchedulerPermittedIdentifiers']);
+    add(hosts.ios.entitlements, keys('ios_entitlements'));
+    add(hosts.macos.entitlements, [...keys('macos_profile'), ...[...row.matchAll(/hardened: Some\("([^"\n]+)"\)/g)].map(m => m[1])]);
+  }
+  add(hosts.ios.entitlements, ['aps-environment'], advice('device.push'));
+  add(hosts.ios.entitlements, ['com.apple.developer.applesignin'], advice('auth.apple'));
+  const hardened = readFileSync(new URL('../../runner/src/hardened.rs', import.meta.url), 'utf8');
+  add(hosts.macos.entitlements, [...hardened.matchAll(/entitlement: "([^"]+)"/g)].map(m => m[1]));
+  add(hosts.ios.infoPlist, ['WKApplication', 'WKCompanionAppBundleIdentifier', 'WKRunsIndependentlyOfCompanionApp']);
+  const packages = new URL('../../packages/', import.meta.url);
+  for (const directory of readdirSync(packages, { withFileTypes: true })) {
+    if (!directory.isDirectory()) continue;
+    let spec;
+    try { spec = JSON.parse(readFileSync(new URL(`${directory.name}/exact.json`, packages), 'utf8')); }
+    catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+    for (const declaration of spec.names ?? []) for (const [platform, { infoPlist }] of Object.entries(hosts)) {
+      const addDerived = value => {
+        if (Array.isArray(value)) add(infoPlist, value);
+        else if (typeof value === 'string') add(infoPlist, [value]);
+        else if (value && typeof value === 'object') for (const child of Object.values(value)) addDerived(child);
+      };
+      addDerived(declaration.derives?.[platform]);
+    }
+  }
+  return metadataOwners = hosts;
+}
+
+/** Refusal-only manifest dictionaries: name every supplied key, including keys no writer owns yet. */
+export function appleMetadataProblem(problem) {
+  const match = /^(host\.(ios|macos)\.(infoPlist|entitlements))\.([\s\S]*): not a known key$/.exec(problem);
+  if (!match) return problem;
+  const [, path, platform, kind, key] = match;
+  const owners = appleMetadataOwners()[platform][kind].get(key);
+  const advice = owners?.length ? (owners.length > 1 ? `choose one: ${owners.join(' or ')}` : owners[0]) : owners
+    ? 'Exact writes this key itself from its declarations (docs/reference.md#apple-bundle-metadata), so it cannot be set here'
+    : `not supported on ${platform}: Exact does not write this key; file a \`bun exact.mjs feedback note\` from the app directory naming ${JSON.stringify(key)} and what the native module needs`;
+  return `${path}.${key}: refused; ${advice}`;
 }

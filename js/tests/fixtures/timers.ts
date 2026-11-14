@@ -32,9 +32,16 @@ async function answer(source: string, args: any[]): Promise<unknown> {
       await new Promise<void>(resolve => setTimeout(() => { seen.push("then"); resolve(); }, 50));
       return seen.join(",");
     }
+    // A handle is converted as Web IDL converts a `long`: its string or a boxed number clears it too, and an
+    // unknown one clears nothing. The last is cleared once the answer has parked on its deadline.
     case "cleared": {
-      const id = setTimeout(() => log.push("cleared ran"), 50);
-      clearTimeout(id);
+      const ran = (name: string) => () => log.push(name + " ran");
+      clearTimeout(setTimeout(ran("number"), 50));
+      clearTimeout(String(setTimeout(ran("string"), 50)) as any);
+      clearTimeout(new Number(setTimeout(ran("boxed"), 50)) as any);
+      clearTimeout("no such timer" as any);
+      const parked = setTimeout(ran("parked"), 50);
+      setTimeout(() => clearTimeout(String(parked) as any), 10);
       await sleep(100);
       return log.join(",") || "none";
     }

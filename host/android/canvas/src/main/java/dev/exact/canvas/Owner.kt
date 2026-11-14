@@ -654,8 +654,8 @@ internal object Exact {
         if (o != null) { o.input(); o.call(f) } else { f(); turned() }
     }
 
-    fun moduleEvent(id: Int, slot: Int, generation: Int, kind: String, payload: String) =
-        field { Native.moduleEvent(id, slot, generation, kind, payload) }
+    fun moduleEvent(id: Int, slot: Int, generation: Int, session: Long, kind: String, payload: String) =
+        field { Native.moduleEvent(id, slot, generation, session, kind, payload) }
 
     fun fieldFocused(id: Int, generation: Int, focused: Boolean) = field { Native.fieldFocused(id, generation, focused) }
     fun fieldEdited(id: Int, generation: Int, seq: Int, value: String, start: Int, end: Int) =
@@ -664,7 +664,7 @@ internal object Exact {
         field { Native.fieldComposing(id, generation, composing, value) }
     fun fieldSelected(id: Int, generation: Int, start: Int, end: Int) = field { Native.fieldSelected(id, generation, start, end) }
     fun fieldAction(id: Int, generation: Int, action: Int) = field { Native.fieldAction(id, generation, action) }
-    fun fieldInput(id: Int, generation: Int) = field { Native.fieldInput(id, generation) }
+    fun fieldInput(id: Int, generation: Int, kind: Int) = field { Native.fieldInput(id, generation, kind) }
 
     /** What happened in the window of surface [serial] of the top layer ([Surfaces], [Native.surface], LLP 1115.001
      * D10): told on exact2's thread, in order. exact2 answers with the surface painted again or closed (a request,

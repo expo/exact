@@ -58,7 +58,7 @@ export async function openStdio({ host, plan, world, size, app, env: extra = {},
   }
   else if ((linux && process.env.EXACT_LINUX_BIN) || (android && process.env.EXACT_ANDROID_BIN)) unchecked(host, android ? 'EXACT_ANDROID_BIN' : 'EXACT_LINUX_BIN');
   else if (android && bin.endsWith('.apk')) refuseStale(host, bin, [...apkChanges(a, bin), ...bakedSettingChanges(bin, a)], androidRebuild(a, true));
-  else if (linux || android) refuseStale(host, bin, [...depInfoChanges(bin), ...bakedSettingChanges(bin, a)], android ? androidRebuild(a, false) : linuxRebuild(a));
+  else if (linux || android) refuseStale(host, bin, [...depInfoChanges(bin, a), ...bakedSettingChanges(bin, a)], android ? androidRebuild(a, false) : linuxRebuild(a));
   else if (!device && process.env.EXACT_MAC_BIN) unchecked(host, 'EXACT_MAC_BIN');
   if (device && (plan || extra.EXACT_PLAN || extra.EXACT_ASSETS)) throw new Error('a phone cannot read host-local plan/assets paths; use --url or its embedded app');
   const ph = device ? phone(pick) : null;

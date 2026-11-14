@@ -285,51 +285,33 @@ pub fn roots_reply() -> String {
     s
 }
 
-/// The agent's `appFile` ([`app_file`]) and `shareFile` ([`share_copy`],
-/// through the roots of the asking session's own app, `data`'s).
-pub fn file_op<D: exact_runner::DataSource>(op: &str, request: &str, data: &D) -> String {
-    match op {
-        "appFile" => app_file(&exact_runner::agent::field_str(request, "path").unwrap_or_default()),
-        _ => {
-            let roots = app_dirs(data.app_id())
-                .ok()
-                .flatten()
-                .map(|(roots, _)| roots);
-            share_copy(request, data.grants(), roots.as_ref())
+/// The app-file roots and their policy, from the same directory decision.
+pub(crate) fn app_roots_reply<D: exact_runner::DataSource>(data: &D) -> String {
+    let app_id = data.app_id();
+    let agent = std::env::var_os("EXACT_AGENT").is_some();
+    let reply = match app_dirs(app_id) {
+        Ok(Some(_)) => serde_json::json!({"available": true, "store": if agent {
+            std::env::var("EXACT_AGENT_STORAGE").unwrap_or_default()
+        } else { "real".into() }}),
+        Ok(None) => {
+            serde_json::json!({"available": false, "code": if agent { "agent" } else { "unavailable" },
+            "message": "app files need an app identity and, in a drive, a scratch store (--storage <name>)"})
         }
-    }
+        Err(error) => {
+            serde_json::json!({"available": false, "code": "storage", "message": format!("{error:?}")})
+        }
+    };
+    format!("{{\"storage\":{},{}", reply, &roots_reply()[1..])
 }
 
-/// `{"file":"/…"}`: the file behind an `app:/data|cache|tmp/…` path, which
-/// an export copies out (LLP 1069.010 D3); an error for anything else.
-pub fn app_file(path: &str) -> String {
-    let [data, cache, temporary] = roots();
-    let resolved = path.strip_prefix("app:/").and_then(|rest| {
-        let (dir, rest) = rest.split_once('/')?;
-        let root = match dir {
-            "data" => data,
-            "cache" => cache,
-            "tmp" => temporary,
-            _ => return None,
-        };
-        let parts: Vec<&str> = rest.split('/').collect();
-        if parts
-            .iter()
-            .any(|p| p.is_empty() || *p == "." || *p == ".." || p.contains('\0'))
-        {
-            return None;
-        }
-        Some(parts.iter().fold(root, |p, part| p.join(part)))
-    });
-    match resolved {
-        Some(file) => {
-            let mut s = String::from("{\"file\":");
-            exact_runner::agent::quote(&file.to_string_lossy(), &mut s);
-            s.push('}');
-            s
-        }
-        None => exact_runner::agent::error(&format!("{path} names no app file")),
-    }
+/// The agent's `shareFile` ([`share_copy`]), through the asking session's
+/// own app's roots.
+pub fn share_file<D: exact_runner::DataSource>(request: &str, data: &D) -> String {
+    let roots = app_dirs(data.app_id())
+        .ok()
+        .flatten()
+        .map(|(roots, _)| roots);
+    share_copy(request, data.grants(), roots.as_ref())
 }
 
 /// Each app's directories as its storage opened them, by their paths, pinned

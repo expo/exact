@@ -73,6 +73,7 @@ fn a_tinted_raster_is_its_alpha_masking_the_tint() {
 
 #[test]
 fn untinted_rasters_with_box_paint_stay_bare_in_batches_and_documents() {
+    exact_web::link(exact_web_capabilities::linked!(shadows));
     let plan = contract::compile(
         r##"component App
   view

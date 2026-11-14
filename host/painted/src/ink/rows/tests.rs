@@ -282,3 +282,80 @@ fn a2_counter_rejects_truncation_boundary_and_sign_crossings() {
     assert!(!super::zero_interval(-5.25, 0.25, 2.25));
     assert!(!super::zero_interval(0., 0., 0.));
 }
+
+#[test]
+fn moved_rows_resnapshot_blends_and_backdrops_under_the_current_clip() {
+    use exact_kernel::style::{BackdropFilter, BackdropOp};
+    fn effect_row(b: &mut dyn Backend, origin: (f32, f32), pixels: &Arc<Pixmap>) {
+        let ts = Transform::from_row(1., 0.15, -0.1, 1., origin.0, origin.1);
+        b.push_opacity(0.71);
+        b.fill(&Shape::rect((-8., -6., 68., 56.)), [30, 150, 230, 190], ts);
+        for delta in [0., 2., 4.] {
+            b.push_clip(
+                &Shape::new((delta, delta, 52. - delta, 40. - delta), [7.; 4]),
+                ts,
+            );
+        }
+        b.backdrop_filter(
+            &Shape::elliptical((-5., -3., 62., 52.), [(12., 8.); 4]),
+            &BackdropFilter(vec![BackdropOp::Blur(4.), BackdropOp::Saturate(0.3)]),
+            ts,
+        );
+        for (n, mode) in [1, 3, 2].into_iter().enumerate() {
+            b.island_image(
+                pixels.clone(),
+                (-2. + n as f32 * 9., 1. + n as f32 * 7., 35., 27.),
+                ts,
+                mode,
+            );
+        }
+        for _ in 0..3 {
+            b.pop_clip();
+        }
+        b.pop_opacity();
+    }
+    let mut ink = Ink::new().unwrap();
+    let mut pixels = Pixmap::new(2, 2).unwrap();
+    pixels.fill(tiny_skia::Color::from_rgba8(220, 50, 100, 170));
+    let pixels = Arc::new(pixels);
+    for scale in [1., 1.5, 2.] {
+        ink.begin(130., 100., scale);
+        ink.row_begin(1, (14., 10.), None);
+        effect_row(&mut ink, (14., 10.), &pixels);
+        ink.row_end((-8., -6., 68., 56.));
+        for origin in [(0., 0.), (-18., -12.), (72., 44.), (112., 84.)] {
+            let mut frames = Vec::new();
+            for retained in [true, false] {
+                ink.begin(130., 100., scale);
+                for n in 0..13 {
+                    ink.fill(
+                        &Shape::rect((n as f32 * 10., 0., 10., 100.)),
+                        [(n * 31) as u8, 130, 170, 255],
+                        Transform::identity(),
+                    );
+                }
+                ink.push_clip(
+                    &Shape::new((3., 2., 123., 95.), [8.; 4]),
+                    Transform::identity(),
+                );
+                if retained {
+                    assert!(ink.reusable(1, origin));
+                    ink.row_draw(1, origin, (origin.0 - 8., origin.1 - 6., 68., 56.));
+                } else {
+                    effect_row(&mut ink, origin, &pixels);
+                }
+                ink.pop_clip();
+                frames.push(ink.finish().unwrap());
+            }
+            let maximum = frames[0]
+                .data()
+                .iter()
+                .zip(frames[1].data())
+                .map(|(a, b)| a.abs_diff(*b))
+                .max()
+                .unwrap();
+            assert!(maximum <= 1, "scale {scale}, origin {origin:?}: {maximum}");
+        }
+        ink.row_free(1);
+    }
+}

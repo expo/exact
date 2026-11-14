@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import vm from 'node:vm';
 import { open } from '../../scripts/agent.mjs';
+import { CONTRACT, heldApp, holdingServer } from '../../scripts/held-fixture.mjs';
 import { webCompiler } from './module.mjs';
 
 const root = resolve(import.meta.dir, '../..');
@@ -25,6 +26,61 @@ async function build(dir) {
   expect(stdout + stderr).not.toMatch(/failed|structuredClone|dynamic import/);
   return dist;
 }
+
+test('a render waits for a held Rust module request until its reply or the deadline', async () => {
+  const server = holdingServer();
+  const dir = heldApp(root, server.origin, 'Rust');
+  let realm, current;
+  try {
+    writeFileSync(resolve(dir, 'app.contract'), `routes nav
+  home "/" render=client
+    plain "/plain" render=request
+    status "/status" render=request
+
+${CONTRACT.replace('    column', `    column
+      if top(nav).name == "status" && item != ""
+        head status=404`)}`);
+    const dist = await build(dir);
+    const { renderer } = await import('./render.mjs');
+    const render = renderer(dist); render.ahead = false;
+    const createContext = vm.createContext;
+    realm = spyOn(vm, 'createContext').mockImplementation((ctx, options) => {
+      const clock = { now: 0 };
+      ctx.performance = { now: () => clock.now };
+      current = { ctx, clock };
+      return createContext(ctx, options);
+    });
+    const page = async path => {
+      const reply = await render(path, 1000);
+      const checkpoint = JSON.parse(/<script type="application\/vnd.exact.checkpoint"[^>]*>([^<]*)<\/script>/.exec(reply.html)[1]);
+      return { status: reply.status, settled: reply.settled, pending: checkpoint.pending, failed: reply.failed,
+        item: /data-testid="item"[^>]*>([^<]*)</.exec(reply.html)[1] };
+    };
+    for (const path of ['/plain', '/status']) for (const release of [true, false]) {
+      let finished = false;
+      const before = server.seen.filter(s => s === 'changes held').length;
+      const waiting = page(path).then(reply => { finished = true; return reply; });
+      const until = performance.now() + 10000;
+      while (!finished && server.seen.filter(s => s === 'changes held').length === before) {
+        if (performance.now() >= until) throw new Error('held request did not reach the server');
+        await new Promise(resolve => setTimeout(resolve, 5));
+      }
+      expect(finished).toBe(false);
+      if (release) {
+        expect(server.release('held')).toBe(true);
+        expect(await waiting).toEqual({ status: path === '/status' ? 404 : 200, settled: true, pending: [], failed: [], item: expect.stringMatching(/^r\d+\|detail$/) });
+      } else {
+        current.clock.now = 1000;
+        expect(await waiting).toEqual({ status: 503, settled: false, pending: ['item'], failed: [], item: '' });
+      }
+    }
+  } finally {
+    if (current) current.clock.now = Infinity;
+    realm?.mockRestore();
+    server.stop();
+    rmSync(dir, { recursive: true, force: true });
+  }
+}, 120000);
 
 // The rule a render settles by, as the render host settles (host/render/src/lib.rs `settle`; LLP 1048.000 D9): it
 // waits for work in flight (a fetch, a held fetch, an upload, a stream until its first message, an answer's own

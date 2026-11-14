@@ -121,6 +121,10 @@ fn a_header_button_that_presses_nothing_is_named() {
         "{says}"
     );
     assert!(says.contains("give it `role=\"status\"`"), "{says}");
+    assert!(
+        says.contains("say `navigationBar=\"none\"` on the route's element and draw the row yourself (docs/recipes/chat-header.md"),
+        "{says}"
+    );
     // A disabled one is UIKit's disabled bar item, shown dimmed: no warning.
     let disabled = src.replace("button aria-label", "button disabled=true aria-label");
     let (result, warnings) = contract::compile_warned(&disabled);
@@ -192,5 +196,18 @@ fn a_header_of_buttons_alone_is_the_bar_and_one_with_a_text_is_named() {
             && m.contains("one `text role=\"heading\"`")
             && m.contains("a header of buttons alone is the bar"),
         "{m}"
+    );
+    // A heading that presses is still the heading, as the kernel's bar
+    // reads it: one is the title, the text after it its subtitle, and two
+    // are two headings.
+    let heading = "  text \"Inbox\" role=\"heading\" press=go\n";
+    let subtitle = format!("{heading}  text \"3 unread\"\n");
+    assert_eq!(crate::warnings::warned(&route(&subtitle)), []);
+    let (_, warnings) = contract::compile_warned(&route(&heading.repeat(2)));
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(
+        warnings[0].message.contains("holds 2 headings"),
+        "{}",
+        warnings[0].message
     );
 }

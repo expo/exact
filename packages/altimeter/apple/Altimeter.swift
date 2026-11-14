@@ -148,12 +148,10 @@ public final class AltimeterModule: ExactPackage {
         out["dropped"] = 0
         out["interrupted"] = false
         if let after = (args["after"] as? Double).map(Int.init) {
-            let fresh = group.ring.filter { $0.sequence > after }
-            let kept = group.history > 0 ? Array(fresh.suffix(group.history)) : []
-            out["samples"] = kept.map(\.fields)
-            out["dropped"] = group.history > 0 ? max(0, newest.sequence - after - kept.count) : 0
-            out["interrupted"] = group.pauses.contains { $0 >= after }
-            if !shown { out["samples"] = [[String: Any]](); out["interrupted"] = true }
+            let batch = Self.batch(group.ring, after: after, history: group.history, shown: shown)
+            out["samples"] = batch.samples
+            out["dropped"] = batch.dropped
+            out["interrupted"] = !shown || group.pauses.contains { $0 >= after }
         }
         return out
     }
@@ -259,3 +257,15 @@ public final class AltimeterModule: ExactPackage {
     }
 }
 #endif
+
+extension AltimeterModule {
+    /// A poll's samples after the runner's cursor `after` (D13): the newest `history` of those in
+    /// `ring`, and none while the app is hidden. The answer's sequence, the newest, becomes the next
+    /// cursor, so every sample after `after` not answered is counted as dropped.
+    static func batch(_ ring: [(sequence: Int, fields: [String: Any])], after: Int, history: Int, shown: Bool)
+        -> (samples: [[String: Any]], dropped: Int) {
+        guard history > 0, let newest = ring.last?.sequence else { return ([], 0) }
+        let kept = shown ? ring.filter { $0.sequence > after }.suffix(history) : []
+        return (kept.map(\.fields), max(0, newest - after - kept.count))
+    }
+}

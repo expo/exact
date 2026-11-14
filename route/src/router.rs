@@ -16,8 +16,10 @@
 use crate::{canonical, fragment_of, Destination, Entry, Refusal, Router, Tab, Table};
 
 impl Router {
-    /// Seed every tab at its root, then open the launch location. An unmatched
-    /// launch returns the empty input and one refusal, just like open(empty).
+    /// Seed every tab at its root, the location's own tab at the root visit
+    /// of its chain, then open the launch location: a query on a root
+    /// location changes no id. An unmatched launch returns the empty input
+    /// and one refusal, just like open(empty).
     pub fn launch(table: &Table, location: &str) -> (Self, Option<Refusal>) {
         open(table, Self::default(), location)
     }
@@ -103,11 +105,17 @@ pub fn open(table: &Table, r: Router, location: &str) -> (Router, Option<Refusal
             table.check().map_err(|e| refusal(e.message))?;
             for root in table.roots() {
                 let route = &table.routes[root];
-                let d = Destination {
-                    name: route.name.clone(),
-                    url: canonical(&route.pattern),
-                    tab: route.name.clone(),
-                    params: table.empty_params(),
+                // The location's own tab is seeded at its chain's root visit,
+                // so a launch at `/?q=a` spends the ids a launch at `/` does
+                // and a document rendered at either is the other's.
+                let d = match chain.first().filter(|d| d.name == route.name) {
+                    Some(d) => d.clone(),
+                    None => Destination {
+                        name: route.name.clone(),
+                        url: canonical(&route.pattern),
+                        tab: route.name.clone(),
+                        params: table.empty_params(),
+                    },
                 };
                 let entry = mint(&mut out.next, d)?;
                 out.tabs.push(Tab {

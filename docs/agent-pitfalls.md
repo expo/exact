@@ -11,6 +11,14 @@ diagnose it. **Candidate diagnostic** marks one that could become a check cheapl
 
 This list holds what the [agent guide](contract-for-agents.md)'s rules don't make obvious.
 
+## Component calculations
+
+- **A child derive still runs at every read.** Its body is compiled once per
+  use, without caching its value. Keep large calculations in a root derive
+  when readers should share the evaluated result. A binding's failing child
+  calculation unsets that binding; a root derive's failure refuses the commit.
+  (Instance expression tests and the form fixture pair, 2026-11-13.)
+
 ## Layout
 
 - **A search field pushes a header button off a phone.** Under `--chrome agent`,
@@ -230,6 +238,16 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
 
 ## Lists and scrolling
 
+- **A long text on iOS or macOS loses its kerning, ligatures and right-to-left
+  order.** A whole document in one `text` (an article, a long Markdown note) is
+  one string to Core Text, and Core Text does not shape a string longer than a
+  length it does not document: Arabic is unjoined and runs left to right, and
+  Latin text is not kerned, so a line can break at another word. The length was
+  10,240 UTF-16 units on iOS 27.1 and macOS 27.2, and can change in any release.
+  Give each paragraph or block its own `text`, and never split inside a
+  paragraph ([long text](recipes/long-text.md)). (Duo Lab, 2026-11-12.)
+  **Candidate diagnostic:** `check` could name a text whose string is that long.
+
 - **A frame's cell count is not its stretched layout width.** Giving the
   harness's animation rows a width of `animCols` cells changed fullscreen layout in
   a window narrower than the animation's minimum 20 cells. `width="100%"`
@@ -326,6 +344,13 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   on which tab shows; run a jump the reader asks for (a Now button) from its
   press. (Bake-off r25, timetable: Saved and back took the board from 07:34 to
   05:00.)
+
+- **A mixed native bake alone does not include its Rust source in the JS web build.**
+  A source composed with `exact_js_bake::build_mixed_with` still needs a module
+  crate exporting that source through `exact_logic_abi::export!`, named by
+  `rust.module.package` in app.json. Without it, the JS target calls TypeScript
+  for the Rust source and gets `UnknownSource`. The canvas gallery's `logic/`
+  crate and manifest show the declaration. (Web capture smoke, 2026-11-12.)
 
 - **A data answer past 16 MiB fails only on the JS target.** A 64 MiB string from
   a Rust source loaded on the wasm web host and on Linux, and on the JS target
@@ -434,6 +459,13 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   by the root's `navigationBack`, and a route that declares one that is disabled
   refuses it (the log says "back gesture refused" and why). A route with no such
   control always goes back (LLP 1115 D5). Fix: enable the control, or leave it out.
+- **Browser Back restores a screen, but its Back returns to the screen just left.**
+  Cause: an in-app transition used `open`, which replaced the current visit with
+  the destination's declared chain. Browser Back then pushed the discarded URL
+  above that destination. Fix: use `push` to keep the caller. `open` also keeps
+  every current visit when the selected stack is a prefix of the declared chain;
+  use it then to include an intermediate parent, or for a deliberate return such
+  as Home (LLP 1038 §3, D7).
 - **A `link` to a route does nothing on iOS or the Mac.** On the web the browser's
   Back and Forward and a `link` to a declared route work with no `navigate` handler:
   the runner pops or goes there itself (LLP 1115 D5, LLP 1115.000 D4.3). A native host
@@ -453,11 +485,8 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   the scroller right after the route's `header`. Fix: a `scroll flex=1 min-height=0`
   right after the `header`. It is the bar's scroller with nothing written, and
   `navigationScroll="id"` on the route names a different one
-  (docs/contract-for-agents.md, "Routes and web documents"). A pushed route whose
-  content is a plain `list` (its rows built in slices) still opens its large title
-  collapsed (issues/20261112-pushed-screen-large-title-bar-is-54-points.md).
-  The compiler refuses a name nothing in the
-  route carries, or one on a box that never scrolls (`lower-route-scroll`). **Candidate diagnostics:** the
+  (docs/contract-for-agents.md, "Routes and web documents"). The compiler refuses
+  a name nothing in the route carries, or one on a box that never scrolls (`lower-route-scroll`). **Candidate diagnostics:** the
   compiler could refuse a named scroller that is not right after the `header` (an
   iOS-only rule today, so not refused); the hosts could journal a route whose
   content overflows with nothing to scroll it (QUEUE.md).
@@ -1880,6 +1909,15 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   `nav = top(nav).name == "shop" and (url == "/" or url.slice(0, 2) == "/?") ? replace(nav, url) : go(nav, url)`,
   so Back leaves the shop rather than stepping through each filter. (The same store, 2026-11-01.)
 
+- **A route that says `activate=interaction` offers a browser's agent no tools at load.** Its page
+  registers its faced tools with `document.modelContext` only when its script starts: at the
+  person's first use of a control, on a page with an `intersect` handler at a scroll or when that
+  element shows, or when the viewport differs from one the page's comparisons were rendered for.
+  Until then `getTools()` is empty. Leave `activate` unsaid on such a route: in an app with a faced
+  tool on the web door, an undeclared route whose page would wait for the reader activates `idle`
+  instead, and registers its tools once the page has loaded and is idle. (Exact Bistro, a WebMCP
+  demo site, 2026-11-12.)
+
 ## Working on Exact itself
 
 - **A CDP adapter re-sends known children and Styles stays empty.**
@@ -1959,7 +1997,7 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   `/usr/bin/openssl`, macOS's LibreSSL, comes first on `PATH`; it writes the run's EC
   key with explicit curve parameters, which Bun cannot read back (`startNet` in
   `host/web-js/conformance/net.mjs`), so every `conform.mjs` run fails, the async
-  lane's `conform`, `conform-firefox` and `conform-webkit` steps included. Fix: put
+  lane's `conform` and `conform-browsers` steps included. Fix: put
   Homebrew's OpenSSL 3 first (`PATH=/opt/homebrew/bin:$PATH`). (#1148, 2026-10-30.)
 - **An `EXACT_WEB_DIST` build compiles, then fails renaming its stage.** The
   destination's parent directory does not exist. Create that parent before

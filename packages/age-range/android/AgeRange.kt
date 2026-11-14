@@ -33,12 +33,13 @@ class AgeRangeModule(context: ExtensionContext, private val play: AgeSignalsMana
     companion object {
         /** Play's default bands, inclusive (D11). */
         private val BANDS = listOf(0 to 12, 13 to 15, 16 to 17, 18 to null)
+        private const val OLDEST = 150.0
 
         /** Apple's rule for gates (D8), which the module keeps on every platform: one to three whole ages,
-         * ascending, at least two years apart. */
+         * ascending, at least two years apart. An age is at most [OLDEST], as on Apple. */
         fun refused(gates: JSONArray?): String? {
             val ages = (0 until (gates?.length() ?: 0)).map { gates!!.optDouble(it) }
-            if (ages.size !in 1..3 || ages.any { it.isNaN() || it < 0 || it != Math.rint(it) }) return "ageGates are one to three whole ages"
+            if (ages.size !in 1..3 || ages.any { it.isNaN() || it !in 0.0..OLDEST || it != Math.rint(it) }) return "ageGates are one to three whole ages"
             return if (ages.zipWithNext().all { (a, b) -> b - a >= 2 }) null else "ageGates ascend at least two years apart"
         }
 

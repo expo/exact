@@ -474,7 +474,8 @@ public final class SpeechSynthesisModule: NSObject, ExactPackage, AVSpeechSynthe
     /// Utterances whose reply was dropped: never the app's (D2).
     public func dispose(_ ids: [String]) {
         advance()
-        for id in ids {
+        // The speaking one last: ending it begins the next queued, which must not be one dropped with it.
+        for id in ids.filter({ $0 != current }) + ids.filter({ $0 == current }) {
             guard let u = utterances[id], u.state != "ended" else { continue }
             say("\(id): its reply was dropped")
             let speaking = current == id

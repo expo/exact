@@ -99,17 +99,28 @@ enum Command {
 }
 enum Payload {
     Empty,
-    Image(Arc<Bitmap>, ObjectFit, Option<[u8; 4]>),
+    Image(
+        Arc<Bitmap>,
+        ObjectFit,
+        Option<[u8; 4]>,
+        exact_kernel::ImageRendering,
+    ),
     Text(
         Rc<Paragraph>,
-        Vec<RunPaint>,
         Option<Rc<inline_frame::Captured>>,
+        Vec<TextCommand>,
     ),
     /// An `svg`'s scene as resolved at capture (LLP 1055.000 §4: SVG in a
     /// retained region; the instant is the capture's), its wide colours
     /// settled for the capture's appearance (LLP 1121 stage 4).
     Svg(Rc<exact_kernel::svg::Scene>),
 }
+enum TextCommand {
+    Begin(f32, Vec<(Shape, [u8; 4])>),
+    Ink(super::text_shadow::TextInk),
+    End(f32),
+}
+
 struct NodePaint {
     ordinal: usize,
     key: NodeKey,
@@ -226,6 +237,8 @@ impl Picture {
                 .node(id)
                 .ok_or("content node removed during capture")?;
             if (scene.hidden)(id)
+                || scene.kernel.is_top_layer(id)
+                || scene.kernel.host_block(id).is_some()
                 || node.is_inline_run()
                 || node.style.display == Display::None
                 || node.props.str(PropId::SemanticTag) == Some("dialog")
@@ -276,13 +289,67 @@ impl Picture {
                             .ok_or("intrinsic answer cannot paint final content")?;
                         let palette = native.palette(painter.dark).to_vec();
                         let inline = inline_frame::Captured::new(scene.kernel, &node, p, &palette);
-                        Payload::Text(p.clone(), palette, inline)
+                        // The accepted source's opacities, except where the
+                        // engine presents another (an animation, a transition,
+                        // a press look), which the live painter shows too.
+                        let chains: Vec<inline_opacity::Chain> = native
+                            .opacity()
+                            .iter()
+                            .map(|chain| {
+                                chain
+                                    .iter()
+                                    .map(|&(id, kept)| {
+                                        let shown = (scene.presented)(id).opacity;
+                                        match scene.kernel.node(id) {
+                                            Some(n) if n.style.opacity != shown => {
+                                                (id, shown.clamp(0., 1.))
+                                            }
+                                            _ => (id, kept),
+                                        }
+                                    })
+                                    .collect()
+                            })
+                            .collect();
+                        let groups = inline_opacity::Groups::new(node.id, &chains);
+                        let backgrounds = text_backgrounds(scene.kernel, &node, painter.dark, None);
+                        let mut commands = Vec::new();
+                        groups.visit(&mut |paint| match paint {
+                            inline_opacity::Paint::Begin(index, alpha) => {
+                                let backgrounds: Vec<_> = backgrounds
+                                    .iter()
+                                    .map(|b| {
+                                        let b = b.as_ref()?;
+                                        let mut layers = std::iter::once(b)
+                                            .chain(b.outer.iter())
+                                            .filter(|b| groups.owner(scene.kernel, b.id) == index);
+                                        let mut b = layers.next()?.clone();
+                                        b.outer = layers.cloned().collect();
+                                        Some(b)
+                                    })
+                                    .collect();
+                                commands.push(TextCommand::Begin(
+                                    alpha,
+                                    p.inline_backgrounds(
+                                        &backgrounds,
+                                        &scene.kernel.env_of(node.id),
+                                    ),
+                                ));
+                            }
+                            inline_opacity::Paint::Text(range) => commands.push(TextCommand::Ink(
+                                painter.capture_text_ink(scene.kernel, p, &palette, None, range),
+                            )),
+                            inline_opacity::Paint::End(_, alpha) => {
+                                commands.push(TextCommand::End(alpha))
+                            }
+                        });
+                        Payload::Text(p.clone(), inline, commands)
                     }
                     NodeType::Image => scene.images.get(&id).map_or(Payload::Empty, |image| {
                         Payload::Image(
                             image.clone(),
                             node.style.object_fit,
                             super::image_tint(&node, &(scene.presented)(id), painter.dark),
+                            node.computed_row(StyleId::ImageRendering, |s| s.image_rendering),
                         )
                     }),
                     NodeType::Svg => {
@@ -307,13 +374,22 @@ impl Picture {
                     + paint.inset_shadow_fills(&geometry).len();
                 cost += match &payload {
                     Payload::Empty => 0,
-                    Payload::Text(..) => 1,
+                    Payload::Text(_, _, commands) => commands
+                        .iter()
+                        .map(|command| match command {
+                            TextCommand::Begin(alpha, fills) => {
+                                fills.len() + usize::from(*alpha < 1.)
+                            }
+                            TextCommand::Ink(_) => 1,
+                            TextCommand::End(alpha) => usize::from(*alpha < 1.),
+                        })
+                        .sum(),
                     Payload::Svg(s) => {
                         let mut n = 0;
                         s.walk(&mut |_| n += 1);
                         n
                     }
-                    Payload::Image(image, fit, _) => {
+                    Payload::Image(image, fit, _, _) => {
                         usize::from(object_fit(image.natural(), *fit, geometry.content).is_some())
                     }
                 };
@@ -674,13 +750,13 @@ impl<'a> Replay<'a> {
                                 .into_iter()
                                 .all(|(x, y)| x.is_finite() && y.is_finite());
                     });
-                    if let Payload::Image(image, fit, _) = &n.payload {
+                    if let Payload::Image(image, fit, _, _) = &n.payload {
                         finite &= object_fit(image.natural(), *fit, c).is_none_or(finite_rect);
                     }
                     if !finite {
                         return Err("nonfinite content paint geometry".into());
                     }
-                    if let Payload::Text(p, _, _) = &n.payload {
+                    if let Payload::Text(p, ..) = &n.payload {
                         let query_transform = Transform::from_scale(scale, scale)
                             .pre_concat(transform)
                             .pre_scale(1. / scale, 1. / scale);
@@ -778,19 +854,30 @@ impl<'a> Replay<'a> {
                         ));
                     }
                     n.paint.paint(painter.backend.as_mut(), g, parent);
+                    // The overflow clip holds a text's own lines, as the
+                    // live walk clips them (CSS Overflow 3 §3), and the
+                    // children; the leave pops it.
+                    if let Some(shape) = field::overflow_clip(&g.outer, n.paint.widths, n.axes) {
+                        painter.backend.push_clip(&shape, parent);
+                        clips.push(clip);
+                        let own = bbox(parent, shape.rect);
+                        clip = Some(clip.map_or(own, |c| intersect(c, own)));
+                    }
                     match &n.payload {
                         Payload::Empty => {}
-                        Payload::Image(image, fit, tint) => {
+                        Payload::Image(image, fit, tint, rendering) => {
                             if let Some(dst) = object_fit(image.natural(), *fit, g.content) {
                                 let clips = [g.content_edge()];
                                 let placed = image.placed(dst);
-                                painter.backend.image(image, placed, &clips, parent, *tint);
+                                painter
+                                    .backend
+                                    .image(image, placed, &clips, parent, *tint, *rendering);
                             }
                         }
                         Payload::Svg(s) => {
                             painter.paint_svg(s, n.clips(), n.paint.content_shape(g), parent);
                         }
-                        Payload::Text(p, palette, inline) => {
+                        Payload::Text(p, inline, commands) => {
                             if let Some(inline) = inline {
                                 walk.inline.insert(
                                     n.id,
@@ -798,20 +885,34 @@ impl<'a> Replay<'a> {
                                 );
                             }
                             walk.text.insert(n.key, p.clone());
-                            painter.backend.text(
-                                &mut painter.text.borrow_mut(),
-                                p,
-                                palette,
-                                (g.content.0, g.content.1),
-                                parent,
-                            );
+                            for command in commands {
+                                match command {
+                                    TextCommand::Begin(alpha, fills) => {
+                                        if *alpha < 1. {
+                                            painter.backend.push_opacity(*alpha);
+                                        }
+                                        for (shape, color) in fills {
+                                            let mut shape = *shape;
+                                            shape.rect.0 += g.content.0;
+                                            shape.rect.1 += g.content.1;
+                                            painter.backend.fill(&shape, *color, parent);
+                                        }
+                                    }
+                                    TextCommand::Ink(ink) => painter.paint_text_ink(
+                                        p,
+                                        ink,
+                                        (g.content.0, g.content.1),
+                                        parent,
+                                        None,
+                                    ),
+                                    TextCommand::End(alpha) => {
+                                        if *alpha < 1. {
+                                            painter.backend.pop_opacity();
+                                        }
+                                    }
+                                }
+                            }
                         }
-                    }
-                    if let Some(shape) = field::overflow_clip(&g.outer, n.paint.widths, n.axes) {
-                        painter.backend.push_clip(&shape, parent);
-                        clips.push(clip);
-                        let own = bbox(parent, shape.rect);
-                        clip = Some(clip.map_or(own, |c| intersect(c, own)));
                     }
                 }
                 Command::Leave(i) => {

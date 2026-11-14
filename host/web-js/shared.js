@@ -17,6 +17,7 @@
 // commits' updates wait behind it, in order.
 
 import { hold, within } from './focus.js';
+import { rt as Link } from './rt-link.js';
 
 const NAME = '[data-shared-element]';
 let pending = null; // the tails waiting for a transition's update
@@ -95,9 +96,11 @@ function ident() { return `exact-se-${++serial}`; }
 export function commit(tail, queue, inflight, after) {
   // A deferred tree update keeps the press that caused it (focus.js), so a field it mounts may still
   // take the focus from the pressed control.
+  // A tool call waits for its commit's deferred update, whose commands are the call's (calls.js).
   const deferred = () => {
-    const held = hold(), run = () => { run.ran = true; return within(held, tail); };
-    run.release = () => { held?.release(); tail.unrun?.(); };
+    const held = hold(), call = { id: Link.Invocation.id }, run = () => { run.ran = true; Link.Invocation.pending.delete(call); return within(held, tail); };
+    Link.Invocation.pending.add(call);
+    run.release = () => { Link.Invocation.pending.delete(call); held?.release(); tail.unrun?.(); };
     return run;
   };
   if (pending) { pending.push(deferred()); return true; }

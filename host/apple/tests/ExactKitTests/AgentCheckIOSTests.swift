@@ -184,6 +184,32 @@ final class AgentCheckIOSTests: XCTestCase {
         XCTAssertNil(painted["onAccentFill"], "\(painted)")
     }
 
+    /// Each translucent view's opacity counts once in the ink and the fill under it.
+    func testATranslucentViewsOpacityCountsOnce() throws {
+        let agent = mounted([
+            ["op": "create", "id": 1, "kind": "view", "style": ["background_color": [255, 255, 255, 255]]],
+            ["op": "create", "id": 2, "kind": "view", "style": ["background_color": [255, 0, 0, 255]]],
+            ["op": "create", "id": 4, "kind": "view"],
+            ["op": "create", "id": 3, "kind": "text", "props": ["text": "Faded"], "style": ["text_color": [0, 0, 0, 255], "font_size": 17]],
+            ["op": "children", "id": 1, "ids": [2]], ["op": "children", "id": 2, "ids": [4]], ["op": "children", "id": 4, "ids": [3]],
+            ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 400.0, "h": 800.0],
+            ["op": "frame", "id": 2, "x": 16.0, "y": 20.0, "w": 120.0, "h": 36.0],
+            ["op": "frame", "id": 4, "x": 0.0, "y": 0.0, "w": 120.0, "h": 36.0],
+            ["op": "frame", "id": 3, "x": 12.0, "y": 8.0, "w": 96.0, "h": 20.0],
+            ["op": "present", "id": 2, "property": "opacity", "x": 0.5, "y": 0.0],
+            ["op": "present", "id": 4, "property": "opacity", "x": 0.5, "y": 0.0],
+        ])
+        XCTAssertEqual(session?.presenter.views[2]?.alpha, 0.5)
+        XCTAssertEqual(session?.presenter.views[4]?.alpha, 0.5)
+        let items = try XCTUnwrap(agent.check([:])["items"] as? [[String: Any]])
+        let faded = try XCTUnwrap(items.first { $0["text"] as? String == "Faded" }, "\(items)")
+        XCTAssertEqual((faded["fg"] as? [Double])?.last, 0.25, "\(faded)")
+        // Half red over the white page.
+        let bg = try XCTUnwrap(faded["bg"] as? [Double], "\(faded)")
+        XCTAssertEqual(bg[1], 127.5, accuracy: 1, "\(faded)")
+    }
+
     func testCheckObservesInkFitCoverTargetsOverflowCardsAndOverlap() throws {
         let white: [Double] = [255, 255, 255, 255]
         let agent = mounted([

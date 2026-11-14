@@ -255,7 +255,10 @@ impl Usb {
         }
         let kind = match setup["requestType"].as_str() { Some("class") => 1, Some("vendor") => 2, _ => 0 };
         let recipient = match setup["recipient"].as_str() { Some("interface") => 1, Some("endpoint") => 2, Some("other") => 3, _ => 0 };
-        let mut data = if incoming { vec![0u8; args["length"].as_u64().unwrap_or(0) as usize] } else { args["data"].as_str().and_then(unbase64).unwrap_or_default() };
+        let mut data = match buffer(args, incoming, u16::MAX as u64, "control transfer") {
+            Ok(data) => data,
+            Err(e) => return e,
+        };
         let mut t = CtrlTransfer {
             request_type: (if incoming { 0x80 } else { 0 }) | kind << 5 | recipient,
             request: setup["request"].as_u64().unwrap_or(0) as u8,
@@ -278,7 +281,10 @@ impl Usb {
         if o.claims.is_empty() {
             return json!({ "error": "InvalidStateError", "message": "no interface is claimed" });
         }
-        let mut data = if incoming { vec![0u8; args["length"].as_u64().unwrap_or(0) as usize] } else { args["data"].as_str().and_then(unbase64).unwrap_or_default() };
+        let mut data = match buffer(args, incoming, bulk_most(), "transfer") {
+            Ok(data) => data,
+            Err(e) => return e,
+        };
         let endpoint = args["endpointNumber"].as_u64().unwrap_or(0) as u32 | if incoming { 0x80 } else { 0 };
         let mut t = BulkTransfer { endpoint, length: data.len() as u32, timeout: 5000, data: data.as_mut_ptr() };
         // SAFETY: as for a control transfer.
@@ -317,6 +323,34 @@ impl Usb {
         self.context.changed("usb.usbConnection");
         Json::Null
     }
+}
+
+/// A transfer's buffer: `length` bytes to read, or the bytes to write, at most `most` either way; else the call's
+/// `TypeError`, before anything the size of `length` is allocated. A control transfer's `wLength` is 16 bits, so its
+/// `most` is 65,535, as macOS has it.
+fn buffer(args: &Json, incoming: bool, most: u64, what: &str) -> Result<Vec<u8>, Json> {
+    if incoming {
+        return match args["length"].as_f64() {
+            Some(n) if n >= 0.0 && n.fract() == 0.0 && n <= most as f64 => Ok(vec![0u8; n as usize]),
+            _ => Err(json!({ "error": "TypeError", "message": format!("{what} length must be an integer from 0 to {most}") })),
+        };
+    }
+    let data = args["data"].as_str().and_then(unbase64).unwrap_or_default();
+    if data.len() as u64 > most {
+        return Err(json!({ "error": "TypeError", "message": format!("{what} data must contain at most {most} bytes") }));
+    }
+    Ok(data)
+}
+
+/// The longest bulk or interrupt transfer usbfs takes: the memory its transfers may hold at once,
+/// `usbcore.usbfs_memory_mb` (16 MB by default; https://docs.kernel.org/admin-guide/kernel-parameters.html), past
+/// which the ioctl fails `ENOMEM`. Its 0, no limit, reads as a gibibyte: the ioctl's buffer is one allocation.
+fn bulk_most() -> u64 {
+    let mb = std::fs::read_to_string("/sys/module/usbcore/parameters/usbfs_memory_mb")
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .unwrap_or(16);
+    if mb == 0 { 1 << 30 } else { (mb << 20).min(1 << 30) }
 }
 
 fn transferred(n: i32, incoming: bool, data: &[u8]) -> Json {
@@ -484,5 +518,22 @@ mod tests {
         assert_eq!(read(" 3.20\n", "0\n"), (0x0320, None));
         std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!((bcd_usb(&dir), configured(&dir)), (0, None));
+    }
+
+    /// A control transfer's `wLength` is 16 bits: 65,536 would ask the device for 0 bytes, so it is refused, as a
+    /// length past a bulk transfer's bound is, before a buffer that long is allocated.
+    #[test]
+    fn a_transfer_longer_than_its_ioctl_takes_is_refused_before_allocating() {
+        let read = |length: Json, most: u64| buffer(&json!({ "length": length }), true, most, "transfer").map(|b| b.len());
+        assert_eq!(read(json!(0), 65535), Ok(0));
+        assert_eq!(read(json!(65535), 65535), Ok(65535));
+        assert_eq!(read(json!(64.0), 65535), Ok(64));
+        for refused in [json!(65536), json!(1u64 << 40), json!(-1), json!(1.5), json!(null), json!("8")] {
+            assert_eq!(read(refused.clone(), 65535).unwrap_err()["error"], "TypeError", "{refused}");
+        }
+        assert_eq!(read(json!(u64::MAX), bulk_most()).unwrap_err()["error"], "TypeError");
+        let write = |bytes: usize| buffer(&json!({ "data": base64(&vec![7u8; bytes]) }), false, 65535, "transfer");
+        assert_eq!(write(65535).map(|b| b.len()), Ok(65535));
+        assert_eq!(write(65536).unwrap_err()["error"], "TypeError");
     }
 }

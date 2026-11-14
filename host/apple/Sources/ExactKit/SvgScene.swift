@@ -89,6 +89,8 @@ enum CssAnimations {
     /// Replace `layer`'s CSS animations with `specs`, keeping any whose spec
     /// is unchanged (a data tick must not restart a running pulse).
     static func apply(_ specs: [CssAnimation], to layer: CALayer, clock: Double?, installed: inout [String: Int], offscreen: CFTimeInterval? = nil) {
+        var changed = false
+        defer { if changed { (layer.delegate as? NodeView)?.overflowClipGeometryChanged() } }
         var keep: Set<String> = []
         for spec in specs {
             let id = spec.id
@@ -97,11 +99,13 @@ enum CssAnimations {
             h.combine(spec.signature); h.combine(clock)
             let signature = h.finalize()
             if installed[id] == signature { continue }
+            changed = true
             installed[id] = signature
             layer.removeAnimation(forKey: id)
             if let animation = make(spec, layer: layer, clock: clock, offscreen: offscreen) { layer.add(animation, forKey: id) }
         }
         for id in installed.keys where !keep.contains(id) {
+            changed = true
             layer.removeAnimation(forKey: id)
             installed.removeValue(forKey: id)
         }
@@ -662,6 +666,7 @@ final class SvgHost {
         scene.apply(spec, dark: dark, clock: clock)
         if let view = layer.delegate as? NodeView { place(id, in: view.contentBox()) }
         scene.root.applyColorRange(limit: limit, deep: true)
+        (layer.delegate as? NodeView)?.overflowClipGeometryChanged()
     }
 
     /// Places `id`'s scene at its view's content box, which a sheet may hold:

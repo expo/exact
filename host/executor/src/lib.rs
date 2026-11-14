@@ -206,6 +206,7 @@ struct Shared {
     #[cfg(test)]
     queued_deadlines: Arc<AtomicUsize>,
     abort: AbortController,
+    http_cache: std::sync::OnceLock<SharedHttpCache>,
     /// Where the app's files are, as the host names them; unset on a host or
     /// drive that has none.
     root_paths: std::sync::OnceLock<[std::path::PathBuf; 3]>,
@@ -215,6 +216,10 @@ struct Shared {
     /// boot: opening makes the directories, and a cold boot opens no app
     /// storage (fieldnotes' `apple_module_replacement_…` test).
     roots: std::sync::OnceLock<Result<ibex2::stdlib::app_fs::AppDirectories, String>>,
+    #[cfg(test)]
+    roots_checked: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+    #[cfg(test)]
+    deadline_armed: Mutex<Option<std::sync::mpsc::Sender<Deadline>>>,
     /// Open two-way sockets by stream ticket (LLP 1016.000 D7; `stream.rs`).
     sockets: Mutex<std::collections::HashMap<u64, stream::Socket>>,
     /// Long polls waiting to ask again, by stream ticket (LLP 1016.000 D8;
@@ -235,8 +240,17 @@ impl Shared {
     /// request, which leaves them unopened, or when the host named none.
     pub(crate) fn roots_for(&self, request: &Request) -> body::Roots<'_> {
         request.body_from.as_ref().or(request.body_to.as_ref())?;
+        self.app_roots()
+    }
+    fn app_roots(&self) -> body::Roots<'_> {
         let paths = self.root_paths.get()?;
-        Some(self.roots.get_or_init(|| body::open(paths)))
+        Some(self.roots.get_or_init(|| {
+            body::open(
+                paths,
+                #[cfg(test)]
+                self.roots_checked.lock().unwrap().clone(),
+            )
+        }))
     }
 }
 
@@ -270,6 +284,15 @@ pub struct Core {
 /// Makes the host (and its transport) an owner or a stream fetches
 /// through: the platform's, unless the embedder names another.
 pub type StreamHost = Arc<dyn Fn() -> ibex2::host::Host + Send + Sync>;
+
+// With no I/O grants there is nothing to endow. Refusal must not wait
+// for platform initialization, including the default stores' bundle identity.
+fn independent_bindings(grants: &str, host: &StreamHost) -> Option<ibex2::host::Bindings> {
+    ibex2::grant::GrantSet::parse(&exact_runner::io_grants(grants))
+        .ok()
+        .filter(|grants| !grants.is_empty())
+        .map(|grants| host().endow(grants))
+}
 
 /// The ordered owner (the boot's bindings) and the independent ones. The
 /// boot endowed its bindings with the data module's grants, before the plan
@@ -396,8 +419,13 @@ impl Core {
             #[cfg(test)]
             queued_deadlines: Arc::default(),
             abort: AbortController::new(),
+            http_cache: std::sync::OnceLock::new(),
             root_paths: std::sync::OnceLock::new(),
             roots: std::sync::OnceLock::new(),
+            #[cfg(test)]
+            roots_checked: Mutex::default(),
+            #[cfg(test)]
+            deadline_armed: Mutex::default(),
             sockets: Mutex::default(),
             retrying: Mutex::default(),
             uploads: stream::Uploads::default(),
@@ -680,9 +708,17 @@ impl Core {
             // Queued closures are destroyed by their executor owner. Doing
             // it here could run an arbitrary destructor on the UI thread.
             if self.machine.is_none() {
-                for queue in &mut state.completed {
-                    queue.clear();
+                for lane in 0..2 {
+                    let outcomes = std::mem::take(&mut state.completed[lane]);
+                    for done in outcomes.iter().filter(|done| !done.message) {
+                        state.counts[lane] -= 1;
+                        state.bytes[lane] -= done.bytes;
+                        state.streams -= usize::from(done.stream);
+                    }
                 }
+                state.light = 0;
+                state.agains = 0;
+                state.ordered.clear();
             } else if let Some(machine) = &self.machine {
                 machine.stop(&mut state);
             }
@@ -861,9 +897,7 @@ fn complete(shared: &Shared, ticket: u64, outcome: Outcome) {
     let finished_at = std::time::Instant::now();
     let mut state = shared.state.lock().unwrap();
     if state.retired {
-        if state.book.retiring {
-            asynch::external_end(shared, &mut state, ticket);
-        }
+        asynch::external_end(shared, &mut state, ticket);
         return;
     }
     let Some(at) = state.running.iter().position(|run| run.ticket == ticket) else {
@@ -930,10 +964,6 @@ fn complete(shared: &Shared, ticket: u64, outcome: Outcome) {
 /// and a long native call it hands to the app's native module.
 fn handoff(request: &Request) -> bool {
     (request.continuation.is_some() && request.storage.is_none()) || request.is_native()
-}
-
-fn handed_off(job: &Job) -> bool {
-    handoff(&job.request) && matches!(job.work, Some(OwnedWork::Later(_)))
 }
 
 /// An HTTP read with no effect to lose if it is never sent (RFC 9110 §9.2.1).
@@ -1054,7 +1084,7 @@ fn worker(
 ) {
     let parsed = || ibex2::grant::GrantSet::parse(&exact_runner::io_grants(&grants));
     let bindings = if lane == 1 && bindings.is_none() {
-        parsed().ok().map(|g| host().endow(g))
+        independent_bindings(&grants, &host)
     } else {
         bindings
     };
@@ -1070,7 +1100,10 @@ fn worker(
             loop {
                 if state.retired {
                     let abandoned = std::mem::take(&mut state.jobs[lane]);
+                    state.counts[lane] -= abandoned.len();
+                    state.bytes[lane] -= abandoned.iter().map(|job| job.charge).sum::<usize>();
                     let fenced = std::mem::take(&mut state.fenced);
+                    state.fenced_bytes = 0;
                     let discarded = std::mem::take(&mut state.discard);
                     drop(state);
                     drop((abandoned, fenced, discarded));
@@ -1142,10 +1175,6 @@ fn worker(
             shared.abort.signal().register(move || abort.abort())
         };
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let files = Files {
-                roots: shared.roots_for(&request),
-                grants: &grants,
-            };
             // A source's narrower scope runs on this worker's own transport,
             // so it reuses the connections that transport keeps.
             let scoped = match scoped_grants(&grants, request.grants.as_deref()) {
@@ -1163,7 +1192,7 @@ fn worker(
                 forced,
                 work,
                 &abort,
-                &files,
+                &grants,
                 overlap && class == RequestClass::Read,
                 (&shared, ticket, class),
             )
@@ -1194,13 +1223,6 @@ impl Core {
     }
 }
 
-/// What a body read from an app file needs: where the files are, and the
-/// app's grants (the request's own scope narrows them).
-struct Files<'a> {
-    roots: body::Roots<'a>,
-    grants: &'a str,
-}
-
 #[allow(clippy::too_many_arguments)]
 fn execute(
     fetch: Result<&ibex2::host::Fetch, &str>,
@@ -1208,7 +1230,7 @@ fn execute(
     forced: bool,
     work: Option<Work>,
     abort: &AbortController,
-    files: &Files<'_>,
+    grants: &str,
     overlap: bool,
     cache_job: (&Arc<Shared>, u64, RequestClass),
 ) -> Outcome {
@@ -1257,6 +1279,13 @@ fn execute(
         // A deadline that cannot be kept is refused, never silently none.
         Err(why) => return failed(FailureKind::Refused, why),
     };
+    #[cfg(test)]
+    if let (Some(armed), Some(deadline)) = (
+        cache_job.0.deadline_armed.lock().unwrap().as_ref(),
+        deadline.as_ref(),
+    ) {
+        let _ = armed.send(deadline.clone());
+    }
     // The body from an app file, read now, as late as can be, and refused
     // before anything is sent (LLP 1108 D6 R2). The deadline or an abort
     // ends the request while the file is read, and nothing is sent.
@@ -1272,22 +1301,45 @@ fn execute(
             None
         }
     };
-    if let Err(outcome) = body::resolve(files.roots, files.grants, &mut request, &ended) {
+    let roots = match body::prepare(cache_job.0, &request, &ended) {
+        Ok(roots) => roots,
+        Err(outcome) => return outcome,
+    };
+    if let Err(outcome) = body::resolve(roots.as_ref(), grants, &mut request, &ended) {
         return outcome;
     }
     // The file a 2xx body goes to (LLP 1108 D6 R2): staged before sending.
-    let staged = match body_to::stage(files.roots, files.grants, &request) {
+    let staged = match body_to::stage(roots.as_ref(), grants, &request) {
         Ok(staged) => staged,
         Err(outcome) => return outcome,
     };
     if let Some(outcome) = ended() {
         return outcome;
     }
+    let shared_cache = cache_job.0.http_cache.get();
     if let Some(outcome) =
-        cache::prepare(cache_job.0, cache_job.1, &mut request, cache_job.2, forced)
-            .or_else(|| cache::missing(&request, forced))
+        cache::prepare(cache_job.0, cache_job.1, &mut request, cache_job.2, forced).or_else(|| {
+            if shared_cache.is_none() {
+                cache::missing(&request, forced)
+            } else {
+                None
+            }
+        })
     {
         return outcome;
+    }
+    let mode = if forced && request.cache != exact_runner::CacheMode::NoStore {
+        exact_runner::CacheMode::Reload
+    } else {
+        request.cache
+    };
+    if shared_cache.is_some() {
+        if let Err(outcome) = cache::granted(grants, &request) {
+            return outcome;
+        }
+        if let Err(error) = reach::admit_cached(&request) {
+            return fetch_failure(error, abort);
+        }
     }
     let mut req = fetch_request(request, forced);
     cache::observe(cache_job.0, &mut req);
@@ -1298,7 +1350,11 @@ fn execute(
     // deadline over 60 s is not cut short by it.
     req.timeout = timeout.map(|ms| std::time::Duration::from_millis(u64::from(ms) + 1_000));
     let retry = cache::retry_request(cache_job.0, cache_job.1, &req);
-    let result = fetch.stream(req, &abort.signal()).and_then(check_headers);
+    let result = match shared_cache {
+        Some(cache) => cache.stream(&fetch, req, mode, &abort.signal()),
+        None => fetch.stream(req, &abort.signal()),
+    }
+    .and_then(check_headers);
     let redirected_conditional = result.as_ref().is_ok_and(|r| {
         cache::retry(
             &mut cache_job.0.state.lock().unwrap(),
@@ -1375,6 +1431,8 @@ mod body_to;
 
 mod admission;
 mod cache;
+mod shared_cache;
+pub use shared_cache::SharedHttpCache;
 pub mod preload;
 pub mod pump;
 mod reads;

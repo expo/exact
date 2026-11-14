@@ -106,7 +106,6 @@ extension NavigationHost {
         let nav = makeNavigation(first: routes.first?.node)
         prepareRoutes(routes, in: nav)
         nav.setViewControllers(routes, animated: false)
-        recordOwned(nav)
         watchPops(nav)
         tabStacks[panel] = nav
         return nav
@@ -126,9 +125,6 @@ extension NavigationHost {
         if let plain = stack as? PlainTab { return plain.show(routes.first) }
         guard let nav else { return }
         if !nav.stackRoutes.elementsEqual(routes, by: ===) { nav.setViewControllers(nav.stackFront + routes, animated: false) }
-        // Record what it holds even when it already held them: UIKit moves routes between More and a tab's own
-        // controller, and a pop's Back is found from this record (`recordOwned`)
-        recordOwned(nav)
     }
 
     /// Build the tabs More's list shows a row for that the runner has not

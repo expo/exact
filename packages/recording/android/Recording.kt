@@ -16,6 +16,8 @@
 //   ends stops it (`track-ended`).
 // - `audioLevel` (D1): the RMS of each `interval`, computed on the capture's thread; an answer covers every interval
 //   since the last.
+// - `<audio-waveform>` (D13) draws a bar's height as the level in decibels, as a recorder's meter shows it
+//   (`WaveformBars`).
 // - Under the agent (§10) nothing records: the level is the synthetic signal on the session clock, and a stopped
 //   recorder's file is WAV of a tone that follows it, answered as `audio/wav`.
 package exact.recording
@@ -131,7 +133,7 @@ class RecordingModule(context: ExtensionContext) : ExactExtension(context) {
         if (track.isEmpty()) return JSONObject().put("audioLevel", 0).put("totalAudioEnergy", 0).put("totalSamplesDuration", 0).put("levels", JSONArray())
         val key = "$track ${args.optDouble("interval", 0.0)} ${args.optDouble("history", 0.0)}"
         val m = meters[key] ?: Meter(args.optDouble("interval", 50.0).takeIf { it > 0 } ?: 50.0,
-            args.optDouble("history", 100.0).takeIf { it > 0 }?.toInt() ?: 100, context.now()).also { m ->
+            args.optDouble("history", 100.0).takeIf { it > 0 }?.toInt() ?: 100, context.now(), context.agent).also { m ->
             try { m.leave = context.tracks.subscribe(track, m, false, context.origin) } catch (e: TrackError) { return error(e.code) }
             meters[key] = m
         }
@@ -163,10 +165,10 @@ class RecordingModule(context: ExtensionContext) : ExactExtension(context) {
         if (track == w.track) return
         w.meter?.stop()
         w.track = track
-        w.meter = if (track.isEmpty()) null else Meter(50.0, 1000, this.context.now()).also { m ->
+        w.meter = if (track.isEmpty()) null else Meter(WaveformBars.STEP, WaveformBars.HISTORY, this.context.now(), this.context.agent).also { m ->
             try { m.leave = this.context.tracks.subscribe(track, m, false, this.context.origin) } catch (e: TrackError) { return }
         }
-        w.bars = emptyList()
+        w.bars = WaveformBars(this.context.now())
     }
 
     override fun destroyView(view: View) { (view as? Waveform)?.let { it.gone = true; it.meter?.stop() } }
@@ -175,7 +177,7 @@ class RecordingModule(context: ExtensionContext) : ExactExtension(context) {
         val paint = Paint().apply { color = Color.rgb(209, 36, 47) }
         var track = ""
         var meter: Meter? = null
-        var bars: List<Double> = emptyList()
+        var bars = WaveformBars(0.0)
         var gone = false
         private val density = context.resources.displayMetrics.density
 
@@ -183,8 +185,8 @@ class RecordingModule(context: ExtensionContext) : ExactExtension(context) {
 
         override fun doFrame(frameTimeNanos: Long) {
             if (gone) return
-            val fit = ((width + GAP * density) / ((BAR + GAP) * density)).toInt()
-            bars = meter?.levelsNow(this@RecordingModule.context.now())?.takeLast(fit) ?: emptyList()
+            val now = this@RecordingModule.context.now()
+            meter?.let { bars.advance(now, it.advance(now)) }
             invalidate()
             Choreographer.getInstance().postFrameCallback(this)
         }
@@ -194,8 +196,11 @@ class RecordingModule(context: ExtensionContext) : ExactExtension(context) {
             val h = height.toFloat()
             val bar = BAR * density
             val gap = GAP * density
-            bars.forEachIndexed { i, level ->
-                val x = w - (bars.size - i) * (bar + gap) + gap
+            // One bar more than fits: the oldest slides out at the left as the bars scroll.
+            val shown = bars.bars.takeLast(((w + gap) / (bar + gap)).toInt() + 1)
+            val phase = bars.phase.toFloat()
+            shown.forEachIndexed { i, level ->
+                val x = w - (shown.size - i + phase) * (bar + gap) + gap
                 val half = maxOf(density, (level * (h / 2 - 2 * density)).toFloat())
                 canvas.drawRect(x, h / 2 - half, x + bar, h / 2 + half, paint)
             }
@@ -458,59 +463,70 @@ class RecordingModule(context: ExtensionContext) : ExactExtension(context) {
         }
     }
 
-    /** A level on one track with one argument group (D1). */
-    private inner class Meter(val interval: Double, val history: Int, var at: Double) : TrackConsumer {
-        var leave: (() -> Unit)? = null
-        private var untap: (() -> Unit)? = null
-        private val levels = ArrayList<Double>()
-        private var energy = 0.0
-        private var duration = 0.0
-        private var last = 0.0
-        private var running = false
-        private var quiet = false
-        private val measured = java.util.concurrent.ConcurrentLinkedQueue<Double>()
+}
 
-        override fun live(source: AudioSource?) {
-            running = true
-            if (source == null || untap != null) return
-            val window = maxOf(1, (source.sampleRate * interval / 1000).toInt())
-            var sum = 0.0
-            var count = 0
-            untap = source.tap { samples, n ->
-                for (i in 0 until n) {
-                    val s = samples[i] / 32768.0
-                    sum += s * s; count += 1
-                    if (count >= window) { measured.add(minOf(1.0, sqrt(sum / count))); sum = 0.0; count = 0 }
-                }
-                while (measured.size > 4096) measured.poll()
+
+/** A level on one track with one argument group (D1). */
+internal class Meter(val interval: Double, val history: Int, var at: Double, private val agent: Boolean) : TrackConsumer {
+    var leave: (() -> Unit)? = null
+    private var untap: (() -> Unit)? = null
+    private val levels = ArrayList<Double>()
+    private var energy = 0.0
+    private var duration = 0.0
+    private var last = 0.0
+    private var running = false
+    private var quiet = false
+    private val measured = java.util.concurrent.ConcurrentLinkedQueue<Double>()
+
+    override fun live(source: AudioSource?) {
+        running = true
+        if (source == null || untap != null) return
+        val window = maxOf(1, (source.sampleRate * interval / 1000).toInt())
+        var sum = 0.0
+        var count = 0
+        untap = source.tap { samples, n ->
+            for (i in 0 until n) {
+                val s = samples[i] / 32768.0
+                sum += s * s; count += 1
+                if (count >= window) { measured.add(minOf(1.0, sqrt(sum / count))); sum = 0.0; count = 0 }
             }
+            while (measured.size > 4096) measured.poll()
         }
+    }
 
-        override fun muted(reason: String) { quiet = true }
-        override fun unmuted() { quiet = false }
-        override fun ended() { running = false; untap?.invoke(); untap = null }
-        fun stop() { untap?.invoke(); untap = null; leave?.invoke(); leave = null }
+    override fun muted(reason: String) { quiet = true }
+    override fun unmuted() { quiet = false }
+    override fun ended() { running = false; untap?.invoke(); untap = null }
+    fun stop() { untap?.invoke(); untap = null; leave?.invoke(); leave = null }
 
-        /** The rolling levels, read up to [now]. */
-        fun levelsNow(now: Double): List<Double> { read(now); return levels }
+    fun read(now: Double): JSONObject {
+        advance(now)
+        return JSONObject().put("audioLevel", last).put("totalAudioEnergy", energy).put("totalSamplesDuration", duration)
+            .put("levels", JSONArray(levels))
+    }
 
-        fun read(now: Double): JSONObject {
-            val steps = floor((now - at) / interval).toInt()
-            val fresh = ArrayList<Double>()
-            if (steps > 0) {
-                when {
-                    !running || quiet -> repeat(steps) { fresh += 0.0 }
-                    context.agent -> for (k in 1..steps) fresh += synthetic(floor((at + k * interval) / 50).toInt())
-                    else -> { val all = generateSequence { measured.poll() }.toList(); fresh += all.takeLast(steps) }
-                }
-                at += steps * interval
+    /** The levels of the intervals since the meter last advanced, kept in its history: silence by the clock, the
+     * measured audio as the capture delivers it, each window once. */
+    fun advance(now: Double): List<Double> {
+        val steps = floor((now - at) / interval).toInt()
+        val fresh = ArrayList<Double>()
+        val measuredNow = generateSequence { measured.poll() }.toList()
+        val silent = !running || quiet
+        when {
+            // Silence adds no energy: its whole span is counted, and only the levels the history keeps are made.
+            silent -> if (steps > 0) {
+                repeat(minOf(steps, history)) { fresh += 0.0 }
+                duration += steps * interval / 1000
+                last = 0.0
             }
-            for (level in fresh) { energy += level * level * interval / 1000; duration += interval / 1000; last = level }
-            levels += fresh
-            while (levels.size > history) levels.removeAt(0)
-            return JSONObject().put("audioLevel", last).put("totalAudioEnergy", energy).put("totalSamplesDuration", duration)
-                .put("levels", JSONArray(levels))
+            agent -> for (k in 1..steps) fresh += RecordingModule.synthetic(floor((at + k * interval) / 50).toInt())
+            else -> fresh += measuredNow
         }
+        if (steps > 0) at += steps * interval
+        if (!silent) for (level in fresh) { energy += level * level * interval / 1000; duration += interval / 1000; last = level }
+        levels += fresh.takeLast(history)
+        while (levels.size > history) levels.removeAt(0)
+        return fresh
     }
 }
 
@@ -550,6 +566,52 @@ internal data class Form(val container: Int, val codec: String, val profile: Int
 
 private const val BAR = 3f
 private const val GAP = 2f
+
+/** What `<audio-waveform>` draws, as the web's `WaveformBars` draws it (`web/index.js`): one bar a [STEP] of the
+ * session's time, newest last, each the height of a level as the meter's ballistics carry it, and how far the newest
+ * bar has moved on from its place ([phase], 0 to 1), so the bars scroll with time between steps. Levels that arrive
+ * together are queued and drawn a step apart; when none has arrived by its step the bars wait at a full step. */
+internal class WaveformBars(private var at: Double) {
+    companion object {
+        const val STEP = 50.0
+        const val HISTORY = 1000
+        private const val FLOOR = -50.0
+        /** A meter's ballistics, each the share of the way a step goes: a bar rises within the step (20 ms) and falls
+         * back over a few (120 ms). */
+        private val ATTACK = 1 - kotlin.math.exp(-STEP / 20)
+        private val RELEASE = 1 - kotlin.math.exp(-STEP / 120)
+        /** Levels at most this many steps behind the time are drawn at once. */
+        private const val LAG = 4
+
+        /** A bar's height, 0 to 1, for a level (an interval's RMS, 0 to 1): its decibels over the last 50 dB below
+         * full scale. Speech at an RMS near 0.03 is −30 dBFS, two fifths of the height, where the linear level drew it
+         * a thirtieth. */
+        fun height(level: Double): Double =
+            if (level > 0) minOf(1.0, maxOf(0.0, (20 * kotlin.math.log10(level) - FLOOR) / -FLOOR)) else 0.0
+    }
+
+    val bars = ArrayList<Double>()
+    var phase = 0.0
+        private set
+    private val queue = ArrayDeque<Double>()
+    private var shown = 0.0
+
+    /** Take [levels], the meter's since the last frame, and move to [now]. */
+    fun advance(now: Double, levels: List<Double>) {
+        levels.forEach { queue.addLast(height(it)) }
+        while (now - at >= STEP && queue.isNotEmpty()) { take(); at += STEP }
+        while (queue.size > LAG) take()
+        if (now - at > STEP) at = now - STEP
+        phase = minOf(1.0, maxOf(0.0, (now - at) / STEP))
+    }
+
+    private fun take() {
+        val target = queue.removeFirst()
+        shown += (target - shown) * (if (target > shown) ATTACK else RELEASE)
+        bars += shown
+        while (bars.size > HISTORY) bars.removeAt(0)
+    }
+}
 
 /** A WAV header for [length] bytes of 16-bit mono PCM at [rate]. */
 private fun header(length: Int, rate: Int): ByteArray {

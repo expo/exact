@@ -4,10 +4,10 @@ import { spawnSync } from 'node:child_process';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
-import { createApp } from './new.mjs';
+import { applyPattern, createApp } from './new.mjs';
 import { dependencyTables, updateManifests } from './update-manifests.mjs';
 import { ensureShells } from '../scripts/app-shells.mjs';
-import { pathFrom } from '../scripts/app.mjs';
+import { pathFrom, resolveApp } from '../scripts/app.mjs';
 
 const root = resolve(import.meta.dir, '..');
 const sqlite = 'vendor/ibex/crates/ibex2-sqlite';
@@ -16,6 +16,78 @@ const scopes = ['dependencies', `target.'${target}'.dependencies`, 'workspace.de
 const dependencies = (doc, scope) => scope === scopes[0] ? doc.dependencies : scope === scopes[1] ? doc.target[target].dependencies : doc.workspace.dependencies;
 const write = (file, text) => { mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, text); };
 const packageText = name => `[package]\nname = "${name}"\nversion = "0.1.0"\nedition = "2021"\n[lib]\npath = "lib.rs"\n`;
+
+test('SDK-named app folders keep one crate identity through update, regeneration and renaming', () => {
+  mkdirSync(resolve(root, 'target'), { recursive: true });
+  const parent = mkdtempSync(resolve(root, 'target/app-identity-'));
+  try {
+    for (const [index, folder, title, name] of [
+      [0, 'exact', 'Everbloom', 'everbloom'],
+      [1, 'exact-js', 'Éver Bloom!', 'ever-bloom'],
+      [2, 'exact', 'Exact_JS', 'exact-js-app'],
+      [3, 'exact', '123 Garden', 'app-123-garden'],
+      [4, 'exact', '🌱', 'app'],
+      [5, 'exact', undefined, 'exact-app'],
+    ]) {
+      let dir = resolve(parent, String(index), folder);
+      createApp(dir, { title, with: ['ios', 'linux'] });
+      const pkg = () => JSON.parse(readFileSync(resolve(dir, 'package.json'), 'utf8'));
+      assert.equal(pkg().name, name);
+      assert.match(applyPattern(dir, 'one-screen').said, /^one-screen: wrote/);
+      for (let pass = 0; pass < 3; pass++) {
+        if (pass === 1) {
+          const manifest = JSON.parse(readFileSync(resolve(dir, 'app.json'), 'utf8'));
+          manifest.name = manifest.app.name = 'Changed Display Name';
+          writeFileSync(resolve(dir, 'app.json'), JSON.stringify(manifest));
+          const moved = resolve(parent, String(index), 'Exact Feature');
+          renameSync(dir, moved);
+          dir = moved;
+        }
+        createApp(dir, { update: true });
+        assert.match(readFileSync(resolve(dir, 'exact.mjs'), 'utf8'), new RegExp(`name: "${name}",`));
+        const { workspace, crates } = ensureShells(dir);
+        assert.deepEqual(crates, ['web', 'apple', 'linux']);
+        for (const kind of crates) {
+          const doc = Bun.TOML.parse(readFileSync(resolve(workspace, kind, 'Cargo.toml'), 'utf8'));
+          assert.equal(doc.package.name, `${name}-${kind}`);
+          assert.equal(resolveApp(dir).crate(kind), doc.package.name);
+        }
+        assert.equal(ensureShells(dir).wrote, false);
+        rmSync(workspace, { recursive: true, force: true });
+      }
+      assert.equal(pkg().name, name);
+    }
+  } finally { rmSync(parent, { recursive: true, force: true }); }
+}, 60_000);
+
+test('authored crate names win over the package name and an SDK-named directory', () => {
+  mkdirSync(resolve(root, 'target'), { recursive: true });
+  const parent = mkdtempSync(resolve(root, 'target/app-identity-'));
+  try {
+    const made = resolve(parent, 'original'), moved = resolve(parent, 'exact');
+    createApp(made, { with: ['ios'] });
+    const { workspace, crates } = ensureShells(made);
+    for (const entry of ['Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo', ...crates]) {
+      cpSync(resolve(workspace, entry), resolve(made, entry), { recursive: true });
+    }
+    rmSync(workspace, { recursive: true, force: true });
+    for (const kind of crates) {
+      const file = resolve(made, kind, 'Cargo.toml');
+      writeFileSync(file, readFileSync(file, 'utf8').replace(`original-${kind}`, `authored-${kind}`));
+    }
+    renameSync(made, moved);
+    for (let pass = 0; pass < 2; pass++) {
+      createApp(moved, { update: true, with: ['linux', 'android'] });
+      assert.match(readFileSync(resolve(moved, 'exact.mjs'), 'utf8'), /name: "authored",/);
+      for (const kind of ['web', 'apple', 'linux', 'android']) {
+        const doc = Bun.TOML.parse(readFileSync(resolve(moved, kind, 'Cargo.toml'), 'utf8'));
+        assert.equal(doc.package.name, `authored-${kind}`);
+        assert.equal(resolveApp(moved).crate(kind), doc.package.name);
+      }
+    }
+    assert.equal(JSON.parse(readFileSync(resolve(moved, 'package.json'), 'utf8')).name, 'original');
+  } finally { rmSync(parent, { recursive: true, force: true }); }
+}, 60_000);
 
 function declaration(key, form, scope, path) {
   if (form === 'inline') return `${key} = { path = ${JSON.stringify(path)} }\n`;

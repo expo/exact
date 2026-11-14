@@ -61,6 +61,7 @@ icons
   icon.sun = icon(svg "icons/sun.svg")
   icon.moon = icon(svg "icons/moon.svg")
   icon.github = icon(svg "icons/github.svg")
+  icon.chevronright = icon(svg "icons/chevron-right.svg")
   icon.panelclose = icon(svg "icons/sidebar-collapse.svg")
   icon.panelopen = icon(svg "icons/sidebar-expand.svg")
   icon.algolia = icon(svg "icons/algolia.svg")

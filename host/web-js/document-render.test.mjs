@@ -1224,6 +1224,64 @@ export const answer: Answer = async (_source, [name]): Promise<Result<'note'>> =
   } finally { api.stop(true); }
 }, 60000);
 
+// LLP 1069.005 D2: a draw of randomness is the device's, so a page whose render drew, by `crypto`, by making a key or by
+// a randomized signature, is its reader's alone, kept and shared by no one, even on a `render=cached` route. A deterministic
+// signature, an empty fill or a call the platform refuses draws nothing. A request that says `no-store`, in any case,
+// leaves nothing kept.
+test('serve keeps and shares no page whose render drew randomness', async () => {
+  await renderedPages(`shape Note
+  text: string
+
+routes nav
+  plain "/" render=cached
+  drawn "/drawn" render=cached
+  keyed "/keyed" render=cached
+  signed "/signed" render=cached
+  pure "/pure" render=cached
+
+component App
+  resource note = note(top(nav).name) as shape Note
+  view
+    main
+      text note.text
+`, async (_, html, dist) => {
+    const { pageServer } = await import('./render.mjs');
+    const said = [], sent = {}, page = pageServer(dist, undefined, line => said.push(line));
+    const unstored = name => name === 'cache-control' ? 'max-age=60, No-Store' : undefined;
+    for (const [at, header] of [['/', unstored], ['/'], ['/'], ...['/drawn', '/keyed', '/signed', '/pure'].flatMap(at => [[at], [at]])])
+      (sent[at] ??= new Set()).add((await page(at, header ?? (() => undefined))).headers['cache-control']);
+    const renders = at => said.filter(l => l.startsWith(`render ${at} 200`)).length;
+    // No source failed: what `crypto.subtle` inherits, its `toString` here, still answers
+    expect(said.filter(l => l.startsWith('  /'))).toEqual([]);
+    expect(['/', '/drawn', '/keyed', '/signed', '/pure'].map(at => [at, renders(at), [...sent[at]]])).toEqual([
+      ['/', 2, ['public, max-age=0, s-maxage=60']], ['/drawn', 2, ['no-store']], ['/keyed', 2, ['no-store']],
+      ['/signed', 2, ['no-store']], ['/pure', 1, ['public, max-age=0, s-maxage=60']],
+    ]);
+  }, { 'app.ts': `import type { Answer, Result } from './app.contract.d.ts';
+export const appId = 'test.heads';
+export const grants = '';
+export const answer: Answer = async (_source, [name]): Promise<Result<'note'>> => {
+  const ecdsa = { name: 'ECDSA', namedCurve: 'P-256' };
+  if (name === 'drawn') crypto.getRandomValues(new Uint8Array(1));
+  if (name === 'keyed') await crypto.subtle.generateKey(ecdsa, false, ['sign']);
+  // A key from a fixed seed, so that only the signature draws: ML-DSA's is hedged, randomized by default (FIPS 204)
+  if (name === 'signed') await crypto.subtle.sign('ML-DSA-65', await crypto.subtle.importKey('raw-seed' as any, new Uint8Array(32), 'ML-DSA-65', false, ['sign']), new Uint8Array(1));
+  if (name === 'pure') {
+    await crypto.subtle.sign('HMAC', await crypto.subtle.importKey('raw', new Uint8Array(16), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']), new Uint8Array(1));
+    // A fixed 512-bit key, signed with no salt (RFC 8017 §9.1.1)
+    const pss = { name: 'RSA-PSS', hash: 'SHA-256' }, pkcs8 = Uint8Array.from(atob('${RSA}'), c => c.charCodeAt(0));
+    const rsa = await crypto.subtle.importKey('pkcs8', pkcs8, pss, false, ['sign']);
+    for (const saltLength of [0, 0.5]) await crypto.subtle.sign({ ...pss, saltLength }, rsa, new Uint8Array(1));
+    crypto.getRandomValues(new Uint8Array(0));
+    try { crypto.getRandomValues(new Float64Array(1)); } catch {}
+    await crypto.subtle.generateKey(ecdsa, false, ['encrypt']).catch(() => null);
+  }
+  return { text: \`\${name} \${await crypto.subtle.toString()}\` };
+};
+` });
+}, 60000);
+const RSA = 'MIIBVAIBADANBgkqhkiG9w0BAQEFAASCAT4wggE6AgEAAkEAx0Mg1whnO3050UXzx0W1yxTY3DdA8Q4l3edP2kRTt9aMCQQWvrZO8vigE9OZ/dymeJBXY4NXaP6yji7Nc4y7tQIDAQABAkAApnZK7VjGWT2sve0DxfVTmDE6+UjSYI6UE8FjormJNrgg2AsM4dFG13tCMA25xb8wgUBB+ZfBUtXZMTzNRqrRAiEA+0qgqd/KEjPkR0JFSXbetIac9lDUSSC4+cKMnbtqJ+0CIQDK/u5oHiR4diH+IcOFyRQwppwCLuJOiDRuYjFKzKFZ6QIhANS03L4uMeuqhQZUcDW5KtYARAizbp3f1vOC3Gf/ZeIZAiAfoLa+jCu8hRNoyBPxrVGy/tKB2JI0EC6zICNz9wwQuQIgK+TAG/sa+A1eV+ol6HqlyOSniwccAUoHdesq778edEM=';
+
 // LLP 1048.007 D10: a request route's page that waits for the reader names its answers past 1 KB rather than holding
 // them; the capture script fetches them with the runtime, and the page adopts. Answers no longer kept build it afresh.
 test('a waiting page names its answers past 1 KB, adopts once they come, and builds afresh without them', async () => {

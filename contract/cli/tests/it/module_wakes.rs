@@ -987,6 +987,41 @@ fn a_call_waits_for_a_running_wake() {
     assert_eq!(calls[0]["certainty"], "applied");
 }
 
+/// LLP 1133.023 D7: a call waits at most [`WAIT`] for the invocation
+/// before it, a running call as much as a wake: behind a call that has not
+/// settled after 5 s it is refused `busy` and never runs.
+#[test]
+fn a_call_behind_a_running_call_is_refused_after_five_seconds() {
+    let app = App::new("call");
+    let text = std::fs::read_to_string(app.0.join("app.contract")).unwrap();
+    let tool = "  tool poke writes closed \"Pull once.\" = poke\n  action poke\n    send pulled = pull(\"call\")\n  action once\n";
+    app.write("app.contract", &text.replacen("  action once\n", tool, 1));
+    let mut r = boot(&app);
+    let how = || exact_runner::CallHow {
+        door: "agent".into(),
+        ..Default::default()
+    };
+    r.call_tool("poke", "{}", how()).unwrap();
+    r.call_tool("poke", "{}", how()).unwrap();
+    by(&mut r, 0.0);
+    let calls = state(&r)["intents"]["calls"].clone();
+    assert_eq!(calls[0]["state"], "running", "{calls}");
+    assert_eq!(calls[1]["state"], "waiting", "{calls}");
+    by(&mut r, 4_999.0);
+    let calls = state(&r)["intents"]["calls"].clone();
+    assert_eq!(calls[1]["state"], "waiting", "{calls}");
+    by(&mut r, 1.0);
+    let calls = state(&r)["intents"]["calls"].clone();
+    assert_eq!(calls[0]["outcome"], "refused", "{calls} {}", logs(&r));
+    assert_eq!(calls[0]["reason"], "busy");
+    assert_eq!(calls[1]["state"], "running", "{calls}");
+    answer_pull(&mut r);
+    by(&mut r, 0.0);
+    let calls = state(&r)["intents"]["calls"].clone();
+    assert_eq!(calls[1]["outcome"], "ok", "{calls} {}", logs(&r));
+    assert!(r.take_requests().is_empty(), "{}", logs(&r));
+}
+
 /// LLP 1133.033 D21: Android's reader under the agent starts no foreground
 /// service and says each claim through the claimant's `changed`; the runner
 /// journals it and lists the claims held in the claimant's

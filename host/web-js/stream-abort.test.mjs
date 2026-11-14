@@ -20,12 +20,14 @@ function runtime(prefix) {
   for (const name of ['http-body.js', 'grant-admission.js', 'faults.js', 'address-space.js', 'navigation.js', 'storage-environment.js']) writeFileSync(resolve(dir, name), hostFixtureFile(resolve(root, 'host/web', name)));
   writeFileSync(resolve(dir, 'admission.js'), readFileSync(resolve(root, 'host/web-js/admission.js'), 'utf8').replaceAll("'../web/", "'./"));
   writeFileSync(resolve(dir, 'admission-data.js'), "import { createGrantSet } from './admission.js'; export const tsGrantSet = createGrantSet(null);\n");
-  writeFileSync(resolve(dir, 'rt.js'), 'export const clock={agent:false,now:0},journal=[],Resources=[],inflight={n:0};export const drive=()=>{},time=()=>{},Origin={now:()=>"app"};export const checkpoint=()=>({kept:null});export const commit=f=>f();export const R=()=>{};export const painted=()=>Promise.resolve();\n');
+  writeFileSync(resolve(dir, 'rt.js'), 'export const clock={agent:false,now:0},journal=[],Resources=[],inflight={n:0};export const drive=()=>{},time=()=>{},Origin={now:()=>"app"};export const checkpoint=()=>({kept:null});export const commit=f=>f();export const R=()=>{};export const painted=()=>Promise.resolve();export const canvasCommitted=()=>Promise.resolve();\n');
   writeFileSync(resolve(dir, 'rt-link.js'), "import * as rt from './rt.js'; export { rt };\n");
   writeFileSync(resolve(dir, 'names.js'), 'export const sourceTypes = {};\n');
   return dir;
 }
 const at = (dir, name) => pathToFileURL(resolve(dir, name)).href;
+// The browser's response names the URL it came from, which admission reads (a response without one is refused).
+const responseAt = (input, body, init) => Object.defineProperty(new Response(body, init), 'url', { value: new URL(input?.url ?? String(input), location).href });
 
 let dir, open;
 beforeAll(async () => {
@@ -229,7 +231,7 @@ test("every cache mode reaches the browser from a JS fetch, a stream and a wasm 
         expect(init.mode).toBe('same-origin');
         if (new URL(input).origin !== location.origin) throw new TypeError('cross-origin cache-only request');
       }
-      return new Response('reply');
+      return responseAt(input, 'reply');
     };
     const { tsGrantSet } = await import(at(fixture, 'admission-data.js'));
     const { createRequestExecutor } = await import(at(fixture, 'admission.js'));
@@ -265,16 +267,16 @@ test("every cache mode reaches the browser from a JS fetch, a stream and a wasm 
     }
     for (const cache of [undefined, 'default', 'reload']) {
       const controller = new AbortController();
-      globalThis.fetch = async (_input, init) => { sent.push(init); controller.abort(); return new Response(null, { status: 204 }); };
+      globalThis.fetch = async (input, init) => { sent.push(init); controller.abort(); return responseAt(input, null, { status: 204 }); };
       const poll = { cursor: 'since', from: 'seq', sameCursorEvent: false };
       await request({ method: 'GET', url: 'https://example.test/poll', headers: [], cache, stream: true, longPoll: poll }, { grantSet: tsGrantSet, controllers: new Set(), controller });
       expect(sent.at(-1).cache).toBe(cache ?? 'no-store');
       const next = new AbortController();
-      globalThis.fetch = async (_input, init) => { sent.push(init); next.abort(); return new Response(null, { status: 204 }); };
+      globalThis.fetch = async (input, init) => { sent.push(init); next.abort(); return responseAt(input, null, { status: 204 }); };
       await open({ input: 'https://example.test/poll', init: { cache, exactStream: e => e.data, exactLongPoll: { cursor: 'since', from: 'seq' } } }, v => v, tsGrantSet, () => {}, next);
       expect(sent.at(-1).cache).toBe(cache ?? 'no-store');
     }
-    globalThis.fetch = async (input, init) => { sent.push(init); if (init.cache === 'only-if-cached' && new URL(input).origin !== location.origin) throw new TypeError('cross-origin cache-only request'); return new Response('reply'); };
+    globalThis.fetch = async (input, init) => { sent.push(init); if (init.cache === 'only-if-cached' && new URL(input).origin !== location.origin) throw new TypeError('cross-origin cache-only request'); return responseAt(input, 'reply'); };
     writeFileSync(resolve(fixture, 'ts-data.js'), readFileSync(resolve(root, 'host/web-js/ts-data.js'), 'utf8')
       .replace("'__APP_TS__'", "'./app.js'").replace('__AUTH_IMPORT__', '').replace('__AUTH_INSTALL__', '').replace("'__FETCH_MODULE__'", "'./ts-fetch.js'"));
     writeFileSync(resolve(fixture, 'names.js'), "export const sourceTypes = {cached:[['s'],'s']};\n");

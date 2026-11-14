@@ -281,6 +281,31 @@ mod tests {
     }
 
     #[test]
+    fn a_horizontal_track_leaves_the_corner_only_for_a_vertical_bar() {
+        for (overflow_y, corner) in [("hidden", 0.), ("clip", 0.), ("auto", 12.)] {
+            let source = format!(
+                "component App\n  view\n    column width=240 height=200 overflow-x=\"auto\" overflow-y=\"{overflow_y}\"\n      column width=1000 height=1000 flex-shrink=0\n"
+            );
+            let (mut p, error) = Presenter::boot_with(
+                &crate::test_plan(&source),
+                (),
+                (240., 200.),
+                1.,
+                PathBuf::new(),
+                PainterChoice::Cpu,
+            )
+            .unwrap();
+            assert!(error.is_none(), "{error:?}");
+            p.set_scrollbars(false);
+            p.frame();
+            let bars = &p.brush.scrollbars.bars;
+            let bar = bars.iter().find(|b| !b.vertical).unwrap();
+            assert_eq!(bars.len(), if corner > 0. { 2 } else { 1 }, "{overflow_y}");
+            assert_eq!(bar.track.2, bar.port.2 - 4. - corner, "{overflow_y}");
+        }
+    }
+
+    #[test]
     fn desktop_scrollbars_drag_page_and_cancel_without_pressing_content() {
         let source = r#"component App
   state presses = 0

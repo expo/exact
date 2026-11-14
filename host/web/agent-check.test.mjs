@@ -745,6 +745,53 @@ test('folded captions over pictures use captured pixels unless their own fill co
   } finally { await session.close(); }
 }, 120_000);
 
+// Spark's swipe stamps: `pointer-events: none` takes a text out of hit testing, so the scan starts at its card.
+test('a text outside hit testing stands on its own fill, and on captured pixels without one', async () => {
+  const picture = `"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='400' height='48'%3E%3Cpath fill='%2300ff00' d='M0 0h400v48H0z'/%3E%3C/svg%3E"`;
+  const source = `component Stamps
+  view
+    column background-color="black" color="white" padding=16 gap=16
+      column position="relative" height=48
+        image ${picture} position="absolute" inset=0 width="100%" height="100%"
+        column position="relative" testId="card"
+          text testId="stamp" pointer-events="none" background-color="black" "Stamp on its own fill"
+      column position="relative" height=48
+        image ${picture} position="absolute" inset=0 width="100%" height="100%"
+        column position="relative"
+          text pointer-events="none" "Stamp on a picture"
+`;
+  const session = await open({ host: 'web', url: await built('unhit-stamps', source) });
+  try {
+    const ids = new Map((await session.op({ op: 'tree' })).nodes.map(n => [n.props.testId, n.id]));
+    const obs = await session.op({ op: 'check' });
+    expect(obs.items.find(it => it.text === 'Stamp on its own fill')).toMatchObject({ bg: [0, 0, 0], on: 'own', solid: true });
+    expect(obs.items.find(it => it.text === 'Stamp on a picture').bg).toBeUndefined();
+    expect(ids.has('stamp')).toBe(true);
+  } finally { await session.close(); }
+}, 120_000);
+
+// Spark's card beneath the one being dragged: its name's right corners lie under the top card's white name.
+test('a corner another view is drawn over is not read as the ground of the text under it', async () => {
+  const source = `component Overdrawn
+  view
+    column background-color="black" padding=16
+      column position="relative" width=300 height=48
+        image "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='48'%3E%3Cpath fill='%2300ff00' d='M0 0h300v48H0z'/%3E%3C/svg%3E" position="absolute" inset=0 width="100%" height="100%"
+        text position="relative" color="white" font-size=24 "Partly under a card"
+        column position="absolute" top=24 left=0 right=0 bottom=0 background-color="white"
+        column position="absolute" top=0 left=150 right=0 bottom=0 background-color="white"
+`;
+  const session = await open({ host: 'web', url: await built('overdrawn', source) });
+  try {
+    const item = (await session.op({ op: 'check' })).items.find(it => it.text === 'Partly under a card');
+    expect(item.bg).toBeUndefined();
+    expect(item.drawnOver).toEqual([1, 2, 3]);
+    // Its one uncovered corner is no majority: the text is left unjudged, never judged white on white.
+    const runs = (await checkOp(session, ['both'])).check;
+    expect(runs.map(run => run.findings.filter(f => f.kind === 'contrast'))).toEqual([[], []]);
+  } finally { await session.close(); }
+}, 120_000);
+
 test('Shared Elements keeps Zoom Close painted, observed and usable after repeated flights in both schemes', async () => {
   if (webCompiler().cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
   const root = resolve(import.meta.dir, '../..'), dir = mkdtempSync(resolve(root, 'target/shared-elements-agent-'));

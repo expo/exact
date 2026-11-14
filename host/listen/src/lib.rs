@@ -30,6 +30,9 @@ use std::time::{Duration, Instant};
 /// Bytes a connection may hold unwritten (D3).
 pub const SEND_BYTES: usize = 1 << 20;
 
+/// How often a listener with no directory to watch looks at its path.
+const REWATCH_MS: i32 = 100;
+
 /// What to listen on, and how (D1).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
@@ -352,6 +355,21 @@ impl Loop {
         }
     }
 
+    /// The watched directory is no longer the path's (renamed or removed),
+    /// or there was none: look at the path, which may bind it again and so
+    /// make its directory, then watch the directory now there and look
+    /// again for what changed before that watch began. With none to watch,
+    /// the loop comes back here on a timer.
+    fn rewatch(&mut self) {
+        self.watch = None;
+        self.look();
+        let dir = (self.config.path.parent()).unwrap_or(std::path::Path::new("/"));
+        self.watch = watch::Watch::new(dir).ok();
+        if self.watch.is_some() {
+            self.look();
+        }
+    }
+
     fn turn(&mut self) {
         let mut fds = vec![libc::pollfd {
             fd: self.wake,
@@ -388,12 +406,20 @@ impl Loop {
         }
         let now = Instant::now();
         let soonest = self.conns.values().filter_map(|c| c.deadline).min();
-        let timeout = soonest.map_or(-1, |d| {
+        let mut timeout = soonest.map_or(-1, |d| {
             d.saturating_duration_since(now)
                 .as_millis()
                 .min(i32::MAX as u128) as i32
                 + 1
         });
+        let unwatched = !watched && self.ever_bound;
+        if unwatched {
+            timeout = if timeout < 0 {
+                REWATCH_MS
+            } else {
+                timeout.min(REWATCH_MS)
+            };
+        }
         // SAFETY: `fds` is a live array of its own length.
         let n = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, timeout) };
         if n < 0 {
@@ -419,12 +445,15 @@ impl Loop {
         }
         if watched {
             if fds[at].revents != 0 {
-                if let Some(watch) = &self.watch {
-                    watch.drain();
+                if self.watch.as_ref().is_some_and(watch::Watch::drain) {
+                    self.rewatch();
+                } else {
+                    self.look();
                 }
-                self.look();
             }
             at += 1;
+        } else if unwatched {
+            self.rewatch();
         }
         if let Some(fd) = listening {
             if fds[at].revents != 0

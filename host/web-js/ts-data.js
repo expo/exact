@@ -14,7 +14,7 @@ import * as source from '__APP_TS__';
 import { createSecretFacade, hasGrant, inOverlay, overlaying, setAppGrantSet } from './admission.js';
 import { tsGrantSet } from './admission-data.js';
 import { sourceTypes } from './names.js';
-import { checkpoint, clock, commit, drive, inflight, journal, Origin, painted, R, Resources, time } from './rt.js';
+import { canvasCommitted, checkpoint, clock, commit, drive, inflight, journal, Origin, painted, R, Resources, time } from './rt.js';
 import { failureCode, failureReason, Shaped } from './shape.js';
 // What uploads a resource asks (uploads.js); with ts-fetch-refused.js no source can upload, and the build links none.
 import { ledger, requestKey } from './uploads.js';
@@ -228,7 +228,7 @@ let watching = null, page = null, load = null;
 // D4, the runner's `changed`).
 const changed = (r, topic) => {
   const t = r.ticket;
-  if (!t || t.stream || t.req?.stream) return R(r);
+  if (!t || t.stream || t.req?.stream) return R(r, true);
   if (!t.again) journal.push(`t=${clock.now} changed ${topic}: ticket ${t.id} (${r.name}) lands first, then it is asked again`);
   t.again = true;
 };
@@ -243,7 +243,7 @@ const moduleWatched = new Map(); // module key -> sources
 // Whether the answer that made the call still wants its reply is its call's `wanted`, its ticket's `held` (rt.js
 // `reply`), which a registration's reply reads (LLP 1133.011 D11).
 globalThis.__exact_module = body => {
-  const key = `${body.extension}.${body.source}`, call = activeCall(), before = answering.call;
+  const key = `${body.extension}.${body.source}${body.owner ? `#${body.owner}` : ''}`, call = activeCall(), before = answering.call;
   if (body.source && watching) (moduleWatched.get(key) ?? moduleWatched.set(key, new Set()).get(key)).add(watching);
   // A continuation keeps the least privileged pending call until its answer settles.
   const origin = call?.origin ?? 'app';
@@ -252,7 +252,8 @@ globalThis.__exact_module = body => {
   finally { answering.call = before; }
 };
 (globalThis.exact ??= {}).announceModule = topic => announce(topic, 'module');
-globalThis.exact.moduleReaders = key => Resources.filter(r => moduleWatched.get(key)?.has(r.source)).map(r => r.name);
+// The readers whose data code read module source `key`, of `among`: the release scan passes only the awake ones.
+globalThis.exact.moduleReaders = (key, among = Resources) => among.filter(r => moduleWatched.get(key)?.has(r.source)).map(r => r.name);
 // The documents the answers watch, for the agent's `state.watches`, as the runner lists them: a development page
 // names it (build.mjs), since the agent drives only that, and a production page does not link it.
 export const watchState = () => [...new Set(Resources.flatMap(r => r.gone ? [] : [...r.watches ?? []]))].sort().flatMap(t => {
@@ -525,6 +526,18 @@ export function install(data, mixed = false, modules = null) {
   data.grants = setAppGrantSet(tsGrantSet);
   const storage = globalThis.__exactRender ? renderStorage(null) : storageOf(tsGrantSet);
   if (globalThis.__exactRender) { data.watchedInRender = watchedInRender; data.refusedInRender = refusedInRender; }
+  globalThis.captureCanvas = (surface, path) => {
+    if (overlaying.on) return Promise.reject(inOverlay('captureCanvas()'));
+    if (answering.mapper || answering.mapperCall) return Promise.reject(new Error("captureCanvas() is unavailable in a stream's mapper: capture in the answer that opens the stream"));
+    const call = answering.call, active = () => !!call && !call.settled && (call.wanted?.() ?? call.turn) && !call.ticket?.r?.gone;
+    if (globalThis.__exactRender) return refuseInRender('captureCanvas()', call);
+    if (!active()) return Promise.reject(new DOMException('captureCanvas() requires a live answer: call it directly or after await', 'InvalidStateError'));
+    return ordinary(() => {
+      const ready = canvasCommitted(surface, active);
+      return Promise.all([ready, import('./canvas-capture.js')]).then(([, m]) =>
+        m.captureCanvas(surface, path, (path, png) => m.writeCanvas(appId, tsGrantSet, path, png, active), ready, active));
+    });
+  };
   // The module's storage, as the runner's `state.background` (LLP 1097 D8).
   if (storage) data.background = () => ({ queued: queue.length, inFlight: head ? 1 : 0, ...counts });
   // A rejection nothing handled reaches the journal, as on every host (D8):

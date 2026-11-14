@@ -813,7 +813,8 @@ fn strings_past_the_limit_are_refused_where_they_would_be_built_or_kept() {
     let mut r = boot(b.finish().unwrap(), Data::new(Value::Unit));
     assert!(matches!(
         r.act("double", vec![]),
-        Err(RunnerError::Trap(crate::vm::Trap::StringTooLong { .. }))
+        Err(RunnerError::Evaluation { ref error, .. }) if matches!(**error, RunnerError::Trap(crate::vm::Trap::StringTooLong { .. }),
+        )
     ));
     let long = "x".repeat(crate::vm::MAX_STRING + 1);
     assert!(matches!(

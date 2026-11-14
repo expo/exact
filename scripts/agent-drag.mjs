@@ -2,7 +2,7 @@
 // the viewport, and the route to the touch runner (`host/apple/touches.mjs`)
 // or to the carrier's own contact phases. `agent.mjs` calls it from `tap`.
 import { MalformedOperation, pointerArguments, tapWords, inputJSON } from './agent-keys.mjs';
-import { DRAG_BOUNDS, REACH_MS } from '../host/apple/touches.mjs';
+import { DRAG_BOUNDS, REACH_MS, reaches } from '../host/apple/touches.mjs';
 import { layoutArgs, perfOp } from './agent-inspect.mjs';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
@@ -96,7 +96,8 @@ export async function duringOp(s, op) {
  * ms, one straight drag by (dx, dy) over `over` ms, hold `hold` ms, lift;
  * `during` thunks run while the finger is down after the move, before the
  * hold (kanban F14: a screenshot during a drag shows it moved), when no
- * input is accepted (`s.held`). The start and the end must be in the viewport. A real touch
+ * input is accepted (`s.held`). Both ends stay in the viewport unless `into: 'keyboard'`
+ * extends the end to the screen above its bottom safe area. A real touch
  * under `--touch platform`; elsewhere the carrier's own contact phases,
  * refused where the carrier refuses them.
  */
@@ -116,12 +117,6 @@ const still = (r, target) => (Array.isArray(r.scrolledBy) && r.scrolledBy.every(
   ? [`nothing scrolled: the scroller is at the end of its range, or its content fits it; if it should scroll, \`layout ${target}\` shows its height, and one as tall as its content is in a column that grows with it (\`min-height=0\` on that column, the compiler's \`lower-scroll-grows\`)`]
   : []);
 
-/** The software keyboard's top in the viewport's space while it shows (`state.keyboard`), else Infinity. */
-async function keyboardTop(s) {
-  const k = (await s.op({ op: 'state' })).keyboard;
-  return k?.visible && Number.isFinite(k.top) ? k.top : Infinity;
-}
-
 function dragLeg(opts) {
   const { dx, dy, from, press = 0, over = 250, hold = 0 } = opts, drag = { press, over, hold };
   if (![...(opts.to === undefined ? [dx, dy] : []), press, over, hold].every(Number.isFinite) || [press, over, hold].some((v) => v < 0)) throw new MalformedOperation('drag: expected finite dx, dy and non-negative press, over and hold (ms)');
@@ -135,6 +130,7 @@ function dragLeg(opts) {
 
 export const dragLegs = (opts) => [opts, ...(opts.path ?? [])].map(({ dx, dy, press = 0, over = 250, hold = 0, during = [] }) => ({ dx, dy, press, over, hold, during }));
 export function dragArguments(opts) {
+  if (opts.into !== undefined && opts.into !== 'keyboard') throw new MalformedOperation('drag: into takes keyboard');
   if (opts.path !== undefined && (!Array.isArray(opts.path) || !opts.path.length || opts.path.length > 7 || opts.to !== undefined)) throw new MalformedOperation('drag: path is one to seven further legs, each with dx, dy, over, hold and during; drag to takes no path');
   dragLeg(opts);
   for (const leg of opts.path ?? []) {
@@ -161,6 +157,11 @@ export function parseDrag(s, text) {
     } else if (['over', 'hold'].includes(key) || key === 'press' && leg === drag) leg[key] = Number(words[i++]);
     else if (key === 'from' && leg === drag || key === 'at' && drag.to !== undefined) drag[key] = [Number(words[i++]), Number(words[i++])];
     else if (key === 'mouse' && leg === drag) drag.mouse = true;
+    else if (key === 'into') {
+      if (drag.into !== undefined) throw new MalformedOperation('drag: into is given twice');
+      drag.into = words[i++];
+      if (drag.into !== 'keyboard') throw new MalformedOperation('drag: into takes keyboard');
+    }
     else if (key === 'modifiers' && leg === drag) drag.modifiers = words[i++];
     else if (key === 'during') {
       const ops = [];
@@ -171,7 +172,7 @@ export function parseDrag(s, text) {
       }
       if (!ops.length) throw new MalformedOperation(`tap … drag … during: each read is quoted, as during "state liked" or during 'state liked'`);
       leg.during = ops;
-    } else throw new MalformedOperation(`tap … drag: unknown option ${key}; from x y, press ms, over ms, hold ms, during "op", then dx dy`);
+    } else throw new MalformedOperation(`tap … drag: unknown option ${key}; from x y, press ms, over ms, hold ms, into keyboard, during "op", then dx dy`);
   }
   dragArguments(drag);
   return drag;
@@ -179,6 +180,7 @@ export function parseDrag(s, text) {
 
 export async function dragTap({ s, carrier, node, target, host, timing, tapRefusal, scrolled }, opts) {
   dragArguments(opts);
+  if (opts.into && (!['ios', 'host-ios'].includes(host) || carrier.touch !== 'platform' || !carrier.touches)) throw new Error('drag: into keyboard needs iOS --touch platform');
   // `drag to B [at x y]` (LLP 1094 D12): the delta from both boxes at the press, to B's middle or to (x, y) from its
   // top left; B unmounted or off screen is refused by name. An autoscrolling drag is `drag dx dy hold ms`.
   if (opts.to !== undefined) {
@@ -187,7 +189,7 @@ export async function dragTap({ s, carrier, node, target, host, timing, tapRefus
     try { dragArguments({ ...opts, to: undefined }); }
     catch (error) { throw new Error(error.message); }
   }
-  const { dx, dy, from, mouse = false, modifiers, press = 0, over = 250, hold = 0, during = [] } = opts, drag = { dx, dy, press, over, hold, during }, said = { dx, dy, press, over, hold, ...(mouse ? { mouse } : {}), ...(modifiers ? { modifiers } : {}), ...(opts.to !== undefined ? { to: opts.to } : {}) };
+  const { dx, dy, from, into, mouse = false, modifiers, press = 0, over = 250, hold = 0, during = [] } = opts, drag = { dx, dy, press, over, hold, during, ...(into ? { into } : {}) }, said = { dx, dy, press, over, hold, ...(mouse ? { mouse } : {}), ...(modifiers ? { modifiers } : {}), ...(opts.to !== undefined ? { to: opts.to } : {}) };
   // `mouse` (files diary F10): the left button, where the carrier's contact
   // is otherwise a finger (the web's); a desktop host's contact is the mouse.
   if (mouse && (carrier.touches || ['ios', 'host-ios'].includes(host))) throw new Error('drag: mouse is a desktop pointer\'s; an iOS contact is a finger');
@@ -202,21 +204,20 @@ export async function dragTap({ s, carrier, node, target, host, timing, tapRefus
   if (!b) throw new Error(`view ${node.id} has no box on screen`);
   const start = from ? [b.x + from[0], b.y + from[1]] : [b.x + b.w / 2, b.y + b.h / 2], end = [start[0] + dx, start[1] + dy];
   const inside = ([x, y]) => x >= 0 && y >= 0 && x <= vp.w && y <= vp.h;
-  // Under real touches a drag may also end over the software keyboard while it shows, as a person's drag to dismiss
-  // it does (LLP 1080.000 §11): below the viewport under `interactive-widget="resizes-content"`. The touch runner's
-  // aim judges the point against the keyboard's box (`reaches`); a visible keyboard's top sends it there.
-  let keyboard;
-  const reaches = async (p) => inside(p) || carrier.touches && inside([p[0], 0])
-    && p[1] >= (keyboard ??= await keyboardTop(s)) && p[1] <= (layout.screen ? layout.screen.h - layout.screen.y : Infinity);
+  if (into && !(await s.op({ op: 'state' })).keyboard?.visible) throw new Error('drag: into keyboard needs the software keyboard up at the press');
+  const bounds = { viewport: [vp.w, vp.h], screen: layout.screen, safeArea: layout.safeArea };
+  if (into && !inside(start)) throw new Error(`drag: start (${start}) leaves the viewport (${vp.w} × ${vp.h})`);
+  const endpoint = (point) => reaches(bounds, point, into);
   if (opts.path) {
     let point = [...start];
     for (const leg of legs) {
       point = [point[0] + leg.dx, point[1] + leg.dy];
-      if (!await reaches(point)) throw new Error(`drag: path waypoint (${point}) leaves the viewport (${vp.w} × ${vp.h})`);
+      if (!endpoint(point)) throw new Error(`drag: path waypoint (${point}) leaves ${into ? 'the screen above its bottom safe area' : `the viewport (${vp.w} × ${vp.h})`}`);
     }
   }
 
-  if (vp && !(inside(start) && await reaches(end))) {
+  if (into && !endpoint(end)) throw new Error(`drag: end (${end}) leaves the screen above its bottom safe area`);
+  if (vp && !(inside(start) && endpoint(end))) {
     // A scroller dragged further than the viewport reaches scrolls the whole way (euxy FRICTION 14). On iOS it is the
     // scroll view's own drag, which a viewport does not bound, under real touches too: a held real stroke scrolls less
     // than its length (a 300-point one scrolled Reflow 214) and an unheld one flings, so real strokes would not scroll

@@ -26,7 +26,10 @@ test('exact hatch writes each target\'s stub, wires it in, and declares the word
     const page = readFileSync(resolve(dir, 'modules/web/index.js'), 'utf8');
     assert.ok(page.includes("import * as avatarHatch from './hatch-avatar.js';") && page.includes('hatches["avatar"] = avatarHatch;'));
     assert.ok(readFileSync(resolve(dir, 'modules/web/hatch-avatar.js'), 'utf8').includes('export function elementEnded(e)'));
-    // A second word joins the first; the same word again changes nothing; the scopes take no word.
+    // A second word joins the first; the same word again changes nothing; the scopes take no word. The module's
+    // directories and files other than Swift sources are not read.
+    mkdirSync(resolve(dir, 'modules/apple/0-support.swift'), { recursive: true });
+    writeFileSync(resolve(dir, 'modules/apple/0-icon.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
     hatch(['unread-dot'], () => {});
     const again = hatch(['avatar'], () => {});
     assert.deepEqual(again.wrote, []);
@@ -77,7 +80,7 @@ test('exact hatch writes each target\'s stub, wires it in, and declares the word
     assert.deepEqual(hatch(['unread-dot'], () => {}).todo.filter(line => line.includes('android/build.rs')), []);
     // In a module of the app's own, with no marker, the lines to add are shown, not written.
     rmSync(resolve(dir, 'modules/apple'), { recursive: true });
-    mkdirSync(resolve(dir, 'modules/apple'));
+    mkdirSync(resolve(dir, 'modules/apple/0-support'), { recursive: true });
     writeFileSync(resolve(dir, 'modules/apple/Mine.swift'), 'final class Mine: ExactModule {}\nlet exactModule: ExactModule.Type = Mine.self\n');
     const mine = hatch(['seal'], () => {});
     assert.equal(mine.todo.length, 2);

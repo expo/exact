@@ -169,6 +169,34 @@ component Glyph
     assert_eq!(build("state", state).unwrap_err().id, "tamber-param-scope");
 }
 
+/// A param whose name begins another's is not blamed for the longer one:
+/// `color`'s token is a prefix of `colorActive`'s.
+#[test]
+fn a_param_is_refused_by_its_whole_token_not_a_prefix() {
+    // The child draws the prop as text, or keeps it in a state it draws.
+    let src = |state: &str, shown: &str| {
+        format!(
+            "component App\n  params\n    color: color = \"#ffffff\"\n    colorActive: color = \"#000000\"\n  view\n    column background-color=\"param.color\" color=\"param.colorActive\"\n      Label(label=\"param.colorActive\")\ncomponent Label\n  props\n    label: string\n{state}  view\n    text {shown}\n"
+        )
+    };
+    for (name, src) in [
+        ("prefix-text", src("", "label")),
+        ("prefix-state", src("  state c = label\n", "c")),
+    ] {
+        let path = app(name, &[("app.contract", &src), ("app.tamber", DESIGN)]);
+        let Err(errors) = contract::compile_path_all(&path, false) else {
+            panic!("{name} compiled")
+        };
+        let named: Vec<&str> = errors
+            .iter()
+            .filter(|e| e.id == "tamber-param-scope")
+            .map(|e| e.message.as_str())
+            .collect();
+        assert_eq!(named.len(), 1, "{name}: {errors:?}");
+        assert!(named[0].contains("App.colorActive`"), "{name}: {named:?}");
+    }
+}
+
 #[test]
 fn a_param_is_a_rows_value_and_what_a_row_computes_from_it_is_refused() {
     // A row's value: a string, a template, a branch, an arm, a `+`.

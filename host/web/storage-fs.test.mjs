@@ -79,3 +79,18 @@ test('a stored Blob with no type is shown with the type asked for, as bytes are'
   });
   expect(types).toEqual(['application/pdf', 'application/pdf', 'application/x-picked']);
 }, 60_000);
+
+test('a rename onto the other kind of entry is EISDIR or ENOTDIR, as rename(2) answers natively', async () => {
+  const codes = await inPage(async () => {
+    const { createFileStore } = await import('/storage-fs.js');
+    const store = createFileStore('rename-kinds');
+    const code = (promise) => promise.then(() => 'renamed', (error) => error.code);
+    try {
+      await store.mkdir('app:/data/folder');
+      await store.writeFile('app:/data/file', new Uint8Array([1]));
+      return [await code(store.rename('app:/data/file', 'app:/data/folder')),
+        await code(store.rename('app:/data/folder', 'app:/data/file'))];
+    } finally { store.close(); }
+  });
+  expect(codes).toEqual(['EISDIR', 'ENOTDIR']);
+}, 60_000);
