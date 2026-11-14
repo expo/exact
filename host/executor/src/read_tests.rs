@@ -943,7 +943,7 @@ fn forgotten_running_queued_and_fenced_post_reads_are_sent_and_drop_their_outcom
                     .forgotten
             );
             assert!(
-                matches!(state.fenced.front(), Some(Fenced::Held(r, _, _, true)) if r.ticket == 17)
+                matches!(state.fenced.front(), Some(Fenced::Held(r, _, _, true, _)) if r.ticket == 17)
             );
         }
         server.reply(1, b"forgotten running");

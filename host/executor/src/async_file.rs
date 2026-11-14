@@ -263,6 +263,7 @@ impl Machine {
             at,
             Job {
                 ticket: run.0,
+                cache_exchange: r.cache_exchange,
                 request,
                 forced,
                 work: None,
@@ -382,6 +383,7 @@ mod tests {
             let (lane, charge, limit) = super::super::super::reservation(&request).unwrap();
             state.jobs[lane].push_back(Job {
                 ticket,
+                cache_exchange: None,
                 request,
                 forced: false,
                 work: None,

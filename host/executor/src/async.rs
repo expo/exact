@@ -651,7 +651,7 @@ impl Machine {
             generation: run.1,
             claim: Claim::None,
             cached: false,
-            cache_exchange: None,
+            cache_exchange: job.cache_exchange.take(),
             cache_replacing: super::cache::replacing(
                 &job.request,
                 job.class,

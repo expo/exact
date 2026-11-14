@@ -225,6 +225,42 @@ pub(super) fn replacing(
     .then(|| Key::of(request))
 }
 
+pub(super) fn exchange(request: &Request, class: RequestClass) -> Option<Exchange> {
+    (eligible(request, class) && request.cache != CacheMode::NoStore).then(|| Exchange {
+        key: Key::of(request),
+        previous: None,
+        started: Instant::now(),
+        store: !Directives::of(&request.headers).no_store,
+    })
+}
+
+pub(super) fn asked(state: &mut State, r: &RequestOut, work: bool) -> Option<Exchange> {
+    state.cache.as_ref()?;
+    let exchange = (!work).then(|| exchange(&r.request, r.class)).flatten()?;
+    if replacing(&r.request, r.class, r.forced, work).is_some() {
+        // A refresh must survive older completions, even before they start (LLP 1162 D4).
+        for old in state
+            .running
+            .iter_mut()
+            .filter_map(|r| r.cache_exchange.as_mut())
+            .chain(
+                state.jobs[0]
+                    .iter_mut()
+                    .filter_map(|j| j.cache_exchange.as_mut()),
+            )
+            .chain(state.fenced.iter_mut().filter_map(|f| match f {
+                Fenced::Held(_, _, _, _, exchange) => exchange.as_mut(),
+                Fenced::Refused(..) => None,
+            }))
+        {
+            if old.key == exchange.key {
+                old.store = false;
+            }
+        }
+    }
+    Some(exchange)
+}
+
 fn replacing_before(state: &State, ticket: u64, key: &Key) -> bool {
     state.ordered.iter().take_while(|t| **t != ticket).any(|t| {
         state
@@ -440,13 +476,15 @@ pub(super) fn prepare(
             }
         }
     }
-    if let Some(run) = state.running.iter_mut().find(|r| r.ticket == ticket) {
-        run.cache_exchange = Some(Exchange {
-            key,
-            previous,
-            started: Instant::now(),
-            store,
-        });
+    if let Some(exchange) = state
+        .running
+        .iter_mut()
+        .find(|r| r.ticket == ticket)
+        .and_then(|r| r.cache_exchange.as_mut())
+    {
+        exchange.previous = previous;
+        exchange.started = Instant::now();
+        exchange.store &= store;
     }
     None
 }
@@ -488,7 +526,7 @@ pub(super) fn retry(state: &mut State, ticket: u64, status: u16, redirected: boo
         return false;
     }
     exchange.started = Instant::now();
-    if let Some(cache) = state.cache.as_mut() {
+    if let Some(cache) = state.cache.as_mut().filter(|_| exchange.store) {
         cache.drop_key(&exchange.key);
         cache.collect();
     }
@@ -600,21 +638,7 @@ fn store_response(
     now: Instant,
     wall: SystemTime,
 ) {
-    if !store {
-        return;
-    }
     if response.status != 200 && !Directives::of(&response.headers).no_store {
-        return;
-    }
-    let preloads = preloads
-        | cache
-            .entries
-            .iter()
-            .find(|e| e.key == key)
-            .map_or(0, |e| e.preloads);
-    cache.drop_key(&key);
-    cache.collect();
-    if response.status != 200 {
         return;
     }
     let mut headers = end_to_end(&response.headers);
@@ -629,6 +653,20 @@ fn store_response(
             "age",
             &current_age(&headers, delay, received).as_secs().to_string(),
         );
+    }
+    if !store {
+        return;
+    }
+    let preloads = preloads
+        | cache
+            .entries
+            .iter()
+            .find(|e| e.key == key)
+            .map_or(0, |e| e.preloads);
+    cache.drop_key(&key);
+    cache.collect();
+    if response.status != 200 {
+        return;
     }
     let Some((age, lifetime, validate)) = freshness(&headers, delay, received) else {
         return;
