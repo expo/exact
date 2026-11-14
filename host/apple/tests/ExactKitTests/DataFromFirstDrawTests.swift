@@ -64,6 +64,37 @@ final class DataFromFirstDrawTests: XCTestCase {
         XCTAssertFalse(session.dataPreparing)
     }
 
+    /// D2 on an observed launch: the launch observer's turns while the
+    /// evaluation runs (its start, the first frame's presentation) read no
+    /// outstanding work from the owner, so they do not wait for it.
+    func testTheLaunchObserverDoesNotWaitForTheEvaluation() throws {
+        let launch = ExactLaunch()
+        addTeardownBlock { launch.link?.invalidate() }
+        let session = try booted()
+        launch.delegateInit()
+        launch.didFinishLaunching()
+        launch.bootEntered(session)
+        launch.treeApplied(session, path: "/")
+        let held = DispatchSemaphore(value: 0)
+        var released = false
+        defer { if !released { held.signal() } }
+        Owner.shared.post { _ = held.wait(timeout: .now() + 10) }
+        session.drawReceipt().drawn()
+        // What the draw tells `ExactLaunch.shared` of its launch session.
+        launch.drawn(session)
+        launch.link?.isPaused = true
+        launch.evaluating(session)
+        launch.frame(Vsync(at: try XCTUnwrap(launch.marks[.commit]), interval: 1.0 / 60))
+        XCTAssertNotNil(launch.marks[.present])
+        let started = Date()
+        for _ in 0..<3 { waitForMainQueue() }
+        XCTAssertLessThan(Date().timeIntervalSince(started), 2, "no observer turn waited for the owner")
+        XCTAssertEqual(launch.lastOutstanding, ["activation"])
+        held.signal()
+        released = true
+        waitFor("the data's activation") { session.dataActivated }
+    }
+
     /// D2: when the evaluation has ended, the categories, the app's native
     /// module and the activation run in the main thread's next turn.
     func testTheRestRunsInTheTurnAfterTheEvaluation() throws {

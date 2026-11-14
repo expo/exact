@@ -318,9 +318,13 @@ public final class ExactLaunch: NSObject {
     }
 
     /// The launch session's outstanding work, from the runner and the host.
-    /// Empty when the screen can be used.
+    /// Empty when the screen can be used. While the data source is prepared
+    /// on the owner, the ledger's read would wait there for the module's
+    /// evaluation (LLP 1027.008 D2), and only activation is outstanding.
     private func outstandingNow() -> [String]? {
-        guard let session = launchSession, let ledger = Self.ledger(session) else { return nil }
+        guard let session = launchSession else { return nil }
+        if session.dataPreparing { return ["activation"] }
+        guard let ledger = Self.ledger(session) else { return nil }
         if ledger.poisoned { finish("logic_failed"); return nil }
         failedResources = ledger.failed
         return ledger.items + (activation != "ready" ? ["activation"] : [])
