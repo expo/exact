@@ -1,5 +1,5 @@
 //! The dependency table: what every binding, site, derive and resource
-//! argument reads, scanned once from the plan when a runner boots.
+//! argument reads, scanned once for an immutable program.
 //!
 //! @ref LLP 1005 §8 (the Deps table and dirty-set sweep)
 //!
@@ -318,29 +318,68 @@ impl Deps {
             resources: plan.resources.len(),
             mutations: plan.mutations.len(),
         };
-        let scan = |code: Code| scan(plan, layout, code);
+        let mut derive_reads = Vec::with_capacity(plan.derives.len());
+        for d in &plan.derives {
+            derive_reads.push(scan(plan, layout, d.body, d.owner, &derive_reads));
+        }
+        let scan = |code: Code, arm| scan(plan, layout, code, arm, &derive_reads);
+        let mut binding_arms = vec![None; plan.bindings.len()];
+        let mut surface_arms = vec![None; plan.surface_args.len()];
+        for node in plan.nodes.iter() {
+            for b in node.bindings.iter() {
+                binding_arms[b.0 as usize] = node.arm;
+            }
+            if let Some(surface) = node.surface {
+                for a in plan.surface(surface).args.iter() {
+                    surface_arms[a.0 as usize] = node.arm;
+                }
+            }
+        }
+        for look in &plan.looks {
+            for b in look.bindings.iter() {
+                binding_arms[b.0 as usize] = plan.node(look.node).arm;
+            }
+        }
         let mut deps = Deps {
             layout: Some(layout),
-            bindings: plan.bindings.iter().map(|b| scan(b.expr)).collect(),
-            surface_args: plan.surface_args.iter().map(|a| scan(a.expr)).collect(),
+            bindings: plan
+                .bindings
+                .iter()
+                .zip(binding_arms)
+                .map(|(b, arm)| scan(b.expr, arm))
+                .collect(),
+            surface_args: plan
+                .surface_args
+                .iter()
+                .zip(surface_arms)
+                .map(|(a, arm)| scan(a.expr, arm))
+                .collect(),
             nodes: ReadsTable::default(),
-            subjects: plan.regions.iter().map(|r| scan(r.subject)).collect(),
-            keys: plan.regions.iter().map(|r| scan(r.key)).collect(),
+            subjects: plan
+                .regions
+                .iter()
+                .map(|r| scan(r.subject, r.arm))
+                .collect(),
+            keys: plan
+                .regions
+                .iter()
+                .map(|r| scan(r.key, r.arms.iter().next()))
+                .collect(),
             index_keys: plan
                 .regions
                 .iter()
-                .map(|r| is_index_key(plan.code(r.key)))
+                .map(|r| is_index_key(plan, r.key, r.arms.iter().next()))
                 .collect(),
             bodies: ReadsTable::default(),
             regions: ReadsTable::default(),
-            derives: plan.derives.iter().map(|d| scan(d.body)).collect(),
+            derives: derive_reads.clone(),
             resource_args: plan
                 .resources
                 .iter()
                 .map(|r| {
                     let mut reads = Reads::default();
                     for a in r.args.iter() {
-                        reads.union(&scan(plan.arg(a).expr), 0);
+                        reads.union(&scan(plan.arg(a).expr, None), 0);
                     }
                     reads
                 })
@@ -414,7 +453,13 @@ impl Deps {
 
     /// What one code body reads, as the table's rows are scanned.
     pub(crate) fn reads_of(&self, plan: &Plan, code: Code) -> Reads {
-        scan(plan, self.layout.expect("built from a plan"), code)
+        scan(
+            plan,
+            self.layout.expect("built from a plan"),
+            code,
+            None,
+            &self.derives,
+        )
     }
 
     /// The inputs `reads` names, in bit order.
@@ -510,14 +555,24 @@ impl Deps {
     }
 }
 
-fn is_index_key(code: &[u8]) -> bool {
+fn is_index_key(plan: &Plan, code: Code, arm: Option<exact_plan::ArmsId>) -> bool {
+    let (code, owner) = plan.read_code(plan.code(code));
+    if owner.is_some_and(|owner| plan.frame_cut(arm, owner) != Some(0)) {
+        return false;
+    }
     let mut code = vm::instructions(code);
     matches!(code.next(), Some(Ok(i)) if i.op == Opcode::LoadIndex && i.args[0] == 0)
         && matches!(code.next(), Some(Ok(i)) if i.op == Opcode::Return)
         && code.next().is_none()
 }
 
-fn scan(plan: &Plan, layout: Layout, code: Code) -> Reads {
+fn scan(
+    plan: &Plan,
+    layout: Layout,
+    code: Code,
+    arm: Option<exact_plan::ArmsId>,
+    rows: &[Reads],
+) -> Reads {
     let mut reads = Reads::default();
     let mut code = vm::instructions(plan.code(code)).peekable();
     while let Some(instruction) = code.next() {
@@ -531,7 +586,44 @@ fn scan(plan: &Plan, layout: Layout, code: Code) -> Reads {
                 reads.bits.set(index);
                 reads.row_slots |= plan.slots.get(index).is_none_or(|s| s.owner.is_some());
             }
-            Opcode::LoadDerive => reads.bits.set(layout.derive(index)),
+            Opcode::LoadDerive => match plan.unsettled_body(index as u32) {
+                None => reads.bits.set(layout.derive(index)),
+                Some(row) => {
+                    let Some(body) = rows.get(index) else {
+                        reads.opaque = true;
+                        continue;
+                    };
+                    let mut body = body.clone();
+                    match plan.frame_cut(arm, row.owner) {
+                        Some(cut) => {
+                            let shift = |mask: u64| {
+                                if cut < 64 {
+                                    (mask << cut)
+                                        | if cut > 0 && mask >> (64 - cut) != 0 {
+                                            1 << 63
+                                        } else {
+                                            0
+                                        }
+                                } else if mask == 0 {
+                                    0
+                                } else {
+                                    1 << 63
+                                }
+                            };
+                            body.frames = shift(body.frames);
+                            body.positions = shift(body.positions);
+                            if cut != 0 {
+                                body.fields = 0;
+                            }
+                        }
+                        None => {
+                            body.opaque = true;
+                            body.frames = !0;
+                        }
+                    }
+                    reads.union(&body, 0);
+                }
+            },
             Opcode::LoadResource => reads.bits.set(layout.resource(index)),
             Opcode::PendingResource | Opcode::CurrentResource => {
                 // Known only once the resource settled, like its value.
@@ -656,6 +748,32 @@ impl RowWrites {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_index_alias_is_positional_only_in_its_owners_frame() {
+        use exact_plan::{asm::Asm, builder::PlanBuilder, RegionKind, TypeKind};
+        let mut b = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
+        let number = b.primitive(TypeKind::Number);
+        let unit = b.constant(&exact_plan::Value::Unit);
+        let (_, outer) = b.region(RegionKind::Each, None, None, 0, unit, unit, 1);
+        let (_, inner) = b.region(RegionKind::Each, None, Some(outer[0]), 0, unit, unit, 1);
+        let mut body = Asm::new();
+        body.load_index(0);
+        let direct = b.code(body);
+        let row = b.derive("position", number, direct);
+        b.set_derive_unsettled(row, Some(outer[0]));
+        let mut call = Asm::new();
+        call.load_derive(row);
+        let alias = b.code(call);
+        let plan = b.finish().unwrap();
+        for (code, reader, positional) in [
+            (direct, outer[0], true),
+            (alias, outer[0], true),
+            (alias, inner[0], false),
+        ] {
+            assert_eq!(is_index_key(&plan, code, Some(reader)), positional);
+        }
+    }
 
     #[test]
     fn frame_masks_shift_with_a_sticky_far_bit() {

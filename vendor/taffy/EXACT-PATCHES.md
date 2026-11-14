@@ -2324,7 +2324,7 @@ answers, respectively, cache storage is 232, 232 and 424 bytes, against
 describes the conditional additional storage.
 
 **Held by** `kernel/tests/it/size_cache.rs`, the kernel's `layout::size_cache`,
-`layout::size_cache::shapes`, `layout::memo_tests`, and
+`layout::size_cache::shapes_tests`, `layout::memo_tests`, and
 `kernel/tests/it/layout_equality/size_cache.rs`. The public-API regressions,
 including wraparound, both lookups, cache bytes and descendant geometry after
 flex and grid baseline probes, run in kernel test targets. Frames, scroll

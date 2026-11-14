@@ -412,7 +412,7 @@ impl Build<'_> {
     fn fold(&mut self, n: &NodeInst) -> Result<(Rc<StyleProps>, PropList), DocTreeError> {
         let plan = self.plan;
         let row = plan.node(n.node);
-        let deps = &self.sites.deps;
+        let deps = &self.sites.data.deps;
         let constant = row.bindings.iter().all(|b| {
             plan.binding(b).kind != BindingKind::Style || deps.bindings[b.0 as usize].is_constant()
         });

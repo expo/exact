@@ -10,6 +10,7 @@ mod box_filter;
 mod colors;
 mod field_align;
 mod focus;
+mod font_stack;
 mod grouped_rows;
 mod height;
 mod height_binding;

@@ -1291,41 +1291,6 @@ fn forgotten_ordered_backlog_releases_queued_buffers_and_aborts_running_read() {
     until_settled(&core);
 }
 
-#[test]
-fn an_ordered_job_waits_for_retained_bytes_instead_of_refusing() {
-    let (core, fixture, woke) = setup();
-    // Four undrained outcomes retain 480 MiB of capacity (never touched).
-    for ticket in 1..=4 {
-        core.run(
-            job(ticket, Request::continuation(ticket)),
-            Some(Box::new(|| Outcome::Storage(Vec::with_capacity(120 << 20)))),
-        )
-        .unwrap();
-    }
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while core.shared.state.lock().unwrap().completed[0].len() < 4 {
-        assert!(Instant::now() < deadline);
-        std::thread::sleep(Duration::from_millis(5));
-    }
-    // Admitted on its request buffers; its 128 MiB ceiling doesn't fit yet.
-    core.run(job(5, Request::get("https://example.test/read")), None)
-        .unwrap();
-    std::thread::sleep(Duration::from_millis(100));
-    assert!(fixture.state.lock().unwrap().2.is_empty());
-    core.begin_pump();
-    assert_eq!(core.drain()[0].0, 1);
-    let rest = collect(&core, &woke, 4);
-    assert_eq!(
-        rest.into_iter().map(|v| v.0).collect::<Vec<_>>(),
-        [2, 3, 4, 5]
-    );
-    assert_eq!(
-        fixture.state.lock().unwrap().2,
-        ["https://example.test/read"]
-    );
-    until_settled(&core);
-}
-
 /// The platform transport, a loopback server and a body over its 64 KiB
 /// handoff, behind and beside handed-off module turns as worker placement
 /// queues them (the Crew port's F4/F6, not reproduced on macOS).
@@ -1498,3 +1463,6 @@ pub(crate) fn lane_host() -> ibex2::host::Host {
     #[cfg(not(target_vendor = "apple"))]
     ibex2::host::Host::new()
 }
+
+#[path = "handoff_tests.rs"]
+mod handoff;

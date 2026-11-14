@@ -70,10 +70,13 @@ pub(super) fn push_style(
     run: &Run,
     range: Range<usize>,
     index: u32,
-    family: &FamilyChoice,
+    family: &[FamilyChoice],
 ) {
     builder.push(StyleProperty::Brush(index), range.clone());
-    builder.push(StyleProperty::FontFamily(family.family()), range.clone());
+    builder.push(
+        StyleProperty::FontFamily(FamilyChoice::stack(family)),
+        range.clone(),
+    );
     builder.push(StyleProperty::FontSize(run.size.max(0.5)), range.clone());
     builder.push(
         StyleProperty::FontWeight(parley::FontWeight::new(f32::from(run.weight))),
@@ -386,7 +389,7 @@ impl ShapedSource {
         let half = (minimum - ascent - descent - leading) / 2.0;
         let strut = (ascent + half, descent + leading + half);
         let run_metrics: Vec<_> = spec.runs.iter().map(|r| catalog.font_metrics(r)).collect();
-        let families: Vec<FamilyChoice> =
+        let families: Vec<Vec<FamilyChoice>> =
             spec.runs.iter().map(|r| catalog.choice(r.family)).collect();
         let wrap = if spec.white_space.model().wraps() {
             parley::TextWrapMode::Wrap

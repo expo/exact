@@ -817,7 +817,7 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> Surface
                 .and_then(|r| r.span_since);
             if let Ok(r) = crate::perf::PerfRequest::parse(request) {
                 if r.perf || r.perf_reset {
-                    sim.measure_spans(crate::perf::clock_ms, r.perf_reset);
+                    crate::perf::measure_spans(sim, r.perf_reset);
                 }
                 // A reader's timing keeps no samples to report percentiles
                 // from: arming or resetting perf replaces it at the next frame.

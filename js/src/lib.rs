@@ -377,6 +377,7 @@ pub struct Module {
     /// did not await moves to the background. An instance a worker owner
     /// builds runs one turn to its end, and keeps its answers waiting.
     main_thread: bool,
+    worker_retired: Option<Arc<std::sync::atomic::AtomicBool>>,
     background: background::Background,
 }
 
@@ -457,6 +458,7 @@ impl Module {
             canvas_surfaces: Vec::new(),
             agent_seed: None,
             main_thread: true,
+            worker_retired: None,
             background: Default::default(),
         };
         module.with_agent_seed(exact_data::crypto::AgentStream::agent_seed())
@@ -525,7 +527,10 @@ impl Module {
     /// What an owner thread needs to build this module there (LLP 1027.002
     /// D2): its bytecode, identity, directories, plan and limits — all of it
     /// `Send`; the runtime is created, run and destroyed on the owner.
-    fn build(template: &Module) -> exact_data::placed::Obtain<Module> {
+    fn build(
+        template: &Module,
+        retired: Arc<std::sync::atomic::AtomicBool>,
+    ) -> exact_data::placed::Obtain<Module> {
         let bytecode = template.bytecode.clone();
         let app_id = template.app_id.clone();
         let grants = template.grants.clone();
@@ -549,6 +554,7 @@ impl Module {
             // Before `activate`, which loads: a worker's answers wait for
             // their storage (LLP 1097 D6).
             module.main_thread = false;
+            module.worker_retired = Some(retired);
             // The template's interrupt reaches the instance on its owner, and
             // its native handle finds the instance's long-call handler.
             module.watch = watch;
@@ -698,6 +704,7 @@ impl Module {
             self.document_owner,
             self.compression_hold.clone(),
         )?);
+        self.storage.as_mut().unwrap().worker_retired = self.worker_retired.clone();
         let ctx = &mut *self.host as *mut HostState as *mut c_void;
         let host: HostFn = host_door;
         let bytes: engine::BytesFn = crypto::bytes_door;
@@ -782,8 +789,13 @@ impl Module {
     pub fn unload(&mut self) {
         // A dev restart or a reload replaces the module: what it started
         // and did not await is finished first, within a second (LLP 1097
-        // D10). A worker's answers waited for theirs.
-        if !self.snapshot {
+        // D10). A retired worker drops its queued work without delivering it.
+        if !self.snapshot
+            && !self
+                .worker_retired
+                .as_ref()
+                .is_some_and(|r| r.load(std::sync::atomic::Ordering::Acquire))
+        {
             self.finish_background(std::time::Duration::from_secs(1));
         }
         self.drop_runtime();

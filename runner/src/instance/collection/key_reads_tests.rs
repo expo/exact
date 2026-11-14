@@ -58,8 +58,8 @@ fn key_reads_track_derive_resource_and_pending_variants() {
         input.pending_resources = (&pending).into();
         input.pending_mutations = &pending;
         let seen = crate::instance::deps::Seen::of(&input);
-        let key = &sites.deps.keys[0];
-        assert!(!sites.deps.changed(&seen, &input).intersects(&key.bits));
+        let key = &sites.data.deps.keys[0];
+        assert!(!sites.data.deps.changed(&seen, &input).intersects(&key.bits));
         match kind {
             0 => input.derives = &after,
             1 => input.resources = (&held_after).into(),
@@ -68,7 +68,7 @@ fn key_reads_track_derive_resource_and_pending_variants() {
             _ => unreachable!(),
         }
         assert!(
-            sites.deps.changed(&seen, &input).intersects(&key.bits),
+            sites.data.deps.changed(&seen, &input).intersects(&key.bits),
             "dependency {kind}"
         );
     }
@@ -77,6 +77,6 @@ fn key_reads_track_derive_resource_and_pending_variants() {
 #[test]
 fn a_router_read_is_pure_and_an_action_parameter_is_opaque() {
     let sites = |kind| crate::instance::SiteIndex::new(&key_reuse_dependency_plan(kind));
-    assert!(sites(4).deps.keys[0].constant());
-    assert!(sites(5).deps.keys[0].opaque);
+    assert!(sites(4).data.deps.keys[0].constant());
+    assert!(sites(5).data.deps.keys[0].opaque);
 }

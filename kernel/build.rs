@@ -94,6 +94,9 @@ struct StyleRow {
     rare: bool,
     #[serde(default)]
     cold: bool,
+    /// A parser family linked when a plan binds this row (LLP 1047 D2).
+    #[serde(default)]
+    capability: Option<String>,
     /// What a native host does with the row other than draw it (LLP 1159.000 D2).
     #[serde(default)]
     hosts: Vec<StyleHostRow>,
@@ -683,6 +686,7 @@ fn generate(schema: &Schema, digest: u64) -> String {
     )
     .unwrap();
     writeln!(w, "    }}").unwrap();
+    emit_style_capabilities(w, schema);
     writeln!(w, "    /// The wire codec.").unwrap();
     writeln!(w, "    pub fn codec(self) -> StyleCodec {{").unwrap();
     writeln!(w, "        match self {{").unwrap();

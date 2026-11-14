@@ -1350,18 +1350,7 @@ public final class ExactSession {
         let first = schemeDark == nil
         schemeDark = dark
         reportColors()
-        // Views found painting in an appearance of their own before the
-        // session had a scheme (a `color-scheme` subtree at boot, LLP 1034
-        // §8): queued now, and said in the scheme's own batch, after it.
-        if first {
-            let early = unreported; unreported.removeAll()
-            for id in early {
-                if let v = presenter.views[id] { noteAppearance(v); continue }
-                #if os(iOS) || os(tvOS)
-                if let dark = presenter.flats.appearance(of: id) { noteAppearance(id, dark: dark) }
-                #endif
-            }
-        }
+        reportDeferredAppearances(first: first)
         // A subtree with a `color-scheme` of its own keeps its appearance when the session's changes, so no trait
         // callback says it: said here, after the scheme. Its views' appearance is the row's, already settled,
         // whatever the platform's walk has reached.
@@ -1384,22 +1373,12 @@ public final class ExactSession {
     /// The appearance last reported for the session, and each node view found painting motion in another (a sheet's override, say), by id.
     private(set) var schemeDark: Bool?
     var viewDark: [UInt32: Bool] = [:]
-    private var pendingViewDark: [(UInt32, Bool)] = []
+    var pendingViewDark: [(UInt32, Bool)] = []
     var colorsOwed = false
     fileprivate(set) var awaitingTree = false // committed to a new runner whose tree is not in: a report would reach the old views
     private func treeIsIn() { awaitingTree = false; replayHeld(); if colorsOwed { colorsOwed = false; reportColors() } } // only the replacement batch, not a reset's cleanup
-    /// A view painting motion: when its own appearance is not the one its node's colours resolve by, say so after
-    /// the batch (LLP 1062 D4).
-    func noteAppearance(_ view: NodeView) { noteAppearance(view.id, dark: view.drawsDark) }
-    /// A node painting in `dark`: a view, or a flat leaf in its parent's appearance.
-    func noteAppearance(_ id: UInt32, dark: Bool) {
-        guard let session = schemeDark else { unreported.insert(id); return }
-        guard dark != viewDark[id] ?? session else { return }
-        viewDark[id] = dark == session ? nil : dark
-        pendingViewDark.append((id, dark))
-    }
-    /// Views noted before the session had a scheme.
-    private var unreported = Set<UInt32>()
+    /// Nodes awaiting the session's or their own appearance report.
+    var unreported = Set<UInt32>()
     /// A new runtime has heard no view's appearance: forget what was said,
     /// and say it again after its first scheme (LLP 1062 D4, LLP 1034 §8).
     private func forgetAppearances() {

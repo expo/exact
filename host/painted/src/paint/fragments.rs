@@ -106,6 +106,9 @@ impl Painter {
         // An ellipsized line changes in place.
         let roll = roll.filter(|_| Rc::ptr_eq(&shown, &paragraph));
         let backgrounds = text_backgrounds(kernel, node, self.dark, walk.reveal);
+        let groups = inline_opacity::Groups::capture(kernel, node.id, &palette, |id| {
+            (walk.scene.presented)(id).opacity
+        });
         let focus = walk
             .scene
             .focus
@@ -118,34 +121,63 @@ impl Painter {
                     && !control::ringless(n)
             });
         let focus = focus.map(|focused| (focused.id, control::ring(&focused, self.dark)));
-        let reveal = walk.reveal;
         let at = |painter: &mut Self, shown: &Paragraph, origin: (f32, f32)| {
-            let backgrounds = shown.inline_backgrounds(&backgrounds, &kernel.env_of(node.id));
-            // Inline backgrounds, under the glyphs, per line fragment.
-            for (shape, color) in &backgrounds {
-                let mut shape = *shape;
-                shape.rect.0 += origin.0;
-                shape.rect.1 += origin.1;
-                painter.backend.fill(&shape, *color, ts);
-            }
-            painter.text_paint(
-                node,
-                kernel,
-                shown,
-                &palette,
-                origin,
-                rect,
-                ts,
-                reveal,
-                roll.as_ref(),
-            );
-            if let Some((focused, accent)) = &focus {
-                for mut shape in inline::focus_fragments(kernel, shown, &palette, *focused) {
-                    shape.rect.0 += origin.0;
-                    shape.rect.1 += origin.1;
-                    painter.field_ring(&shape, *accent, ts);
+            groups.visit(&mut |paint| match paint {
+                inline_opacity::Paint::Begin(index, opacity) => {
+                    if opacity < 1. {
+                        painter.backend.push_opacity(opacity);
+                    }
+                    // A background belongs to its declaring box's group,
+                    // including the parts under a more transparent child.
+                    let backgrounds: Vec<_> = backgrounds
+                        .iter()
+                        .map(|b| {
+                            let b = b.as_ref()?;
+                            let mut layers = std::iter::once(b)
+                                .chain(b.outer.iter())
+                                .filter(|b| groups.owner(kernel, b.id) == index);
+                            let mut b = layers.next()?.clone();
+                            b.outer = layers.cloned().collect();
+                            Some(b)
+                        })
+                        .collect();
+                    for (mut shape, color) in
+                        shown.inline_backgrounds(&backgrounds, &kernel.env_of(node.id))
+                    {
+                        shape.rect.0 += origin.0;
+                        shape.rect.1 += origin.1;
+                        painter.backend.fill(&shape, color, ts);
+                    }
                 }
-            }
+                inline_opacity::Paint::Text(range) => painter.text_paint(
+                    node,
+                    kernel,
+                    shown,
+                    &palette,
+                    origin,
+                    rect,
+                    ts,
+                    walk.reveal,
+                    roll.as_ref(),
+                    range,
+                ),
+                inline_opacity::Paint::End(index, opacity) => {
+                    if let Some((focused, accent)) = &focus {
+                        if groups.owner(kernel, *focused) == index {
+                            for mut shape in
+                                inline::focus_fragments(kernel, shown, &palette, *focused)
+                            {
+                                shape.rect.0 += origin.0;
+                                shape.rect.1 += origin.1;
+                                painter.field_ring(&shape, *accent, ts);
+                            }
+                        }
+                    }
+                    if opacity < 1. {
+                        painter.backend.pop_opacity();
+                    }
+                }
+            });
         };
         if frags.is_empty() {
             // The kernel places the anonymous text item.

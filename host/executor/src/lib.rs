@@ -66,6 +66,7 @@ struct Job {
     queued_deadline: Option<forget::QueuedDeadline>,
     overlap: bool,
     class: RequestClass,
+    cache_store_withheld: bool,
 }
 /// A job a worker took, until its outcome is complete.
 struct Running {
@@ -135,7 +136,7 @@ struct Completed {
 /// A place behind the ordered barrier.
 enum Fenced {
     /// A request, its retained buffers, and whether its outcome is forgotten.
-    Held(Box<RequestOut>, Option<OwnedWork>, usize, bool),
+    Held(Box<RequestOut>, Option<OwnedWork>, usize, bool, bool),
     /// A request refused while the barrier was up: refused when its turn
     /// comes, after the held requests before it are admitted.
     Refused(u64, &'static str),
@@ -553,7 +554,7 @@ impl Core {
 
     /// Admit work, or return a refusal without an overflow queue.
     pub fn run_owned(&self, r: RequestOut, work: Option<OwnedWork>) -> Result<(), &'static str> {
-        self.admit(r, work, false, false)
+        self.admit(r, work, false, false, None)
             .map_err(|(reason, _work)| reason)
     }
 
@@ -708,9 +709,17 @@ impl Core {
             // Queued closures are destroyed by their executor owner. Doing
             // it here could run an arbitrary destructor on the UI thread.
             if self.machine.is_none() {
-                for queue in &mut state.completed {
-                    queue.clear();
+                for lane in 0..2 {
+                    let outcomes = std::mem::take(&mut state.completed[lane]);
+                    for done in outcomes.iter().filter(|done| !done.message) {
+                        state.counts[lane] -= 1;
+                        state.bytes[lane] -= done.bytes;
+                        state.streams -= usize::from(done.stream);
+                    }
                 }
+                state.light = 0;
+                state.agains = 0;
+                state.ordered.clear();
             } else if let Some(machine) = &self.machine {
                 machine.stop(&mut state);
             }
@@ -806,7 +815,7 @@ fn fenced_bytes(fenced: &VecDeque<Fenced>) -> usize {
     fenced
         .iter()
         .map(|f| match f {
-            Fenced::Held(_, _, charge, _) => *charge,
+            Fenced::Held(_, _, charge, _, _) => *charge,
             Fenced::Refused(..) => 0,
         })
         .sum()
@@ -889,9 +898,7 @@ fn complete(shared: &Shared, ticket: u64, outcome: Outcome) {
     let finished_at = std::time::Instant::now();
     let mut state = shared.state.lock().unwrap();
     if state.retired {
-        if state.book.retiring {
-            asynch::external_end(shared, &mut state, ticket);
-        }
+        asynch::external_end(shared, &mut state, ticket);
         return;
     }
     let Some(at) = state.running.iter().position(|run| run.ticket == ticket) else {
@@ -958,10 +965,6 @@ fn complete(shared: &Shared, ticket: u64, outcome: Outcome) {
 /// and a long native call it hands to the app's native module.
 fn handoff(request: &Request) -> bool {
     (request.continuation.is_some() && request.storage.is_none()) || request.is_native()
-}
-
-fn handed_off(job: &Job) -> bool {
-    handoff(&job.request) && matches!(job.work, Some(OwnedWork::Later(_)))
 }
 
 /// An HTTP read with no effect to lose if it is never sent (RFC 9110 §9.2.1).
@@ -1098,7 +1101,10 @@ fn worker(
             loop {
                 if state.retired {
                     let abandoned = std::mem::take(&mut state.jobs[lane]);
+                    state.counts[lane] -= abandoned.len();
+                    state.bytes[lane] -= abandoned.iter().map(|job| job.charge).sum::<usize>();
                     let fenced = std::mem::take(&mut state.fenced);
+                    state.fenced_bytes = 0;
                     let discarded = std::mem::take(&mut state.discard);
                     drop(state);
                     drop((abandoned, fenced, discarded));

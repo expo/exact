@@ -97,9 +97,11 @@ export function observe(views, inactive = () => false) {
     }
     // A box painted between the text and that fill, not one of its ancestors: an image under a title, a stacked sibling.
     const stack = document.elementsFromPoint(Math.min(Math.max(cx, 0), W - 1), Math.min(Math.max(cy, 0), H - 1));
-    // A folded text has no hit-test entry. Include its nearest ancestor in the stack: it may be the opaque fill.
+    // A folded text, or a box `pointer-events: none` takes out of hit testing, has no entry in the stack: scan from its
+    // nearest ancestor that has one, which may be the opaque fill. A fill inside that ancestor paints above everything
+    // the stack holds below it, so nothing there lies between.
     const anchor = chain.find(e => stack.includes(e));
-    if (anchor) for (const e of stack.slice(stack.indexOf(anchor))) {
+    if (anchor && !anchor.contains(top)) for (const e of stack.slice(stack.indexOf(anchor))) {
       if (e === top) break;
       if (!e.contains(el) && !el.contains(e) && paints(e)) return null;
     }
@@ -110,6 +112,11 @@ export function observe(views, inactive = () => false) {
     return { bg: bg.map((v) => Math.round(v)), by, accent, solid };
   };
   const mix = (fg, bg) => [0, 1, 2].map((i) => fg[i] * fg[3] + bg[i] * (1 - fg[3]));
+  // Whether something outside `el` that paints lies over it at (x, y). Unknown, so false, where `el` takes no hit test.
+  const drawnOver = (el, x, y) => {
+    const stack = document.elementsFromPoint(x, y), at = stack.indexOf(el);
+    return at > 0 && stack.slice(0, at).some((e) => !el.contains(e) && paints(e));
+  };
   // The part of box `b` (el's) that is presented: each ancestor that clips or scrolls its overflow cuts it at its padding
   // box, up to a fixed box, which escapes them (LLP 1116.006 D5: a row its list cuts overlaps nothing past the list).
   const visible = (el, b) => {
@@ -277,6 +284,15 @@ export function observe(views, inactive = () => false) {
       }
       const under = backing(el, ink);
       if (under) { item.bg = under.bg; item.on = under.by === item.id ? 'own' : under.by ?? 'page'; if (under.accent) item.onAccentFill = true; if (under.solid) item.solid = true; }
+      else {
+        // The driver then reads the ground at the corners of the presented box (agent-check.mjs `backdrop`, in its order);
+        // a corner another view is drawn over shows that view (a card laid over this text's card), not the ground.
+        const v = visible(el, b), vh = globalThis.visualViewport?.height ?? H, h = vh < H ? Math.min(v.h, Math.max(0, vh - v.y)) : v.h;
+        const i = Math.min(1.5, v.w / 4, h / 4);
+        const over = [[v.x + i, v.y + i], [v.x + v.w - i, v.y + i], [v.x + i, v.y + h - i], [v.x + v.w - i, v.y + h - i]]
+          .flatMap(([x, y], k) => (drawnOver(el, x, y) ? [k] : []));
+        if (over.length) item.drawnOver = over;
+      }
       // An ancestor that clips (never one that scrolls: a person scrolls to it) cutting part of the text away.
       // One that hides it all is a collapsed disclosure, on purpose. What lies past a scroller's edge is reached by
       // scrolling, so an ancestor above that scroller is judged on the part of the text inside the scroller's box:

@@ -159,9 +159,10 @@ component NavigationBars
               text `backs ${backs}` testId=`${e.name}-backs`
               button press=park testId=`${e.name}-park-owners`
                 text "Park retained owners"
-              for l in ["detail", "plain", "twin", "own", "viewer", "sheet", "titled", "form", "glass", "clear", "veil", "solid", "full", "tall", "pair", "named", "bare", "rows", "wrapped"] key=l
-                button press=open(l) testId=`${e.name}-open-${l}`
-                  text l
+              view display="flex" flex-direction="row" flex-wrap="wrap" gap=8
+                for l in ["detail", "plain", "twin", "own", "viewer", "sheet", "titled", "form", "glass", "clear", "veil", "solid", "full", "tall", "pair", "named", "bare", "rows", "wrapped"] key=l
+                  button press=open(l) testId=`${e.name}-open-${l}`
+                    text l
       for e in stack(nav).filter(x => x.name == "glass") key=e.id
         column navigationKey=`${e.id}` navigationPresentation="modal" navigationDetent="medium large" testId="route-glass" position="absolute" inset=0
           header testId="header-glass" display="flex" align-items="center" padding="8px 16px"

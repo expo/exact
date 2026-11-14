@@ -17,6 +17,7 @@ final class SymbolColorIOSTests: XCTestCase {
     private func presenter(_ images: [(Int, Bool, [String: Any])]) -> Presenter {
         let p = Presenter()
         window = UIWindow(frame: CGRect(x: 0, y: 0, width: 300, height: 300))
+        window.overrideUserInterfaceStyle = .light
         p.viewport.frame = window.bounds
         window.addSubview(p.viewport)
         window.makeKeyAndVisible()
@@ -32,11 +33,23 @@ final class SymbolColorIOSTests: XCTestCase {
         p.apply(wireBatch(ops))
         return p
     }
-    private func ink(_ p: Presenter, _ id: UInt32) throws -> [Double] {
-        let color = try XCTUnwrap(p.views[id]?.symbolView?.tintColor)
-        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
-        _ = color.resolvedColor(with: UITraitCollection(userInterfaceStyle: .light)).getRed(&r, green: &g, blue: &b, alpha: &a)
-        return [r, g, b, a].map { (Double($0) * 255).rounded() }
+    private func assertInk(_ p: Presenter, _ id: UInt32, _ expected: [Double], _ message: String = "",
+                           file: StaticString = #filePath, line: UInt = #line) throws {
+        let node = try XCTUnwrap(p.views[id]), view = try XCTUnwrap(node.symbolView)
+        node.layoutSymbol()
+        // An SF Symbol keeps ink outside its CGImage; compare its rendering with a native twin.
+        let color = UIColor(red: expected[0] / 255, green: expected[1] / 255, blue: expected[2] / 255, alpha: expected[3] / 255)
+        let reference = UIImageView(image: try XCTUnwrap(node.image).withTintColor(color, renderingMode: .alwaysOriginal))
+        reference.frame = view.frame
+        reference.contentMode = view.contentMode
+        let base = SymbolMeasure.configuration(points: node.number("font_size", 17), weight: node.number("font_weight", 400))
+        reference.preferredSymbolConfiguration = node.style["symbol_rendering"]?.string == "hierarchical"
+            ? base.applying(UIImage.SymbolConfiguration(hierarchicalColor: color)) : base
+        view.superview?.addSubview(reference)
+        defer { reference.removeFromSuperview() }
+        for (got, want) in zip(try symbolInkChannels(view), try symbolInkChannels(reference)) {
+            XCTAssertEqual(got, want, accuracy: 2, message, file: file, line: line)
+        }
     }
 
     private func picture(_ image: UIImage?) throws -> Data {
@@ -50,14 +63,16 @@ final class SymbolColorIOSTests: XCTestCase {
         let p = presenter([(2, true, ["text_color": tint]), (3, true, ["text_color": pink]), (4, false, ["text_color": pink]),
                            (5, true, ["text_color": pink, "tint_color": teal])])
         XCTAssertNotNil(try XCTUnwrap(p.views[2]).symbolInk)
-        XCTAssertEqual(try ink(p, 2), red, "`color=\"AccentColor\"`: the accent")
-        XCTAssertEqual(try ink(p, 3), [173, 20, 87, 255], "a token's colour")
-        XCTAssertEqual(try ink(p, 4), [173, 20, 87, 255], "computed colour is inherited")
-        XCTAssertEqual(try ink(p, 5), [173, 20, 87, 255], "raster tint is ignored on a symbol")
+        try assertInk(p, 2, red, "`color=\"AccentColor\"`: the accent")
+        try assertInk(p, 3, [173, 20, 87, 255], "a token's colour")
+        try assertInk(p, 4, [173, 20, 87, 255], "computed colour is inherited")
+        try assertInk(p, 5, [173, 20, 87, 255], "raster tint is ignored on a symbol")
         p.apply(wireBatch([["op": "props", "id": 4, "set": ["symbolColorWritten": "1"], "clear": []]]))
-        XCTAssertEqual(try ink(p, 4), [173, 20, 87, 255], "written later")
+        try assertInk(p, 4, [173, 20, 87, 255], "written later")
         p.apply(wireBatch([["op": "props", "id": 4, "set": [:], "clear": ["symbolColorWritten"]]]))
-        XCTAssertEqual(try ink(p, 4), [173, 20, 87, 255], "provenance does not change computed colour")
+        try assertInk(p, 4, [173, 20, 87, 255], "provenance does not change computed colour")
+        p.apply(wireBatch([["op": "style", "id": 4, "style": ["font_size": 17, "text_color": teal]]]))
+        try assertInk(p, 4, [48, 176, 199, 255], "a live colour change repaints the installed image")
     }
 
     func testComputedSymbolColorsInASnapshot() throws {
@@ -75,7 +90,7 @@ final class SymbolColorIOSTests: XCTestCase {
         attachment.name = "Computed symbol color"
         attachment.lifetime = .keepAlways
         add(attachment)
-        XCTAssertEqual(try ink(p, 3), [173, 20, 87, 255])
+        try assertInk(p, 3, [173, 20, 87, 255])
     }
 
     func testChangingHierarchicalInkKeepsTheImageAndItsReplacementIdentity() throws {
@@ -83,7 +98,7 @@ final class SymbolColorIOSTests: XCTestCase {
         let node = try XCTUnwrap(p.views[2]), leaf = try XCTUnwrap(node.symbolView)
         let key = node.symbolKey, generation = node.loadGeneration, original = node.image
         p.apply(wireBatch([["op": "style", "id": 2, "style": ["font_size": 17, "text_color": teal, "symbol_rendering": "hierarchical", "symbol_effect": "replace"]]]))
-        XCTAssertEqual(try ink(p, 2), [48, 176, 199, 255])
+        try assertInk(p, 2, [48, 176, 199, 255])
         XCTAssertEqual(node.symbolKey, key)
         XCTAssertEqual(node.loadGeneration, generation)
         XCTAssertTrue(node.image === original, "paint changes do not replace the glyph")
@@ -183,7 +198,7 @@ final class SymbolColorIOSTests: XCTestCase {
         ops.append(["op": "children", "id": 1, "ids": [100, 200, 300, 400]])
         p.apply(wireBatch(ops))
         let green = [0.0, 200.0, 0.0, 255.0]
-        for id: UInt32 in [400, 303] { XCTAssertEqual(try ink(p, id), green, "\(id): a page symbol takes its written green") }
+        for id: UInt32 in [400, 303] { try assertInk(p, id, green, "\(id): a page symbol takes its written green") }
         let written = UIImage.SymbolConfiguration(hierarchicalColor: try XCTUnwrap(p.views[400]?.symbolInk))
         XCTAssertTrue(try XCTUnwrap(p.views[400]?.symbolView?.preferredSymbolConfiguration).isEqual(try XCTUnwrap(p.views[400]?.symbolView?.preferredSymbolConfiguration).applying(written)), "the image view configures hierarchical ink")
         for owner: UInt32 in [100, 200] {
@@ -199,5 +214,28 @@ final class SymbolColorIOSTests: XCTestCase {
             XCTAssertTrue(try XCTUnwrap(icon.faceImage?.symbolConfiguration).isEqual(face), "\(owner): it is the face's")
         }
     }
+}
+
+func symbolInkChannels(_ view: UIImageView, original: Bool = false) throws -> [Double] {
+    view.layoutIfNeeded()
+    let source = original ? try XCTUnwrap(view.image?.cgImage) : nil
+    let scale = max(1, view.traitCollection.displayScale)
+    let w = source?.width ?? Int(ceil(view.bounds.width * scale))
+    let h = source?.height ?? Int(ceil(view.bounds.height * scale))
+    var bytes = [UInt8](repeating: 0, count: w * h * 4)
+    let context = try XCTUnwrap(CGContext(data: &bytes, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+        space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+    if let source {
+        // Downsampling a path can overshoot both colour and alpha at its edges.
+        context.interpolationQuality = .none
+        context.draw(source, in: CGRect(x: 0, y: 0, width: w, height: h))
+    } else {
+        context.scaleBy(x: scale, y: scale)
+        view.layer.render(in: context)
+    }
+    let at = try XCTUnwrap(stride(from: 0, to: bytes.count, by: 4).max { bytes[$0 + 3] < bytes[$1 + 3] })
+    let alpha = Double(bytes[at + 3])
+    XCTAssertGreaterThan(alpha, 0, "the symbol draws ink")
+    return (0..<3).map { Double(bytes[at + $0]) * 255 / max(1, alpha) } + [alpha]
 }
 #endif

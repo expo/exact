@@ -503,3 +503,54 @@ fn region_coordinates_keep_initial_values_for_undefined_environment_lengths() {
     assert_eq!(vp.coord(Some(fallback), 0.5, vp.width), 50.0);
     assert_eq!(vp.coord(Some(Dimension::Points(0.0)), 0.5, vp.width), 0.0);
 }
+
+#[test]
+fn filter_functions_read_numbers_units_and_names_as_css_does() {
+    use crate::svg::filter::FilterList;
+    // CSS units match in any ASCII case, and a zero needs no unit however
+    // it is spelled (Chrome reads each of these).
+    for (css, canonical) in [
+        ("blur(2PX)", "blur(2px)"),
+        ("hue-rotate(90DEG)", "hue-rotate(90deg)"),
+        ("hue-rotate(0.5TURN)", "hue-rotate(180deg)"),
+        ("hue-rotate(200Grad)", "hue-rotate(180deg)"),
+        (
+            "drop-shadow(2PX 2Px red)",
+            "drop-shadow(2px 2px 0px #ff0000ff)",
+        ),
+        ("blur(0.0)", "blur(0px)"),
+        ("blur(+0)", "blur(0px)"),
+        ("hue-rotate(0.0)", "hue-rotate(0deg)"),
+        (
+            "drop-shadow(0.0 0 red)",
+            "drop-shadow(0px 0px 0px #ff0000ff)",
+        ),
+        ("opacity( 50% )", "opacity(0.5)"),
+        (
+            "drop-shadow(red 1px 2px)",
+            "drop-shadow(1px 2px 0px #ff0000ff)",
+        ),
+    ] {
+        let parsed = FilterList::parse(css).unwrap_or_else(|| panic!("{css}"));
+        assert_eq!(parsed.css(), canonical, "{css}");
+    }
+    assert_eq!(
+        FilterList::parse("brightness(1E1%)"),
+        FilterList::parse("brightness(0.1)")
+    );
+    // Text CSS refuses (Chrome too): numbers outside CSS's number token,
+    // a space inside a function token or a dimension, a negative amount,
+    // and a colour between a shadow's lengths.
+    for css in [
+        "brightness(1.)",
+        "blur(1.px)",
+        "brightness(50 %)",
+        "hue-rotate(90 deg)",
+        "saturate (2)",
+        "brightness(-1e-50)",
+        "drop-shadow(1px red 2px)",
+        "drop-shadow(1px 2px red 3px)",
+    ] {
+        assert!(FilterList::parse(css).is_none(), "{css}");
+    }
+}

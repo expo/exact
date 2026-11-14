@@ -90,7 +90,12 @@ test "reload is observed"
   const server = createServer((req, res) => serveBuildTree(dist, req, res));
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   try {
-    const r = await runTests({ host: 'web', file, app: 'caltrain', url: `http://127.0.0.1:${server.address().port}/` });
+    // Each step is said before it runs and each result as it lands, in order (agent.mjs prints them as they come).
+    const heard = [];
+    const r = await runTests({ host: 'web', file, app: 'caltrain', url: `http://127.0.0.1:${server.address().port}/`,
+      atLine: ({ index, line, last, op }) => heard.push(`${index} ${line}/${last} ${op}`), atResult: (t) => heard.push(`= ${t.name}`) });
+    expect(heard).toEqual(['0 14/16 tap', '0 15/16 type', '0 16/16 clock', '= the three observations', '1 18/18 type', '= a fresh history', '2 20/21 tap', '2 21/21 reload', '= reload is observed']);
+    expect(heard.filter(h => h.startsWith('= ')).length).toBe(r.results.length);
     expect([r.passed, r.failed]).toEqual([1, 2]);
     const failures = r.results[0].failures.join('\n');
     expect(failures).toContain('PROPERTY "ready stays" is false on web');
@@ -872,3 +877,74 @@ test('script state comparisons use inclusive numeric bounds and typed literal me
   expect(holds('2','in',[2])).toBe(false); expect(holds(2,'in',['2'])).toBe(false);
   expect(holds([],'equal',[])).toBe(true);
 });
+
+// Run with a private module registry: only the carrier is stubbed, not compilation or backend resets.
+test('fresh resets Snapback beside an owned app server, with file and test seeds', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'exact-mixed-fresh-'));
+  const script = join(dir, 'check.mjs'), module = fileURLToPath(new URL('./agent-test.mjs', import.meta.url));
+  writeFileSync(script, `
+    import assert from 'node:assert/strict';
+    import { mkdirSync, writeFileSync } from 'node:fs';
+    import { mock } from 'bun:test';
+    const dir = ${JSON.stringify(dir)};
+    writeFileSync(dir + '/app.contract', 'component App\\n  view\\n    text \"Test\"\\n');
+    const resets = [], probes = [];
+    const rest = Bun.serve({port: 0, fetch: req => { probes.push(new URL(req.url).pathname); return Response.json({items: []}); }});
+    const snapback = Bun.serve({port: 0, fetch: async req => {
+      if (new URL(req.url).pathname === '/dev/status') return Response.json({storeId: 'fixture'});
+      resets.push(await req.text()); return Response.json({reset: true, seeded: 1, generation: resets.length});
+    }});
+    mkdirSync(dir + '/dist/.gen', {recursive: true});
+    writeFileSync(dir + '/dist/.gen/admission-data.js', JSON.stringify(['net.fetch http://127.0.0.1:' + rest.port, 'net.fetch http://127.0.0.1:' + snapback.port]));
+    writeFileSync(dir + '/seed.json', '[{"table":"items","row":{"title":"Seed"}}]');
+    const file = dir + '/app.test.contract';
+    writeFileSync(file, 'fresh\\ntest "file reset"\\n  expect state ready == true\\ntest "seeded reset"\\n  fresh "seed.json"\\n  expect state ready == true\\n');
+    let starts = 0, opens = 0;
+    mock.module(${JSON.stringify(fileURLToPath(new URL('./agent.mjs', import.meta.url)))}, () => ({open: async () => {
+      assert.equal(resets.length, ++opens, 'reset precedes opening');
+      return {host:'linux', now:0, op:async()=>({clock:0, lines:[]}), clock:async()=>({}), state:async()=>({mutationRequests:0,slots:{ready:true}}), logs:async()=>({lines:[]}), close:async()=>{}};
+    }}));
+    const {runTests} = await import(${JSON.stringify(module)});
+    try {
+      const r = await runTests({host:'linux', app:dir, file, webDist:dir + '/dist', running:{beforeTest:async()=>{starts++}, check(){}}});
+      assert.equal(r.failed, 0, JSON.stringify(r));
+      assert.equal(r.passed, 2);
+      assert.equal(starts, 2);
+      assert.deepEqual(resets, ['', '[{"table":"items","row":{"title":"Seed"}}]']);
+      assert.deepEqual(probes, ['/dev/status', '/dev/status'], 'the REST origin is probed and left alone');
+      console.log('completed');
+    } finally {rest.stop(true); snapback.stop(true);}
+  `);
+  try {
+    const r = spawnSync(process.execPath, [script], {encoding:'utf8', timeout:30000});
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(r.stdout).toContain('completed');
+  } finally {rmSync(dir, {recursive:true, force:true});}
+}, 30000);
+
+test('replay selects the original ordinal among duplicate names and host variants', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'exact-test-ordinal-')), script = join(dir, 'check.mjs');
+  writeFileSync(join(dir, 'app.contract'), 'component App\n  view\n    text "Test"\n');
+  writeFileSync(join(dir, 'app.test.contract'), 'test "same" on web\n  expect state ready == false\ntest "same" on linux\n  expect state ready == true\ntest "same"\n  expect state ready == false\n');
+  writeFileSync(script, `
+    import assert from 'node:assert/strict';
+    import {mock} from 'bun:test';
+    let opened = 0;
+    mock.module(${JSON.stringify(fileURLToPath(new URL('./agent.mjs', import.meta.url)))}, () => ({open: async () => {
+      opened++;
+      return {host:'linux', now:0, op:async()=>({clock:0,lines:[]}), clock:async()=>({}), state:async()=>({mutationRequests:0,slots:{ready:true}}), logs:async()=>({lines:[]}), close:async()=>{}};
+    }}));
+    const {runTests} = await import(${JSON.stringify(fileURLToPath(new URL('./agent-test.mjs', import.meta.url)))});
+    const r = await runTests({host:'linux', app:${JSON.stringify(dir)}, file:${JSON.stringify(join(dir, 'app.test.contract'))}, testIndex:1,
+      atEnd:async(s,t)=>{assert.equal(t.index,1);return {keep:true};}});
+    assert.equal(r.failed,0,JSON.stringify(r));
+    assert.equal(r.passed,1); assert.equal(r.results.length,1); assert.equal(opened,1);
+    assert.equal(r.results[0].index,1);
+    console.log('completed');
+  `);
+  try {
+    const r = spawnSync(process.execPath, [script], {encoding:'utf8', timeout:30000});
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(r.stdout).toContain('completed');
+  } finally {rmSync(dir, {recursive:true, force:true});}
+}, 30000);

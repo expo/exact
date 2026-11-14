@@ -270,8 +270,9 @@ struct TextRasterJob {
             for key in [NSAttributedString.Key.foregroundColor, .strokeColor, .underlineColor, .strikethroughColor, .exactBackground, .exactShadow] {
                 let value = attributes[key]
                 let cg = Self.paintColor(value)
-                // A run's HDR shadow is in the cast, not these pixels.
-                if value is TextRunShadow, ColorRange.isHDR(cg) { continue }
+                // Grouped HDR shadows composite with their glyphs here;
+                // only ungrouped shadows have a separate cast.
+                if value is TextRunShadow, attributes[NSAttributedString.Key.exactOpacity] == nil, ColorRange.isHDR(cg) { continue }
                 headroom = max(headroom, ColorRange.headroom(cg))
                 guard let cg else { continue }
                 if let srgb = cg.converted(to: Self.extended, intent: .relativeColorimetric, options: nil) {
@@ -400,7 +401,7 @@ struct TextRasterJob {
         var fallbackReason: UInt8 = 0
         if shadow != nil { fallbackReason |= 2 }
         if shadow == nil, let color = oneColor(runs), !ColorRange.isHDR(color) {
-            if !runs.contains(where: Self.decorated) {
+            if !runs.contains(where: Self.needsLinePaint) {
                 let glyphs = lines.compactMap { MeasuredGlyphs.Line($0, origin: 0, paints: Self.paints) }
                 if glyphs.count == lines.count {
                     var out = TextRasterImage(TextDrawing(glyphs, at: positions, frame: frame, scale: scale, color: color, smooths: !antialiased, pixels: CGSize(width: width, height: height)), covered: covered)
@@ -420,6 +421,7 @@ struct TextRasterJob {
         // Runs' own HDR shadows, each once.
         var casters: [TextRunShadow] = []
         for run in runs where (CTRunGetAttributes(run) as NSDictionary)[NSAttributedString.Key.exactHidden] as? Bool != true {
+            if (CTRunGetAttributes(run) as NSDictionary)[NSAttributedString.Key.exactOpacity] != nil { continue }
             if let s = TextRunShadow.of(run), ColorRange.isHDR(s.color), !casters.contains(s) { casters.append(s) }
         }
         guard let ink = bitmap(width: width, height: height, space: space, headroom: headroom, deep: deep, keepsImage: shadow != nil, paint: {
@@ -604,7 +606,9 @@ struct TextRasterJob {
         ctx.scaleBy(x: scale, y: -scale)
         ctx.translateBy(x: -frame.minX, y: -frame.minY)
         ctx.setShouldSmoothFonts(!antialiased)
-        for (line, position) in zip(lines, positions) { TextLinePaint.draw(line, at: position, in: ctx, scale: scale, pass: pass) }
+        if !TextLinePaint.drawOpacity(lines, at: positions, in: ctx, scale: scale, pass: pass) {
+            for (line, position) in zip(lines, positions) { TextLinePaint.draw(line, at: position, in: ctx, scale: scale, pass: pass) }
+        }
         ctx.flush()
     }
 
@@ -628,9 +632,10 @@ struct TextRasterJob {
     }
 
     #if os(iOS) || os(tvOS)
-    /// A run CoreText decorates as it draws its line: an underline or a line-through
-    private static func decorated(_ run: CTRun) -> Bool {
+    /// Glyph values alone omit decorations and inline opacity groups.
+    private static func needsLinePaint(_ run: CTRun) -> Bool {
         let attributes = CTRunGetAttributes(run) as NSDictionary
+        if attributes[NSAttributedString.Key.exactOpacity] != nil { return true }
         return [NSAttributedString.Key.underlineStyle, .strikethroughStyle].contains { ((attributes[$0] as? NSNumber)?.intValue ?? 0) != 0 }
     }
 

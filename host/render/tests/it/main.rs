@@ -432,7 +432,7 @@ fn a_document_whose_ids_nobody_keeps_is_the_settled_tree_projected() {
     for (post, deadline) in [(Post::Soon, 5_000), (Post::Never, 100)] {
         let [runtime, any] = [exact_render::Ids::Runtime, exact_render::Ids::Any].map(|ids| {
             exact_render::render_with_at(
-                &plan(),
+                plan(),
                 &|| Blog::new(post),
                 Default::default(),
                 "/post/7",

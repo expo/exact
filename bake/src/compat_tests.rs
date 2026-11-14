@@ -753,7 +753,7 @@ fn an_executor_is_linked_only_for_a_named_module() {
 
 #[test]
 fn rust_capability_receipts_bind_executor_abi_target_and_module() {
-    assert_eq!(super::RUST_ABI, 11);
+    assert_eq!(super::RUST_ABI, 12);
     let dir = app("rust-capabilities");
     let mut manifest = Manifest::read(&dir).unwrap();
     let mut ids = Vec::new();

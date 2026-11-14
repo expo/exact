@@ -219,6 +219,34 @@ mod tests {
     }
 
     #[test]
+    fn a_button_title_with_opacity_keeps_its_paint_node() {
+        let (host, boot) = opacity_host(
+            "component App\n  view\n    button testId=\"button\" opacity=0.5\n      text \"Title\" opacity=0.25 testId=\"title\"\n",
+        );
+        let title = test_view(&host, "title");
+        let ops: serde_json::Value = serde_json::from_str(&boot).unwrap();
+        assert!(
+            ops["ops"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|op| op["op"] == "create" && op["id"] == title),
+            "a faded title needs its own paint node: {boot}"
+        );
+    }
+
+    #[test]
+    fn native_button_titles_refuse_opacity_instead_of_dropping_it() {
+        for opacity in [0., 0.25, 1.] {
+            let error = contract::compile(&format!(
+                "component App\n  view\n    button appearance=\"auto\" opacity=0.5\n      text \"Title\" opacity={opacity}\n"
+            )).unwrap_err();
+            assert_eq!(error.id, "lower-button-style-attr");
+            assert!(error.message.contains("takes no `opacity`"), "{error}");
+        }
+    }
+
+    #[test]
     fn an_inline_runs_opacity_transition_repaints_its_paragraph() {
         let (mut host, _) = opacity_host(
             "component App\n  state on = false\n  action go\n    on = true\n  view\n    column\n      button \"Go\" testId=\"go\" press=go\n      text\n        text \"Posted \"\n        text \"yesterday\" testId=\"run\" opacity=(on ? 0.2 : 1) transition=\"opacity 1s linear\"\n",

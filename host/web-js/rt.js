@@ -633,6 +633,7 @@ function drain() {
   for (const [e, o] of Scrolls)
     for (const name in o) {
       const at = o[name];
+      if (e[name] !== at) globalThis.exact?.fragment?.cancel(false);
       if (e.$jump) e.$jump(name, at);
       else if (e[name] !== at) {
         if (
@@ -779,6 +780,7 @@ Object.assign(Link, {
   busy: () => !!Writes,
   poisoned: () => Poisoned,
   pauseTimers,
+  Invocation,
 });
 /** The app's data sources (LLP 1016). `answer(source, args, store)` gives `{v}` now, `{req}` (an HTTP request the host
  * runs, then `parse`s), a Promise (an executor-local continuation: TypeScript), or `null` while the source is not

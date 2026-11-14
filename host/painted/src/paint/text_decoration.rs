@@ -126,6 +126,7 @@ impl Painter {
         paragraph: &Paragraph,
         palette: &[RunPaint],
         reveal: Option<ViewId>,
+        selected: std::ops::Range<usize>,
     ) -> Decorations {
         // CSS Text Decoration 3 §2.1: a box's lines are drawn through its
         // descendants' visible text in the box's own colour, whatever the
@@ -136,7 +137,7 @@ impl Painter {
             .iter()
             .enumerate()
             .map(|(index, run)| {
-                if !super::paints(kernel, run.source, reveal) {
+                if !selected.contains(&index) || !super::paints(kernel, run.source, reveal) {
                     return Vec::new();
                 }
                 let mut current = Some(run.source);
@@ -202,7 +203,7 @@ impl Painter {
         }
         let mut lines = Vec::new();
         for (glyph, baseline, paint) in paragraph.paint_glyphs(palette) {
-            if !super::paints(kernel, paint.source, reveal) {
+            if !selected.contains(&glyph.run()) || !super::paints(kernel, paint.source, reveal) {
                 continue;
             }
             // A Markdown piece's own: a followed link, `~~strike~~`.

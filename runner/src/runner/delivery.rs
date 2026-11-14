@@ -49,7 +49,7 @@ impl<D: DataSource> Runner<D> {
     /// Delivery facts are available to the first component state initializers.
     #[allow(clippy::too_many_arguments)] // the host boot facts
     pub fn boot_at(
-        plan: Plan,
+        plan: impl Into<crate::Program>,
         data: D,
         kernel: Kernel,
         viewport: crate::Viewport,

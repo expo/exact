@@ -484,12 +484,13 @@ impl<D: DataSource> Runner<D> {
         {
             return;
         }
-        // @ref LLP 1039 D3 / LLP 1030 D7 — runner facts are never kept answers.
+        // @ref LLP 1039 D3 / LLP 1030 D7 — a runner fact's answer is never
+        // kept, but a surface record's (`kept_surface`).
         // @ref LLP 1162.001 D4 — nor is a declared source's, nor one whose
         // identifying arguments read a declared resource, a kept module
-        // source's included: a launch with no rendered page starts that
-        // resource on its placeholder, so such a kept answer would not fit
-        // (LLP 1027.005 D3), and an older one is forgotten.
+        // source's included: a launch with no rendered page starts the
+        // declared resource on its placeholder, so such a kept answer would
+        // not fit (LLP 1027.005 D3), and an older one is forgotten.
         if !surface && !waits_for_module(&self.plan, self.plan.str(self.resource_row(i).source)) {
             return;
         }

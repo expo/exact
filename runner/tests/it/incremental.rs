@@ -507,6 +507,7 @@ fn lockstep(app: &str, plan: &Plan, seed: u64, steps: usize, deferred: bool) -> 
     let mut tickets: Vec<u64> = Vec::new();
     let mut reports: Vec<CollectionFeedback> = Vec::new();
     let mut commits = 0;
+    let mut dispatched = 0;
     for step in 0..steps {
         let handlers = full.handlers();
         assert_eq!(handlers, incremental.handlers(), "{app} step {step}");
@@ -571,6 +572,7 @@ fn lockstep(app: &str, plan: &Plan, seed: u64, steps: usize, deferred: bool) -> 
                 }
                 let choice = rng.below(choices);
                 if choice >= views.len() {
+                    dispatched += 1;
                     let row = choice - views.len();
                     let args = module_args(plan, row, &mut rng);
                     what = format!(
@@ -587,6 +589,7 @@ fn lockstep(app: &str, plan: &Plan, seed: u64, steps: usize, deferred: bool) -> 
                     let Some(event) = event(&mut rng, kind) else {
                         continue;
                     };
+                    dispatched += 1;
                     what = format!("{event:?} on view {view}");
                     let result = incremental.dispatch(*view, event.clone());
                     // A view with listeners is always found where it lives.
@@ -618,6 +621,12 @@ fn lockstep(app: &str, plan: &Plan, seed: u64, steps: usize, deferred: bool) -> 
             clip(&a)
         );
     }
+    // A plan can declare controls only inside arms the fake answers never
+    // open. Require commit coverage when this run could deliver inputs.
+    assert!(
+        dispatched < steps / 4 || commits >= steps / 4,
+        "{app}: {commits} commits from {dispatched} dispatches"
+    );
     commits
 }
 
@@ -768,12 +777,6 @@ fn every_app_plan_updates_incrementally_exactly_as_it_does_in_full() {
                                         deferred,
                                     );
                                     eprintln!("{app} seed {seed}: {commits} commits");
-                                    // The hello app's one text has no event to hear.
-                                    assert!(
-                                        (plan.handlers.is_empty() && plan.module_events.is_empty())
-                                            || commits >= steps / 4,
-                                        "{app} seed {seed}: only {commits} commits"
-                                    );
                                     commits
                                 })
                             })

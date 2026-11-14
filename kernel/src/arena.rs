@@ -1331,6 +1331,7 @@ mod tests {
             (StyleId::TextColor, text("light-dark(#112233, #ffffff)")),
             (StyleId::WhiteSpace, text("pre-wrap")),
             (StyleId::DynamicRangeLimit, text("constrained")),
+            (StyleId::ImageRendering, text("pixelated")),
             (StyleId::ColorScheme, text("dark")),
             // LLP 1121 D5: the app tuple, plus one.
             (StyleId::Mode, number(2.0)),

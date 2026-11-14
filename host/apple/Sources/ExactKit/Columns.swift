@@ -128,8 +128,7 @@ extension NodeView {
     func drawParagraphFragments(_ ctx: CGContext, paragraph: Paragraph, spec: Spec, dirty: NSRect) {
         eachFragment(ctx) { box, at, lines in
             let dirty = dirty.offsetBy(dx: -at.x, dy: -at.y)
-            paintBackgroundThroughText(ctx, paragraph: paragraph, spec: spec, in: box, lines: lines)
-            TextEngine.draw(paragraph, spec: spec, in: box, context: ctx, dirty: dirty, lines: lines)
+            drawParagraph(ctx, paragraph: paragraph, spec: spec, in: box, dirty: dirty, lines: lines)
             // Over the ink: the selection's fill, then its glyphs again in the selection's own colour.
             presenter?.selection.draw(self, paragraph: paragraph, spec: spec, in: ctx, dirty: dirty, lineRange: lines)
         }

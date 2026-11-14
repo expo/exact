@@ -340,6 +340,7 @@ final class BarPress: NSObject {
 /// which Exact then leaves alone.
 final class NavigationStack {
     let proxy = NavigationDelegateProxy()
+    let faceTint = BarFaceTintView()
     var showsBar: Bool
     let order: Int
     let label: String
@@ -509,6 +510,10 @@ extension NavigationHost {
         stack.proxy.host = self
         stacks[ObjectIdentifier(nav)] = stack
         nav.delegate = stack.proxy
+        stack.faceTint.changed = { [weak self, weak nav] in
+            if let nav { self?.retintBarFaces(in: nav) }
+        }
+        nav.navigationBar.addSubview(stack.faceTint)
         return stack
     }
 
@@ -1012,9 +1017,13 @@ extension NavigationHost {
         return appearance
     }()
 
-    /// Register a replacement before its first native layout. Resolve only
-    /// the containing route, preserving that stack's Back relationships.
+    /// Keep the primary owner in the root's authored scroller. For a route's
+    /// replacement, register it before its first native layout, preserving Back.
     func scrollBackendChanged(_ node: NodeView) {
+        if node === container {
+            fitOwner()
+            return
+        }
         for current in ViewPresentation.controllers(for: node) {
             if let route = current as? RouteController, route.host === self, let stack = route.stack {
                 guard route.collapseScroll === node || route.edgeScroll === node || (node.scrollView != nil && contentScroller(of: route) === node) else { return }
@@ -1197,7 +1206,9 @@ extension NavigationHost {
             c.barPresses.append(made.press)
             return made.bar
         }
-        let image = i.badge?.image ?? i.chip?.image(tint: presenter.views[i.id]?.carriedTint ?? presenter.viewport.tintColor) ?? i.symbol.flatMap { FaceSymbol.image($0, points: FaceSymbol.barItemPoints) }
+        let dimmed = c.navigationController?.navigationBar.tintAdjustmentMode == .dimmed
+        let image = i.badge?.image(dimmed: dimmed) ?? i.chip?.image(tint: presenter.views[i.id]?.carriedTint ?? presenter.viewport.tintColor,
+            dimmed: dimmed) ?? i.symbol.flatMap { FaceSymbol.image($0, points: FaceSymbol.barItemPoints) }
         // The same control as last time, still a menu or not and still a
         // picture or words: its item is kept and changed, as a hand-built
         // bar's is, so the glass animates what changed (a heart filling).

@@ -71,12 +71,13 @@ impl RegionLeases {
     }
 }
 // Stamp/source/catalog provenance is stored once in the set/source table.
-// No native payload or per-fact Arc; two typed axes and optional baseline stay exact.
-#[derive(Clone, Copy)]
+// Ordinary facts allocate no geometry; flowed facts share the request snapshot.
+#[derive(Clone)]
 struct ScalarFact {
     source: u16,
     offer: Offer,
     metrics: TextMetrics,
+    exclusions: Option<Arc<Vec<crate::FlowShape>>>,
 }
 const _: () = assert!(std::mem::size_of::<ScalarFact>() <= 48);
 #[derive(Default)]
@@ -93,9 +94,18 @@ impl FactSet {
     /// the same width answers every height, as the ordinary path's
     /// measurement cache does: an intrinsic width probe under a definite,
     /// min-content or max-content height is one measurement, not three.
-    fn find(&self, stamp: &ParagraphStamp, offer: Offer) -> Option<usize> {
+    fn find(
+        &self,
+        stamp: &ParagraphStamp,
+        offer: Offer,
+        exclusions: &[crate::FlowShape],
+    ) -> Option<usize> {
         self.entries.iter().position(|f| {
             self.sources[f.source as usize].stamp == *stamp
+                && crate::flow::shapes_eq(
+                    f.exclusions.as_deref().map_or(&[], Vec::as_slice),
+                    exclusions,
+                )
                 && if self.height_free {
                     same_axis(f.offer.width, offer.width)
                 } else {
@@ -157,10 +167,23 @@ impl PartialEq for RegionTicket {
 }
 impl Eq for RegionTicket {}
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub(crate) struct TextKey {
     stamp: ParagraphStamp,
     offer: Offer,
+    exclusions: Option<Arc<Vec<crate::FlowShape>>>,
+}
+impl TextKey {
+    fn exclusions(&self) -> &[crate::FlowShape] {
+        self.exclusions.as_deref().map_or(&[], Vec::as_slice)
+    }
+}
+impl PartialEq for TextKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.stamp == other.stamp
+            && same_offer(self.offer, other.offer)
+            && crate::flow::shapes_eq(self.exclusions(), other.exclusions())
+    }
 }
 /// One immutable first-missing request. Cloning shares its snapshot; no worker
 /// sees the arena or computes geometry. Only the current request may complete.
@@ -214,6 +237,10 @@ impl RegionTextRequest {
     pub fn offer(&self) -> Offer {
         self.0.key.offer
     }
+    /// Resolved exclusions in this paragraph's content coordinates, owned by this offer.
+    pub fn exclusions(&self) -> &[crate::FlowShape] {
+        self.0.key.exclusions()
+    }
     /// Font/catalog identity that must select the worker's shaping context.
     pub fn catalog(&self) -> u64 {
         self.0.catalog
@@ -238,7 +265,7 @@ impl RegionTextRequest {
             .collect();
         f(&TextMeasureRequest {
             atoms: Default::default(),
-            exclusions: &[],
+            exclusions: self.exclusions(),
             runs: &runs,
             paragraph: self.0.source.paragraph,
             width: self.offer().width,
@@ -528,18 +555,19 @@ mod split_storage_tests {
                 source: 0,
                 offer: Offer::definite(1., 1.),
                 metrics: TextMetrics::default(),
+                exclusions: None,
             });
         }
         assert_eq!(facts.entries.len(), 768);
         assert_eq!(facts.entries.capacity(), 768);
-        assert_eq!(std::mem::size_of::<ScalarFact>(), 36);
+        assert_eq!(std::mem::size_of::<ScalarFact>(), 48);
         assert_eq!(
             facts.entries.capacity() * std::mem::size_of::<ScalarFact>(),
-            27_648
+            36_864
         );
         assert_eq!(
             2 * facts.entries.capacity() * std::mem::size_of::<ScalarFact>(),
-            55_296
+            73_728
         );
         assert!(facts.entries.capacity() * std::mem::size_of::<ScalarFact>() <= 36 * 1024);
         facts.sources.reserve_exact(SPLIT_PAINTS);

@@ -79,7 +79,7 @@ pub fn typescript_exporting(
     let mutation_sources: BTreeSet<_> = plan
         .actions
         .iter()
-        .flat_map(|action| exact_runner::vm::instructions(plan.code(action.body)))
+        .flat_map(|action| exact_runner::vm::instructions(plan.read_code(plan.code(action.body)).0))
         .flatten()
         .filter(|instruction| instruction.op == Opcode::Send)
         .map(|instruction| plan.str(StrId(instruction.args[1] as u32)))

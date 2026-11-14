@@ -242,15 +242,16 @@ impl<D: DataSource> Host<D> {
             .is_some_and(|a| a.headers.iter().any(|h| h.id == id))
     }
     pub(super) fn native_protected_id(&self, id: ViewId) -> bool {
+        self.native_selected_id(id) || self.native_captured_id(id)
+    }
+    pub(super) fn native_captured_id(&self, id: ViewId) -> bool {
         let Some(region) = self.content_region.as_ref().filter(|r| r.native.is_some()) else {
             return false;
         };
-        self.native_selected_id(id)
-            || self
-                .runner
-                .kernel()
-                .node(id)
-                .is_some_and(|n| within(self.runner.kernel(), n.key, region.binding.content))
+        self.runner
+            .kernel()
+            .node(id)
+            .is_some_and(|n| within(self.runner.kernel(), n.key, region.binding.content))
     }
     pub(super) fn native_retire_removed_owner(&mut self, batch: &mut Batch) {
         let Some(region) = self.content_region.as_ref().filter(|r| r.native.is_some()) else {
@@ -409,11 +410,21 @@ impl<D: DataSource> Host<D> {
             .map_err(|_| "native node stack allocation")?;
         stack.push(content.index);
         while let Some(slot) = stack.pop() {
-            let arena = self.runner.kernel().arena();
-            if arena.children(slot).len() > charge.nodes.saturating_sub(stack.len()) {
+            let kernel = self.runner.kernel();
+            let arena = kernel.arena();
+            if !within(kernel, arena.key(slot), content) {
+                continue;
+            }
+            let children = arena
+                .children(slot)
+                .iter()
+                .rev()
+                .copied()
+                .filter(|s| within(kernel, arena.key(*s), content));
+            if children.clone().count() > charge.nodes.saturating_sub(stack.len()) {
                 return Err("native stack capacity".into());
             }
-            stack.extend(arena.children(slot).iter().rev().copied());
+            stack.extend(children);
             let node = self
                 .runner
                 .kernel()
@@ -424,6 +435,7 @@ impl<D: DataSource> Host<D> {
             let children = arena
                 .children(slot)
                 .iter()
+                .filter(|s| within(kernel, arena.key(**s), content))
                 .map(|s| arena.local_id(*s))
                 .collect();
             let handlers = self
@@ -584,9 +596,34 @@ impl<D: DataSource> Host<D> {
                 return Ok(());
             }
         }
+        let returning: Vec<_> = native
+            .selected
+            .iter()
+            .flat_map(|a| &a.headers)
+            .filter(|h| {
+                kernel.node_by_key(h.key).is_some()
+                    && !within(kernel, h.key, region.binding.content)
+            })
+            .map(|h| h.id)
+            .collect();
+        // Presenters keep an open popover only if its home is known when
+        // its former publication removes it from the parent's child list.
+        let attachments: Vec<_> = returning
+            .iter()
+            .filter_map(|&id| {
+                let node = kernel.node(id)?;
+                let parent = self.props_of(&node).remove("popoverParent")?;
+                (self.mirror.get(&id)?.props.get("popoverParent") != Some(&parent))
+                    .then_some((id, parent))
+            })
+            .collect();
+        for (id, parent) in &attachments {
+            staged.props(*id, &[("popoverParent", parent.clone())], &[]);
+        }
         if let Some(old) = &native.selected {
             for header in &old.headers {
                 if header.inline_owner.is_none()
+                    && !returning.contains(&header.id)
                     && !candidate.nodes.iter().any(|n| {
                         n.header.key == header.key
                             && n.header.id == header.id
@@ -598,6 +635,7 @@ impl<D: DataSource> Host<D> {
             }
         }
         // All creates precede final children; no Host.mirror mutation yet.
+        // Layout may reserve an empty mirror before its native view exists.
         for node in candidate
             .nodes
             .iter()
@@ -612,7 +650,12 @@ impl<D: DataSource> Host<D> {
                 if h.kind != node.header.kind || h.handlers != node.header.handlers {
                     return Err("native listener/kind replacement needs binding handoff".into());
                 }
-            } else {
+            } else if self.native_selected_id(node.header.id)
+                || self
+                    .mirror
+                    .get(&node.header.id)
+                    .is_none_or(|m| m.style.is_empty())
+            {
                 let pairs: Vec<_> = node
                     .mirror
                     .props
@@ -633,12 +676,20 @@ impl<D: DataSource> Host<D> {
             .iter()
             .filter(|n| n.header.inline_owner.is_none())
         {
-            let same = native.selected.as_ref().is_some_and(|a| {
-                a.headers.iter().any(|h| {
-                    h.id == node.header.id && h.key == node.header.key && h.inline_owner.is_none()
+            let old = self
+                .mirror
+                .get(&node.header.id)
+                .filter(|_| {
+                    !self.native_selected_id(node.header.id)
+                        || native.selected.as_ref().is_some_and(|a| {
+                            a.headers.iter().any(|h| {
+                                h.id == node.header.id
+                                    && h.key == node.header.key
+                                    && h.inline_owner.is_none()
+                            })
+                        })
                 })
-            });
-            let old = same.then(|| self.mirror.get(&node.header.id)).flatten();
+                .filter(|m| !m.style.is_empty());
             if let Some(old) = old {
                 if old.props != node.mirror.props {
                     let set: Vec<_> = node
@@ -746,6 +797,13 @@ impl<D: DataSource> Host<D> {
             .map_err(|_| "native header allocation")?;
         // Last fallible step precedes any mutation of selected A.
         batch.append_checked(staged, limits.diff_wire_bound)?;
+        for (id, parent) in attachments {
+            self.mirror
+                .get_mut(&id)
+                .unwrap()
+                .props
+                .insert("popoverParent", parent);
+        }
         let native = self
             .content_region
             .as_mut()
@@ -755,7 +813,9 @@ impl<D: DataSource> Host<D> {
             .unwrap();
         if let Some(old) = native.selected.take() {
             for h in old.headers {
-                self.mirror.remove(&h.id);
+                if !returning.contains(&h.id) {
+                    self.mirror.remove(&h.id);
+                }
             }
         }
         for node in candidate.nodes {
@@ -775,6 +835,13 @@ impl<D: DataSource> Host<D> {
             collections: candidate.collections,
             charge: candidate.charge,
         });
+        // Selected views leaving the publication keep their native identity.
+        // Replay their suppressed edits only after the new membership takes over.
+        for id in returning {
+            self.update(id, batch);
+            self.emit_children(id, batch);
+        }
+        self.emit_paragraphs(batch);
         Ok(())
     }
     fn native_collections_with(

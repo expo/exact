@@ -1110,6 +1110,7 @@ mod tests {
             activate: exact_plan::ActivatePolicy::Inferred,
             wake: String::new(),
             runtime_form: false,
+            drew: false,
         };
         let js = Js::of(shell).unwrap();
         let head = head_js(shell, &js, "en", "ltr", true, false);
@@ -1191,6 +1192,7 @@ mod tests {
                 activate: exact_plan::ActivatePolicy::Inferred,
                 wake: String::new(),
                 runtime_form: false,
+                drew: false,
             };
             let page = head_js(&shell, &js, "en", "ltr", false, false)
                 + &body_js(&shell, &js, &rendered, false, false, None);

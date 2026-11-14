@@ -1,0 +1,17 @@
+// data: typetour
+// LLP 1077: literal, class and computed visual properties share the linked grammars.
+style Card
+  box-shadow="0 2px 4px #000, inset 0 0 2px #fff"
+  corner-shape="squircle"
+component VisualProperties
+  state changed = false
+  action change
+    changed = !changed
+  view
+    column gap=16 padding=24
+      view testId="card" class=Card width=160 height=80 border-radius=24 background-color="#369"
+      view testId="computed" width=160 height=80 border-radius=20 background-color="#c63" corner-shape=(changed ? "bevel scoop" : "round") box-shadow=(changed ? "inset 1px 2px 4px #000" : "0 2px 4px #000") rotate=(changed ? "y 30deg" : "0 0 -1 10deg")
+      text "Paint" testId="paint" font-size=32 text-shadow=(changed ? "2px 1px 3px #009" : "1px 2px #900") -webkit-text-stroke=(changed ? "1px #00f" : "0 currentcolor")
+      image "symbol:heart" width=24 height=24 -exact-symbol-palette=(changed ? "#f00 #00f" : "none")
+      view testId="gradient" width=160 height=60 background-image=(changed ? "conic-gradient(#f00, #00f, #f00)" : "linear-gradient(#f00, #00f)") mask-image="linear-gradient(#000, transparent)"
+      button "Change" testId="change" press=change

@@ -1,0 +1,71 @@
+fn stamp(): number = performanceNow()
+fn pick(n: number): number = n + 1
+
+component App
+  state n = -1
+  state saved = -1
+  derive at = performanceNow()
+  action grow
+    n = n + 2
+  action save(value: number)
+    saved = value
+  view
+    column
+      Counted(values=range(n), shown=(n >= 0), at=stamp() + 0, via=at + 0, go=save)
+      Same(value=n * 2)
+      button press=grow testId="grow"
+        text "grow"
+      text `${saved}` testId="saved"
+
+component Counted
+  props
+    values: number[]
+    shown: bool
+    at: number
+    via: number
+    go: action
+  derive size = values.length
+  view
+    column
+      text `${shown && size + size > 0}` testId="and"
+      text `${!shown || size + size > 0}` testId="or"
+      text `${shown ? size + size : -1}` testId="ternary"
+      text `${match (shown ? some(1) : none) { case some(x) => size + size + x, case none => -1 }}` testId="match"
+      text `${(shown ? [1] : []).map(x => size + size + x).join(",")}` testId="arrow"
+      text `${at}/${at}/${via}/${via}` testId="clock"
+      text "alive" testId="alive"
+      button press=go(at + at) testId="save"
+        text "save"
+
+component Same
+  props
+    value: number
+  derive pick = pick(1)
+  view
+    column
+      text `${pick(5)}` testId="same-call"
+      text `${pick}/${pick}` testId="same-value"
+      text `${value}` testId="same-prop"
+
+test "sharing preserves lazy expressions and event-time reads"
+  expect text "and" == "false"
+  expect text "or" == "true"
+  expect text "ternary" == "-1"
+  expect text "match" == "-1"
+  expect text "arrow" == ""
+  expect text "alive" == "alive"
+  expect text "same-call" == "6"
+  expect text "same-value" == "2/2"
+  expect text "same-prop" == "-2"
+  tap "grow"
+  expect text "and" == "true"
+  expect text "or" == "true"
+  expect text "ternary" == "2"
+  expect text "match" == "3"
+  expect text "arrow" == "3"
+  expect text "same-call" == "6"
+  expect text "same-value" == "2/2"
+  expect text "same-prop" == "2"
+  clock +1000
+  tap "save"
+  expect text "saved" == "2000"

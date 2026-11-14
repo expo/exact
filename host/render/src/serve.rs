@@ -5,7 +5,7 @@
 //! the router sends to its not-found route, is rendered with a new
 //! runner and module realm (D10), then composed over the
 //! built shell ([`crate::page`]). A `client` route gets the shell. Files
-//! under `dist/` are served as they are; `/.exact/health` answers `ok`.
+//! in the public part of `dist/` are served as they are; `/.exact/health` answers `ok`.
 //! Renders run on a fixed set of workers behind a bounded queue: a request
 //! that finds the queue full is a 503 at once. A failed render, or one that
 //! panics, is a 500 and the server keeps serving. Each render prints one
@@ -106,7 +106,7 @@ impl Stopper {
 
 struct Shared {
     serve: Serve,
-    plan: Plan,
+    plan: exact_runner::Program,
     delivery: exact_runner::delivery::Delivery,
     shell: String,
     /// A page's CSP header lines, none when the app sends none (D11).
@@ -232,7 +232,7 @@ impl Server {
             stop: Arc::new(AtomicBool::new(false)),
             shared: Shared {
                 serve,
-                plan,
+                plan: plan.into(),
                 delivery,
                 shell,
                 csp,
@@ -937,7 +937,12 @@ fn render_kept<D: DataSource + 'static>(
         hints: request.hints,
     };
     let mut response = document(&unconditional, policy, notfound, shared, data, early);
-    if response.status != 200 || response.body.len() > MAX_CACHE_BYTES {
+    // Keep no page sent `no-store`, such as one whose render drew randomness
+    let unkept = response
+        .headers
+        .iter()
+        .any(|(name, value)| *name == "Cache-Control" && value == "no-store");
+    if response.status != 200 || response.body.len() > MAX_CACHE_BYTES || unkept {
         if response.status == 200 && identity(&response, request) {
             response.status = 304;
         }
@@ -1323,6 +1328,11 @@ fn document<D: DataSource + 'static>(
             response.headers.push(("Cache-Control", "no-store".into()));
             response.headers.push(("Retry-After", "1".into()));
         }
+        // A page whose render drew randomness is the reader's alone, whatever
+        // its status, as a draw is the device's (LLP 1069.005 D2)
+        _ if rendered.drew => {
+            response.headers.push(("Cache-Control", "no-store".into()));
+        }
         404 | 410 => {
             response
                 .headers
@@ -1344,8 +1354,10 @@ fn document<D: DataSource + 'static>(
     // sent, so what follows reaches only the origin's cache, which keeps a
     // flushed 200 of a cached route. A page nothing keeps skips it (the
     // page's SHA-256 was ~3% of RealWorld's CPU per page).
-    let kept =
-        policy == Some(RenderPolicy::Cached) && !serve.lifetime.is_zero() && !request.no_store;
+    let kept = policy == Some(RenderPolicy::Cached)
+        && !serve.lifetime.is_zero()
+        && !request.no_store
+        && !rendered.drew;
     if streamed && !kept {
         return response;
     }

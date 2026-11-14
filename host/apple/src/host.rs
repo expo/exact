@@ -217,9 +217,10 @@ pub struct Host<D: DataSource> {
     layout_withheld: bool,
     /// A layout failed or a commit's did not run: `inert_layout` lays out.
     layout_owed: bool,
-    /// Committing an advance's or a presented frame's timers, answers and
-    /// frame tasks ([`Host::advanced`]), where only their commits move the tree.
-    in_advance: bool,
+    /// Committing where only the commits move the tree: an advance
+    /// ([`Host::advanced`]), a list's feedback, an event's action. Any other
+    /// entry changes what layout reads besides the tree.
+    inert_entry: bool,
     /// Routes whose `navigationDetent` names `fit-content` (LLP 1075.003
     /// §9.11), each with its width, resolved padding, border and bottom cover when last measured.
     fit_routes: Vec<(ViewId, Option<[f32; 10]>)>,
@@ -573,7 +574,7 @@ impl<D: DataSource> Host<D> {
             pending_layout: IdSet::default(),
             layout_withheld: false,
             layout_owed: false,
-            in_advance: false,
+            inert_entry: false,
             fit_routes: Vec::new(),
             stickies: IdMap::default(),
             timeline_scrolls: Default::default(),
@@ -730,14 +731,13 @@ impl<D: DataSource> Host<D> {
     /// `cancel`, LLP 1069.002 D9). Also the picker's `showPicker` hold and
     /// `pickedPath`, whose reply adds the file to copy into. A `share` hold
     /// delivers nothing but the journal line the runner writes (LLP 1069.003
-    /// D6). `appFile` names the file behind an `app:/` path, what an export
-    /// copies from (LLP 1069.010 D3); `appRoots` the three roots, which the
+    /// D6). `appRoots` names the three roots, which the
     /// Swift host resolves an image's `app:/` source against (LLP 1069.002
     /// D7); `shareFile` a share's confined copy (LLP 1125 D12). `None` else.
     pub fn answer_hold(&mut self, request: &str) -> Option<String> {
         let op = exact_runner::agent::field_str(request, "op");
-        if let Some(op @ ("appFile" | "shareFile")) = op.as_deref() {
-            return Some(crate::picker::file_op(op, request, self.runner.data_ref()));
+        if op.as_deref() == Some("shareFile") {
+            return Some(crate::picker::share_file(request, self.runner.data_ref()));
         }
         if op.as_deref() == Some("appRoots") {
             return Some(crate::picker::app_roots_reply(self.runner.data_ref()));
@@ -924,7 +924,8 @@ impl<D: DataSource> Host<D> {
                 for timed in &mut result.receipts {
                     timed.at_ms = self.now_ms;
                 }
-                self.commit(&result.receipts, result.error.map(|e| format!("{e:?}")))
+                let error = result.error.map(|e| format!("{e:?}"));
+                self.in_inert_entry(|host| host.commit(&result.receipts, error))
             }
             Err(error) => self.finish(Batch::new(), Some(format!("{error:?}"))),
         }
@@ -962,7 +963,8 @@ impl<D: DataSource> Host<D> {
         self.now_ms = now_ms.max(self.now_ms);
         // At the event's time: an action's `performanceNow()` is the host's (LLP 1096 D3).
         let a = self.runner.dispatch_at(view, event, self.now_ms);
-        self.commit(&a.receipts, a.error.map(|e| format!("{e:?}")))
+        let error = a.error.map(|e| format!("{e:?}"));
+        self.in_inert_entry(|host| host.commit(&a.receipts, error))
     }
 
     /// The platform's own Back from visit `id` (LLP 1115 D5), at `now_ms`.
@@ -1047,10 +1049,7 @@ impl<D: DataSource> Host<D> {
         }
         self.runner.canvas_frame();
         let error = a.error.map(|e| format!("{e:?}"));
-        self.in_advance = true;
-        let out = self.commit(&a.receipts, error);
-        self.in_advance = false;
-        out
+        self.in_inert_entry(|host| host.commit(&a.receipts, error))
     }
 
     /// An image loaded: its intrinsic size, in points (`None` when it failed
@@ -1368,12 +1367,12 @@ impl<D: DataSource> Host<D> {
         self.repaint_renewed(&repaint, &mut batch);
         let seek = self.engine.advance(self.engine_time(self.now_ms));
         debug_assert!(seek.is_ok(), "the clock never runs backwards here");
-        // An advance whose commits changed no node (a frame task that only
-        // moved state nothing shows; a `sent` reader answered at each MIDI
-        // message's time, LLP 1125 D6, with nothing on screen reading it)
-        // lays out only what such a commit can move (`inert_layout`): each
-        // would cost a whole layout and paint order walk otherwise.
-        let inert = self.in_advance && receipts.iter().all(|t| unchanged(&t.receipt));
+        // An advance, a list's feedback or an action whose commits changed no
+        // node (state nothing shows; a `sent` reader answered at each MIDI
+        // message's time, LLP 1125 D6, read by nothing on screen; a scroll
+        // that mounted no row) lays out only what such a commit can move
+        // (`inert_layout`), not a whole layout and paint order walk.
+        let inert = self.inert_entry && receipts.iter().all(|t| unchanged(&t.receipt));
         let layout_error = if height_target_error.is_some() {
             self.layout_owed = true;
             height_target_error

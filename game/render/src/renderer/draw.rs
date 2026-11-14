@@ -67,7 +67,14 @@ impl<const ASSETS: bool> RendererWithAssets<ASSETS> {
 
     /// After the encoded frame's submit: map what it copied for reading.
     pub(crate) fn submitted(&mut self) {
-        if let Some(cache) = self.shadows.as_mut().and_then(|s| s.cached.as_mut()) {
+        // A look keeps its saved levels until submission; it cannot validate
+        // cache writes from an earlier, discarded live encoder.
+        if let Some(cache) = self
+            .shadows
+            .as_mut()
+            .and_then(|s| s.cached.as_mut())
+            .filter(|_| self.look_levels.is_none())
+        {
             if cache.encoded.replace(false) {
                 cache.valid = true;
             }
@@ -294,7 +301,7 @@ impl<const ASSETS: bool> RendererWithAssets<ASSETS> {
         if let Some(probe) = &mut self.probe {
             probe.uncounted = uncounted;
         }
-        self.prepare_shadow_cache(cascades.as_ref(), frame, hooks.materials());
+        let cached_shadows = self.prepare_shadow_cache(cascades.as_ref(), frame, hooks.materials());
         let lean = self.lights.info[0] == 0. && frame.fill.is_none() && self.grids == 0;
         let early = self.pipelines.early;
         let e = &frame.environment;
@@ -381,7 +388,7 @@ impl<const ASSETS: bool> RendererWithAssets<ASSETS> {
             self.mark(timing::CULL);
         }
         self.encode_local_culls(encoder);
-        state.draws += self.encode_shadows(encoder, frame, hooks.materials());
+        state.draws += self.encode_shadows(encoder, frame, hooks.materials(), cached_shadows);
         state.draws += self.encode_local_shadows(encoder, hooks.materials(), frame.timestamps);
         state.draws += self.encode_depth_prepass(encoder, frame, state.size, state.direct);
         self.encode_forward(encoder, target, &mut state, frame, hooks, &view)?;

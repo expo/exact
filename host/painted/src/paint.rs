@@ -55,6 +55,7 @@ pub(crate) use lift::{Ghost, Lift};
 mod alert;
 pub(crate) mod inline;
 pub(crate) mod inline_frame;
+pub(crate) mod inline_opacity;
 mod layer;
 mod lift;
 pub(crate) mod look;

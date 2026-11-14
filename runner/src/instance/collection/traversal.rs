@@ -638,7 +638,7 @@ pub(super) fn validate_nesting(
                     {
                         continue;
                     }
-                    let code = plan.code(binding.expr);
+                    let code = plan.read_code(plan.code(binding.expr)).0;
                     if code == constant(0) {
                         continue;
                     }

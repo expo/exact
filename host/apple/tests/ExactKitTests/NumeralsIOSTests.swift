@@ -302,7 +302,10 @@ final class NumeralsIOSTests: XCTestCase {
             // paragraph's (the same on every run) or one run's.
             ("a fill through transparent glyphs", ["background_clip": "text", "background_color": red], "Finished ", ["text_color": clear], [:], false, { $0.backgroundClip == "text" }),
             ("a stroke", [:], "Finished ", ["text_stroke_width": 2.0, "text_stroke_color": [0.0, 0.0, 255.0, 255.0]], [:], false, { runs($0).contains { $0.stroke != nil } }),
-            ("a paragraph's text shadow", [:], "Finished ", shadowed, shadowed, false, { $0.paragraphSpec().shadow != nil }),
+            ("a shared text shadow", [:], "Finished ", shadowed, shadowed, false, {
+                let spec = $0.paragraphSpec()
+                return spec.shadow != nil || spec.runs.allSatisfy { $0.shadow != nil }
+            }),
             ("a run's own text shadow", [:], "Finished ", shadowed, [:], false, { $0.paragraphSpec().shadow == nil && runs($0).contains { $0.shadow != nil } }),
             ("transparent words", [:], "Finished ", ["text_color": clear], [:], true, { runs($0).contains { ($0.color?.last ?? 1) == 0 } }),
             ("a transparent colour glyph", [:], "\u{1F44D} Finished ", ["text_color": clear], [:], true, { runs($0).contains { ($0.color?.last ?? 1) == 0 && $0.text.contains("\u{1F44D}") } }),

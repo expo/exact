@@ -14,6 +14,17 @@ const CODEC_PATHS: [&str; 11] = [
 const SCHEMA_PATH: &str = "tables/schema.json";
 const DIGEST_DOMAIN: &[u8] = b"exact-kernel-schema-v1\0";
 
+fn emit_style_capabilities(w: &mut String, schema: &Schema) {
+    w.push_str("    /// The parser family a bound row links, if any (LLP 1047 D2).\n");
+    w.push_str("    pub fn capability(self) -> Option<&'static str> {\n        match self {\n");
+    for row in &schema.styles {
+        if let Some(name) = &row.capability {
+            writeln!(w, "            StyleId::{} => Some({name:?}),", pascal(&row.field)).unwrap();
+        }
+    }
+    w.push_str("            _ => None,\n        }\n    }\n");
+}
+
 enum GridSeam {
     Decode,
     Dynamic,

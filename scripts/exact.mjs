@@ -50,7 +50,7 @@ import { grantAdvice } from './grant-advice.mjs';
 import { installIn } from './package-manager.mjs';
 export { grantAdvice, grantLines } from './grant-advice.mjs';
 const { cargoEnvironment, appleExecutableName, HERMES_INSTALLER, hermesBundle, hermesTarget, pathFrom, resolveApp, WEB_TOOLCHAIN, webToolchainEnv } = await import('./app.mjs');
-const { applyPattern, createApp, createGame, patternList, UNCACHED_CRATES, wireSnapback } = await import('../game/new.mjs');
+const { applyPattern, createApp, createGame, patternList, rustApp, UNCACHED_CRATES, wireSnapback } = await import('../game/new.mjs');
 const { gameDefaults, sdkFetch } = await import('../game/app/shells.mjs');
 const { HOST_SDKS, appleSdkName, developerDir, xcodeRefusal } = await import('../host/apple/devices.mjs');
 const { appleArtifacts, assertAppleIdentity } = await import('../host/apple/build.mjs');
@@ -523,8 +523,7 @@ export function sdkReport(env = process.env, { only = null, device = false, tv =
     const opt = binaryenVersion(output('wasm-opt', ['--version']));
     rows.push(row('wasm-opt', opt, BINARYEN, opt === BINARYEN, 'exact setup'));
   }
-  // Bun on Windows writes `rolldown.exe` and `rolldown.bunx` there.
-  const modules = ['rolldown', 'rolldown.exe'].some(bin => existsSync(resolve(ROOT, 'node_modules/.bin', bin)));
+  const modules = !modulesMissing();
   if (want('node_modules')) rows.push(row('node_modules', modules ? 'installed' : '', 'bun.lock', modules, `bun install --frozen-lockfile in ${ROOT}`));
   if (want('Chrome')) {
     // Both pinned builds: the headless shell, and the full build a GPU app's drive or a `perf` need launches. Without
@@ -682,14 +681,30 @@ export function contract(args, env = process.env) {
   if (json) process.stdout.write(result.stdout ?? '');
   return result.status ?? 1;
 }
+/** A path as a shell reads it back: bare when it is plain, else single-quoted (a space in a folder's name). */
+export const shellPath = (path) => (/^[\w./@:+-]+$/.test(path) ? path : `'${path.replaceAll("'", "'\\''")}'`);
+
+/** Whether this checkout's node_modules is missing (Bun on Windows writes `rolldown.exe` and `rolldown.bunx`):
+ * every build's type check imports rolldown from it, and without it Bun's auto-install spins at full CPU with no
+ * output rather than failing (the chat bench's first 20 minutes). */
+export const modulesMissing = (root = ROOT) => !['rolldown', 'rolldown.exe'].some(bin => existsSync(resolve(root, 'node_modules/.bin', bin)));
+/** What a command that needs node_modules says in its place. */
+export const modulesRefusal = (root = ROOT) => `exact's node_modules is missing: run \`bun install --frozen-lockfile\` in ${root} (every build's type check imports rolldown from it)`;
+
 /** `app.ts` against the plan just built, by the type check every host's build runs (the web JS
  * target's `--check`), so a TypeScript error surfaces at the build an author runs most, not at an
  * iOS build. Its report goes to stderr, or is returned as `report` when `capture` (`--json`). Supervised
  * (scripts/check-supervise.mjs): a check that outlasts its bound, or outlives its caller, is stopped, its process
- * group with it. `builder`: the check's script (a test's stand-in). */
-export function checkTypes(dir, {capture = false, builder = resolve(ROOT, 'host/web-js/build.mjs')} = {}) {
+ * group with it; one this checkout's node_modules is missing for is refused before it starts. `builder`: the check's
+ * script (a test's stand-in); `root`: the checkout whose node_modules it needs. */
+export function checkTypes(dir, {capture = false, builder = resolve(ROOT, 'host/web-js/build.mjs'), root = ROOT} = {}) {
   // An app's directory alone: the check is the app build's, which reads its app.json.
   if (!existsSync(resolve(dir, 'app.ts')) || !existsSync(resolve(dir, 'app.json'))) return {status: 0, report: ''};
+  if (modulesMissing(root)) {
+    const report = `error: ${modulesRefusal(root)}\n`;
+    if (!capture) process.stderr.write(report);
+    return {status: 1, report};
+  }
   const out = mkdtempSync(resolve(tmpdir(), 'exact-check-'));
   try {
     const r = spawnSync(process.execPath, [resolve(ROOT, 'scripts/check-supervise.mjs'), String(process.pid), builder, basename(dir), '--check', '--out', out], { stdio: ['ignore', capture ? 'pipe' : 2, capture ? 'pipe' : 2], encoding: 'utf8', maxBuffer: 1 << 26, env: { ...process.env, EXACT_APP_DIR: dir } });
@@ -743,7 +758,7 @@ export function refreshTypes(dir, binary = resolve(ROOT, 'target/debug', process
 }
 /** `exact new`: check the machine first, since a game's or a Snapback app's scaffold needs Cargo (an app's does
  * not); then write it and say what its builds will still need. */
-function newApp(path, {update = false, without = null, with: platforms = [], game = false, assets = false, snapback = null, title, id} = {}) {
+async function newApp(path, {update = false, without = null, with: platforms = [], game = false, assets = false, rust = false, snapback = null, title, id} = {}) {
   if (update) {
     console.log(createApp(path, {update, without, with: platforms}));
     const manifest = resolve(path, 'app.json');
@@ -761,16 +776,27 @@ function newApp(path, {update = false, without = null, with: platforms = [], gam
   // An app compiles no Rust to be made, so a machine without it (an agent's sandbox for a build service) can make one;
   // a game resolves its crates now, and a Snapback app wires a device build.
   const noRust = report.some(row => row.name === 'rustup' && !row.ok);
-  if (noRust && (game || snapback)) {
+  if (noRust && (game || snapback || rust)) {
     printReport(report, {onlyMissing: true});
     throw new Error('exact new needs Rust (rustup) to build exact2\'s own tools, the compiler among them; install it, then run exact new again');
   }
   // A game is a path here, as an app is: `game/new.mjs` alone takes a bare name for game/games.
-  const created = game ? createGame(resolve(path), undefined, {assets}) : createApp(path, {snapback, title, id, with: platforms});
+  const created = game ? createGame(resolve(path), undefined, {assets}) : createApp(path, {snapback, title, id, with: platforms, rust});
   // A game's cache note is what to do next, so it comes after the compiler's line and the table.
   const note = created.indexOf(`\n${UNCACHED_CRATES}`);
   console.log(note < 0 ? created : created.slice(0, note));
   if (!noRust) prebuildCompiler();
+  // A Rust app's lock, resolved from this checkout's (scripts/app-rust.mjs): its builds run Cargo --locked. Its
+  // first line and app-cli's note on the GPU module, not each version it chose; the app stands either way, so a
+  // failure says what to run.
+  if (rust) {
+    try {
+      const said = (await (await import('./app-cli.mjs')).lockApp(resolve(path))).split('\n');
+      console.log([said[0], ...said.slice(1).filter(line => line.startsWith('The GPU module'))].join('\n'));
+    } catch (error) {
+      console.log(`\nThe app is made, but its Cargo.lock could not be resolved: ${error.message}\nRun bun exact.mjs lock in it once Cargo can fetch.`);
+    }
+  }
   if (report.some(row => !row.ok)) {
     // Builders read a bare "still needs" list as the reason a later command failed (bench diaries,
     // 2026-10-07/08): say when nothing on it blocks the app.
@@ -780,6 +806,9 @@ function newApp(path, {update = false, without = null, with: platforms = [], gam
       : '\nThe app was created; nothing below blocks it. Each is needed only for what it names (exact setup --check shows the whole table):');
     printReport(report, {onlyMissing: true});
   }
+  // The table above is the web's (LLP 1153 D1.6): a platform the app names is checked before its first build.
+  const shown = shellPath(resolve(ROOT, 'scripts/exact.mjs'));
+  for (const platform of game ? [] : platforms ?? []) console.log(`Before the first ${platform} build: bun ${shown} setup --check --platform ${platform} names what it lacks (the Xcode or SDK it needs among them).`);
   if (note >= 0) console.log(created.slice(note));
   if (noRust) console.log('\nWithout Rust, this machine cannot check or build the app locally: `bun exact.mjs contract build app.contract` and every local build or dev loop compile exact2\'s tools first. A build service builds it as it is; to check here, install rustup (https://rustup.rs).');
 }
@@ -1190,6 +1219,8 @@ export function pattern(args, say = console.log) {
   const name = args.find(arg => !arg.startsWith('-'));
   if (!name) return say(patternList());
   const dir = process.env.EXACT_APP_DIR ?? process.cwd();
+  // A pattern is a view and its app.ts: beside a Rust data crate it would make the app mixed and drop the view's shapes.
+  if (rustApp(dir)) throw new Error('exact pattern: a pattern writes app.ts, and this app\'s data is Rust (data/); read a pattern with `bun exact.mjs pattern` and port its sources to data/src/lib.rs');
   const { said, next } = applyPattern(dir, name, { force: args.includes('--force') });
   say(said);
   refreshTypes(dir);
@@ -1224,7 +1255,13 @@ const TOPICS = {
   log: 'The driver\'s operations', sheet: 'Recipe: a navigation stack', push: 'Recipe: a navigation stack',
   'tab bar': 'Recipe: tabs', 'back button': 'Recipe: a navigation stack', share: 'Host commands',
   'dark mode': 'Recipe: theme: colours, light and dark, icons',
+  // An icon's `svg` file; a drawing in a row (the waveform recipe) is `docs waveform`.
+  svg: 'Recipe: theme: colours, light and dark, icons',
   'safe area': 'Declarations',
+  // A module's `func call`; the tools recipe's title says "calls" of tool lines, which `docs tool` finds.
+  call: 'Recipe: a native module in Swift',
+  // Said densely in passing elsewhere: the declared sources' bullets, a native module's `later(…)`.
+  optimistic: 'Optimistic writes: the overlay', later: 'Rust data sources',
   font: 'Recipe: app.json, assets and modules', image: 'Recipe: app.json, assets and modules',
   deploy: 'Recipe: porting an app, a release build, splitting the work',
   accessibility: 'Native views: accessibility', strings: 'Recipe: app.json, assets and modules',
@@ -1370,6 +1407,7 @@ async function main(argv) {
     for (const [at, flag, example] of [[titled, '--name', '"Field Log"'], [bundle, '--bundle-id', 'com.yourcompany.fieldlog']])
       if (at >= 0 && (!args[at + 1] || args[at + 1].startsWith('--'))) throw new Error(`exact new: ${flag} takes a value, as in ${flag} ${example}`);
     if ((titled >= 0 || bundle >= 0) && args.includes('--game')) throw new Error('exact new: --name and --bundle-id name an app; a game takes its name and id from its app.json');
+    if (args.includes('--rust') && args.includes('--game')) throw new Error('exact new: --rust makes an app whose data is Rust; a game is Rust already (--game)');
     if (args.includes('--online') && !args.includes('--snapback')) throw new Error('exact new: --online requires --snapback and an existing backend schema');
     if (port >= 0 && !args.includes('--snapback')) throw new Error('exact new: --port is the Snapback origin’s, with --snapback');
     if (without >= 0 && !args[without + 1]) throw new Error('update --without: name the platform, as in --without linux');
@@ -1377,7 +1415,7 @@ async function main(argv) {
     // `mac` is the verb's spelling; the manifest's key is `macos` (scripts/app-shells.mjs PLATFORMS).
     const platforms = [...new Set(withs.flatMap(i => args[i + 1].split(',')).map(p => p.trim()).filter(Boolean).map(p => p === 'mac' ? 'macos' : p))];
     const snapback = args.includes('--snapback') ? { port: port >= 0 ? args[port + 1] : undefined, online: args.includes('--online') } : null;
-    return newApp(path, {update: args.includes('--update'), without: without >= 0 ? (args[without + 1] === 'mac' ? 'macos' : args[without + 1]) : null, with: platforms, game: args.includes('--game'), assets: args.includes('--assets'), snapback, title: titled >= 0 ? args[titled + 1] : undefined, id: bundle >= 0 ? args[bundle + 1] : undefined});
+    return newApp(path, {update: args.includes('--update'), without: without >= 0 ? (args[without + 1] === 'mac' ? 'macos' : args[without + 1]) : null, with: platforms, game: args.includes('--game'), assets: args.includes('--assets'), rust: args.includes('--rust'), snapback, title: titled >= 0 ? args[titled + 1] : undefined, id: bundle >= 0 ? args[bundle + 1] : undefined});
   }
   if (verb === 'backend') {
     const dir = resolve(name), parent = resolve(dir, '..');

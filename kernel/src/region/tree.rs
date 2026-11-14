@@ -26,6 +26,11 @@ impl Derived {
         let mut nodes = HashMap::new();
         let mut stack = vec![root];
         while let Some(s) = stack.pop() {
+            // A closed top-layer box has no block while covered whole, but
+            // remains outside the region publication.
+            if s != root && (arena.blocks.holds(s) || crate::style::top_layer::is_box(arena, s)) {
+                continue;
+            }
             if bounded && slots.len() == REGION_NODES {
                 return Err(LayoutError::ContentRegion("mounted node limit"));
             }
@@ -163,8 +168,11 @@ impl Derived {
         // frame's origin, which differ for a table's parts.
         let mut stack = vec![(root, (0., 0.), OWNER, false, (0., 0.))];
         while let Some((s, (x, y), parent, hidden, (px, py))) = stack.pop() {
+            let Some(&node) = self.nodes.get(&s) else {
+                continue;
+            };
             let hidden = hidden || arena.style(s).display == crate::Display::None;
-            let l = self.tree.layout(self.nodes[&s]);
+            let l = self.tree.layout(node);
             let inline = arena.is_inline_run(s);
             let frame = if inline {
                 Frame::default()
@@ -201,7 +209,7 @@ impl Derived {
                     return Err(LayoutError::ContentRegion("mounted node limit"));
                 }
                 let ordinal = frames.len() as u32;
-                facts.record(arena, &self.tree, s, self.nodes[&s], hidden);
+                facts.record(arena, &self.tree, s, node, hidden);
                 frames.push(RegionFrame {
                     node: arena.key(s),
                     frame,
@@ -209,7 +217,7 @@ impl Derived {
                         l.scrollable_overflow_rect.right,
                         l.scrollable_overflow_rect.bottom,
                     ),
-                    height_measured: self.tree.height_measured(self.nodes[&s]),
+                    height_measured: self.tree.height_measured(node),
                 });
                 offsets.push(RegionOffset {
                     parent,
@@ -223,7 +231,7 @@ impl Derived {
             let origin = if inline {
                 at
             } else {
-                self.tree.parts_origin(arena, s, self.nodes[&s], (x, y), at)
+                self.tree.parts_origin(arena, s, node, (x, y), at)
             };
             if Some(s) == cut {
                 if let Some(b) = branch {
@@ -328,8 +336,7 @@ pub(super) fn shell(
             height_measured: tree.height_measured(n),
         });
         if s != cut {
-            // A popover in the shell is laid out in its block, after the
-            // region (one in the region stays in its trial: imply_blocks).
+            // Each independent subtree is laid out after the region.
             for &c in arena.children(s).iter().rev() {
                 if !arena.blocks.holds(c) {
                     stack.push((c, frame.x, frame.y, hidden))

@@ -108,9 +108,16 @@
         Object.defineProperty(error, "name", { value: "NotSupportedError", writable: true, configurable: true });
       return error;
     }
-    function storageCall(receiver, method, args, convert) {
+    // `accepted`, for a release (a lock's `unlock()`), runs once the operation is queued.
+    function storageCall(receiver, method, args, convert, accepted) {
       if (env.overlaying()) return Promise.reject(inOverlay("storage." + method + "()"));
       var call = env.current();
+      // An answer whose storage wait failed issues no more storage. A release in its `finally` still runs, as the
+      // module's work, queued behind the write the answer left in flight.
+      if (call && call.lost) {
+        if (!accepted) return Promise.reject(call.error || storageError("the answer's storage wait failed"));
+        call = background;
+      }
       // Storage issued after its answer replied (a `.then` chained on a save,
       // a write begun when a background one lands) is background work (D2).
       // Before any answer, during module evaluation, it is refused, as it is
@@ -165,6 +172,7 @@
       }
       call.storage++;
       storing.add(call);
+      if (accepted) accepted();
       // The web realm attributes the cell now, while this answer is current.
       // The adapter runs at issue, and a background round may be current then
       // (LLP 1097 D7). Hermes has no hook and runs the adapter at the call.
@@ -175,6 +183,10 @@
         var op = {
           call: call,
           method: method,
+          abandon: function () {
+            if (held != null && typeof global.__exact_abandon_storage === "function")
+              global.__exact_abandon_storage(held);
+          },
           run: function () {
             try {
               return receiver[method].apply(receiver, argv);
@@ -190,7 +202,7 @@
           env.setCurrent(at);
           unstore(at);
           if (ok) {
-            storageCounts.done++;
+            if (!op.failed) storageCounts.done++;
             var destination =
               method === "transformImage" ? (typeof value === "string" ? value.split("\t")[3] : value.path) : argv[1];
             if (
@@ -217,6 +229,7 @@
               })
             )
               storageCounts.writes++;
+            if (op.failed) return;
             try {
               resolve(convert ? convert(value) : value);
             } catch (e) {
@@ -224,6 +237,7 @@
             }
             return;
           }
+          if (op.failed) return;
           var error = value;
           // The host's grant refusal names no path: name it, and the lines that would admit it.
           if (
@@ -455,8 +469,13 @@
         heldLocks.add(lock);
         if (by && by.replied) freeLocks();
         return Object.freeze({
+          // Tracked until the queue takes the release: one refused is still freed with its answer (`freeLocks`).
           unlock: function () {
-            return heldLocks.delete(lock) ? storageCall(fs, "unlock", [h]) : Promise.resolve();
+            return heldLocks.has(lock)
+              ? storageCall(fs, "unlock", [h], undefined, function () {
+                  heldLocks.delete(lock);
+                })
+              : Promise.resolve();
           },
         });
       });

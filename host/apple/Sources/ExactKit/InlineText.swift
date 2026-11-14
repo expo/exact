@@ -10,6 +10,7 @@ extension InlineText {
     /// The run in its paragraph owner's traits: `contrast` and `elevated`
     /// as `BatchValue.channels` takes them (LLP 1095 D5).
     func run(dark: Bool, contrast: Bool? = nil, elevated: Bool = false, tint: PlatformColor? = nil) -> Run {
+        let opacity = self.opacity
         var value = lightRun
         if dark { value.color = darkColor; value.background = darkBackground }
         if let colorRef { value.color = colorRef.channels(dark: dark, contrast: contrast, elevated: elevated, tint: tint) }
@@ -17,21 +18,8 @@ extension InlineText {
         if let backgroundRef { value.background = backgroundRef.channels(dark: dark, contrast: contrast, elevated: elevated, tint: tint) }
         (value.shadow, value.stroke) = paint.resolve(dark: dark, contrast: contrast, elevated: elevated, tint: tint,
                                                      color: value.color ?? SystemColor.canvasTextChannels(dark: dark, contrast: contrast))
-        if opacity < 1 {
-            // Channels are `BatchValue.textChannels`' (sRGB r g b a, then
-            // optionally a space and its four components), after a shadow's
-            // offsets and blur or a stroke's width.
-            func faded(_ c: [Double]?, from start: Int = 0) -> [Double]? {
-                guard var c, c.count >= start + 4 else { return c }
-                c[start + 3] *= opacity
-                if c.count == start + 9 { c[start + 8] *= opacity }
-                return c
-            }
-            value.color = faded(value.color ?? SystemColor.canvasTextChannels(dark: dark, contrast: contrast))
-            value.background = faded(value.background)
-            value.shadow = faded(value.shadow, from: 3)
-            value.stroke = faded(value.stroke, from: 1)
-        }
+        value.opacity = opacity < 1 ? [InlineOpacity(box: id, alpha: opacity)] : []
+        value.backgroundOpacity = value.opacity
         return value
     }
     static func run(_ text: String, style: NodeStyle, href: String = "", dark: Bool, contrast: Bool? = nil, elevated: Bool = false,

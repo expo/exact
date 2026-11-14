@@ -562,43 +562,14 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
             // What the image says is its node's (`aria-label`), never the
             // name UIKit gives the symbol, which a cell gathering its
             // children's words would read ("checkmark.circle" is "selected").
+            SymbolEffectState.of(leaf).pathTemplate = nil
             showSymbol(image, on: leaf); leaf.isAccessibilityElement = false; leaf.accessibilityElementsHidden = true; leaf.isUserInteractionEnabled = false
             // The symbol's size when the kernel's measurer could not say
             presenter?.queueIntrinsicSize(self, generation: generation, SymbolMeasure.size(name, points: points, weight: weight))
         }
-        inkSymbolView()
         symbolView?.preferredSymbolConfiguration = symbolConfiguration(SymbolMeasure.configuration(points: points, weight: weight))
         if let leaf = symbolView { applySymbolEffect(leaf) }
         layoutSymbol()
-    }
-    func layoutSymbol() {
-        guard let leaf = symbolView else { return }
-        let content = contentBox()
-        leaf.frame = content; leaf.clipsToBounds = !listSymbol // a list cell's image is its own size, centred, as UIKit's
-        switch listSymbol ? "none" : style["object_fit"]?.string ?? "fill" {
-        case "cover": leaf.contentMode = .scaleAspectFill
-        case "none": leaf.contentMode = .center
-        case "scale-down":
-            let size = image?.size ?? .zero
-            leaf.contentMode = size.width <= content.width && size.height <= content.height ? .center : .scaleAspectFit
-        // `contain`, and `fill`: a symbol is a vector glyph, which keeps its
-        // aspect in a box of another shape as an SVG's default
-        // `preserveAspectRatio` (`xMidYMid meet`) keeps it, and as the web
-        // host's symbol mask draws it (LLP 1011 §4).
-        default: leaf.contentMode = .scaleAspectFit
-        }
-        // An icon path is a vector: drawn again at the box it fills, not its em square stretched (UIKit scales a bitmap).
-        if props["symbolPath"] != nil, let image {
-            let side = max(content.width, content.height)
-            // (Centred, it is its em square again, whatever the box was before.)
-            if leaf.contentMode == .center { if leaf.image !== image { leaf.image = image } }
-            else if side > 0, leaf.image?.size.width != side { leaf.image = iconPathImage(side: side) }
-        }
-        // A square box clips nothing the content box does not.
-        if cornerRadii(in: bounds).allSatisfy({ $0 == 0 }) { if leaf.layer.mask != nil { leaf.layer.mask = nil }; return }
-        let path = roundedPath(in: bounds).cgPath
-        var transform = CGAffineTransform(translationX: -content.minX, y: -content.minY)
-        let mask = CAShapeLayer(); mask.path = path.copy(using: &transform); leaf.layer.mask = mask
     }
 
     /// The view is gone: no load in flight may report for it.
@@ -706,35 +677,6 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
     /// Where layout put this box and where it is drawn (`PixelGridIOS.swift`).
     package var grid: GridPlace?
 
-    /// Every canvas's overlay alive, and every node a surface placed. With
-    /// none, no node is under a canvas (`canvasAbove`) or placed
-    /// (`placedAncestor`), and the walks up the tree that ask (each visible
-    /// paragraph every scrolled frame, each node a hit test visits) are
-    /// skipped. A weak table may count one just freed: it only keeps the walk.
-    static let canvasOverlays = NSHashTable<PlainView>.weakObjects()
-    static let placedViews = NSHashTable<NodeView>.weakObjects()
-
-    /// The canvas this node is painted through, if any: the nearest canvas
-    /// above whose overlay holds it.
-    package var canvasAbove: NodeView? {
-        guard Self.canvasOverlays.count > 0 else { return nil }
-        var v: UIView = self
-        while let s = v.superview {
-            if let c = s as? NodeView, c.overlay === v { return c }
-            v = s
-        }
-        return nil
-    }
-
-    /// Something under a canvas repainted outside a batch (LLP 1014 D4 b, c):
-    /// the canvas captures again on this run-loop turn — unless the draw is
-    /// the capture's own, or follows a batch that already captured.
-    func repaintThrough() {
-        guard !Capture.capturing, let c = canvasAbove, !c.paintedThisTurn else { return }
-        c.needsCapture = true
-        canvases?.scheduleCapture()
-    }
-
     /// The end the reader was following moved during their interaction:
     /// settle there when it ends, as a browser's scroll anchoring does.
     package func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
@@ -797,6 +739,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         presenter?.videoVisibility?.changed()
         presenter?.reaimFixedGradients()
         presenter?.scrollPump.scrolled(self)
+        if presenter?.navigation.container === self { presenter?.owners.publish() }
         FrameSampler.scrolled(scrollView, in: presenter?.session, person: false)
         presenter?.session?.frameHealth.trackScrolled(scrollView)
         repaintThrough()
@@ -844,7 +787,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         var v: UIView? = self
         while let n = v {
             if let node = n as? NodeView, (node.placement != nil || node.placementHidden) { return node }
-            if let s = n.superview as? PlainView, let c = s.superview as? NodeView, c.overlay === s { return nil }
+            if n.superview?.canvasOverlayOwner != nil { return nil }
             v = n.superview
         }
         return nil
@@ -873,7 +816,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
     /// UIKit's own conversion.
     package func local(_ windowPoint: CGPoint) -> CGPoint {
         guard let placed = placedAncestor, let h = placed.placement, let inv = NodeView.invert(h),
-              let overlay = placed.superview, let canvas = overlay.superview as? NodeView else {
+              let overlay = placed.superview, let canvas = overlay.canvasOverlayOwner else {
             return convert(windowPoint, from: nil)
         }
         // The canvas reached the same way (a placement above it included),
@@ -916,8 +859,9 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
             // parent box first made those visible choices impossible to tap.
             // A scroller's scroll view reaching into the page's bands takes them too (LLP 1130 D3).
             let band = scrollView == nil ? .zero : pageBand
-            let outsideX = point.x < bounds.minX || point.x > bounds.maxX
-            let outsideY = point.y < bounds.minY - band.top || point.y > bounds.maxY + band.bottom
+            let box = clipsOneAxis ? surface?.frame ?? bounds : bounds
+            let outsideX = point.x < box.minX || point.x > box.maxX
+            let outsideY = point.y < box.minY - band.top || point.y > box.maxY + band.bottom
             if outsideX && (style["overflow_x"]?.string ?? "visible") != "visible" { return nil }
             if outsideY && (style["overflow_y"]?.string ?? "visible") != "visible" { return nil }
             let passesThrough = style["pointer_events"]?.string == "none" || cssVisibilityHidden && !inlineRunShows(at: point)
@@ -970,7 +914,8 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         guard let overlay else { return ordinary() }
         let placed = overlay.subviews.compactMap { $0 as? NodeView }.filter { $0.placement != nil || $0.placementHidden }
         guard !placed.isEmpty else { return ordinary() }
-        guard !isHidden, isUserInteractionEnabled, hitBounds.contains(point) else { return nil }
+        if clipsOneAxis, !oneAxisClipContains(point) { return ordinary() }
+        guard !isHidden, isUserInteractionEnabled, hitBounds.contains(point) || clipsOneAxis && oneAxisClipContains(point) else { return nil }
         // Ordinary HUD paints above the captured children, so it hits first.
         let inOverlay = overlay.convert(point, from: self)
         for child in NodeView.hitOrder(overlay.subviews) where (child as? NodeView)?.placement == nil && (child as? NodeView)?.placementHidden != true {
@@ -985,7 +930,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         }
         // Missed by every child: the canvas itself, unless it lets the
         // touch through (`pointer-events: none`, as `ordinary` says).
-        return style["pointer_events"]?.string == "none" || cssVisibilityHidden ? nil : self
+        return !hitBounds.contains(point) || style["pointer_events"]?.string == "none" || cssVisibilityHidden ? nil : self
     }
 
     /// The box on screen, through the placement of the placed child this
@@ -1225,13 +1170,14 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         if presenter?.applying == true { presenter?.boxFilters.touched(self) } else { renderFilter() }
     }
     func renderFilter(fresh: Bool = true) {
+        defer { overflowClipGeometryChanged() }
         guard let f = boxFilter else { return }
         guard superview != nil else { f.remove(); return }
         setPaintPosition(paintZPosition)
         let shown = window.map { convert(bounds, to: $0).intersects($0.bounds) } ?? true
         // A placed canvas child's picture is drawn from the box as asked, and shows only through its surface.
         let render = { f.render(self.layer, clip: self.resolvedClipMask(), scale: self.window?.screen.scale ?? self.traitCollection.displayScale, dark: self.drawsDark,
-                                node: self.id, fresh: fresh, shown: shown) { [weak self] in if let self { self.presenter?.boxFilters.landed(self); self.filterPublished() } } }
+                                node: self.id, fresh: fresh, shown: shown) { [weak self] in if let self { self.overflowClipGeometryChanged(); self.presenter?.boxFilters.landed(self); self.filterPublished() } } }
         let before = f.picture.sublayers?.first?.contents as AnyObject?
         let draw = { if let box = self.layer as? NodeLayer, box.drawnElsewhere { box.asAsked(render); f.picture.isHidden = true } else { render() } }
         // The filter's input raises the box's opacity and puts it back: no author's change (`passing`).
@@ -1245,6 +1191,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
     package override func didMoveToSuperview() {
         if Self.containerMoves == 0 { pressEpoch &+= 1; cancelPressContact(reparenting: true); presenter?.unshown(self) } // a new parent: shown elsewhere
         super.didMoveToSuperview()
+        overflowClipGeometryChanged()
         Self.textGeometry &+= 1
         paintOrderMoved()
         if superview == nil { boxFilter?.remove() } else if boxFilter != nil { redrawFilter() }
@@ -1257,6 +1204,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         let origin = style["transform_origin"]
         let old = style
         style = s
+        if kind == "image", old["image_rendering"] != s["image_rendering"] { presenter?.session?.rasters.resized(self) }
         if old["display"] != s["display"] || old["visibility"] != s["visibility"] { isHidden = hostHidden }
         if old["zoom"] != s["zoom"], kind == "iframe" { updateEmbedded() } // the guest's page zoom (LLP 1020.002 D6)
         if old["color_scheme"] != s["color_scheme"] { applyColorScheme() }
@@ -1317,9 +1265,10 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
             // Neither axis scrolls any more: the children come back out.
             GlassGroups.moving(in: self) {
                 for child in sv.subviews where child is NodeView { addSubview(child) }
+                scroll = nil
+                if presenter?.navigation.container === self { presenter?.navigation.fitOwner() }
                 sv.removeFromSuperview()
             }
-            scroll = nil
             if pageBand != .zero || bandInset != .zero { more.pageBand = .zero; more.bandInset = .zero }
         }
         scroll?.scrollsX = (ox == "scroll" || ox == "auto")
@@ -1450,7 +1399,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
             let styles = ["top", "right", "bottom", "left"].map { style["border_style_" + $0]?.string ?? "solid" }
             BorderPaint.paint(ctx, box: bounds, widths: widths, colors: colors, radii: radii, styles: styles, shape: CornerShape(style["corner_shape"]))
         }
-        if !cssVisibilityHidden, kind == "image", symbolView == nil, flightLook == nil || imageLayer == nil, let bitmap = raster?.image {
+        if !cssVisibilityHidden, kind == "image", symbolView == nil, flightLook == nil || imageLayer == nil, !(imageLayer is PixelatedImageLayer) || Capture.capturing, let bitmap = raster?.image {
             // CSS object-fit over the content box (the frame inside border
             // and padding), clipped to the content edge's curve: `fill`
             // stretches, `contain`/`cover` keep the ratio, `none` is the
@@ -1458,13 +1407,13 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
             // an unknown value is the initial `fill`.
             let fit = style["object_fit"]?.string ?? "fill"
             let content = contentBox()
-            let rect = RasterGeometry.rect(natural: bitmap.naturalSize, content: content, fit: fit)
+            let rect = flightLook?.image ?? RasterGeometry.rect(natural: bitmap.naturalSize, content: content, fit: fit)
             ctx.saveGState()
             path.addClip()
             clipToContentEdge(ctx, content)
             ctx.translateBy(x: rect.minX, y: rect.maxY)
             ctx.scaleBy(x: 1, y: -1)
-            RasterGeometry.draw(ctx, AnimatedRasters.shared.frame(for: self) ?? bitmap.image, in: CGRect(origin: .zero, size: rect.size), tint: channels("tint_color").map { TextEngine.color($0).cgColor })
+            RasterGeometry.draw(ctx, AnimatedRasters.shared.frame(for: self) ?? bitmap.image, in: CGRect(origin: .zero, size: rect.size), tint: channels("tint_color").map { TextEngine.color($0).cgColor }, rendering: style["image_rendering"]?.string)
             ctx.restoreGState()
         }
         if isParagraph, rollsNumerals {
@@ -1482,8 +1431,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
                 defer { Presenter.signposts.endInterval("text-draw", post); HostPhases.shared.end(phase) }
                 let spec = paragraphSpec()
                 if let paragraph = paragraphLayout() { eachFragment(ctx) { box, at, lines in
-                    paintBackgroundThroughText(ctx, paragraph: paragraph, spec: spec, in: box, lines: lines)
-                    TextEngine.draw(paragraph, spec: spec, in: box, context: ctx, dirty: rect.offsetBy(dx: -at.x, dy: -at.y), lines: lines) } }
+                    drawParagraph(ctx, paragraph: paragraph, spec: spec, in: box, dirty: rect.offsetBy(dx: -at.x, dy: -at.y), lines: lines) } }
             }
         }
         if !cssVisibilityHidden, Capture.capturing, let picture = Capture.web[id] {

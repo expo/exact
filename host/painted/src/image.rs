@@ -40,6 +40,7 @@ mod decode_tests;
 mod jpeg_decode;
 #[path = "image/package.rs"]
 mod package;
+pub(crate) mod sampling;
 pub use package::Ask as PackageAsk;
 #[path = "image/png.rs"]
 mod png_decode;
@@ -72,6 +73,7 @@ struct View {
     accepted: Option<RequestId>,
     requested_for: (f32, f32),
     requested_fit: exact_kernel::ObjectFit,
+    requested_rendering: exact_kernel::ImageRendering,
     requested_scale: f32,
     lease: Option<RasterLease>,
     desired: (f32, f32),
@@ -89,6 +91,7 @@ struct View {
     /// How the box fits the picture, whatever the box: what an SVG picture
     /// is drawn for (`svg_picture::plan`).
     object_fit: exact_kernel::ObjectFit,
+    rendering: exact_kernel::ImageRendering,
     /// The box changed size while it showed a part: from then on it gets the
     /// whole picture (a box that animates would ask for a part a frame).
     resized: bool,
@@ -397,6 +400,7 @@ impl Images {
                 accepted: None,
                 requested_for: (0., 0.),
                 requested_fit: node.style.object_fit,
+                requested_rendering: Default::default(),
                 requested_scale: scale,
                 lease: None,
                 desired: (0., 0.),
@@ -406,6 +410,7 @@ impl Images {
                 symbol_size: None,
                 fit: None,
                 object_fit: node.style.object_fit,
+                rendering: Default::default(),
                 resized: false,
                 part: false,
                 retries: 0,
@@ -428,6 +433,8 @@ impl Images {
             }
             view.fit = plain_box(node.style).then_some(node.style.object_fit);
             view.object_fit = node.style.object_fit;
+            view.rendering =
+                node.computed_row(exact_kernel::StyleId::ImageRendering, |s| s.image_rendering);
             // LLP 1011 §3: a symbol is a font-relative box no file fills (the
             // paint walk strokes a portable role's path into it, `symbol`),
             // never a file request and never the previously accepted raster.
@@ -849,6 +856,7 @@ impl Images {
                         view.request = Some((request, decode.full()));
                         view.requested_for = view.desired;
                         view.requested_fit = view.object_fit;
+                        view.requested_rendering = view.rendering;
                         view.requested_scale = scale;
                         view.part = !decode.crop.whole();
                         view.refusal = None;
@@ -1105,6 +1113,14 @@ fn plan_view(
     if header.is_svg() {
         return svg_picture::plan(header, view.desired, svg_ask(view, scale), available);
     }
+    if view.rendering != exact_kernel::ImageRendering::Auto {
+        let natural = header.metadata.natural;
+        if let Ok(decode) = png_decode::DecodePlan::new(header, (natural.width, natural.height)) {
+            if decode.peak_bytes() <= available {
+                return Ok(decode);
+            }
+        }
+    }
     plan(
         header,
         drawn_size(header, view.desired, view.object_fit, scale),
@@ -1197,6 +1213,19 @@ fn resize_changes_view(header: png_decode::Header, view: &View, scale: f32) -> b
     let (previous, next) = (view.requested_for, view.desired);
     if header.is_svg() {
         return svg_picture::resize_changes(header, svg_ask(view, scale), previous, next);
+    }
+    if view.rendering != view.requested_rendering {
+        return true;
+    }
+    // The source's own samples serve every size; a thumbnail the budget
+    // forced follows the box as `auto`'s does.
+    let natural = header.metadata.natural;
+    if view.rendering != exact_kernel::ImageRendering::Auto
+        && view
+            .request
+            .is_some_and(|(_, full)| (full.width, full.height) == (natural.width, natural.height))
+    {
+        return false;
     }
     resize_changes_decode(
         header,

@@ -88,7 +88,7 @@ pub(super) fn end(b: &[u32], i: usize) -> Option<usize> {
         DASH => i + 3 + at(2)?,
         clip::CLIP_UNION => i + 2 + at(1)?,
         clip::MASK_LAYER => i + 1,
-        picture::IMAGE_TINT => i + 2,
+        picture::IMAGE_TINT | picture::IMAGE_RENDERING => i + 2,
         gradient::SHADER => i + 2 + at(1)?,
         glyphs::BLUR => i + 2,
         ANIMATED => i + 3 + words(at(2)?),

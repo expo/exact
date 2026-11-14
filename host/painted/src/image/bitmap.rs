@@ -233,6 +233,7 @@ mod tests {
                         &[Shape::rect(box_rect)],
                         Transform::identity(),
                         None,
+                        exact_kernel::ImageRendering::Auto,
                     );
                     drawn.push(raster.finish().unwrap());
                 }
@@ -321,6 +322,7 @@ mod tests {
                             &[Shape::rect(box_rect)],
                             Transform::identity(),
                             None,
+                            exact_kernel::ImageRendering::Auto,
                         );
                         drawn.push(raster.finish().unwrap());
                     }

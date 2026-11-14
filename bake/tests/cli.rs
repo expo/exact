@@ -106,6 +106,31 @@ fn compat_cli_validates_all_options_before_reading_the_manifest() {
         std::fs::read_to_string(app.0.join("app.json")).unwrap(),
         manifest
     );
+    for (javascript, rust) in [
+        ("", ""),
+        ("net.fetch https://api.example", "fs.read app:/data"),
+    ] {
+        let result = run(&[
+            ".",
+            "--platform",
+            "ios",
+            "--grants",
+            javascript,
+            "--rust-grants",
+            rust,
+            "--json",
+        ]);
+        assert!(result.status.success(), "{result:?}");
+        let json: Value = serde_json::from_slice(&result.stdout).unwrap();
+        assert_eq!(json["inputs"]["javascriptGrants"], javascript);
+        assert_eq!(json["inputs"]["rustGrants"], rust);
+        for grant in [javascript, rust] {
+            assert!(json["inputs"]["grantCeiling"]
+                .as_str()
+                .unwrap()
+                .contains(grant));
+        }
+    }
 
     app.write("app.json", "invalid JSON");
     for args in [
@@ -122,6 +147,20 @@ fn compat_cli_validates_all_options_before_reading_the_manifest() {
         vec![".", "--platform", "web", "--target", ""],
         vec![".", "--platform", "web", "--target", "a", "--target", "b"],
         vec![".", "--platform", "web", "--json", "--json"],
+        vec![".", "--platform", "web", "--grants"],
+        vec![".", "--platform", "web", "--grants", "--json"],
+        vec![".", "--platform", "web", "--grants", "", "--grants", ""],
+        vec![".", "--platform", "web", "--rust-grants", ""],
+        vec![".", "--platform", "web", "--grants", "", "--rust-grants"],
+        vec![
+            ".",
+            "--platform",
+            "web",
+            "--grants",
+            "",
+            "--rust-grants",
+            "--json",
+        ],
     ] {
         let result = run(&args);
         assert_eq!(result.status.code(), Some(2), "{args:?}: {result:?}");

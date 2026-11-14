@@ -121,6 +121,10 @@ fn a_header_button_that_presses_nothing_is_named() {
         "{says}"
     );
     assert!(says.contains("give it `role=\"status\"`"), "{says}");
+    assert!(
+        says.contains("say `navigationBar=\"none\"` on the route's element and draw the row yourself (docs/recipes/chat-header.md"),
+        "{says}"
+    );
     // A disabled one is UIKit's disabled bar item, shown dimmed: no warning.
     let disabled = src.replace("button aria-label", "button disabled=true aria-label");
     let (result, warnings) = contract::compile_warned(&disabled);

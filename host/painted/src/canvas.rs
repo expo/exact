@@ -53,6 +53,7 @@
 //! - `45 CLIP_UNION len n (rule path)×n` — save and clip to the union of independently filled paths
 //! - `46 MASK_LAYER` — save a layer composited through destination-in at its RESTORE
 //! - `47 IMAGE_TINT color` — the next IMAGE or IMAGE_RRECT uses this colour through the image's alpha
+//! - `49 IMAGE_RENDERING mode` — the next image samples as auto (0), crisp-edges (1), or pixelated (2)
 //! - `48 MATRIX3 a b c d e f g h i` — a row-major projective matrix, in device pixels
 //! - `25 DASH phase n d×n` — the next STROKE is dashed: `n` (even) on/off lengths and the
 //!   offset into them, in the stroke's own units (SVG `stroke-dasharray`, `stroke-dashoffset`)
@@ -587,11 +588,19 @@ impl Backend for Recorder {
         clips: &[Shape],
         ts: Transform,
         tint: Option<[u8; 4]>,
+        rendering: exact_kernel::ImageRendering,
     ) {
         if dst.2 <= 0.0 || dst.3 <= 0.0 {
             return;
         }
-        self.picture(&Picture::Bitmap(image.clone()), dst, clips, ts, tint);
+        self.picture(
+            &Picture::Bitmap(image.clone()),
+            dst,
+            clips,
+            ts,
+            tint,
+            rendering,
+        );
     }
 
     fn blurred_shadow(
@@ -654,7 +663,14 @@ impl Backend for Recorder {
         if dst.2 <= 0.0 || dst.3 <= 0.0 || pixels.width() == 0 || pixels.height() == 0 {
             return;
         }
-        self.picture(&Picture::Canvas(pixels.clone()), dst, clips, ts, None);
+        self.picture(
+            &Picture::Canvas(pixels.clone()),
+            dst,
+            clips,
+            ts,
+            None,
+            exact_kernel::ImageRendering::Auto,
+        );
     }
 
     /// A picture the paint walk rasterised itself (an SVG filter, a text

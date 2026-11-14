@@ -11,6 +11,28 @@ import UIKit
 #endif
 
 extension Presenter {
+    /// Native region publications omit top-layer subtrees. Their ordinary
+    /// views keep the authored parent as their home for lifting and dismissal.
+    func regionPopoverChildren(_ ids: [UInt32], of parent: NodeView) -> [UInt32] {
+        let extra = carrying("popover").filter {
+            $0.props["popoverParent"] == String(parent.id) && !ids.contains($0.id)
+        }.sorted { $0.id < $1.id }
+        return extra.isEmpty ? ids : ids + extra.map(\.id)
+    }
+
+    func attachRegionPopovers() {
+        for pop in carrying("popover") {
+            guard let id = pop.props["popoverParent"].flatMap(UInt32.init), let parent = views[id] else { continue }
+            #if os(macOS)
+            if menus.owns(pop) { continue }
+            #else
+            if menus.lifted(pop) { continue }
+            #endif
+            let container = parent.container
+            if pop.superview !== container { container.addSubview(pop) }
+        }
+    }
+
     /// Where painted popover `pop` goes, against `anchor` in `bounds`: each
     /// option measured in its region by the kernel, what the kernel laid out
     /// (`laid`) standing in where it can't measure; the chosen region is told

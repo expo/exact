@@ -1,9 +1,9 @@
 // Per-run `text-shadow` and `-webkit-text-stroke` (LLP 1077 D3, D7): CSS
 // paints both per inline box, so each run carries its own computed values
 // (a run's style crosses with every inherited row resolved). A paragraph
-// whose runs all share one shadow keeps it on the paragraph: one layer
-// shadow over the raster, or one transparency layer in `draw`. Runs that
-// differ carry theirs as an attribute the line painter draws with Core
+// whose runs share one shadow can keep it on the paragraph when no inline
+// background or opacity group needs separate paint. Other runs carry
+// theirs as an attribute the line painter draws with Core
 // Graphics around those glyph runs; Core Text ignores an `NSShadow`.
 import CoreText
 import Foundation
@@ -18,14 +18,13 @@ import UIKit
 
 
 extension Spec {
-    /// Each run's shadow is the paragraph's when they all agree (the cheap
-    /// path, unchanged); otherwise each run keeps its own and the paragraph
-    /// has none. Runs that paint nothing do not count.
+    /// Promote a shared shadow only when no inline background or opacity
+    /// group needs separate paint.
     mutating func gatherShadows() {
         let painted = runs.filter { !$0.text.isEmpty }
         guard let first = painted.first else { shadow = nil; return }
         let tokenShadow = lineClamp > 0 ? (strut ?? first).shadow : first.shadow
-        if tokenShadow == first.shadow, painted.allSatisfy({ $0.shadow == first.shadow }) {
+        if tokenShadow == first.shadow, painted.allSatisfy({ $0.shadow == first.shadow && $0.opacity.isEmpty && $0.background == nil && $0.outerBackgrounds.isEmpty }) {
             shadow = first.shadow
             for i in runs.indices { runs[i].shadow = nil }
         } else {
@@ -136,10 +135,13 @@ extension TextLinePaint {
     static func draw(_ line: CTLine, at origin: CGPoint, in ctx: CGContext, ink: CGColor, keepsFixed: Bool = false, transparentInk: Bool = false) {
         enum Paint { case nothing, own, ink, decorated, keptLined }
         let runs = CTLineGetGlyphRuns(line) as! [CTRun]
+        func opacity(_ run: CTRun) -> Double {
+            ((CTRunGetAttributes(run) as NSDictionary)[NSAttributedString.Key.exactOpacity] as? [InlineOpacity] ?? []).reduce(1) { $0 * $1.alpha }
+        }
         var solid = [Bool](repeating: true, count: runs.count)
         let paints: [Paint] = runs.enumerated().map { i, run in
             let a = CTRunGetAttributes(run) as NSDictionary
-            if a[NSAttributedString.Key.exactHidden] as? Bool == true { return .nothing }
+            if a[NSAttributedString.Key.exactHidden] as? Bool == true || opacity(run) == 0 { return .nothing }
             if let font = a[kCTFontAttributeName], CTFontGetSymbolicTraits(font as! CTFont).contains(.traitColorGlyphs) { return .own }
             let alpha = (a[NSAttributedString.Key.foregroundColor] as? PlatformColor)?.cgColor.alpha
                 ?? (a[kCTForegroundColorAttributeName] as! CGColor?)?.alpha ?? 1
@@ -176,10 +178,10 @@ extension TextLinePaint {
         }
         // A kept run's decoration is CoreText's too, in the run's own colour:
         // the line again, clipped to those runs and left as it draws.
-        let kept = zip(runs, paints).filter { $0.1 == .keptLined }.map { extent($0.0) }
-        if !kept.isEmpty {
+        for (run, paint) in zip(runs, paints) where paint == .keptLined {
             ctx.saveGState()
-            ctx.clip(to: kept)
+            ctx.setAlpha(opacity(run))
+            ctx.clip(to: extent(run))
             ctx.textPosition = .zero
             CTLineDraw(line, ctx)
             ctx.restoreGState()
@@ -196,8 +198,11 @@ extension TextLinePaint {
             switch paints[i] {
             case .nothing, .keptLined: continue
             case .own:
+                ctx.saveGState()
+                ctx.setAlpha(opacity(run))
                 ctx.textPosition = .zero
                 CTRunDraw(run, ctx, CFRange())
+                ctx.restoreGState()
             case .decorated where solid[i]: continue
             case .ink, .decorated:
                 let count = CTRunGetGlyphCount(run)
@@ -234,7 +239,7 @@ extension TextLinePaint {
     enum Pass {
         /// Everything: a view's own drawing.
         case all
-        /// A raster's ink: all but runs' HDR shadows.
+        /// A raster's ink, excluding ungrouped HDR shadows drawn in a separate cast.
         case ink
         /// Only the glyphs of the runs that cast this shadow, with no shadow.
         case caster(TextRunShadow)
@@ -250,14 +255,21 @@ extension TextLinePaint {
     /// A line whose glyph runs carry their own shadows, in a context already
     /// at the line's origin, y up: each stretch of runs sharing one shadow
     /// drawn in a transparency layer that casts it, under those glyphs, as
-    /// Chrome paints each inline box's shadow with its text.
-    static func drawShadowed(_ line: CTLine, in ctx: CGContext, scale: CGFloat, pass: Pass = .all) -> Bool {
+    /// Chrome paints each inline box's shadow with its text. With `selected`
+    /// (an opacity group's runs, by index), only those runs, and none of
+    /// their neighbours' ink.
+    static func drawShadowed(_ line: CTLine, in ctx: CGContext, scale: CGFloat, pass: Pass = .all, selected: Set<Int>? = nil) -> Bool {
         let runs = CTLineGetGlyphRuns(line) as! [CTRun]
         var shadows = runs.map(TextRunShadow.of)
         let advances = runs.map(extent).reduce(CGRect.null) { $0.union($1) }
-        func hidden(_ run: CTRun) -> Bool { (CTRunGetAttributes(run) as NSDictionary)[NSAttributedString.Key.exactHidden] as? Bool == true }
+        func hidden(_ index: Int) -> Bool {
+            selected?.contains(index) == false
+                || (CTRunGetAttributes(runs[index]) as NSDictionary)[NSAttributedString.Key.exactHidden] as? Bool == true
+        }
+        func grouped(_ index: Int) -> Bool { (CTRunGetAttributes(runs[index]) as NSDictionary)[NSAttributedString.Key.exactOpacity] != nil }
         func draw(_ shown: [CTRun]) {
             guard !shown.isEmpty else { return }
+            if selected != nil { return drawApart(shown, of: line, in: ctx) }
             var clips = shown.map(extent)
             // Decorations occupy advances; italic ink and stroke can pass
             // the line's edges. Admit that ink in the same clip operation,
@@ -289,13 +301,15 @@ extension TextLinePaint {
         }
         switch pass {
         case .all: break
-        case .ink: shadows = shadows.map { $0.flatMap { ColorRange.isHDR($0.color) ? nil : $0 } }
+        case .ink:
+            // A grouped run's HDR shadow composites inside its group.
+            shadows = runs.indices.map { i in shadows[i].flatMap { ColorRange.isHDR($0.color) && !grouped(i) ? nil : $0 } }
         case .caster(let cast):
-            draw(zip(runs, shadows).filter { $0.1 == cast && !hidden($0.0) }.map { $0.0 })
+            draw(runs.indices.filter { shadows[$0] == cast && !hidden($0) && !grouped($0) }.map { runs[$0] })
             return true
         case .backgrounds: return true
         }
-        guard shadows.contains(where: { $0 != nil }) || runs.contains(where: hidden) else { return false }
+        guard selected != nil || shadows.contains(where: { $0 != nil }) || runs.indices.contains(where: hidden) else { return false }
         var i = 0
         while i < runs.count {
             var j = i + 1
@@ -307,11 +321,58 @@ extension TextLinePaint {
             }
             // Decorations belong to CTLineDraw; clip inside the transparency
             // layer so the resulting shadow can extend beyond the run stretch.
-            draw(runs[i..<j].filter { !hidden($0) })
+            draw((i..<j).filter { !hidden($0) }.map { runs[$0] })
             if shadows[i] != nil { ctx.endTransparencyLayer(); ctx.restoreGState() }
             i = j
         }
         return true
+    }
+
+    /// Runs without the rest of their line. `CTRunDraw` draws no decoration,
+    /// and Core Text draws one only with its whole line, so the line is drawn
+    /// again with invisible glyphs, clipped to each decorated run: below its
+    /// baseline before its glyphs (the underline) and above it after them
+    /// (the line-through), the order `CTLineDraw` paints them in. Core Text
+    /// paints a stroked or colour-glyph run even in the invisible mode, so a
+    /// decorated one is drawn whole by the line clipped to it; such a
+    /// neighbour's ink that crosses into a decorated run's advance is drawn
+    /// with that run.
+    private static func drawApart(_ shown: [CTRun], of line: CTLine, in ctx: CGContext) {
+        func decorated(_ run: CTRun) -> Bool {
+            let attributes = CTRunGetAttributes(run) as NSDictionary
+            return CTRunGetGlyphCount(run) > 0 && [NSAttributedString.Key.underlineStyle, .strikethroughStyle].contains { ((attributes[$0] as? NSNumber)?.intValue ?? 0) != 0 }
+        }
+        func paintsItself(_ run: CTRun) -> Bool {
+            let attributes = CTRunGetAttributes(run) as NSDictionary
+            if ((attributes[NSAttributedString.Key.strokeWidth] as? NSNumber)?.doubleValue ?? 0) != 0 { return true }
+            return attributes[kCTFontAttributeName].map { CTFontGetSymbolicTraits($0 as! CTFont).contains(.traitColorGlyphs) } ?? false
+        }
+        func drawLine(clippedTo clips: [CGRect]) {
+            guard !clips.isEmpty else { return }
+            ctx.saveGState()
+            ctx.clip(to: clips)
+            ctx.setTextDrawingMode(.invisible)
+            ctx.textPosition = .zero
+            CTLineDraw(line, ctx)
+            ctx.restoreGState()
+        }
+        let lined = shown.filter(decorated)
+        let whole = lined.filter(paintsItself), split = lined.filter { !paintsItself($0) }
+        func half(_ run: CTRun, above: Bool) -> CGRect {
+            let rect = extent(run)
+            var origin = CGPoint.zero
+            CTRunGetPositions(run, CFRange(location: 0, length: 1), &origin)
+            return above ? CGRect(x: rect.minX, y: origin.y, width: rect.width, height: rect.maxY - origin.y)
+                : CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: origin.y - rect.minY)
+        }
+        drawLine(clippedTo: split.map { half($0, above: false) })
+        for run in shown where !whole.contains(where: { $0 === run }) {
+            ctx.textPosition = .zero
+            CTRunDraw(run, ctx, CFRange())
+        }
+        drawLine(clippedTo: split.map { half($0, above: true) })
+        drawLine(clippedTo: whole.map(extent))
+        for run in shown { TextAtomIcon.draw(run, in: ctx) }
     }
 }
 

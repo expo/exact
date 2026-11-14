@@ -43,6 +43,7 @@ import {
 import { checkpoint, READER, keptAnswer } from './mount.js';
 /** Resource instances, including list members; list aggregates have no entry. */
 export const Resources = [];
+let ResourceIndex = 0;
 export let Ticket = 0;
 export const ticket = () => Ticket,
   nextTicket = () => ++Ticket;
@@ -84,7 +85,7 @@ const sameReq = (a, b) =>
   JSON.stringify(a.longPoll) === JSON.stringify(b.longPoll);
 const send = (t, land) => sendRequest(t, land, Out, data, inflight, say);
 
-function ask(source, args, name, mutation, forced) {
+function ask(source, args, name, mutation, forced, owner = mutation) {
   checkArguments(name, args);
   if (mutation) mutation.requests++;
   if (['startActivity', 'updateActivity', 'endActivity'].includes(source))
@@ -93,7 +94,7 @@ function ask(source, args, name, mutation, forced) {
   try {
     a = data.reserved?.[source]
       ? (v => (v?.then ? v : { v }))(data.reserved[source](source, args, name, forced))
-      : data.answer(source, args, Store, name, !!mutation, forced);
+      : data.answer(source, args, Store, name, !!mutation, forced, owner);
   } catch (e) {
     // what a resource's source sent before it threw goes if the commit stands (ts-data.js)
     Out.push(...(data.thrown?.() ?? []));
@@ -120,7 +121,7 @@ function reply(t, name, source, held, f, next, gone) {
           let p;
           try {
             if (o.error !== undefined) throw new Failed(o.error, o.code, o.reason);
-            p = o.v !== undefined ? { v: o.v } : data.parse(source, t.args, o, Store);
+            p = o.v !== undefined ? { v: o.v } : data.parse(source, t.args, o, Store, t.req);
           } catch (e) {
             throw e instanceof Failed ? e : new Failed(String(e?.message ?? e), failureCode(e), failureReason(e));
           }
@@ -174,6 +175,7 @@ export function res(
   if (kept) [initialArgs, initial] = kept;
   // `marks`: the uploads it asked, `context`: how many of its last arguments are its `with` context (uploads.js)
   const r = {
+    index: ResourceIndex++,
     name,
     source,
     type,
@@ -384,7 +386,7 @@ export function res(
         // they let go, however they answer, supersedes the call.
         const invocation = reasking ? 0 : Invocation.id, origin = reasking ? r.askOrigin ?? 'app' : Origin.now();
         try {
-          ans = Origin.run(origin, () => Invocation.run(invocation, () => ask(source, a, name, false, refresh)));
+          ans = Origin.run(origin, () => Invocation.run(invocation, () => ask(source, a, name, false, refresh, r)));
           // what its source sent on a socket goes once this commit stands (LLP 1016.000 D7, amended 2026-10-18)
           Out.push(...(ans?.effects ?? []));
         } catch (e) {
@@ -608,6 +610,7 @@ export function mut(name, slot, refreshes, type, mode) {
   const pend = sig(false),
     fail = sig(null);
   const m = {
+    index: Mutations.length,
     name,
     requests: 0,
     ticket: null,

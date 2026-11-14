@@ -14,6 +14,7 @@ import UIKit
 struct AimedGradient {
     weak var layer: CAGradientLayer?
     let source: BatchValue, dark: Bool, bounds: CGRect, box: CGRect
+    let tint: UIColor?
     let gradient: Gradient, stops: ([CGFloat], [CGColor])
 }
 
@@ -202,8 +203,8 @@ final class NodeExtras {
     /// A control bar over a scroller's content (LLP 1131 D3, D4): the scroller's paint rank, which it is placed
     /// above, and UIKit's edge effect.
     var bandOver: Int64?
-    /// A child of the navigation root that no route's box meets: it paints
-    /// over the native container (`NavigationHost.clearBesideRoutes`).
+    /// A child beside the routes or below their tab panels: it paints over
+    /// the whole-view native container (`NavigationHost.clearBesideRoutes`).
     var clearsNavigation = false
     var edgeInteraction: AnyObject?
     var scrollWritten: String?
@@ -377,7 +378,7 @@ extension NodeView {
     /// the capture that brings its next frame, as UIKit's own walk would see
     /// the change at once.
     func transparencyChanged() {
-        guard let overlay = superview, let canvas = overlay.superview as? NodeView, canvas.overlay === overlay else { return }
+        guard let overlay = superview, let canvas = overlay.canvasOverlayOwner else { return }
         canvas.needsCapture = true
         canvases?.scheduleCapture()
     }
@@ -487,6 +488,7 @@ extension NodeView {
     func reachesChildren(at point: CGPoint) -> Bool {
         let x = (style["overflow_x"]?.string ?? "visible") != "visible", y = (style["overflow_y"]?.string ?? "visible") != "visible"
         guard x || y, scrollView == nil else { return true }
+        if clipsOneAxis { return oneAxisClipContains(point) }
         let uniform = number("border_width")
         let widths = ["top", "right", "bottom", "left"].map { number("border_width_" + $0, uniform) }
         if x && y { return innerOutline(widths, in: bounds).contains(point) }

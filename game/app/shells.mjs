@@ -269,8 +269,13 @@ fn main() {
   const bakeArt = hasArt(appDir);
   // The snapshot excludes this entire generated root, including its gitignore.
   if (!existsSync(resolve(root, '.gitignore'))) writeFileSync(resolve(root, '.gitignore'), '*\n!.gitignore\n');
+  // A game without a data crate can take its Apple host from exact-game-apple, compiled once
+  // for every such game (exact_game_app::bake_shared_declaration decides). A lock captured
+  // before that crate existed would refuse it, so such a game keeps its own host. A lock
+  // captured since names it, so capturing one leaves the graph it was captured from.
+  const sharedApple = !data && (!existsSync(lock) || /^name = "exact-game-apple"$/m.test(readFileSync(lock, 'utf8')));
   for (const kind of ['gpu', 'web', 'apple', 'linux', 'windows', 'android']) {
-    const shell = resolve(root, kind);
+    const shell = resolve(root, kind), shared = kind === 'apple' && sharedApple;
     // A cached build script can run from either the game or its deeper proof copy.
     const levelBake = resolve(source, 'bake/src/files.rs');
     const tests = kind === 'linux' && existsSync(resolve(appDir, 'linux/tests'))
@@ -289,7 +294,7 @@ fn main() {
       ? `exact-game-render.workspace = true\n${app.game.audio === true ? "exact-game-audio.workspace = true\n" : ""}${renderDependency}game-logic = { package = "${crate}", path = ${JSON.stringify(relative(shell, logicDir))} }\n\n[target.'cfg(target_arch = "wasm32")'.dependencies]\nwasm-bindgen.workspace = true\nwasm-bindgen-futures.workspace = true\nweb-sys.workspace = true\n\n[build-dependencies]\nexact-game.workspace = true\nserde_json = "1"\ngame-logic = { package = "${crate}", path = ${JSON.stringify(relative(shell, logicDir))} }\n${bakeArt ? 'exact-game-bake.workspace = true\n' : ''}`
       // Android's Canvas host is the Linux host's (exact_painted::canvas_jni!), linked only on Android.
       : kind === 'android' ? `\n[target.'cfg(target_os = "android")'.dependencies]\nibex2-sqlite.workspace = true\nexact-logic.workspace = true\nexact-runner.workspace = true\nexact-painted.workspace = true\n${dataDependency}\n[build-dependencies]\nexact-game-app.workspace = true\n${dataBuildDependency}`
-      : `${kind === 'web' ? '' : 'ibex2-sqlite.workspace = true\nexact-logic.workspace = true\n'}exact-runner.workspace = true\nexact-${kind}.workspace = true\n${kind === 'web' ? 'exact-web-capabilities.workspace = true\n' : ['linux', 'windows'].includes(kind) ? 'exact-painted.workspace = true\n' : ''}${dataDependency}\n[build-dependencies]\nexact-game-app.workspace = true\n${dataBuildDependency}`;
+      : `${kind === 'web' ? '' : 'ibex2-sqlite.workspace = true\nexact-logic.workspace = true\n'}exact-runner.workspace = true\nexact-${kind}.workspace = true\n${shared ? 'exact-game-apple.workspace = true\n' : ''}${kind === 'web' ? 'exact-web-capabilities.workspace = true\n' : ['linux', 'windows'].includes(kind) ? 'exact-painted.workspace = true\n' : ''}${dataDependency}\n[build-dependencies]\nexact-game-app.workspace = true\n${dataBuildDependency}`;
     const files = {
       ...(kind === 'web' && data ? { [`src/bin/${name}-dev.rs`]: `//! The resident dev driver for the game's web shell: \`${name}-dev <source> <out>\`, baking with its data.\n\nfn main() -> std::process::ExitCode {\n    exact_web::dev::main::<app_data::${data.type}>()\n}\n` } : {}),
       'Cargo.toml': header + dependencies + (tests.length ? `\n[dev-dependencies]\nserde_json.workspace = true\nexact-update = { path = ${JSON.stringify(relative(shell, resolve(gameRoot, '../update')))} }\n` : ''),
@@ -346,6 +351,7 @@ ${bakeArt ? `    exact_game_bake::bake_art(${JSON.stringify(relative(shell, appD
 `
         : data
           ? `fn main() {\n    exact_game_app::bake_data_declaration::<app_data::${data.type}>("${kind}", ${JSON.stringify(relative(shell, appDir))}, "app_data::${data.type}");\n}\n`
+          : shared ? `fn main() {\n    exact_game_app::bake_shared_declaration(${JSON.stringify(relative(shell, appDir))});\n}\n`
           : `fn main() {\n    exact_game_app::bake_declaration("${kind}", ${JSON.stringify(relative(shell, appDir))});\n}\n`,
     };
     const generatedTests = existsSync(resolve(shell, 'tests')) ? readdirSync(resolve(shell, 'tests')).sort() : [];

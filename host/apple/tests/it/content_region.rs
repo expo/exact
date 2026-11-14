@@ -1000,50 +1000,344 @@ fn native_region_promotes_and_clears_the_fields_editor_rect() {
     );
 }
 
-/// Stage 14 B's fallback (theme2 09:54): a popover under a registered
-/// region keeps its in-region layout, no viewport block, so the native
-/// region's capture, which takes every node of the content branch, matches
-/// the kernel's publication, and the region publishes.
 #[test]
-fn a_popover_under_a_native_region_stays_in_it_and_publishes() {
-    let source = r##"component App
+fn native_region_publication_excludes_popovers_through_open_close_and_resize() {
+    let plan = contract::compile(
+        r#"component App
+  state body = "Row content"
+  action revise
+    body = "Updated row content"
   view
     column width="100%" height="100%"
-      view id="owner" position="relative" width="100%" height=400 flex-shrink=0 overflow-x="hidden" overflow-y="hidden"
-        view id="content" width="100%" height="100%"
-          text "Row" testId="row"
-          column testId="pop" popover="manual" width="50%" height=30
+      view id="owner" width=400 height=200 overflow-x="hidden" overflow-y="hidden"
+        view id="content" width="100%" height="100%" testId="content"
+          column testId="row"
+            text body testId="body"
+            button id="source" testId="source" popovertarget="pop" press=revise
+              text "Open"
+            column id="pop" testId="pop" popover="auto" width="50%" height=60
+              text "Popover content" testId="pop-body" width="100%"
         text "Preparing" id="pending"
-"##;
-    let plan = contract::compile(source).unwrap().encode();
-    let (mut host, _) = Host::boot_native_region(
+"#,
+    )
+    .unwrap()
+    .encode();
+    let (mut host, mut wire) = Host::boot_native_region(
         &plan,
         Data,
         Box::new(MonospaceMeasurer::default()),
-        600.,
         800.,
+        600.,
         registration(),
         exact_apple::content_region::NativeProjectionLimits::default(),
         exact_runner::time::Launch::NONE,
     )
     .unwrap();
-    let drops = Rc::new(Cell::new(0));
-    settle(&mut host, &drops);
+    projection_complete(&mut host, &mut wire);
+    let pop = projection_id(&host, "pop");
+    let pop_body = projection_id(&host, "pop-body");
+    let row = projection_id(&host, "row");
+    let body = projection_id(&host, "body");
+    let source = projection_id(&host, "source");
+    let check = |host: &Host<Data>, wire: &str| {
+        let batches = serde_json::Deserializer::from_str(wire)
+            .into_iter::<serde_json::Value>()
+            .map(Result::unwrap)
+            .collect::<Vec<_>>();
+        assert!(batches.iter().all(|b| b["error"].is_null()), "{wire}");
+        let state = batches
+            .iter()
+            .flat_map(|b| b["ops"].as_array().unwrap())
+            .rev()
+            .find(|op| op["op"] == "native-region")
+            .unwrap();
+        assert_eq!(state["current"], true);
+        let members = state["members"].as_array().unwrap();
+        assert!(members.iter().any(|n| n["id"] == body));
+        assert!(!members
+            .iter()
+            .any(|n| n["id"] == pop || n["id"] == pop_body));
+        assert!(host.region_publication_id().is_some());
+    };
+    check(&host, &wire);
+    let batches = serde_json::Deserializer::from_str(&wire)
+        .into_iter::<serde_json::Value>()
+        .map(Result::unwrap)
+        .collect::<Vec<_>>();
+    let ops = batches
+        .iter()
+        .flat_map(|b| b["ops"].as_array().unwrap())
+        .collect::<Vec<_>>();
+    let created = ops
+        .iter()
+        .find(|op| op["op"] == "create" && op["id"] == pop)
+        .unwrap();
+    assert_eq!(created["props"]["popoverParent"], row.to_string());
+    assert!(ops
+        .iter()
+        .any(|op| op["op"] == "create" && op["id"] == pop_body));
+    let children = ops
+        .iter()
+        .rev()
+        .find(|op| op["op"] == "children" && op["id"] == row)
+        .unwrap();
+    assert!(!children["ids"]
+        .as_array()
+        .unwrap()
+        .contains(&serde_json::json!(pop)));
+    assert_eq!(host.runner().kernel().node(pop).unwrap().frame.width, 400.);
+    let block = exact_kernel::HostBlock {
+        width: exact_kernel::BlockAxis::Region(780.),
+        height: exact_kernel::BlockAxis::Region(540.),
+    };
+    let measured = host.measure_block(pop, block).unwrap();
+    assert_eq!(measured.used.0, 390.);
+    wire = host.set_blocks(&[(pop, Some(block))]);
+    projection_complete(&mut host, &mut wire);
+    check(&host, &wire);
+    assert_eq!(host.runner().kernel().node(pop).unwrap().frame.width, 390.);
+    assert_eq!(
+        host.runner().kernel().node(pop_body).unwrap().frame.width,
+        390.
+    );
+    let measured_batches = serde_json::Deserializer::from_str(&wire)
+        .into_iter::<serde_json::Value>()
+        .map(Result::unwrap)
+        .collect::<Vec<_>>();
+    for id in [pop, pop_body] {
+        assert!(measured_batches
+            .iter()
+            .flat_map(|b| b["ops"].as_array().unwrap())
+            .any(|op| op["op"] == "frame" && op["id"] == id && op["w"] == 390.));
+    }
+    wire = host.set_blocks(&[(pop, None)]);
+    projection_complete(&mut host, &mut wire);
+    check(&host, &wire);
+    for cover in [Some(exact_kernel::HostCover::Whole), None] {
+        wire = host.set_covers(&[(pop, cover)]);
+        projection_complete(&mut host, &mut wire);
+        check(&host, &wire);
+    }
+    assert_eq!(host.runner().kernel().node(pop).unwrap().frame.width, 400.);
+    wire = host.dispatch_at(source, Event::Press, 1.);
+    projection_complete(&mut host, &mut wire);
+    check(&host, &wire);
+    assert_eq!(
+        host.runner()
+            .kernel()
+            .node(body)
+            .unwrap()
+            .props
+            .str(exact_kernel::PropId::Text),
+        Some("Updated row content")
+    );
+    wire = host.resize(1000., 600.);
+    projection_complete(&mut host, &mut wire);
+    check(&host, &wire);
+    assert_eq!(host.runner().kernel().node(pop).unwrap().frame.width, 500.);
+    assert_eq!(host.runner().kernel().node(row).unwrap().frame.width, 400.);
+}
+
+#[test]
+fn a_popover_transfers_between_native_publication_and_ordinary_views() {
+    let plan = contract::compile(
+        r#"component App
+  state lifted = false
+  state body = "Row content"
+  action flip
+    lifted = !lifted
+    body = body + "!"
+  view
+    column width="100%" height="100%"
+      button testId="flip" press=flip
+        text "Flip"
+      view id="owner" position="relative" width=400 height=200 overflow-x="hidden" overflow-y="hidden"
+        view id="content" width="100%" height="100%"
+          column testId="row"
+            text body testId="body"
+            column id="pop" testId="pop" popover="manual" position=(lifted ? "absolute" : "sticky") width="50%" height=60
+              column testId="pop-child"
+                text body testId="pop-body"
+        text "Preparing" id="pending"
+"#,
+    )
+    .unwrap()
+    .encode();
+    let (mut host, mut wire) = Host::boot_native_region(
+        &plan,
+        Data,
+        Box::new(MonospaceMeasurer::default()),
+        800.,
+        600.,
+        registration(),
+        exact_apple::content_region::NativeProjectionLimits::default(),
+        exact_runner::time::Launch::NONE,
+    )
+    .unwrap();
+    projection_complete(&mut host, &mut wire);
+    let pop = projection_id(&host, "pop");
+    let child = projection_id(&host, "pop-child");
+    let body = projection_id(&host, "pop-body");
+    let row = projection_id(&host, "row");
+    let flip = projection_id(&host, "flip");
+    let mut live = std::collections::BTreeMap::new();
+    let mut apply = |wire: &str, lifted: bool, expected: &str| {
+        let batches = serde_json::Deserializer::from_str(wire)
+            .into_iter::<serde_json::Value>()
+            .map(Result::unwrap)
+            .collect::<Vec<_>>();
+        for batch in &batches {
+            assert!(batch["error"].is_null(), "{batch}");
+            for op in batch["ops"].as_array().unwrap() {
+                let id = op["id"].as_u64().unwrap_or_default() as u32;
+                match op["op"].as_str().unwrap() {
+                    "destroy" => {
+                        assert!(
+                            ![pop, child, body].contains(&id),
+                            "transfer destroys {id}: {wire}"
+                        );
+                        live.remove(&id);
+                    }
+                    "create" => {
+                        assert!(
+                            live.insert(id, op.clone()).is_none(),
+                            "duplicate create {id}"
+                        );
+                    }
+                    "props" => {
+                        let node = live
+                            .get_mut(&id)
+                            .unwrap_or_else(|| panic!("props for missing {id}: {wire}"));
+                        for key in op["clear"].as_array().unwrap() {
+                            node["props"]
+                                .as_object_mut()
+                                .unwrap()
+                                .remove(key.as_str().unwrap());
+                        }
+                        for (key, value) in op["set"].as_object().unwrap() {
+                            node["props"][key] = value.clone();
+                        }
+                    }
+                    "children" => {
+                        if id == row && !op["ids"].as_array().unwrap().contains(&pop.into()) {
+                            assert_eq!(
+                                live[&pop]["props"]["popoverParent"],
+                                row.to_string(),
+                                "attachment must precede removal from the row's children"
+                            );
+                        }
+                        live.get_mut(&id).expect("children for a live view")["ids"] =
+                            op["ids"].clone();
+                    }
+                    _ => {}
+                }
+            }
+        }
+        for id in [pop, child, body] {
+            assert!(live.contains_key(&id));
+        }
+        assert_eq!(live[&pop]["ids"], serde_json::json!([child]));
+        assert_eq!(live[&child]["ids"], serde_json::json!([body]));
+        assert_eq!(
+            live[&row]["ids"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!(pop)),
+            !lifted
+        );
+        let members = batches
+            .iter()
+            .flat_map(|b| b["ops"].as_array().unwrap())
+            .rev()
+            .find(|op| op["op"] == "native-region")
+            .unwrap()["members"]
+            .as_array()
+            .unwrap();
+        for id in [pop, child, body] {
+            assert_eq!(members.iter().any(|n| n["id"] == id), !lifted);
+        }
+        if lifted {
+            assert_eq!(live[&pop]["props"]["popoverParent"], row.to_string());
+        } else {
+            assert!(live[&pop]["props"]["popoverParent"].is_null());
+        }
+        assert_eq!(live[&body]["props"]["text"], expected);
+    };
+    apply(&wire, false, "Row content");
+    for (turn, lifted) in [true, false, true].into_iter().enumerate() {
+        wire = host.dispatch_at(flip, Event::Press, turn as f64 + 1.);
+        if !lifted {
+            assert!(host.pending_region_request().is_some());
+            wire.push_str(&host.set_blocks(&[(pop, None)]));
+        }
+        projection_complete(&mut host, &mut wire);
+        apply(
+            &wire,
+            lifted,
+            &format!("Row content{}", "!".repeat(turn + 1)),
+        );
+        if lifted {
+            let block = exact_kernel::HostBlock {
+                width: exact_kernel::BlockAxis::Region(780.),
+                height: exact_kernel::BlockAxis::Region(540.),
+            };
+            wire = host.set_blocks(&[(pop, Some(block))]);
+            projection_complete(&mut host, &mut wire);
+            apply(
+                &wire,
+                lifted,
+                &format!("Row content{}", "!".repeat(turn + 1)),
+            );
+        }
+    }
+}
+
+/// An inline run that says `popover` is no top-layer box: the native
+/// capture keeps it in its paragraph's runs.
+#[test]
+fn an_inline_popover_run_keeps_its_text_in_a_native_region() {
+    let plan = contract::compile(
+        r#"component App
+  view
+    column width="100%" height="100%"
+      view id="owner" position="relative" width=400 height=200 overflow-x="hidden" overflow-y="hidden"
+        view id="content" width="100%" height="100%" testId="content"
+          text testId="paragraph"
+            text "Before " testId="before"
+            text "Keep me" testId="kept" popover="manual"
+        text "Preparing" id="pending"
+"#,
+    )
+    .unwrap()
+    .encode();
+    let (mut host, mut wire) = Host::boot_native_region(
+        &plan,
+        Data,
+        Box::new(MonospaceMeasurer::default()),
+        800.,
+        600.,
+        registration(),
+        exact_apple::content_region::NativeProjectionLimits::default(),
+        exact_runner::time::Launch::NONE,
+    )
+    .unwrap();
+    projection_complete(&mut host, &mut wire);
+    assert!(host.region_publication_id().is_some(), "{wire}");
+    let kept = projection_id(&host, "kept");
+    let members = serde_json::Deserializer::from_str(&wire)
+        .into_iter::<serde_json::Value>()
+        .map(Result::unwrap)
+        .flat_map(|b| b["ops"].as_array().unwrap().clone())
+        .filter(|op| op["op"] == "native-region")
+        .last()
+        .unwrap()["members"]
+        .clone();
     assert!(
-        host.region_publication_id().is_some(),
-        "the native region publishes"
+        members.as_array().unwrap().iter().any(|n| n["id"] == kept),
+        "{members}"
     );
-    let key = host.runner().kernel().find_by_test_id("pop")[0];
-    let pop = host.runner().kernel().node_by_key(key).unwrap().id;
-    assert_eq!(
-        host.runner().kernel().host_block(pop),
-        None,
-        "in the region"
-    );
-    let frame = host.runner().kernel().node(pop).unwrap().frame;
-    assert_eq!(
-        (frame.width, frame.height),
-        (300., 30.),
-        "half the owner's 600"
-    );
+    let run = wire
+        .rfind(&format!("\"id\":{kept},\"parent\":"))
+        .expect("the run is in its paragraph");
+    assert!(wire[run..].contains("Keep me"), "{wire}");
 }

@@ -1,0 +1,13 @@
+component App
+  state xs = range(65536)
+  state n = 1
+  view
+    Child(xs=xs, n=n)
+component Child
+  props
+    xs: number[]
+    n: number
+  derive next = n + 1
+  derive values = xs.map(x => 1 + next)
+  view
+    text `${values.length}` testId="last"

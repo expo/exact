@@ -863,6 +863,62 @@ fn a_redirected_reply_checks_every_hops_scope_before_boot_and_queued_adoption() 
 }
 
 #[test]
+fn a_refresh_aborted_behind_the_fence_withholds_the_pending_preloads_cache_copy() {
+    let mut wrong = Vec::new();
+    for asynchronous in [false, true] {
+        for mode in [
+            exact_runner::CacheMode::Default,
+            exact_runner::CacheMode::Reload,
+            exact_runner::CacheMode::NoCache,
+        ] {
+            let server = Server::new();
+            let (release, held) = channel();
+            let mut old = Plan::new(200, &[("Cache-Control", "max-age=60")], b"old");
+            old.held = Some(held);
+            server.plan("/feed", old);
+            let (set, clock) = fresh_clock(&server, vec![definition(&server, "/feed")]);
+            server.seen(1);
+            let (core, woke) = server.core(asynchronous, true);
+            adopt(&core, set);
+            let mut refused = job(1, server.request("/refused").prefetch());
+            refused.class = RequestClass::Ordered;
+            assert!(core.run(refused, None).is_err());
+            let mut refresh = job(2, server.request("/feed").cache(mode));
+            refresh.forced = mode == exact_runner::CacheMode::Default;
+            core.run(refresh, None).unwrap();
+            {
+                let state = core.shared.state.lock().unwrap();
+                assert!(state.ordered_barrier);
+                assert_eq!(state.fenced.len(), 1);
+                assert!(matches!(
+                    state.cache.as_ref().unwrap().preloads[0].reply,
+                    ReplyState::Pending { .. }
+                ));
+            }
+            core.cancel(&[2]);
+            assert!(core.shared.state.lock().unwrap().fenced.is_empty());
+            release.send(()).unwrap();
+            ready(&core, 1);
+            assert!(core.resume_ordered().is_empty());
+            let (reply, cached) = read(&core, &woke, &server, 3, "/feed");
+            assert!(cached);
+            assert_eq!(reply.body, b"old");
+            assert!(!core
+                .take_preload_journal()
+                .iter()
+                .any(|fact| fact.outcome == Event::DroppedByRefresh));
+            *clock.lock().unwrap() += HOLD;
+            server.plan("/feed", Plan::new(200, &[], b"new"));
+            let (reply, cached) = read(&core, &woke, &server, 4, "/feed");
+            if cached || reply.body != b"new" {
+                wrong.push((asynchronous, mode));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "preload copies stored: {wrong:?}");
+}
+
+#[test]
 fn refresh_admission_drops_equal_ready_and_pending_preloads_and_releases_waiters() {
     for asynchronous in [false, true] {
         for pending in [false, true] {

@@ -111,7 +111,7 @@ impl DataSource for AbiBackup {
         source: &str,
         args: &[Value],
     ) -> Result<Answer, exact_runner::DataError> {
-        let request = exact_logic_abi::call_request(store, source, args, None).unwrap();
+        let request = exact_logic_abi::call_request(None, store, source, args, None).unwrap();
         self.0.dispatch(&request).unwrap();
         exact_logic_abi::call_reply(self.0.output(), store)
     }
@@ -122,7 +122,8 @@ impl DataSource for AbiBackup {
         args: &[Value],
         outcome: exact_runner::Outcome,
     ) -> Result<Answer, exact_runner::DataError> {
-        let request = exact_logic_abi::call_request(store, source, args, Some(&outcome)).unwrap();
+        let request =
+            exact_logic_abi::call_request(None, store, source, args, Some(&outcome)).unwrap();
         self.0.dispatch(&request).unwrap();
         exact_logic_abi::call_reply(self.0.output(), store)
     }

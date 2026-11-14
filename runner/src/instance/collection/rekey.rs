@@ -151,7 +151,7 @@ impl Collection {
         }
         // Shared objects can move. A positional key must be evaluated at
         // the new position, including the otherwise-reused suffix.
-        if vm::instructions(u.env.plan.code(key))
+        if vm::transitive_instructions(u.env.plan, u.env.plan.code(key))
             .any(|i| i.is_ok_and(|i| i.op == exact_plan::Opcode::LoadIndex))
         {
             return Ok(false);

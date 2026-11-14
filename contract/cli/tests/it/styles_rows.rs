@@ -694,3 +694,79 @@ fn a_class_choice_is_the_class_it_chooses() {
         }
     }
 }
+
+#[test]
+fn image_rendering_is_inherited_and_changes_with_dynamic_styles() {
+    use exact_kernel::{ImageRendering, StyleId};
+    for mode in ["auto", "crisp-edges", "pixelated"] {
+        contract::compile(&format!(
+            "component App\n  view\n    image \"sprite.png\" width=96 height=96 image-rendering=\"{mode}\"\n"
+        )).unwrap();
+    }
+    let plan = contract::compile(
+        r#"style Smooth
+  image-rendering="auto"
+style Follow
+  opacity=1
+component App
+  state mode = "pixelated"
+  state own = true
+  action crisp
+    mode = "crisp-edges"
+  action smooth
+    mode = "auto"
+  action release
+    own = false
+  view
+    column image-rendering=mode
+      image "sprite.png" testId="inherited"
+      image "sprite.png" image-rendering="auto" testId="own"
+      image "sprite.png" class=(own ? Smooth : Follow) testId="class"
+      button aria-label="Sprite" testId="face"
+        image "sprite.png"
+"#,
+    )
+    .unwrap();
+    let plan = contract::bake(plan, NoData).unwrap();
+    let mut r = Runner::boot(
+        plan,
+        NoData,
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    let mode = |r: &Runner<NoData>, id| {
+        let k = r.kernel();
+        k.node_by_key(k.find_by_test_id(id)[0])
+            .unwrap()
+            .computed_row(StyleId::ImageRendering, |s| s.image_rendering)
+    };
+    let fits = |r: &Runner<NoData>| {
+        let k = r.kernel();
+        let id = k.node_by_key(k.find_by_test_id("face")[0]).unwrap().id;
+        k.press_face(id).unwrap().fits
+    };
+    assert!(
+        !fits(&r),
+        "the authored image keeps its sampler instead of becoming a native face"
+    );
+    assert_eq!(mode(&r, "inherited"), ImageRendering::Pixelated);
+    assert_eq!(mode(&r, "own"), ImageRendering::Auto);
+    assert_eq!(mode(&r, "class"), ImageRendering::Auto);
+    r.act("crisp", vec![]).unwrap();
+    assert_eq!(mode(&r, "inherited"), ImageRendering::CrispEdges);
+    assert_eq!(mode(&r, "class"), ImageRendering::Auto);
+    r.act("release", vec![]).unwrap();
+    assert_eq!(mode(&r, "class"), ImageRendering::CrispEdges);
+    r.act("smooth", vec![]).unwrap();
+    assert_eq!(mode(&r, "inherited"), ImageRendering::Auto);
+    assert!(fits(&r));
+    for value in ["smooth", "nearest", "low-quality"] {
+        let error = contract::compile(&format!(
+            "component App\n  view\n    image \"sprite.png\" image-rendering=\"{value}\"\n"
+        ))
+        .unwrap_err();
+        assert_eq!(error.id, "lower-attr-value");
+    }
+}

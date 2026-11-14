@@ -651,7 +651,7 @@ impl Machine {
             generation: run.1,
             claim: Claim::None,
             cached: false,
-            cache_exchange: None,
+            cache_exchange: super::cache::exchange(state, &job),
             cache_replacing: super::cache::replacing(
                 &job.request,
                 job.class,
@@ -1017,12 +1017,10 @@ fn at_limit(state: &State, lane: usize, origin: &str) -> bool {
 }
 
 /// What starting `job` charges more: response bytes, and a sized upload's
-/// file. A handoff charges no response bytes, a job sizing its file only
-/// the request buffers it holds (D5).
+/// file. A job sizing its file holds only its request buffers (D5).
 fn charge(book: &Book, lane: usize, job: &Job, kind: Kind) -> (usize, usize) {
     let sized = book.sized.get(&job.ticket).map(|n| *n as usize);
     let more = match kind {
-        Kind::Handoff => 0,
         Kind::Http if job.request.body_from.is_some() && sized.is_none() => 0,
         _ => job.limit - job.charge,
     };

@@ -240,8 +240,10 @@ test('external Rust modules have identical bytes in relocated cold source captur
   const dir = mkdtempSync(resolve(root, 'target/rust-reproducible-'));
   const write = (path, bytes) => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, bytes); };
   const previousHelper = process.env.EXACT_FILESYSTEM_HELPER;
+  const previousTarget = process.env.CARGO_TARGET_DIR;
   try {
     const helper = filesystemHelper();
+    delete process.env.CARGO_TARGET_DIR;
     // Copy the builder's imports too: each capture must resolve its own Exact checkout and path dependencies.
     const pending = ['scripts/rust.mjs'], sources = new Map(), parser = new Bun.Transpiler({ loader: 'js' });
     while (pending.length) {
@@ -299,6 +301,7 @@ test('external Rust modules have identical bytes in relocated cold source captur
     assert.equal((await row(changed.variants.wasm.bytes)).action, 'publish');
   } finally {
     if (previousHelper === undefined) delete process.env.EXACT_FILESYSTEM_HELPER; else process.env.EXACT_FILESYSTEM_HELPER = previousHelper;
+    if (previousTarget === undefined) delete process.env.CARGO_TARGET_DIR; else process.env.CARGO_TARGET_DIR = previousTarget;
     rmSync(dir, { recursive: true, force: true });
   }
 }, 120000);

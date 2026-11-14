@@ -59,6 +59,7 @@ extension Presenter {
 
     /// `given`: the node to align, found by its caller (a fragment's, in its route: `Fragment.swift`).
     func scrollElementIntoView(_ args: [Any], target given: NodeView? = nil) {
+        if given == nil { cancelFragment() }
         guard let name = args.first as? String,
               let target = given ?? views.values.sorted(by: { $0.id < $1.id }).first(where: { $0.props["id"] == name }),
               target.window != nil else {
@@ -176,7 +177,9 @@ final class ElementScrolls {
     /// target replaced, recycled into another row, or on an inactive route
     /// cancels its request.
     func flush() {
-        guard !held.isEmpty, !presenter.applying else { return }
+        guard !presenter.applying else { return }
+        defer { presenter.flushFragment() }
+        guard !held.isEmpty else { return }
         let settling = presenter.settlesElementScroll
         for entry in held {
             guard let node = entry.node, node.incarnation == entry.incarnation, presenter.views[node.id] === node,
@@ -278,7 +281,7 @@ extension Presenter {
 
     /// `given`: the node to align, found by its caller (a fragment's, in its route: `Fragment.swift`).
     func scrollElementIntoView(_ args: [Any], target given: NodeView? = nil) {
-        if given == nil, let fragment = fragmentHeld { elementScrolls.drop(fragment); fragmentHeld = nil } // the author's scroll wins over a fragment's still held
+        if given == nil { cancelFragment() }
         guard let name = args.first as? String,
               let target = given ?? views.values.sorted(by: { $0.id < $1.id }).first(where: { $0.props["id"] == name }) else {
             session?.log("scrollIntoView \"\(args.first ?? "")\" refused: no live node with that id")
@@ -368,6 +371,20 @@ extension Presenter {
         return projected
     }
 
+    /// Page clearance is kernel padding, so its bars do not appear in `adjustedContentInset`.
+    /// A reveal still aligns inside the part of that page UIKit leaves visible.
+    private func elementPageInsets(_ scroll: UIScrollView) -> UIEdgeInsets {
+        var inset = scroll.adjustedContentInset
+        guard let route = scroll.superview?.next as? RouteController,
+              route.contentViewport === scroll else { return inset }
+        let safe = scroll.safeAreaInsets, off = NavigationHost.clearanceOff(route.node)
+        if !NavigationHost.insetsNoTop(route.node) { inset.top = max(inset.top, safe.top) }
+        if off & 2 == 0 { inset.right = max(inset.right, safe.right) }
+        if off & 4 == 0 { inset.bottom = max(inset.bottom, safe.bottom) }
+        if off & 8 == 0 { inset.left = max(inset.left, safe.left) }
+        return inset
+    }
+
     /// The target's box in `sv` and where `sv`'s offset goes to align it,
     /// measured now: a layout can size a native row that had an estimated
     /// height. With `projected`, the box is where the inner reveals take it.
@@ -391,7 +408,7 @@ extension Presenter {
             frame = target.convert(target.bounds, to: sv)
         }
         let area = IntoView.inset(frame, style: target.style, family: "scroll_margin", outward: true)
-        let inset = owner?.scrollPortInsets(sv) ?? sv.adjustedContentInset
+        let inset = owner?.scrollPortInsets(sv) ?? elementPageInsets(sv)
         var port = IntoView.inset(sv.pageBounds.inset(by: inset), style: owner?.style ?? [:], family: "scroll_padding")
         if let grouped, sv === grouped, let pinned = pinnedHeader(over: frame, in: grouped) {
             port.origin.y += pinned

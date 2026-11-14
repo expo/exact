@@ -32,6 +32,35 @@ function answer(source:string, args:unknown[], store:Store, storage:Storage, nat
   }
   if (op === "shared-wait") return shared.then(() => ({text: "waited"}));
   const song = storage.fs.directories.data + "/song";
+  if (op === "storage-handoff") {
+    const opened = storage.sqlite.open("app:/data/notes.db");
+    const getter = (globalThis as any).__exact_storage_promise;
+    const raw = getter?.();
+    return opened.then(async db => {
+      const leaked = raw && await raw;
+      await db.close();
+      return {text: leaked ? "raw database exposed" : "private"};
+    });
+  }
+  if (op === "worker-retirement") {
+    return (async () => {
+      const db = await storage.sqlite.open("app:/data/notes.db");
+      const first = db.execute("INSERT INTO notes VALUES ('submitted')");
+      const orphan = storage.fs.atomicWriteFile(song + "-orphan", bytes(value));
+      first.catch(() => storage.fs.atomicWriteFile(song + "-reaction", bytes(value)).catch(() => {}));
+      orphan.catch(() => {});
+      await Promise.all([first, orphan]);
+      await db.close();
+      return {text: "written"};
+    })();
+  }
+  if (op === "timeout-queue") {
+    const first = storage.fs.atomicWriteFile(song, bytes(value));
+    const orphan = storage.fs.atomicWriteFile(song + "-orphan", bytes(value));
+    first.catch(() => storage.fs.atomicWriteFile(song + "-reaction", bytes(value)).catch(() => {}));
+    orphan.catch(() => {});
+    return Promise.all([first, orphan]).then(() => ({text: "written"}));
+  }
   // The summary's edit: answered from memory, saved unawaited, in the answer.
   if (op === "save") {
     saving = storage.fs.atomicWriteFile(song, bytes(value)).catch((e) => { lastError = String(e.code); });

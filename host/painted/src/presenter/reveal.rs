@@ -234,12 +234,16 @@ impl<D: DataSource> Presenter<D> {
             .and_then(exact_plan::Value::as_str)
             .unwrap_or_default();
         let activation = args.get(2).and_then(exact_plan::Value::as_number);
-        self.fragment_anchor = None;
         // The activation this command makes, armed when its router change
-        // arrived; taken once.
+        // arrived; taken once. One armed before and not now was taken or
+        // superseded: it leaves the current hold and scroll alone.
         let armed = self
             .fragment_armed
             .filter(|(a, _)| Some(*a as f64) == activation);
+        if armed.is_none() && activation.is_some_and(|a| a > 0. && a <= self.fragment_seen as f64) {
+            return;
+        }
+        self.fragment_anchor = None;
         if armed.is_some() {
             self.fragment_armed = None;
         }

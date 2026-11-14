@@ -254,15 +254,29 @@ def weekdays : List String :=
 /-- `formatDay(thenMs, nowMs, utcOffset, mode)` (LLP 1116.020 D8): `t`'s day
 counted from `n`'s in the offset's calendar days. `day` is `Today`,
 `Yesterday`, `Tomorrow` or the medium date; `day-time` adds ` at ` and the
-short time; `list` (any other mode: `Eval.formatting` passes only the three)
-is the short time today, `Yesterday`, the weekday two to six days back,
-else `M/D/YY`. `""` when either instant is invalid. -/
+short time; `section` (LLP 1168.000 D5) is `Today`, `Yesterday`,
+`Tomorrow`, the weekday two to six days either side, else `Thu, Oct 15`,
+with `, 2025` when the year is not `n`'s; `list` (any other mode:
+`Eval.formatting` passes only the four) is the short time today,
+`Yesterday`, the weekday two to six days back, else `M/D/YY`. `""` when
+either instant is invalid. -/
 def formatDay (t n offset : F64) (mode : String) : String :=
   match wallMs t offset, wallMs n offset with
   | .some wall, .some now =>
     let days := floorInt (wall / 86400000)
     let apart := days - floorInt (now / 86400000)
-    if mode == "list" then
+    if mode == "section" then
+      if apart == 0 then "Today" else if apart == -1 then "Yesterday" else if apart == 1 then "Tomorrow"
+      else
+        let weekday := weekdays.getD (Int.emod (days + 4) 7).toNat ""
+        if -6 ≤ apart && apart ≤ 6 then weekday
+        else
+          let (year, month, day) := civil days
+          let (nowYear, _, _) := civil (floorInt (now / 86400000))
+          let name := String.ofList ((months.getD (month - 1) "").toList.take 3)
+          String.ofList (weekday.toList.take 3) ++ ", " ++ name ++ " " ++ toString day
+            ++ (if year == nowYear then "" else ", " ++ toString year)
+    else if mode == "list" then
       if apart == 0 then formatTime t offset
       else if apart == -1 then "Yesterday"
       else if -6 ≤ apart && apart ≤ -2 then weekdays.getD (Int.emod (days + 4) 7).toNat ""
@@ -498,6 +512,8 @@ def fillTemplate (r : Record) (wall : F64) (names periods : String) : Nat → Li
       else if name = "k" ∨ name = "kk" then padded r ((h + 23) % 24 + 1) w
       else if name = "m" ∨ name = "mm" then padded r (minutes % 60) w
       else if name = "N" then (itemsOf names).getD (month - 1) ""
+      -- After the twelve months, the seven weekdays, Sunday's first (LLP 1168.000 D5).
+      else if name = "E" then (itemsOf names).getD (12 + (Int.emod (floorInt (wall / 86400000) + 4) 7).toNat) ""
       else if name = "a" then
         ((itemsOf periods).filterMap fun p => match partsOf p with
           | [start, n] => (start.toNat?).bind fun start => if start ≤ minutes then .some n else .none
@@ -523,7 +539,15 @@ def dayIn (r : Record) (cycle : Option String) (t n offset : F64) (mode : String
   | .some wall, .some now =>
     let days := floorInt (wall / 86400000)
     let apart := days - floorInt (now / 86400000)
-    if mode == "list" then
+    -- Its capitals are the data's: no host maps case.
+    if mode == "section" then
+      if apart == 0 then itemOf r 24 0 else if apart == -1 then itemOf r 24 1 else if apart == 1 then itemOf r 24 2
+      else if -6 ≤ apart && apart ≤ 6 then itemOf r 29 (Int.emod (days + 4) 7).toNat
+      else
+        let (year, _, _) := civil days
+        let (nowYear, _, _) := civil (floorInt (now / 86400000))
+        if year == nowYear then dateIn r wall 25 26 else dateIn r wall 27 28
+    else if mode == "list" then
       if apart == 0 then timeIn r wall cycle
       else if apart == -1 then itemOf r 24 1
       else if -6 ≤ apart && apart ≤ -2 then itemOf r 16 (Int.emod (days + 4) 7).toNat

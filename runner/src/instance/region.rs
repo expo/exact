@@ -31,7 +31,7 @@ impl RegionInst {
         fresh: bool,
     ) -> Result<bool, InstanceError> {
         let plan = u.env.plan;
-        let deps = &u.sites.deps;
+        let deps = &u.sites.data.deps;
         let index = self.region.0 as usize;
         let row = plan.region(self.region);
         let subject_stale = fresh || u.stale(&deps.subjects[index]);
@@ -380,6 +380,7 @@ impl RegionInst {
         *arm = want;
         *frame = new_frame;
         if let Some(i) = want {
+            frame.region = Some(region.0);
             let arm_id = plan.region(region).arms.iter().nth(i);
             if let Some(id) = arm_id.filter(|id| owns_slots(plan, *id)) {
                 let slots: RowSlots = Rc::new(RefCell::new(BTreeMap::new()));

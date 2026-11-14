@@ -48,6 +48,7 @@ pub fn canvas_bitmap(
 
 /// A literal binding's value, if the code is one push and `Return`.
 pub fn literal(plan: &Plan, code: &[u8]) -> Option<exact_plan::Value> {
+    let code = plan.read_code(code).0;
     let ins: Vec<_> = instructions(code).collect::<Result<_, _>>().ok()?;
     match ins.as_slice() {
         [a, r] if r.op == Opcode::Return => match a.op {
@@ -65,7 +66,7 @@ pub fn literal(plan: &Plan, code: &[u8]) -> Option<exact_plan::Value> {
 /// Whether a binding's code pushes a string `used` accepts: what it can be,
 /// as runner/src/uses.rs asks it.
 pub fn can_be(plan: &Plan, code: &[u8], used: &dyn Fn(&str) -> bool) -> bool {
-    instructions(code).any(|i| {
+    exact_runner::vm::transitive_instructions(plan, code).any(|i| {
         i.is_ok_and(|i| i.op == Opcode::Str && used(plan.str(exact_plan::StrId(i.args[0] as u32))))
     })
 }
@@ -627,7 +628,7 @@ const PLATFORM: &str = "-exact-platform-color(";
 pub fn metric_map(plan: &Plan, code: &[u8]) -> Option<String> {
     use exact_kernel::style::metrics::{column, named, value};
     let mut pairs: Vec<String> = Vec::new();
-    for i in instructions(code).flatten() {
+    for i in exact_runner::vm::transitive_instructions(plan, code).flatten() {
         if i.op != Opcode::Str {
             continue;
         }

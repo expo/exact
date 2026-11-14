@@ -123,10 +123,20 @@ impl<D: DataSource> Host<D> {
             }
         }
         for &(view, block) in blocks {
+            let captured = self.native_captured_id(view);
             match self.runner.kernel_mut().set_host_block(view, block) {
                 // Its frame is in another space now: sent whatever it is.
                 Ok(()) => self.queue_layout(view),
                 Err(e) => drop(error.get_or_insert(format!("block: {e:?}"))),
+            }
+            if captured != self.native_captured_id(view) {
+                self.content_region
+                    .as_mut()
+                    .unwrap()
+                    .native
+                    .as_mut()
+                    .unwrap()
+                    .dirty = true;
             }
         }
         self.runner.place_blocks(placements);

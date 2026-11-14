@@ -5,6 +5,9 @@ use super::*;
 mod advance_tests;
 #[path = "closed.rs"]
 pub(super) mod closed;
+#[cfg(test)]
+#[path = "inert_commit_tests.rs"]
+mod inert_commit_tests;
 #[path = "separator.rs"]
 pub(super) mod separator;
 
@@ -498,6 +501,17 @@ impl<D: DataSource> Host<D> {
         self.layout_withheld = false;
         self.emit_ranks(batch);
         self.emit_collections(batch)
+    }
+
+    /// Commits from an entry where only the commits move the tree
+    /// (`inert_entry`): a list's feedback, an event's action, an advance.
+    /// The flag ends with the commit, even when a panic unwinds through it
+    /// to a caller that keeps the host.
+    pub(super) fn in_inert_entry<T>(&mut self, commit: impl FnOnce(&mut Self) -> T) -> T {
+        self.inert_entry = true;
+        let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| commit(self)));
+        self.inert_entry = false;
+        out.unwrap_or_else(|panic| std::panic::resume_unwind(panic))
     }
 
     /// An advance whose commits changed no node ([`Host::commit_tree`]): no

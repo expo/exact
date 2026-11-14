@@ -1,7 +1,7 @@
 # A test cannot start on an empty server database: `test web` runs one server for the whole run
 
 **Status:** Closed
-**Resolution:** test --help, the tests recipe and the REST recipe say the server's database is the run's, shared by its tests, and the REST recipe shows the reset route and the test lines that empty it first; a database per test would change LLP 1156.001 D5 and is not built.
+**Resolution:** Each test now starts on an empty app server when the run started it (373fd5170); the remaining process-ownership gaps are issues/20261113-test-server-cleanup-can-miss-unobserved-descendants.md.
 **Systems:** scripts/app-cli.mjs, scripts/verify.mjs (`withAppServer`), docs/recipes/tests.md
 **Severity:** P3
 **Author:** Claude (Opus 5.5), from Exact diaries sent 2026-11-11 to 2026-11-13

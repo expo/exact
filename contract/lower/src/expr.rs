@@ -125,6 +125,12 @@ pub(crate) fn compile(
     scope: &Scope,
     locals: &mut u16,
 ) -> Result<Ty, LowerError> {
+    if !scope.in_action() {
+        if let Some((row, ty)) = l.shared_expression(e, scope)? {
+            asm.load_derive(row);
+            return Ok(ty);
+        }
+    }
     Ok(match e {
         Expr::Number(n, _) => {
             asm.number(*n);

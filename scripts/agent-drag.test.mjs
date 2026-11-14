@@ -1,8 +1,8 @@
 // `drag`'s reply carries what the host journaled about a reorder during it (LLP 1102 §3.17), and
 // keeps every field of the carrier's reply. `bun test ./scripts/agent-drag.test.mjs`.
 import { test, expect } from 'bun:test';
-import { dragTap, heldDown, heldPhase, heldRead, heldTick, HELD_LEAD, HELD_READ, HELD_STEP, STROKES, TICK_STEP } from './agent-drag.mjs';
-import { DRAG_BOUNDS, realTap, REACH_MS, TICK_MARGIN } from '../host/apple/touches.mjs';
+import { dragTap, dragArguments, parseDrag, heldDown, heldPhase, heldRead, heldTick, HELD_LEAD, HELD_READ, HELD_STEP, STROKES, TICK_STEP } from './agent-drag.mjs';
+import { DRAG_BOUNDS, realTap, reaches, REACH_MS, TICK_MARGIN } from '../host/apple/touches.mjs';
 
 import assert from 'node:assert/strict';
 import { open } from './agent.mjs';
@@ -686,43 +686,65 @@ test('a real clock step stops advancing as soon as its held touch ends', async (
   expect(s.held).toBe(null);
 });
 
-// A real drag may end over the software keyboard while it shows, as a person's drag to dismiss it does (LLP 1080.000
-// §11). Under `interactive-widget="resizes-content"` the viewport stops at the keyboard's top, so its end lies below it.
-test('a real drag may end over a visible keyboard, and not past it', async () => {
-  const aim = (keyboard) => ({ orientation: 'portrait', session: 'main', generation: 1, screen: { x: 0, y: 0, w: 400, h: 800 }, point: [30, 400], fixed: [30, 400], fixedAxes: [[1, 0], [0, 1]], display: [400, 800], viewport: [400, 500], at: [30, 400], window: [30, 400], seq: 4, hit: 7, keyboard });
+// Under `interactive-widget="resizes-content"` the viewport stops at the keyboard's top. Only `into keyboard` lets
+// a real drag end below it, down to the screen minus its bottom safe area, to dismiss the keyboard (LLP 1080.000 §11).
+test('into keyboard is explicit and bounds the end above the screen bottom safe area', () => {
+  expect(parseDrag({}, '0 300 hold 1000 into keyboard during "state"').into).toBe('keyboard');
+  expect(() => parseDrag({}, '0 300 into screen')).toThrow('keyboard');
+  expect(() => parseDrag({}, '0 300 into keyboard into keyboard')).toThrow('twice');
+  expect(() => dragArguments({ dx: 0, dy: 300, into: true })).toThrow('keyboard');
+  const aim = { viewport: [400, 438], screen: { w: 400, h: 800, x: 0, y: 62 }, safeArea: { bottom: 34 }, keyboard: [0, 438, 400, 300] };
+  expect(reaches(aim, [30, 600])).toBe(false);
+  expect(reaches(aim, [30, 704], 'keyboard')).toBe(true);
+  for (const point of [[30, 704.1], [30, -1], [-1, 600], [401, 600]]) expect(reaches(aim, point, 'keyboard')).toBe(false);
+});
+
+test('the touch runner requires a visible keyboard and checks both ends before injecting', async () => {
+  const aim = (keyboard) => ({ orientation: 'portrait', session: 'main', generation: 1, screen: { x: 0, y: 0, w: 400, h: 800 }, safeArea: { bottom: 34 }, point: [30, 400], fixed: [30, 400], fixedAxes: [[1, 0], [0, 1]], display: [400, 800], viewport: [400, 500], at: [30, 400], window: [30, 400], seq: 4, hit: 7, keyboard });
   const began = { seq: 5, touch: 1, phase: 'began', t: 1, at: [30, 400], view: 'Control', node: 7, session: 'main', generation: 1 };
   const injected = [];
-  const drag = (keyboard, dy) => realTap({ id: 7, drag: { dx: 0, dy, press: 0, over: 100, hold: 0 },
-    ask: async (req) => req.aim ? { aim: aim(keyboard) } : { log: [began,
+  const drag = (keyboard, dy, opts = {}, change = {}) => realTap({ id: 7, drag: { dx: 0, dy, press: 0, over: 100, hold: 0, into: 'keyboard', ...opts },
+    ask: async (req) => req.aim ? { aim: { ...aim(keyboard), ...change } } : { log: [began,
       { ...began, seq: 6, phase: 'moved', t: 1.1, at: [30, 400 + dy / 2] },
       { ...began, seq: 7, phase: 'ended', t: 1.2, at: [30, 400 + dy] }], truncated: false },
     touches: { async ask(req) { if (req.op !== 'foreground') injected.push(req.to); return req.op === 'foreground' ? { state: 'runningForeground' } : { injected: {} }; } } });
   expect((await drag([0, 500, 400, 300], 300)).delivery).toBe('platform');
   expect(injected).toEqual([[30, 700]]);
-  await expect(drag([0, 500, 400, 300], 450)).rejects.toThrow('outside the viewport (400 × 500) and the software keyboard');
-  await expect(drag(null, 300)).rejects.toThrow('outside the viewport (400 × 500) and no software keyboard shows');
+  await expect(drag([0, 500, 400, 300], 300, { into: undefined })).rejects.toThrow('outside the viewport');
+  await expect(drag([0, 500, 400, 300], 367)).rejects.toThrow('bottom safe area');
+  await expect(drag([0, 500, 400, 300], 450)).rejects.toThrow('bottom safe area');
+  await expect(drag(null, 10)).rejects.toThrow('keyboard up at the press');
+  await expect(drag([0, 500, 400, 300], 100, {}, { at: [30, 501] })).rejects.toThrow('start');
+  await expect(drag([0, 500, 400, 300], 300, { path: [{ dx: 0, dy: 100, over: 100, hold: 0 }] })).rejects.toThrow('path waypoint');
   expect(injected).toHaveLength(1);
 });
 
 // The driver sends that drag to the touch runner, never to the scroller's own drag it takes past the viewport.
-test('a scroller dragged over a visible keyboard is a real touch, not the scroll view\'s drag', async () => {
+test('into keyboard requires iOS platform touches and never falls back to scrolling', async () => {
   const later = (v) => new Promise((done) => setTimeout(() => done(v), 1));
-  const run = async (keyboard) => {
+  const run = async ({ keyboard = { visible: true }, host = 'ios', touch = 'platform', opts = {} } = {}) => {
     const sent = [];
     const s = {
       contact: null, held: null, now: 0,
-      async layout() { return later({ nodes: [{ id: 7, x: 0, y: 0, w: 400, h: 500, type: 'ScrollView' }], viewport: { w: 400, h: 500 }, screen: { x: 0, y: 0, w: 400, h: 800 } }); },
+      async layout() { return later({ nodes: [{ id: 7, x: 0, y: 0, w: 400, h: 500, type: 'ScrollView' }], viewport: { w: 400, h: 500 }, screen: { x: 0, y: 62, w: 400, h: 800 }, safeArea: { bottom: 34 } }); },
       async op(req) { return later(req.op === 'state' ? { keyboard } : { lines: [], next: 5 }); },
       async landed(r) { return later(r); },
     };
     const carrier = {
-      touches: true,
-      async input(id, phase) { sent.push(phase); return later({ tapped: id, delivery: 'platform' }); },
-      async ask(req) { sent.push(req.scrollDrag ? 'scrollDrag' : req.op); return later({ scrolledBy: [0, 1] }); },
+      touches: touch !== 'agent', touch,
+      async input(id, phase, opts) { sent.push({ phase, into: opts.drag.into }); return later({ tapped: id, delivery: 'platform' }); },
+      async ask() { throw Error('must not substitute a recognized scroll'); },
     };
-    await dragTap({ s, carrier, node: { id: 7 }, target: 'transcript', host: 'ios', timing: 'agent', tapRefusal: async (_, __, e) => e }, { dx: 0, dy: 400, from: [200, 300] });
+    await dragTap({ s, carrier, node: { id: 7 }, target: 'transcript', host, timing: 'agent', tapRefusal: async (_, __, e) => e }, { dx: 0, dy: 400, from: [200, 300], into: 'keyboard', ...opts });
     return sent;
   };
-  expect(await run({ visible: true, top: 500, overlap: 300 })).toEqual(['drag']);
-  expect(await run({ visible: false, overlap: 0 })).toEqual(['scrollDrag']);
+  expect(await run()).toEqual([{ phase: 'drag', into: 'keyboard' }]);
+  expect(await run({ host: 'host-ios' })).toEqual([{ phase: 'drag', into: 'keyboard' }]);
+  for (const host of ['web', 'macos', 'linux', 'android']) await expect(run({ host })).rejects.toThrow('iOS --touch platform');
+  for (const touch of ['agent', 'drag']) await expect(run({ touch })).rejects.toThrow('iOS --touch platform');
+  await expect(run({ keyboard: { visible: false }, opts: { dy: 10 } })).rejects.toThrow('keyboard up at the press');
+  await expect(run({ opts: { from: [200, 501], dy: 0 } })).rejects.toThrow('start');
+  await expect(run({ opts: { dy: 405 } })).rejects.toThrow('bottom safe area');
+  await expect(run({ opts: { dx: 201 } })).rejects.toThrow('bottom safe area');
+  await expect(run({ opts: { path: [{ dx: 0, dy: 5, hold: 0 }] } })).rejects.toThrow('path waypoint');
 });

@@ -177,6 +177,11 @@ package final class RasterInput: @unchecked Sendable {
         return try RasterMetadata.read(prefix: prefix, encodedBytes: encodedBytes)
     }
     package func bytes() throws -> Data {
+        try withBytes { bytes, _ in bytes }
+    }
+    /// The decode and its animation use the same opened file. The animation
+    /// duplicates the descriptor before this read closes it.
+    func withBytes<T>(_ body: (Data, FileHandle) throws -> T) throws -> T {
         let file = try handle()
         defer { try? file.close() }
         // A changed file cannot make readToEnd allocate an unbounded buffer.
@@ -184,7 +189,7 @@ package final class RasterInput: @unchecked Sendable {
         try file.seek(toOffset: 0)
         let bytes = try file.read(upToCount: encodedBytes) ?? Data()
         guard bytes.count == encodedBytes else { throw RasterFailure.decode }
-        return bytes
+        return try body(bytes, file)
     }
 }
 

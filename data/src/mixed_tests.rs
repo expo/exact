@@ -733,12 +733,18 @@ fn a_placed_source_runs_its_turns_on_its_own_thread_and_the_runner_commits_them(
         placed.parse(&mut store, "fail", &[], outcome).unwrap_err(),
         DataError::BadArguments("n".into())
     );
-    // Work already dispatched outlives its proxy: the owner finishes the
-    // turn it holds, and the reply lands on a ticket nobody holds.
+    // A dispatched turn that has not reached its owner never starts after
+    // the proxy retires.
     let t = token(placed.answer(&mut store, "now", &[]).unwrap());
     let dispatch = placed.dispatch(t, &store);
     drop(placed);
-    assert!(envelope::is_turn(&run(dispatch)));
+    assert!(matches!(
+        run(dispatch),
+        Outcome::Failed {
+            kind: FailureKind::Aborted,
+            ..
+        }
+    ));
     // A reply dropped unsent — an owner that died mid-turn — is `Aborted`.
     let (tx, rx) = std::sync::mpsc::channel();
     drop(Reply::new(move |outcome| {
@@ -750,43 +756,6 @@ fn a_placed_source_runs_its_turns_on_its_own_thread_and_the_runner_commits_them(
             kind: FailureKind::Aborted,
             ..
         }
-    ));
-}
-
-#[test]
-fn a_built_worker_keeps_its_template_here_and_builds_its_instance_on_the_owner() {
-    fn build(template: &Threaded) -> crate::placed::Obtain<Threaded> {
-        let calls = template.calls.clone();
-        Box::new(move || {
-            calls.lock().unwrap().push(format!(
-                "built:{}",
-                std::thread::current().name().unwrap_or("?")
-            ));
-            Ok(Threaded { calls })
-        })
-    }
-    let calls = Arc::new(Mutex::new(Vec::new()));
-    let mut placed = Placed::built(
-        Threaded {
-            calls: calls.clone(),
-        },
-        Placement::Worker,
-        build,
-    );
-    placed.activate().unwrap();
-    let mut store = Store::new("secret.keep rust\nsecret.keep shared", []);
-    let t = token(placed.answer(&mut store, "now", &[]).unwrap());
-    let outcome = run(placed.dispatch(t, &store));
-    let v = value_of(placed.parse(&mut store, "now", &[], outcome));
-    assert_eq!(v.as_str(), Some("+"));
-    assert_eq!(calls.lock().unwrap()[0], "built:exact-owner");
-    // The template stays: replacement and validation go through it.
-    assert!(placed.query("x", &[]).is_ok());
-    placed.activate_for_validation().unwrap();
-    assert_eq!(placed.placement(), Placement::Main);
-    assert!(matches!(
-        placed.answer(&mut store, "now", &[]).unwrap(),
-        Answer::Now(_)
     ));
 }
 
@@ -1493,3 +1462,5 @@ fn a_worker_child_s_overlay_shows_the_answer_and_says_so_once() {
 }
 
 mod reachability;
+
+mod placed;

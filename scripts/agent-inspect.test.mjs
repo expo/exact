@@ -5,6 +5,8 @@ import { render, renderTrace, renderFrameHealthReport, renderFrameHealthMetrics,
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { open } from './agent-session.mjs';
+import { launchFacts } from './agent-launch.mjs';
 
 test('bounded frame report and capture controls bypass legacy perf collection', async () => {
   const asked = [];
@@ -267,6 +269,42 @@ test('--plan finds plans with a map beside them in a directory, and refuses one 
 test('perf during subtracts each handler\'s dispatches and drops the ones that did not run', () => {
   const read = (n) => ({ plan: 'p', incarnation: 1, seq: n, sites: [], handlers: [{ site: 3, event: 'hover in', dispatched: n, committed: n }, { site: 5, event: 'press', dispatched: 1, committed: 0 }] });
   expect(perfDelta(read(2), read(60)).handlers).toEqual([{ site: 3, event: 'hover in', dispatched: 58, committed: 58 }]);
+});
+
+test('world perf during refuses replacement even when tick and restart counters match', async () => {
+  const before = { tick: 12, restarted: 0, spanTicks: 4, incarnation: 'module:7', generation: 1, spans: [] };
+  for (const [changed, reason] of [
+    [{ incarnation: 'module:8' }, 'world incarnation'],
+    [{ incarnation: 'replacement:7' }, 'world incarnation'],
+    [{ generation: 2 }, 'recording generation'],
+  ]) {
+    let current = before;
+    const s = { perf: async () => current };
+    await expect(perfOp(s, ['world:world', 'during'], 'perf world:world during "clock +0"', async () => {
+      current = { ...before, ...changed };
+    })).rejects.toThrow(reason);
+  }
+});
+
+test('world perf carries its recording cursor through the session and keeps valid spans', async () => {
+  const asked = [], spans = { incarnation: 'module:7', generation: 2, spanTicks: 4, spans: [{ name: 'tick.other', count: 1 }] };
+  const s = await open({ reuse: { host: 'web', browser: 'chrome', launchFacts: launchFacts({}), reset() {},
+    async ask(req) {
+      if (req.op === 'tree') return { nodes: [{ id: 1, props: { testId: 'world' }, depth: 0 }] };
+      asked.push(req);
+      return { world: { tick: 12, restarted: 0, perf: { tickSpans: spans } } };
+    },
+  } });
+  const got = await perfOp(s, ['world:world', 'during'], 'perf world:world during "clock +0"', async () => {});
+  expect(asked).toEqual([
+    { op: 'state', id: 1, world: true, perf: true },
+    { op: 'state', id: 1, world: true, perf: true, span_since: { incarnation: 'module:7', generation: 2, ticks: 4 } },
+  ]);
+  expect(got).toEqual({ target: 'world:world', tick: 12, restarted: 0, ...spans,
+    from: { tick: 12, incarnation: 'module:7', generation: 2, spanTicks: 4 } });
+  expect(renderPerf(got)).toContain('world incarnation module:7 · recording generation 2');
+  delete spans.generation;
+  await expect(s.perf('world:world')).rejects.toThrow('names no world incarnation or recording generation');
 });
 
 test('state world events uses the world seam and an optional type filter', async () => {

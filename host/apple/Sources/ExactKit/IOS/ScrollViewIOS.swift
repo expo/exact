@@ -11,7 +11,17 @@ package final class PlainView: UIView {
     package override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         // The document takes the page's bands too, where its edge scrollers reach (LLP 1130 D3).
         let m = (superview as? Viewport)?.pageMargins ?? .zero
-        guard !isHidden, isUserInteractionEnabled, bounds.inset(by: UIEdgeInsets(top: -m.top, left: -m.left, bottom: -m.bottom, right: -m.right)).contains(point) else { return nil }
+        // A one-axis clip's box fits its children's paint, not their hit
+        // slop: past the node it limits only the clipped axis. Its canvas
+        // overlay leaves the clip to the canvas's own hit test.
+        let inside: Bool
+        if let node = superview as? NodeView, node.clipBox === self, node.clipsOneAxis {
+            inside = node.oneAxisClipContains(convert(point, to: node))
+        } else {
+            inside = canvasOverlayOwner?.clipsOneAxis == true
+                || bounds.inset(by: UIEdgeInsets(top: -m.top, left: -m.left, bottom: -m.bottom, right: -m.right)).contains(point)
+        }
+        guard !isHidden, isUserInteractionEnabled, inside else { return nil }
         return NodeView.hitChildren(in: self, at: point, with: event)
     }
     package override var accessibilityElements: [Any]? {

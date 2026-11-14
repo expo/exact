@@ -100,7 +100,22 @@ impl<D: DataSource> Runner<D> {
     fn member_status(&self, member: &ModulesRow, sub: &Json) -> Json {
         (sub["status"].as_str())
             .and_then(|s| self.sibling(member, s))
-            .and_then(|s| self.value_of(&s))
+            .and_then(|s| {
+                if self.route(&s) != super::Route::Real {
+                    return self.value_of(&s);
+                }
+                // Entitlements and settings belong to the bound implementation,
+                // not the declaration's substitute for this target.
+                let sync = self.plan.str(s.sync);
+                if sync.is_empty() {
+                    return None;
+                }
+                let body =
+                    json!({ "extension": self.plan.str(s.extension), "sync": sync, "args": {} });
+                let answer =
+                    self.native_slot().hosted_call()?(&serde_json::to_vec(&body).ok()?).ok()?;
+                serde_json::from_slice(&answer).ok()
+            })
             .unwrap_or_default()
     }
 

@@ -686,7 +686,11 @@ export function nativeResourceMappings(manifest, platform = 'macos') {
   const reserved = new Set(['assets', 'deck', 'gpu', 'fonts', 'strings', 'web', 'apple', 'linux', 'src', 'data', 'modules', 'node_modules', 'target', 'dist']);
   const overlap = (a, b) => a === b || a.startsWith(b + '/') || b.startsWith(a + '/');
   for (const [i, entry] of mappings.entries()) {
-    if (!safe(entry.from) || reserved.has(entry.from.split('/')[0]) || entry.from.startsWith('.'))
+    // A root Exact owns says which, and what to name instead (the chat benchmark's `data` was refused unexplained).
+    const root = typeof entry.from === 'string' ? entry.from.split('/')[0] : '';
+    if (safe(entry.from) && reserved.has(root))
+      throw new Error(`${key}.from "${entry.from}" is under \`${root}/\`, a directory Exact owns (each of ${[...reserved].map(name => `\`${name}/\``).join(', ')} holds sources, assets or build output); put the files in a directory of their own, such as \`${root === 'data' ? 'data-files' : `${root}-files`}/\``);
+    if (!safe(entry.from) || entry.from.startsWith('.'))
       throw new Error(`${key}.from must name a separate app-relative resource directory, outside source, asset and output roots`);
     if (!safe(entry.to) || !(mac ? /^(Resources|Helpers|Frameworks)\/.+/ : /^Resources\/.+/).test(entry.to)
       || MAC_RESOURCES_WRITTEN.some(name => overlap(entry.to, `Resources/${name}`))

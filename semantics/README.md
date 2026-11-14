@@ -25,6 +25,7 @@ tested against it, differentially and at random.
 | `Contract/Vm.lean` | A model of the expression VM (`runner/src/vm.rs`) for the opcodes expressions and action bodies use, over instructions with symbolic operands, and a decoder from the plan's bytes (`plan/tables/format.json`, `opcodes`). |
 | `Contract/Lower.lean` | A compiler from the semantics' expressions and statements to VM code, mirroring `contract/lower` (`expr.rs`, `stmts.rs`) instruction for instruction. |
 | `Contract/VmFacts.lean`, `Lower{Types,Sim,Spec,Proof,Lists,Calls,Correct,Stmt}.lean` | Its correctness proof (below). |
+| `Contract/VmRows.lean` | Executable derive calls over the VM: fresh callee machines, owner-frame and owned-slot selection, shared call and callback-work counters, and caller restoration. |
 | `Contract/LowerCheck.lean` | The Lean half of `difftest lowering`. |
 | `vm-extract/` | The shipped VM machine (`runner/src/machine.rs`) extracted to Lean by Charon and Aeneas, and proved to refine `Contract/Vm.lean` step by step and run by run (`vm-extract/README.md`). |
 | `Contract/ValTy.lean` | Types as sets of values (`ValTy`, `conforms` without finiteness), the order and join the checker's `?` induces (`Ty.le`, `Ty.unify`), and that `conforms` at a complete type gives `ValTy`. |
@@ -567,8 +568,12 @@ source as it is.
 3. **Prove.** A reachability invariant of one slot is
    `Reachable.slotIn`: the values the slot starts with (`SlotOrigin`:
    unfold the program's `states`), and for every action a handler of the
-   view or a task names, the body keeps it (`BodyKeeps`). An action body
-   is unfolded by `wp` (`BodyKeeps.of_wp`); `simp` with the `EvalR` rules
+   view, a task or a mutation's `then` names, the body keeps it (`BodyKeeps`).
+   Queue mutation slots use the same rule: `Reachable.slotInvariant` also
+   carries the waiting sends' answer property (`QueuedIn`) through drains.
+   [Queued sends](#queued-sends-and-gated-tasks-llp-1092) describes the
+   corresponding event and advance rules. An action body is unfolded by
+   `wp` (`BodyKeeps.of_wp`); `simp` with the `EvalR` rules
    (`EvalR.str_iff`, `EvalR.var_local`, …) turns it into a statement about
    values. A body that never touches the slot is dismissed by `decide`
    (`Stmt.noAssigns`, `BodyKeeps.untouched`); a body that calls an action
@@ -1064,6 +1069,19 @@ queue mutation, on both sides. The corpus has `mutations/queue-*` (`queue-then`:
 queue with a `then` beside a timer) and `timers/gated-*` (`gated-frame`), and the generator writes queue mutations (sent more than
 once on a path) and gated tasks over the states alone.
 
+The one-slot invariants include queue mutation slots. `SlotInvariant x V c`
+combines `SlotIn x V c.slots` with `QueuedIn x V c.queued`:
+`∀ q ∈ c.queued, q.1 = x → ∀ v, V (.some v)`. Boot has no waiting sends;
+`BodyKeeps` supplies the answer property for new sends, and a drain either
+lands such an answer, removes a refused send, or keeps it stalled. Poisoning
+clears the waiting sends. `Reachable.slotIn` projects the slot property;
+`Reachable.slotInvariant`, `Event.step_slotInvariant` and
+`Reachable.advance_slotInvariant` carry both. `Contract/Invariant.lean` has
+a checked example with two sends to one queue, a drain, refusal and poisoning.
+The equality rule `Reachable.advance_untouched` and the slot-only event rule
+`Event.step_slotIn` still require a slot no drain writes: waiting answers
+can change a queue mutation's slot even when no clock action touches it.
+
 What it does not carry, as restrictions:
 
 - `pending(m)` is false for a queue mutation whose send waits (the oracle
@@ -1072,9 +1090,6 @@ What it does not carry, as restrictions:
 - A send behind one in flight (every answer here is synchronous) is the
   runner's and the conformance plans' tests (`contract/cli/tests/it/queue.rs`,
   `host/web-js/conformance/queue.contract`).
-- The one-slot invariants (`Reachable.slotIn`, `Event.step_slotIn`,
-  `Reachable.advance_untouched`) are proved of slots that are not a queue
-  mutation's, whose answers an advance lands (`QUEUE.md`).
 - The component-level semantics (`Contract.CompSem`) refuses both, so
   `difftest expansion` writes and reads programs without them.
 
@@ -1192,13 +1207,44 @@ element's `testId` are observed, and nothing inside a virtualized `list`:
 the runner builds only the rows its window lays out, which is layout, so
 both sides leave a virtualized list's descendants out of the observation
 (the list's own line stays). The runner's evaluation bounds (list steps,
-string length, value size and depth) are a refinement the semantics
+derive calls and call depth, string length, value size and depth) are a refinement the semantics
 doesn't model (LLP 1090 D8): a step the runner refuses for one
-(`IterationLimit`, `StringTooLong` as a trap or an argument's or write's
-refusal, `ValueTooLarge`, `ValueTooDeep`) is `UNSUPPORTED`, outside the
+(`IterationLimit`, `CallLimit`, `CallDepth`, `StringTooLong` as a trap or an
+argument's or write's refusal, `ValueTooLarge`, `ValueTooDeep`) is `UNSUPPORTED`, outside the
 semantics, not a divergence, and so is a step after the runner unset a
 binding for one (its journal line is a `#` note in the runner's
 observation). The web's JS target refuses the same steps
 (`host/web-js/conform.mjs`). The checker's two type refusals that bound a value
 (`type-option-option`, `type-too-deep`) are in `Contract.check` too
 (`checkBounds`, and where `infer` grows a type: `some`, `map`, the roster).
+
+Executable instance expressions share plan rows during lowering. Source
+expansion and `instance_iff` still use substitution. `VmRows` runs these
+calls over `Vm.step`: a fresh callee machine, empty parameters and writable
+slots, frames cut to the owner, and the caller restored with the returned
+value. Calls share a 65,536-call counter and a depth bound of 64. Callback
+work shares a 65,536-step counter. `owner_frames_cut` proves selection of
+the nearest owner; `frame_read_rebase` relates item, index and bound reads
+across the cut. Its checked examples exercise owner
+selection, local isolation, depth, sibling calls and caller-spent callback work.
+Instance frames carry owned-slot stores. A call reselects slots from the
+retained frames, taking only the nearest instance of each owning region;
+return restores the caller's slots and frames. Checked examples cover a
+retained owner, an inaccessible inner slot, a root call and a missing slot
+in the nearest instance. These stores are modeled but are not yet supplied
+by `LowerCheck`'s contextual validation.
+
+`LowerCheck` receives row bytecode, owner regions and the checked substituted
+expressions that lowering shares. It decodes every body and compares root-owned
+rows with source evaluation, including transitive row calls. A mutation test
+changes an executable body and requires a divergence. Arm-owned rows are
+reported as needing an instance environment and counted as refused by this
+check; they are not claimed as validated.
+
+Still owed: the general correspondence between shared loads and substitution,
+including the matcher's scope and binder conditions; contextual validation of
+arm-owned bodies and their view readers; and refinement of `VmRows` to the
+runner's row-call implementation. The model does not yet carry the roster's
+list-step, string and extent accounting. The existing
+lowering theorems cover `Vm` without this sharing transformation. The call
+model and its local invariants do not extend those theorems.

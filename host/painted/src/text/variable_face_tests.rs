@@ -41,7 +41,7 @@ fn declared_assets(weights: &[[u16; 2]], assets: Assets) -> (TextEngine, u16) {
         .families
         .iter()
         .position(
-            |f| matches!(f, FamilyChoice::Declared(name) if name.starts_with("ExactPlanStack")),
+            |f| matches!(f.as_slice(), [FamilyChoice::Declared(name)] if name.starts_with("ExactPlanStack")),
         )
         .expect("declared font registered") as u16;
     (TextEngine::with_catalog(catalog), family)
@@ -341,7 +341,7 @@ fn width_range_draws(assets: Assets) {
     let family = catalog
         .families
         .iter()
-        .position(|f| matches!(f, FamilyChoice::Declared(_)))
+        .position(|f| matches!(f.as_slice(), [FamilyChoice::Declared(_)]))
         .unwrap() as u16;
     let mut engine = TextEngine::with_catalog(catalog);
     let mut drawn = |stretch: f32| {
@@ -402,7 +402,7 @@ fn font_variation_settings_win_for_their_own_axes() {
     let family = catalog
         .families
         .iter()
-        .position(|f| matches!(f, FamilyChoice::Declared(_)))
+        .position(|f| matches!(f.as_slice(), [FamilyChoice::Declared(_)]))
         .unwrap() as u16;
     let mut engine = TextEngine::with_catalog(catalog);
     let mut drawn = |weight: u16, stretch: f32, settings: &str| {

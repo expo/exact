@@ -109,4 +109,80 @@ extension ExactSession {
         controlTextChanged()
         #endif
     }
+
+    /// Recheck appearances seen before the session's trait report.
+    func reportDeferredAppearances(first: Bool) {
+        let early = unreported
+        for id in early {
+            // Boot's deferred views may already have a native override.
+            if first { unreported.remove(id) }
+            if let node = presenter.views[id] { noteAppearance(node); continue }
+            #if os(iOS) || os(tvOS)
+            if let dark = presenter.flats.appearance(of: id) { noteAppearance(id, dark: dark); continue }
+            #endif
+            unreported.remove(id)
+        }
+    }
+
+    /// A view painting motion: when its own appearance is not the one its node's colours resolve by, say so after
+    /// the batch (LLP 1062 D4).
+    func noteAppearance(_ view: NodeView) { noteAppearance(view.id, dark: view.drawsDark) }
+    /// A node painting in `dark`: a view, or a flat leaf in its parent's appearance.
+    func noteAppearance(_ id: UInt32, dark: Bool) {
+        guard let session = schemeDark else { unreported.insert(id); return }
+        #if os(iOS) || os(tvOS)
+        // The session's own trait walk is not an independent subtree override.
+        if let view, (view.traitCollection.userInterfaceStyle == .dark) != session { unreported.insert(id); return }
+        // The session can report before UIKit reaches a deferred child. A
+        // colour-table batch may restyle it in between. An authored scheme
+        // or a native override already fixes the subtree's appearance.
+        if unreported.contains(id), dark != session, !hasAppearanceOverride(id, dark: dark) { return }
+        #endif
+        unreported.remove(id)
+        guard dark != viewDark[id] ?? session else { return }
+        viewDark[id] = dark == session ? nil : dark
+        pendingViewDark.append((id, dark))
+    }
+
+    #if os(iOS) || os(tvOS)
+    private func hasAppearanceOverride(_ id: UInt32, dark: Bool) -> Bool {
+        let node = presenter.views[id] ?? presenter.flats.host(of: id)
+        if node?.style["color_scheme"] != nil { return true }
+        return Self.styleOverride(above: node, session: view) == (dark ? .dark : .light)
+    }
+
+    /// The nearest appearance override on UIKit's trait path up from
+    /// `start`, short of anything `session` also inherits from (an override
+    /// there is the session's own). In the iOS 17 trait hierarchy a
+    /// controller's root view inherits from its controller, a controller from
+    /// its parent, a presented one from its presentation controller, and that
+    /// from the presenting controller (WWDC23, "Unleash the UIKit trait system").
+    private static func styleOverride(above start: UIView?, session: UIView?) -> UIUserInterfaceStyle? {
+        func covers(_ view: UIView?) -> Bool {
+            guard let view, let session else { return false }
+            return session.isDescendant(of: view)
+        }
+        var at: AnyObject? = start
+        while let step = at {
+            switch step {
+            case let view as UIView:
+                if view is UIWindow || covers(view) { return nil }
+                if view.overrideUserInterfaceStyle != .unspecified { return view.overrideUserInterfaceStyle }
+                if let controller = view.next as? UIViewController, controller.viewIfLoaded === view { at = controller } else { at = view.superview }
+            case let controller as UIViewController:
+                if covers(controller.viewIfLoaded) { return nil }
+                if controller.overrideUserInterfaceStyle != .unspecified { return controller.overrideUserInterfaceStyle }
+                // `presentationController` is read only once presented: reading it makes one.
+                if let parent = controller.parent { at = parent }
+                else if controller.presentingViewController != nil { at = controller.presentationController }
+                else { at = controller.viewIfLoaded?.superview }
+            case let presentation as UIPresentationController:
+                if presentation.traitOverrides.contains(UITraitUserInterfaceStyle.self) { return presentation.traitOverrides.userInterfaceStyle }
+                at = presentation.presentingViewController
+            default: return nil
+            }
+        }
+        return nil
+    }
+    #endif
 }

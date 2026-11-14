@@ -4,7 +4,11 @@ use std::rc::Rc;
 
 fn fixture(text: &str) -> Presenter<()> {
     let source = format!("component App\n  view\n    column width=\"100%\" padding=20 box-sizing=\"border-box\"\n{text}");
-    let plan = contract::compile(&source).unwrap();
+    program(&source)
+}
+
+fn program(source: &str) -> Presenter<()> {
+    let plan = contract::compile(source).unwrap();
     let (presenter, error) = Presenter::boot_with(
         &plan.encode(),
         (),
@@ -16,6 +20,30 @@ fn fixture(text: &str) -> Presenter<()> {
     .unwrap();
     assert!(error.is_none(), "{error:?}");
     presenter
+}
+
+#[test]
+fn a_focused_inline_run_composites_its_ring_with_its_ink() {
+    let draw = |opacity| {
+        let mut p = fixture(&format!(
+            "      text font-size=32 color=\"#000000\"\n        text \"HHHH\" tabindex=0 testId=\"run\" opacity={opacity}\n"
+        ));
+        let key = p.host().kernel().find_by_test_id("run")[0];
+        let id = p.host().kernel().node_by_key(key).unwrap().id;
+        assert!(p.set_focus(Some(id), 0.).is_none());
+        p.frame().clone()
+    };
+    let full = draw(1.);
+    for opacity in [0., 0.25, 1.] {
+        let actual = draw(opacity);
+        for (a, s) in actual.data().iter().zip(full.data()) {
+            let expected = (255. - f32::from(255 - s) * opacity).round() as u8;
+            assert!(
+                a.abs_diff(expected) <= 2,
+                "the focus ring takes opacity {opacity}: {a} != {expected}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -46,6 +74,115 @@ fn nested_text_paints_the_same_paragraph_that_layout_measured() {
         assert!(
             actual.data() == expected.data(),
             "nested run pixels differ despite identical measured paragraph at width {width}"
+        );
+    }
+}
+
+#[test]
+fn inline_opacity_fades_all_run_paints_and_ancestor_lines() {
+    let draw = |outer, opacity, paragraph| {
+        let mut p = fixture(&format!(
+            "      text font-size=32 opacity={paragraph} color=\"#000000\" text-decoration-line=\"underline line-through\"\n        text opacity={outer}\n          text \"HHHH\" opacity={opacity} background-color=\"#ff0000\" text-shadow=\"0px 45px 0px #00ff00\" -webkit-text-stroke=\"1px #0000ff\"\n"
+        ));
+        p.frame().clone()
+    };
+    let solid = draw(1., 1., 1.);
+    assert!(solid.data().chunks_exact(4).any(|p| p != [255; 4]));
+    assert!(
+        draw(0., 1., 0.5)
+            .data()
+            .chunks_exact(4)
+            .all(|p| p == [255; 4]),
+        "a zero-opacity inline container leaves no glyph, background, shadow, stroke or decoration"
+    );
+    for opacity in [0., 0.25, 1.] {
+        let actual = draw(0.5, opacity, 0.5);
+        for (a, s) in actual.data().iter().zip(solid.data()) {
+            let expected = (255. - f32::from(255 - s) * 0.25 * opacity).round() as u8;
+            assert!(
+                a.abs_diff(expected) <= 2,
+                "opacity {opacity}: {a} instead of {expected}"
+            );
+        }
+    }
+}
+
+#[test]
+fn glyph_clipped_backgrounds_take_only_their_opacity_groups_runs() {
+    let draw = |opacity| {
+        let mut p = fixture(&format!(
+            "      text font-size=32 color=\"transparent\" background-color=\"red\" background-clip=\"text\"\n        text \"HHHH\"\n        text \"HHHH\" opacity={opacity}\n"
+        ));
+        p.frame().clone()
+    };
+    let solid = draw(1.);
+    let hidden = draw(0.);
+    let half = draw(0.5);
+    let mut faded = 0;
+    for ((full, zero), half) in solid
+        .data()
+        .chunks_exact(4)
+        .zip(hidden.data().chunks_exact(4))
+        .zip(half.data().chunks_exact(4))
+    {
+        if full == zero {
+            assert_eq!(full, half, "the opaque sibling must paint once");
+        } else {
+            faded += 1;
+            for (h, f) in half.iter().zip(full) {
+                let expected = (255. - f32::from(255 - f) * 0.5).round() as u8;
+                assert!(h.abs_diff(expected) <= 2);
+            }
+        }
+    }
+    assert!(
+        faded > 20,
+        "the transparent-colour run punches a faded glyph clip"
+    );
+}
+
+#[test]
+fn inline_background_belongs_to_its_own_opacity_group() {
+    let draw = |opacity| {
+        let mut p = fixture(&format!(
+            "      text font-size=32 color=\"#000000\"\n        text opacity={opacity} background-color=\"red\"\n          text \"HHHH\" opacity=0.5\n          text \"HHHH\"\n"
+        ));
+        p.frame().clone()
+    };
+    let solid = draw(1.);
+    for opacity in [0., 0.25, 1.] {
+        let actual = draw(opacity);
+        for (a, s) in actual.data().iter().zip(solid.data()) {
+            let expected = (255. - f32::from(255 - s) * opacity).round() as u8;
+            assert!(
+                a.abs_diff(expected) <= 2,
+                "opacity {opacity}: {a} instead of {expected}"
+            );
+        }
+    }
+}
+
+#[test]
+fn nested_run_opacity_samples_the_animation_clock() {
+    let mut p = program(
+        "keyframes fade\n  from opacity=0\n  to opacity=1\ncomponent App\n  view\n    column width=\"100%\" padding=20 box-sizing=\"border-box\"\n      text font-size=32 color=\"#000000\" opacity=0.5\n        text opacity=0.5\n          text \"HHHH\" animation=\"fade 1s linear both\"\n",
+    );
+    assert!(p.animation_frame(0.).is_none());
+    for time in [0., 250., 1000.] {
+        assert!(p.clock(time).1.is_none());
+        let actual = p.frame().clone();
+        let mut reference = fixture(&format!(
+            "      text \"HHHH\" font-size=32 color=\"#000000\" opacity={}\n",
+            0.25 * time / 1000.
+        ));
+        let expected = reference.frame();
+        assert!(
+            actual
+                .data()
+                .iter()
+                .zip(expected.data())
+                .all(|(a, b)| a.abs_diff(*b) <= 2),
+            "nested inline opacity differs from the paragraph's group opacity at {time} ms"
         );
     }
 }

@@ -1404,10 +1404,20 @@ fn spacing_tree(e: &Expr) -> bool {
 /// in the other; lowering checks each literal against the row and the
 /// runner converts each value; `none` clears a row, as a one-sided class does.
 /// Arms that disagree otherwise are refused as
-/// any expression's are.
+/// any expression's are. A `let` around the choice (a shared derive's or
+/// prop's) leaves its arms the value's.
 fn style_value(e: &Expr, scope: &Scope, shapes: &Shapes) -> Result<Ty, TypeError> {
     if matches!(e, Expr::None(_)) {
         return Ok(Ty::Unknown);
+    }
+    if let Expr::Let {
+        name, value, body, ..
+    } = e
+    {
+        let t = infer(value, scope, shapes)?;
+        let mut inner = scope.clone();
+        inner.push(vec![(name.clone(), Ref::Local(0), t)]);
+        return style_value(body, &inner, shapes);
     }
     if !matches!(e, Expr::Ternary(..) | Expr::Match { .. }) {
         return infer(e, scope, shapes);

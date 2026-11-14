@@ -8,7 +8,6 @@ use super::*;
 use exact_textflow::{FlowOptions, FlowShape, Fragment, Options, Prepared};
 use std::ops::Range;
 
-#[derive(Clone)]
 pub(super) struct FlowLayout {
     pub fragments: Vec<Fragment>,
     pub text: Arc<str>,
@@ -16,7 +15,7 @@ pub(super) struct FlowLayout {
     pub paint_ends: Vec<usize>,
     pub line_height: f32,
     width: f32,
-    shapes: Vec<FlowShape>,
+    pub(super) shapes: Vec<FlowShape>,
     pub(super) incomplete: bool,
 }
 impl FlowLayout {
@@ -120,13 +119,12 @@ impl FlowSource {
             })
             .collect();
         let mut clusters: Vec<Cluster> = Vec::new();
-        let mut offset = 0;
         let (baseline, height) = source.flow_box(
             plain.layout_runs().flat_map(|r| r.glyphs),
             &plain.layouts().faces,
         );
         for run in plain.layout_runs() {
-            let start = offset + text[offset..].find(run.text).unwrap_or(0);
+            let start = source.data.lines[run.line_i].start;
             let mut glyphs = run.glyphs.to_vec();
             // Logical clusters: a stable sort keeps the shaper's order inside
             // multi-glyph clusters.
@@ -147,7 +145,6 @@ impl FlowSource {
                     });
                 }
             }
-            offset = start + run.text.len();
         }
         if !source.spec.white_space.model().preserves()
             && text.chars().any(|ch| {
@@ -169,6 +166,9 @@ impl FlowSource {
                 .char_indices()
                 .filter(|(_, ch)| whitespace(*ch))
                 .map(|(at, ch)| {
+                    // Only CSS-collapsible characters receive a space advance.
+                    // Other break controls have no ink in the flowed painter.
+                    let collapsible = matches!(ch, ' ' | '\t' | '\n' | '\r');
                     let pos = clusters.partition_point(|c| c.range.start < at);
                     let line = clusters
                         .get(pos)
@@ -183,10 +183,11 @@ impl FlowSource {
                                 start: at as u32,
                                 end: (at + ch.len_utf8()) as u32,
                                 metadata: run_ends.partition_point(|end| *end <= at) as u32,
+                                w: if collapsible { g.w } else { 0.0 },
                                 ..*g
                             })
                             .collect(),
-                        width,
+                        width: if collapsible { width } else { 0.0 },
                     }
                 })
                 .collect();
@@ -282,7 +283,7 @@ impl Paragraph {
 impl TextEngine {
     /// Layout from the same full shape as ordinary text. The caller may hand back
     /// its current snapshot; no shape/frame history is retained by this method.
-    /// Justify falls back to start; clamp counts bands, including obstructed ones.
+    /// Clamp counts bands, including obstructed ones.
     pub fn paragraph_flow(
         &mut self,
         spec: &Spec,
@@ -336,12 +337,26 @@ impl TextEngine {
             return p.clone();
         }
         let started = Instant::now();
+        self.layout_calls += 1;
+        let (p, walk) = source.layout_flow(width, shapes);
+        self.flow_walk += walk;
+        self.flowing += started.elapsed();
+        Rc::new(p)
+    }
+}
+
+impl ShapedSource {
+    pub(super) fn layout_flow(
+        self: &Rc<Self>,
+        width: f32,
+        shapes: &[FlowShape],
+    ) -> (Paragraph, Duration) {
+        let source = self.clone();
         if source.flow.borrow().is_none() {
             let prepared = Rc::new(FlowSource::new(&source));
             *source.flow.borrow_mut() = Some(prepared);
         }
         let data = source.flow.borrow().as_ref().unwrap().clone();
-        self.layout_calls += 1;
         let options = FlowOptions {
             direction: if source.spec.direction == exact_kernel::Direction::Rtl {
                 exact_textflow::Direction::Rtl
@@ -356,10 +371,10 @@ impl TextEngine {
         let mut fragments = Vec::new();
         let walk_started = Instant::now();
         let result = exact_textflow::flow(&data.prepared, shapes, &options, &mut fragments);
-        self.flow_walk += walk_started.elapsed();
+        let walk = walk_started.elapsed();
         if !result.complete && !result.clamped {
             let mut ordinary = source.layout(Some(width));
-            ordinary.flow = Some(FlowLayout {
+            ordinary.flow = Some(Arc::new(FlowLayout {
                 fragments: Vec::new(),
                 text: data.text.clone(),
                 paint_ends: Vec::new(),
@@ -367,9 +382,9 @@ impl TextEngine {
                 width,
                 shapes: shapes.to_vec(),
                 incomplete: true,
-            });
+            }));
             ordinary.resident_capacity_bytes = cache::capacities(&ordinary);
-            return Rc::new(ordinary);
+            return (ordinary, walk);
         }
         let mut height = result.height;
         let mut layouts = Lines {
@@ -380,9 +395,11 @@ impl TextEngine {
         let mut bottoms = Vec::new();
         let mut slots = Vec::new();
         let mut band = u32::MAX;
+        let mut ending_band = false;
         let fragment_count = fragments.len();
         let mut paint_ends = Vec::with_capacity(fragment_count);
-        for (fragment_index, f) in fragments.iter_mut().enumerate() {
+        for fragment_index in 0..fragment_count {
+            let f = &fragments[fragment_index];
             if band != f.line {
                 exact_textflow::intervals(
                     shapes,
@@ -393,7 +410,20 @@ impl TextEngine {
                     &mut slots,
                 );
                 band = f.line;
+                // Every interval on an ending line keeps start alignment.
+                let last = fragments[fragment_index..]
+                    .iter()
+                    .take_while(|f| f.line == band)
+                    .last()
+                    .unwrap();
+                ending_band = last.end == data.text.len()
+                    || (result.clamped && last.line == fragments[fragment_count - 1].line)
+                    || data.text[..last.end]
+                        .chars()
+                        .next_back()
+                        .is_some_and(|ch| source.spec.white_space.model().forces_break(ch));
             }
+            let f = &mut fragments[fragment_index];
             let available = slots
                 .iter()
                 .find(|s| s.0 == f.x)
@@ -402,23 +432,37 @@ impl TextEngine {
             let b = data.clusters.partition_point(|c| c.range.start < f.end);
             let mut visible = Vec::new();
             let mut pending_space = None;
+            let preserves = source.spec.white_space.model().preserves();
             for c in &data.clusters[a..b] {
                 let value = &data.text[c.range.clone()];
-                if value.chars().all(|ch| {
-                    matches!(
-                        ch,
-                        ' ' | '\t' | '\r' | '\n' | '\u{85}' | '\u{c}' | '\u{2028}' | '\u{2029}'
-                    )
-                }) {
-                    if source.spec.white_space.model().preserves() {
-                        if value.chars().all(|ch| matches!(ch, ' ' | '\t')) {
-                            visible.push(c);
-                        }
-                        continue;
+                if preserves
+                    && value.chars().all(|ch| {
+                        matches!(
+                            ch,
+                            ' ' | '\t' | '\r' | '\n' | '\u{85}' | '\u{c}' | '\u{2028}' | '\u{2029}'
+                        )
+                    })
+                {
+                    if value.chars().all(|ch| matches!(ch, ' ' | '\t')) {
+                        visible.push(c);
                     }
+                } else if value
+                    .chars()
+                    .all(|ch| matches!(ch, ' ' | '\t' | '\r' | '\n'))
+                {
                     if !visible.is_empty() && pending_space.is_none() {
                         pending_space = Some(c);
                     }
+                } else if value
+                    .chars()
+                    .all(|ch| matches!(ch, '\u{85}' | '\u{c}' | '\u{2028}' | '\u{2029}'))
+                {
+                    // Under collapse these are zero-width text, as the walker
+                    // measures them: the spaces on either side are kept.
+                    if let Some(space) = pending_space.take() {
+                        visible.push(space);
+                    }
+                    visible.push(c);
                 } else if !value.chars().all(|ch| {
                     matches!(
                         ch,
@@ -489,9 +533,28 @@ impl TextEngine {
                     visible[start..i].reverse();
                 }
             }
-            let shift = match source.spec.align {
+            // Match ordinary Parley justification: widen spaces and NBSPs,
+            // leaving paragraph ends, forced breaks and clamp endings at start.
+            let space = |c: &Cluster| matches!(&data.text[c.range.clone()], " " | "\u{a0}");
+            let last_ink = visible
+                .iter()
+                .filter(|c| !space(c))
+                .map(|c| c.range.start)
+                .max();
+            let expands = |c: &Cluster| space(c) && last_ink.is_some_and(|end| c.range.start < end);
+            let spaces = visible.iter().filter(|c| expands(c)).count();
+            let extra = if source.spec.align == TextAlign::Justify && !ending_band && spaces > 0 {
+                (available - f.width).max(0.0) / spaces as f32
+            } else {
+                0.0
+            };
+            f.width += extra * spaces as f32;
+            let shift = match source.spec.align.physical(source.spec.direction) {
                 TextAlign::Center => (available - f.width) / 2.0,
                 TextAlign::Right => available - f.width,
+                TextAlign::Justify if source.spec.direction == exact_kernel::Direction::Rtl => {
+                    available - f.width
+                }
                 _ => 0.0,
             }
             .max(0.0);
@@ -521,11 +584,16 @@ impl TextEngine {
                 append_suffix(glyphs, &mut x);
             }
             for c in visible {
-                glyphs.extend(c.glyphs.iter().copied().map(|mut g| {
+                let adjustment = if expands(c) { extra } else { 0.0 };
+                let last = c.glyphs.len().saturating_sub(1);
+                glyphs.extend(c.glyphs.iter().copied().enumerate().map(|(i, mut g)| {
                     g.x += x;
+                    if i == last {
+                        g.w += adjustment;
+                    }
                     g
                 }));
-                x += c.width;
+                x += c.width + adjustment;
             }
             if source.spec.direction != exact_kernel::Direction::Rtl {
                 append_suffix(glyphs, &mut x);
@@ -574,7 +642,7 @@ impl TextEngine {
             record: std::cell::OnceCell::from(Arc::new(layouts)),
             remake: None,
             measured: RefCell::new(None),
-            flow: Some(FlowLayout {
+            flow: Some(Arc::new(FlowLayout {
                 fragments,
                 text: data.text.clone(),
                 paint_ends,
@@ -582,7 +650,7 @@ impl TextEngine {
                 width,
                 shapes: shapes.to_vec(),
                 incomplete: false,
-            }),
+            })),
             #[cfg(test)]
             layout_lifetime: Arc::new(()),
             width: measured_width,
@@ -597,7 +665,6 @@ impl TextEngine {
             private_text_bytes_estimate: 0,
         };
         p.resident_capacity_bytes = cache::capacities(&p);
-        self.flowing += started.elapsed();
-        Rc::new(p)
+        (p, walk)
     }
 }

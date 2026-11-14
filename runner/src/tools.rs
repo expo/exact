@@ -68,7 +68,7 @@ fn describe(shape: &Shape) -> &'static str {
 /// does with a send is the module's.
 pub fn sends(plan: &exact_plan::Plan, tool: usize) -> bool {
     let body = plan.code(plan.actions[plan.tools[tool].action.0 as usize].body);
-    crate::vm::instructions(body)
+    crate::vm::instructions(plan.read_code(body).0)
         .flatten()
         .any(|i| i.op == exact_plan::Opcode::Send)
 }

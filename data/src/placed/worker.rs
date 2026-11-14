@@ -21,7 +21,7 @@ impl<D: DataSource + 'static> Placed<D> {
     }
 
     /// Start the owner (LLP 1027.002 D2): it obtains its instance, then runs
-    /// turns in order until this proxy drops its end of the channel.
+    /// turns in order until this proxy retires it.
     pub(super) fn spawn_owner(&mut self, obtain: Obtain<D>) -> Result<(), DataError> {
         let (jobs, rx) = channel::<Job>();
         let grants = self.grants.clone();
@@ -29,11 +29,15 @@ impl<D: DataSource + 'static> Placed<D> {
         let aborted = self.aborted.clone();
         let abort_wake = self.abort_wake.clone();
         let identity = self.identity.clone();
+        let retired = self.retired.clone();
         std::thread::Builder::new()
             .name("exact-owner".into())
             .spawn(move || {
                 let mut source = obtain();
                 for job in rx {
+                    if retired.load(Ordering::Acquire) {
+                        break;
+                    }
                     let instance = identity.as_ref().map(|m| m.instance());
                     let _wake = RetirementWake {
                         instance,
@@ -147,7 +151,7 @@ impl<D: DataSource + 'static> Placed<D> {
                         Ok(source) => match instance.as_ref().and_then(|i| i.failure()) {
                             Some(message) => Err(unavailable(message)),
                             None => decode_args(&args).and_then(|args| {
-                                turn(source, &mut local, target, &name, &args, outcome)
+                                turn(source, &mut local, target, &name, &args, outcome, &retired)
                             }),
                         },
                     };
@@ -226,6 +230,7 @@ fn parse_fetch<D: DataSource>(
 /// through every wait the source runs itself (its storage, its own worker
 /// closures); end at an answer, an error, or a request only the host can run
 /// (`fetch`, the portable storage protocol) — a yield.
+#[allow(clippy::too_many_arguments)]
 fn turn<D: DataSource>(
     source: &mut D,
     local: &mut Store,
@@ -233,6 +238,7 @@ fn turn<D: DataSource>(
     name: &str,
     args: &[Value],
     outcome: Option<(Option<u64>, Option<u64>, Outcome)>,
+    retired: &AtomicBool,
 ) -> Result<Option<Answer>, DataError> {
     let mut result = match outcome {
         None => crate::answer(source, target, local, name, args).map(Some),
@@ -283,6 +289,9 @@ fn turn<D: DataSource>(
                     )));
                 };
                 let outcome = work();
+                if retired.load(Ordering::Acquire) {
+                    return Err(unavailable("the module's worker was retired"));
+                }
                 result = parse_fetch(
                     source,
                     target,

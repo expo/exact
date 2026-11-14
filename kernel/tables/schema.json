@@ -2269,6 +2269,10 @@
       ],
       "default": "content-box"
     },
+    "ImageRendering": {
+      "values": ["auto", "crisp-edges", "pixelated"],
+      "default": "auto"
+    },
     "ObjectFit": {
       "values": [
         "fill",
@@ -3341,6 +3345,7 @@
     {
       "bit": 57,
       "field": "box_shadow",
+      "capability": "shadows",
       "codec": "box-shadow",
       "_comment": "@ref LLP 1077 D4: CSS `box-shadow`, `none` or a list (at most 8) of shadows, each `inset? <length>{2,4} <color>` in any order, painted as CSS paints outer and inset shadows; it replaced LLP 1064's four shadow rows. A missing colour is refused (LLP 1064 D1).",
       "cold": true
@@ -3382,6 +3387,7 @@
     {
       "bit": 62,
       "field": "rotate",
+      "capability": "rotate",
       "codec": "f32",
       "default": 0,
       "cold": true
@@ -4005,6 +4011,7 @@
     {
       "bit": 141,
       "field": "background_image",
+      "capability": "gradients",
       "snapshot": "admit",
       "watch": "admit",
       "codec": "background-image",
@@ -4082,6 +4089,7 @@
     {
       "bit": 151,
       "field": "text_shadow",
+      "capability": "shadows",
       "codec": "text-shadow",
       "inherited": true,
       "_comment": "@ref LLP 1077 D3: CSS `text-shadow`, `none` or one shadow (no list, no spread), under the glyphs and decorations; a missing colour is currentcolor. Inherited, as in CSS."
@@ -4089,6 +4097,7 @@
     {
       "bit": 152,
       "field": "mask_image",
+      "capability": "gradients",
       "rare": true,
       "codec": "mask-image",
       "_comment": "@ref LLP 1077 D2: CSS `mask-image`, `none` or one gradient in background-image's grammar (LLP 1066), its alpha over the border box. Not inherited."
@@ -4096,6 +4105,7 @@
     {
       "bit": 153,
       "field": "corner_shape",
+      "capability": "corners",
       "rare": true,
       "codec": "corner-shape",
       "_comment": "@ref LLP 1077 D1: CSS `corner-shape`, one to four of round | squircle | square | bevel | scoop | notch | superellipse(K), plus -exact-continuous (Apple's continuous curve on every host; declared in LLP 1001). Shapes the corners `border-radius` sizes."
@@ -4103,6 +4113,7 @@
     {
       "bit": 154,
       "field": "text_stroke_width",
+      "capability": "text_stroke",
       "codec": "f32",
       "default": 0,
       "inherited": true,
@@ -4111,6 +4122,7 @@
     {
       "bit": 155,
       "field": "text_stroke_color",
+      "capability": "text_stroke",
       "codec": "current-color",
       "default": "currentcolor",
       "inherited": true,
@@ -4126,6 +4138,7 @@
     {
       "bit": 157,
       "field": "rotate_axis",
+      "capability": "rotate",
       "codec": "rotate-axis",
       "_comment": "@ref LLP 1077 D8: the axis of CSS `rotate` (`x`, `y`, `z` or three numbers), set with `rotate`'s angle by the one `rotate` attribute; initial z. The angle is `rotate` (bit 62), which the engine animates.",
       "cold": true
@@ -4170,6 +4183,7 @@
     {
       "bit": 163,
       "field": "symbol_palette",
+      "capability": "symbol_palette",
       "codec": "symbol-palette",
       "inherited": true,
       "_comment": "@ref LLP 1077 D10: not CSS. A symbol's palette, one to three colours, under `-exact-symbol-rendering: palette`. Inherited."
@@ -4866,6 +4880,13 @@
       "layout": true,
       "default": 0,
       "_comment": "The left side of `local_inset_top`'s override."
+    },
+    {
+      "bit": 247,
+      "field": "image_rendering",
+      "codec": "enum:ImageRendering",
+      "inherited": true,
+      "_comment": "CSS Images 3 §5.3: auto smooths; crisp-edges uses nearest-neighbour sampling; pixelated uses nearest-neighbour at the nearest integer scale, then smooths to the requested size."
     }
   ],
   "_transitions": "The `transition` row is CSS `transition` (LLP 1002): count u8 (≤8), then per declaration property u8 (0 all, then 1 + `Property`: 1 translate, 2 scale, 3 rotate, 4 opacity, 5 height, 6 stroke-dashoffset, 7 r, 8 color, 9 background-color, 10 fill, 11 stroke, 12 cx, 13 cy, 14 x, 15 y, 16 rx, 17 ry, 18 border-top-color, 19 border-right-color, 20 border-bottom-color, 21 border-left-color, 22 -exact-tint-color, 23 box-shadow — LLP 1062; 24, box-shadow's colour alone, is refused; 25 font-weight, 26 font-stretch, 27 font-variation-settings — LLP 1019 §13 D10; 28 is CSS's `border-color` shorthand; 29 is a path's `d`, LLP 1055.000 D15), duration f32 s, delay f32 s, easing u8 (0 linear, 1 ease, 2 ease-in, 3 ease-out, 4 ease-in-out, 5 cubic-bezier + 4×f32, 6 steps + u16 count + u8 position, 7 spring + f32 stiffness/damping/mass, 8 linear() + u8 count + count×(f32 input, f32 output)). Its Rust type lives in exact-motion; the kernel owns the bytes.",

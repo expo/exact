@@ -47,10 +47,15 @@ Three reports on macOS:
 
 ## Fix
 
-Let `app.json` declare, under `host.ios`, entitlements (checked against the signing profile as
-`widgets.mjs` checks the App Group and push ones), extra Info.plist keys, and files placed at the
-bundle root (`PrivacyInfo.xcprivacy`), each merged into what Exact derives and refused where they
-conflict.
+Under LLP 1069.008 D4 (amended 2026-11-11), entitlements remain derived from grant lines
+and named manifest switches. `host.ios.infoPlist`, `host.macos.infoPlist`,
+`host.ios.entitlements` and `host.macos.entitlements` refuse every supplied key,
+giving tested grant advice, identifying a key Exact derives, or asking for a
+feedback note when Exact never writes it. No dictionary value is merged into a bundle.
+
+An app supplies `PrivacyInfo.xcprivacy` beside `app.json`; the build merges it
+before signing. Admission of an unowned Info.plist key waits for a diary naming
+one. The notification service extension remains a separate, open issue.
 
 ## Verified and still open
 
@@ -61,9 +66,14 @@ named-switch paths (`host/apple/build.mjs`, `host/apple/presence.mjs`,
 `runner/src/device.rs`). Package plist declarations compose through
 `host/apple/plist.mjs`.
 
-The remaining app metadata requests need a design decision. LLP 1069.008 D3-D4
-excludes arbitrary entitlement dictionaries; the notification service extension
-is outside the visible-push admission (`rules/DEFERRED.md`, notifications).
-Those boundaries do not resolve the reported need for native code that has no
-admitted grant or switch. No generic dictionary is added here. The issue stays
-open for a concrete capability admission or an amendment to that boundary.
+LLP 1069.008 D4 keeps entitlements derived. `host.ios.infoPlist`,
+`host.macos.infoPlist`, `host.ios.entitlements` and `host.macos.entitlements` now
+refuse every supplied key in one diagnostic. Tested grant lines include any
+companion grants. Other derived keys point to the bundle metadata reference;
+a key Exact never writes asks for a feedback note naming it. The native-module and app-json
+recipes explain the grant path, including `device.photos-add`.
+
+Admission of unowned Info.plist keys still needs a decision informed by a diary
+naming one, so this issue stays open. The notification service extension is tracked
+separately in `issues/20261113-an-ios-build-cannot-package-a.md`; it remains outside
+the visible-push admission (`rules/DEFERRED.md`, notifications).

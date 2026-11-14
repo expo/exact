@@ -1,6 +1,6 @@
 //! The plan's tables → one ES module.
 //! Module shape:
-//! slots `s_i = sig(init)`, derives `d_i = memo(body)`, resources
+//! slots `s_i = sig(init)`, settled derives `d_i = memo(body)`, resources
 //! `r_i = res(source, args, compiled value, compiled args)`, actions
 //! `a_i = act(body)` (writes land at commit, as the VM's `StoreSlot`
 //! collects them), then the view as nested statements: a node is `h(…)` with
@@ -353,27 +353,7 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
         }
         root_slot(plan, i, &top, dev_reload, &mut em.uses, &mut body)?;
     }
-    for (i, r) in plan.derives.iter().enumerate() {
-        let f = code::function(
-            plan,
-            plan.code(r.body),
-            &code::evaluation(&top, format!("derive {:?}", plan.str(r.name)), false),
-            0,
-            &mut em.uses,
-        )
-        .map_err(|e| format!("derive {}: {e}", plan.str(r.name)))?;
-        let memo = em.uses.rt("memo");
-        let _ = write!(
-            body,
-            "const d_{i}={memo}({f},{}{});",
-            serde_json::to_string(&type_code(plan, r.ty)).unwrap(),
-            if site_attrs {
-                format!(",{}", serde_json::to_string(plan.str(r.name)).unwrap())
-            } else {
-                String::new()
-            }
-        );
-    }
+    body.push_str(&em.declare_derives(&top, site_attrs)?);
     // The reserved sources facts.js, midi.js and transport.js answer, their declared fields filled by name:
     // installed before any resource, since the boot's settlement asks them (the runner answers them itself).
     let facts = crate::facts::reserved(plan, &mut body)?;
@@ -636,7 +616,6 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
         let project = em.uses.rt("navigationRoots");
         let _ = write!(body, "{project}($navigation);");
     }
-    // The state's getters, for the agent (names live in `names.js`).
     let list = |p: &str, n: usize| {
         (0..n)
             .map(|i| format!("{p}_{i}"))
@@ -653,10 +632,15 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
             .map(|(i, _)| format!("s_{i}"))
             .collect::<Vec<_>>()
             .join(","),
-        list("d", plan.derives.len()),
+        plan.derives
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| !r.unsettled)
+            .map(|(i, _)| format!("d_{i}"))
+            .collect::<Vec<_>>()
+            .join(","),
         list("r", plan.resources.len())
     );
-    // The queues read the state a stalled `next` saw (LLP 1092 D3).
     if (plan.mutations.iter()).any(|m| m.mode == exact_plan::MutationMode::Queue) {
         let queues = em.uses.rt("queues");
         let _ = write!(body, "{queues}($state);");
@@ -717,7 +701,13 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
                 .map(|r| plan.str(r.name))
                 .collect()
         ),
-        names(plan.derives.iter().map(|r| plan.str(r.name)).collect()),
+        names(
+            plan.derives
+                .iter()
+                .filter(|r| !r.unsettled)
+                .map(|r| plan.str(r.name))
+                .collect()
+        ),
         names(plan.resources.iter().map(|r| plan.str(r.name)).collect()),
         types(
             plan.slots
@@ -726,7 +716,13 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
                 .map(|r| r.ty)
                 .collect()
         ),
-        types(plan.derives.iter().map(|r| r.ty).collect()),
+        types(
+            plan.derives
+                .iter()
+                .filter(|r| !r.unsettled)
+                .map(|r| r.ty)
+                .collect()
+        ),
         types(plan.resources.iter().map(|r| r.ty).collect())
     );
     // Each source's parameter and result types, by field name, for a

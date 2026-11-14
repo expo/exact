@@ -117,6 +117,7 @@ pub(super) struct Layout {
     baselines: Arc<Vec<f32>>,
     bottoms: Arc<Vec<f32>>,
     metrics: TextMetrics,
+    flow: Option<Arc<flow::FlowLayout>>,
     capacity: usize,
     #[cfg(test)]
     lifetime: Arc<()>,
@@ -296,6 +297,12 @@ impl FontWorker {
             slot.as_ref()
                 .filter(|old| old.key == key)
                 .and_then(|old| old.payload.upgrade())
+                .filter(|layout| {
+                    layout.flow.as_ref().map_or_else(
+                        || input.request.exclusions().is_empty(),
+                        |flow| flow.shapes == input.request.exclusions(),
+                    )
+                })
         });
         if let Some(layout) = hit {
             #[cfg(test)]
@@ -335,7 +342,12 @@ impl FontWorker {
         };
         #[cfg(test)]
         work::add(|n| n.layouts += 1);
-        let p = shaped.layout(width);
+        let p = match width {
+            Some(width) if !input.request.exclusions().is_empty() => {
+                shaped.layout_flow(width, input.request.exclusions()).0
+            }
+            _ => shaped.layout(width),
+        };
         let metrics = if source.spec.is_empty() {
             TextMetrics::default()
         } else {
@@ -364,6 +376,7 @@ impl FontWorker {
                 index,
                 metrics,
                 lines: p.layouts().clone(),
+                flow: p.flow,
                 baselines: p.baselines,
                 bottoms: p.bottoms,
                 capacity: p.resident_capacity_bytes,
@@ -435,7 +448,7 @@ pub(crate) fn adopt(
             measured: RefCell::new(None),
             baselines: l.baselines.clone(),
             bottoms: l.bottoms.clone(),
-            flow: None,
+            flow: l.flow.clone(),
             #[cfg(test)]
             layout_lifetime: l.lifetime.clone(),
             width: metrics.width,

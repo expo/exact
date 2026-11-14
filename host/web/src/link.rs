@@ -77,6 +77,16 @@ pub struct Linked {
     /// CSS grid's grammar, validation and serialization: linked at [`link`]
     /// when any grid row is bound.
     pub grid: Option<fn()>,
+    /// Shadow grammars (LLP 1077 D3, D4), linked at [`link`].
+    pub shadows: Option<fn()>,
+    /// Corner shape grammar (LLP 1077 D1), linked at [`link`].
+    pub corners: Option<fn()>,
+    /// Rotation grammars (LLP 1077 D8), linked at [`link`].
+    pub rotate: Option<fn()>,
+    /// Text stroke grammar (LLP 1077 D7), linked at [`link`].
+    pub text_stroke: Option<fn()>,
+    /// Symbol palette grammar (LLP 1077 D10), linked at [`link`].
+    pub symbol_palette: Option<fn()>,
     /// `env(viewport-segment-*)`'s grammar (LLP 1078 D3): linked at [`link`].
     pub segments: Option<fn()>,
     /// `frame` and `measure` (LLP 1051.000 D4): the page's answers, through
@@ -161,6 +171,11 @@ impl Linked {
         animations: None,
         gradients: None,
         grid: None,
+        shadows: None,
+        corners: None,
+        rotate: None,
+        text_stroke: None,
+        symbol_palette: None,
         geometry: None,
         segments: None,
         dataset: None,
@@ -238,6 +253,21 @@ impl Linked {
         if self.grid.is_some() {
             uses = uses.with(Capability::Grid);
         }
+        if self.shadows.is_some() {
+            uses = uses.with(Capability::Shadows);
+        }
+        if self.corners.is_some() {
+            uses = uses.with(Capability::Corners);
+        }
+        if self.rotate.is_some() {
+            uses = uses.with(Capability::Rotate);
+        }
+        if self.text_stroke.is_some() {
+            uses = uses.with(Capability::TextStroke);
+        }
+        if self.symbol_palette.is_some() {
+            uses = uses.with(Capability::SymbolPalette);
+        }
         if self.geometry.is_some() {
             uses = uses.with(Capability::Geometry);
         }
@@ -287,6 +317,21 @@ pub fn link(linked: Linked) {
         link();
     }
     if let Some(link) = linked.grid {
+        link();
+    }
+    if let Some(link) = linked.shadows {
+        link();
+    }
+    if let Some(link) = linked.corners {
+        link();
+    }
+    if let Some(link) = linked.rotate {
+        link();
+    }
+    if let Some(link) = linked.text_stroke {
+        link();
+    }
+    if let Some(link) = linked.symbol_palette {
         link();
     }
     if let Some(link) = linked.segments {
@@ -348,6 +393,72 @@ pub(crate) fn admit(plan: &exact_plan::Plan) -> Result<(), HostError> {
 #[cfg(test)]
 mod tests {
     use crate::{Host, HostError};
+
+    #[test]
+    fn decoration_shadows_are_refused_when_unlinked_and_emitted_when_linked() {
+        let plan = contract::compile(
+            "decoration glow text-shadow=\"0 0 1px #000\"\ncomponent A\n  view\n    textarea decorations=TextDecorations(value=\"a\", spans=[TextDecorationSpan(name=\"glow\", start=0, end=1)])\n",
+        )
+        .unwrap();
+        crate::link(crate::Linked::CORE);
+        let refused = Host::boot(&plan.encode(), (), Default::default(), "/").map(|_| ());
+        assert!(
+            matches!(&refused, Err(HostError::Unlinked(names)) if names == "shadows"),
+            "{refused:?}"
+        );
+        let mut linked = crate::Linked::CORE;
+        linked.shadows = Some(exact_kernel::style::link_shadows);
+        crate::link(linked);
+        let (_, batch) = Host::boot(&plan.encode(), (), Default::default(), "/").unwrap();
+        assert!(
+            batch.contains("text-shadow:0px 0px 1px #000000ff"),
+            "{batch}"
+        );
+    }
+
+    #[test]
+    fn visual_grammars_are_refused_before_literal_or_computed_bindings_run() {
+        for (row, value, capability) in [
+            ("box-shadow", "0 2px 4px #000", "shadows"),
+            ("text-shadow", "1px 2px #000", "shadows"),
+            ("corner-shape", "squircle", "corners"),
+            ("rotate", "y 30deg", "rotate"),
+            ("-webkit-text-stroke", "1px #f00", "text_stroke"),
+            ("-exact-symbol-palette", "#f00 #00f", "symbol_palette"),
+        ] {
+            for expression in [format!("\"{value}\""), "paint".into()] {
+                crate::link(crate::Linked::CORE);
+                let plan = contract::compile(&format!(
+                    "component A\n  state paint = \"{value}\"\n  view\n    text \"a\" {row}={expression}\n"
+                ))
+                .unwrap();
+                let refused = Host::boot(&plan.encode(), (), Default::default(), "/").map(|_| ());
+                assert!(
+                    matches!(&refused, Err(HostError::Unlinked(names)) if names == capability),
+                    "{row}={expression}: {refused:?}"
+                );
+                let mut linked = crate::Linked::CORE;
+                match capability {
+                    "shadows" => linked.shadows = Some(exact_kernel::style::link_shadows),
+                    "corners" => linked.corners = Some(exact_kernel::style::link_corners),
+                    "rotate" => linked.rotate = Some(exact_kernel::style::link_rotate),
+                    "text_stroke" => {
+                        linked.text_stroke = Some(exact_kernel::style::link_text_stroke)
+                    }
+                    "symbol_palette" => {
+                        linked.symbol_palette = Some(exact_kernel::style::link_symbol_palette);
+                    }
+                    _ => unreachable!(),
+                }
+                crate::link(linked);
+                let (_, batch) = Host::boot(&plan.encode(), (), Default::default(), "/").unwrap();
+                assert!(
+                    batch.contains("\"error\":null"),
+                    "{row}={expression}: {batch}"
+                );
+            }
+        }
+    }
 
     /// The core alone on this test's thread, whatever an earlier test on
     /// it linked (the test harness may reuse a thread).

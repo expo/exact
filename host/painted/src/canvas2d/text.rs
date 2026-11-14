@@ -81,19 +81,21 @@ fn font_style(style: u8) -> FontStyle {
 }
 
 impl Fonts {
-    /// The first family of the list that resolves: a generic or declared
-    /// family by the plan's choice, another by an installed family's name;
-    /// none, serif (Chrome's default).
-    fn family(&mut self, families: &[String]) -> FamilyChoice {
+    /// Authored families before platform fallback; an empty list uses
+    /// serif (Chrome's default).
+    fn families(&mut self, families: &[String]) -> Vec<FamilyChoice> {
+        let mut choices = Vec::new();
         for f in families {
             if let Some((_, c)) = self.names.iter().find(|(n, _)| n.eq_ignore_ascii_case(f)) {
-                return c.clone();
-            }
-            if self.fonts.collection.family_id(f).is_some() {
-                return FamilyChoice::Declared(f.clone());
+                choices.push(c.clone());
+            } else if self.fonts.collection.family_id(f).is_some() {
+                choices.push(FamilyChoice::Declared(f.clone()));
             }
         }
-        FamilyChoice::Serif
+        if choices.is_empty() {
+            choices.push(FamilyChoice::Serif);
+        }
+        choices
     }
 
     fn shape(&mut self, style: &RunStyle, text: &str, rtl: bool) -> Shaped {
@@ -105,11 +107,11 @@ impl Fonts {
                 face: None,
             };
         }
-        let family = self.family(&style.families);
+        let families = self.families(&style.families);
         let mut builder = self
             .layout
             .ranged_builder(&mut self.fonts, text, 1.0, false);
-        builder.push_default(StyleProperty::FontFamily(family.family()));
+        builder.push_default(StyleProperty::FontFamily(FamilyChoice::stack(&families)));
         builder.push_default(StyleProperty::FontSize(size));
         builder.push_default(StyleProperty::FontWeight(FontWeight::new(f32::from(
             style.weight,
@@ -217,10 +219,10 @@ impl Fonts {
         use skrifa::raw::TableProvider;
         let size = style.size;
         let face = face.or_else(|| {
-            let family = self.family(&style.families);
+            let families = self.families(&style.families);
             let fonts = &mut self.fonts;
             let mut query = fonts.collection.query(&mut fonts.source_cache);
-            query.set_families(std::iter::once(family.family_query()));
+            query.set_families(families.iter().map(FamilyChoice::family_query));
             query.set_attributes(Attributes::new(
                 FontWidth::NORMAL,
                 FontStyle::Normal,

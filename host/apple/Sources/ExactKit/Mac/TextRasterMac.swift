@@ -273,22 +273,6 @@ final class TextRasterizer {
 }
 
 extension NodeView {
-    /// Every canvas's overlay (`NodeView.init`): with none, no view is
-    /// painted through a canvas, and `canvasAbove`, which the text pass asks
-    /// of each paragraph near the port, takes no walk to the window.
-    static let canvasOverlays = NSHashTable<FlippedView>.weakObjects()
-    /// The canvas this node is painted through, if any: the nearest canvas
-    /// above whose overlay holds it.
-    package var canvasAbove: NodeView? {
-        guard Self.canvasOverlays.count > 0 else { return nil }
-        var v: NSView = self
-        while let s = v.superview {
-            if let c = s as? NodeView, c.overlay === v { return c }
-            v = s
-        }
-        return nil
-    }
-
     /// Whether this paragraph's text is a rasterized surface rather than
     /// something `draw` paints. Asked by AppKit through `wantsUpdateLayer`.
     var rastersText: Bool { canRasterText && !textRasterUsesStrips }

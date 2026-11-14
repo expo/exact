@@ -66,8 +66,8 @@ enum AppFiles {
     /// The regular file `path` names, opened through no symbolic link
     /// (`AppFileWalk`), as `readFile` and a share open it; nil for any other.
     static func open(_ path: String) -> FileHandle? {
-        guard let at = place(path) else { return nil }
-        return AppFileWalk.open(at.root, at.names)
+        lock.lock(); let roots = roots; lock.unlock()
+        return AppFileWalk.open(path, roots: roots)
     }
     /// The URL of the file `open` finds, for a reader that takes a URL (a
     /// player, picture in picture); nil where `open` refuses.

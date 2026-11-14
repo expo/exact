@@ -753,6 +753,7 @@ function popped({ j, state, url, ua }) {
       first = Math.min(first, cursor);
       written[cursor] = stamp(cursor, last);
       go(cursor, j ?? cursor, () => history.replaceState(written[cursor], "", historyURL(written[cursor].url)));
+      if (!pop.op) globalThis.exact?.fragment?.traverse(root, last, navigation, log);
     } else if (pop.op) {
       const op = pop.op;
       if (j !== null && j !== cursor) {

@@ -8,6 +8,23 @@ import { dirname, resolve } from 'node:path';
 import { refuse, canonicalBytes, fileCard, publicKeyFromRaw, indexCard, readAssetIndex, validateRawIntegers } from './deploy-signing.mjs';
 import { OriginUnavailable, sha256, streamPath } from './origin.mjs';
 
+/** Binary source evidence travels as a blob: a full compiler input roster
+ * can exceed the envelope's size limit. Its digest is signed in the cohort. */
+export function binaryInputFile(build) {
+  if (!build?.binary?.sourceInputs) return null;
+  const bytes = canonicalBytes(build.binary.sourceInputs);
+  return { name: 'binary-inputs.json', bytes, sha256: sha256(bytes) };
+}
+
+/** Frozen capabilities and binary evidence. Absolute source paths stay in
+ * the private build receipt, outside the signed stream envelope. */
+export function cohortReceipt(build) {
+  if (build?.version !== 1 || build.graph?.version !== 1 || !build.binary?.sha256) throw new Error('missing completed bake graph and binary receipt');
+  const evidence = binaryInputFile(build);
+  return {version:1,compat:{id:build.compat.id,inputs:build.compat.inputs,target:build.compat.target},sources:build.graph.sources,surfaceCalls:build.graph.surfaceCalls??{},binary:build.binary.sha256,
+    ...(evidence ? {binaryInputs:{sha256:evidence.sha256,bytes:evidence.bytes.length}} : {})};
+}
+
 function strictBase64(text, length, label) {
   if (typeof text !== 'string') throw new Error(`${label} is not base64 text`);
   const decoded = Buffer.from(text, 'base64');

@@ -178,9 +178,14 @@ pub(crate) fn drawn(records: &[Record], facts: &Facts, read: &Reading) -> Drawn 
     } else {
         Measure::Unmeasured("the shadow maps' texels were not read back".into())
     };
-    // The caster instances the shadow passes submitted, where the cull counted
-    // them (not in a direct frame, which draws casters unculled).
-    let sun_casters = (facts.cascades > 0 && !facts.direct)
+    // Reused depth has no caster draw or cull count in this frame.
+    let cached = records.iter().any(|r| {
+        matches!(
+            (r.stage, r.drew),
+            (Stage::SunShadow(_), Drew::Summary("cached sun casters"))
+        )
+    });
+    let sun_casters = (facts.cascades > 0 && !facts.direct && !cached)
         .then(|| {
             (records.iter())
                 .filter_map(|r| match (r.stage, r.drew) {

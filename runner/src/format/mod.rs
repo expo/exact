@@ -55,6 +55,7 @@ pub fn formatting(f: Stdlib, args: &[Value], plan: &Plan) -> Option<Value> {
                 "day" => DayMode::Day,
                 "day-time" => DayMode::DayTime,
                 "list" => DayMode::List,
+                "section" => DayMode::Section,
                 _ => return None,
             };
             day_label(num(0)?, num(1)?, num(2)?, mode)
@@ -140,6 +141,7 @@ enum DayMode {
     Day,
     DayTime,
     List,
+    Section,
 }
 
 /// `formatDay(thenMs, nowMs, utcOffset, mode)` (LLP 1116.020 D8): `then`'s
@@ -151,7 +153,11 @@ enum DayMode {
 /// - `DayTime`: that, ` at `, and the short time (`Oct 11, 2026 at 4:42 PM`);
 /// - `List`: the short time today, `Yesterday`, the weekday two to six days
 ///   back (seven back is today's weekday, so a date), else `M/D/YY`, as
-///   `{ dateStyle: "short" }` prints it, a later day's too.
+///   `{ dateStyle: "short" }` prints it, a later day's too;
+/// - `Section`: a chat's day separator (LLP 1168.000 D5): `Today`,
+///   `Yesterday`, `Tomorrow`, the weekday two to six days either side, else
+///   the weekday, month and day (`Thu, Oct 15`), with the year when it is
+///   not `now`'s (`Sun, May 4, 2025`).
 ///
 /// `""` when either instant is invalid (D7).
 fn day_label(then: f64, now: f64, offset: f64, mode: DayMode) -> Value {
@@ -161,6 +167,28 @@ fn day_label(then: f64, now: f64, offset: f64, mode: DayMode) -> Value {
     let day = |w: f64| (w / 86_400_000.0).floor() as i64;
     let (days, apart) = (day(wall), day(wall) - day(today));
     let time = || format_time(then, offset);
+    if mode == DayMode::Section {
+        return Value::str(&match apart {
+            0 => "Today".to_owned(),
+            -1 => "Yesterday".to_owned(),
+            1 => "Tomorrow".to_owned(),
+            -6..=6 => WEEKDAYS[(days + 4).rem_euclid(7) as usize].to_owned(),
+            _ => {
+                let (year, month, day) = civil(days);
+                let mut out = format!(
+                    "{}, {} ",
+                    &WEEKDAYS[(days + 4).rem_euclid(7) as usize][..3],
+                    &MONTHS[month as usize - 1][..3]
+                );
+                push_number(f64::from(day), &mut out);
+                if !same_year(wall, today) {
+                    out.push_str(", ");
+                    push_number(year as f64, &mut out);
+                }
+                out
+            }
+        });
+    }
     if mode == DayMode::List {
         return match apart {
             0 => time(),
@@ -191,6 +219,12 @@ fn day_label(then: f64, now: f64, offset: f64, mode: DayMode) -> Value {
         out.push_str(time().as_str().unwrap_or_default());
     }
     Value::str(&out)
+}
+
+/// Whether two wall times fall in one calendar year.
+fn same_year(wall: f64, other: f64) -> bool {
+    let year = |w: f64| civil((w / 86_400_000.0).floor() as i64).0;
+    year(wall) == year(other)
 }
 
 /// Rust's `{}` of a finite `x ≥ 0`, its shortest round-trip digits, never

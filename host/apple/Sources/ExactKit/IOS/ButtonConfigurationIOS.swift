@@ -218,8 +218,9 @@ enum ButtonConfigurationIOS {
                       padding: [CGFloat?]? = nil, raster: UIImage? = nil) {
         (button as? NativeButtonIOS)?.resetActiveConfiguration()
         let rows = face.rows
+        let colorTint = accent ?? (button as? NativeButtonIOS)?.owner?.carriedTint
         var (config, drawn, _) = ControlHost.configuration(face)
-        background(rows.button, configuration: &config.background, traits: traits, accent: accent)
+        background(rows.button, configuration: &config.background, traits: traits, accent: colorTint)
         config.title = face.title
         config.subtitle = face.subtitle
         config.image = face.symbol.flatMap { FaceSymbol.image($0) } ?? raster ?? ButtonRasterIOS.image(face, lease: nil)
@@ -262,7 +263,7 @@ enum ButtonConfigurationIOS {
         let circle = !sides.contains(where: { $0 != nil }) && face.title?.isEmpty ?? true && face.subtitle?.isEmpty ?? true
             && config.image != nil && !["plain", "borderless"].contains(drawn)
         if circle, rows.button["control_corner_style"] == nil, uniformRadius(face) == nil { config.cornerStyle = .capsule }
-        let foreground = platformColor(rows.title["text_color"], color(rows.title["text_color"], traits: traits, accent: accent))
+        let foreground = platformColor(rows.title["text_color"], color(rows.title["text_color"], traits: traits, accent: colorTint))
         if let foreground { config.baseForegroundColor = foreground }
         // Unsaid on a fill of the accent, the ink is UIKit's white on every accent, teal and yellow too, as a
         // hand-built filled button draws it (LLP 1116.019 D3). Increase Contrast darkens a system accent, which
@@ -282,7 +283,7 @@ enum ButtonConfigurationIOS {
                 return outgoing
             }
         }
-        let subtitleColor = platformColor(rows.subtitle["text_color"], color(rows.subtitle["text_color"], traits: traits, accent: accent))
+        let subtitleColor = platformColor(rows.subtitle["text_color"], color(rows.subtitle["text_color"], traits: traits, accent: colorTint))
         let subtitleFontAuthored = rows.subtitle["font_size"] != nil || rows.subtitle["font_weight"] != nil
         if subtitleFontAuthored || subtitleColor != nil {
             config.subtitleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
@@ -334,7 +335,7 @@ enum ButtonConfigurationIOS {
         // image in its own ink and ignores that, so there the symbol carries its colour, drawn again as the
         // tint changes (`NativeButtonIOS.tintColorDidChange`).
         let follows = followsAccent(rows.symbol["tint_color"])
-        let resolved = color(rows.symbol["tint_color"], traits: traits, accent: accent), own = follows ? nil : resolved
+        let resolved = color(rows.symbol["tint_color"], traits: traits, accent: colorTint), own = follows ? nil : resolved
         let native = button as? NativeButtonIOS
         native?.symbolInk = nil
         if face.image != nil, follows || own != nil { config.image = config.image?.withRenderingMode(.alwaysTemplate) }

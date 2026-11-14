@@ -66,6 +66,7 @@ enum RowReuse {
 extension Presenter {
     /// A `renew` op: `id`'s view now shows another list item.
     func renew(_ id: UInt32) {
+        if fragmentHeld?.target?.id == id || fragmentHeld?.route?.id == id { cancelFragment() }
         guard let view = views[id] else { return }
         renewing.insert(id)
         if let press = mouseChain.bubbledPress { press.cancel(in: view) }

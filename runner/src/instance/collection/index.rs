@@ -637,6 +637,11 @@ impl SizeIndex {
         })
     }
 
+    /// The keys in order, shared: what an update replaces is still readable.
+    pub(crate) fn order(&self) -> Rc<[Rc<str>]> {
+        Rc::clone(&self.order)
+    }
+
     /// O(log N), no key copy. `follow_end` opts into following only if the clamped
     /// offset is at the end of a nonzero scrollport within host rounding tolerance.
     /// Otherwise preserve the first visible key's top relative to the scrollport

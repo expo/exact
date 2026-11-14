@@ -15,10 +15,10 @@ test('iframe replies keep order and ownership, with no queue across replacement 
     if (path.startsWith('/guest')) return new Response(`<body>Guest<script>window.received=[];addEventListener('message',e=>{received.push(e.data);document.body.textContent=JSON.stringify(received);parent.postMessage({seen:e.data},'*')})</script>`, { headers: { 'content-type': 'text/html' } });
     return new Response(`<main id="exact-root"></main><script type="module">
       import * as frames from '/frame-messages.js';
-      import {commands} from '/commands.js';
+      import {postMessage} from '/commands.js';
       window.framesApi=frames; window.messages=[];window.logs=[];
       addEventListener('message',e=>messages.push(e.data));
-      window.post=(text,id,kind='iframe')=>commands(t=>logs.push(t)).postMessage(text,id,kind);
+      window.post=(text,id,kind='iframe')=>postMessage(t=>logs.push(t))(text,id,kind);
       window.mount=(id,sandbox=null)=>{const frame=document.createElement('iframe');frame.id=id;if(sandbox!==null)frame.setAttribute('sandbox',sandbox);frame.src='/guest-'+id;frames.commitFrameOrigin(frame);document.querySelector('main').append(frame);return frame};
       mount('known');mount('opaque','allow-scripts');mount('sibling');
     </script>`, { headers: { 'content-type': 'text/html' } });

@@ -65,8 +65,8 @@ of range, an arithmetic overflow, a vector past `usize::MAX`) is not proved.
      sweeps); `fetch` decodes as `Contract.Vm.decode` does, a jump's byte
      target being the instruction index there (`encIns`);
    - the resource bounds: the model's `steps`, `kept` and `concat` never
-     refuse; the runner's may (`IterationLimit`, `ValueTooLarge`,
-     `ValueTooDeep`, `StringTooLong`) — the refinement the semantics already
+     refuse; the runner's may (`IterationLimit`, `CallLimit`, `CallDepth`,
+     `ValueTooLarge`, `ValueTooDeep`, `StringTooLong`) — the refinement the semantics already
      names (`semantics/README.md`). `NativeProps` is outside the model: any
      outcome there corresponds to its `unsupported`.
 4. **Lean.** `Contract/*.lean` is compiled here at Aeneas's Lean

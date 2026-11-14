@@ -152,7 +152,7 @@ export function androidHermesDir(env = process.env, local = hermesAndroidBundle(
 }
 
 /** The API level an Android Hermes bundle was built for (its receipt's ANDROID_PLATFORM), or null. Its objects call
- * what bionic has from that level on: the pinned bundle's, built at 30, call `pthread_cond_clockwait`. */
+ * what bionic has from that level on; an API-30 bundle can call `pthread_cond_clockwait`. */
 export function hermesApi(dir) {
   try {
     const flags = JSON.parse(readFileSync(resolve(dir, 'hermes-input-receipt.json'), 'utf8')).build?.flags ?? [];

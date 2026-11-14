@@ -5,8 +5,9 @@ use super::{failed, MAX_HEADERS};
 use exact_runner::{FailureKind, Outcome, Request};
 use ibex2::stdlib::abort::AbortController;
 
+/// The running ceiling includes the outcome's queue record.
 pub(super) fn bounded_outcome(outcome: Outcome, limit: usize) -> Outcome {
-    if retained(&outcome) > limit {
+    if retained(&outcome).saturating_add(std::mem::size_of::<super::Completed>()) > limit {
         failed(
             FailureKind::Refused,
             "native outcome exceeds retention limit",
