@@ -171,7 +171,9 @@ extension NodeView {
         guard props["defaultSurface"] == "true", props["popover"] != nil, props["accessibilityRole"] != "menu",
               let radius = props["defaultSurfaceRadius"].flatMap(Double.init) else { return nil }
         #if os(iOS)
-        if let id = props["id"], presenter?.carrying("contextPopover").contains(where: { $0.props["contextPopover"] == id }) == true { return nil }
+        if let id = props["id"], let presenter,
+           presenter.carrying("contextPopover").contains(where: { $0.props["contextPopover"] == id })
+            || presenter.textViews.values.contains(where: { $0.hasInlineContextPopover && $0.inlineText.contains { $0.props["contextPopover"] == id } }) { return nil }
         #endif
         return CGFloat(radius)
     }
