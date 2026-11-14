@@ -1,17 +1,54 @@
 //! The routes, document scroller and hero known before any opening tag streams.
 
 use super::{
-    bars::bar_header, props_of, tag_of, NodeFacts, PropId, Route, SortedMap, SortedSet, Source,
-    ViewId,
+    bars::bar_header, escape, props_of, tag_of, NodeFacts, PropId, Route, SortedMap, SortedSet,
+    Source, ViewId,
 };
 use exact_plan::EventKind;
+
+/// The image selected for a JavaScript page's preload and fetch priority.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeroImage {
+    /// The source URL before HTML escaping.
+    pub src: String,
+    /// The `<img>`'s `crossorigin` value, before HTML escaping.
+    pub crossorigin: Option<String>,
+    /// Byte offset in `Document::root` for adding a missing `fetchpriority` attribute.
+    pub priority_at: Option<usize>,
+}
+
+impl HeroImage {
+    /// The `<img>`'s priority attribute, which its preload carries too: the
+    /// preload starts the request, at the preload's priority, so a preload
+    /// without it fetches the hero at low priority (LLP 1048.007 D5).
+    pub const PRIORITY: &'static str = " fetchpriority=\"high\"";
+
+    /// The `<link rel="preload">` that makes the `<img>`'s request: its URL
+    /// and `crossorigin`, escaped as the `<img>` escapes them, and its
+    /// priority. Chrome leaves a preload of another CORS mode unused and
+    /// fetches the image twice. `None` for a value with a NUL character,
+    /// which the walk refuses too.
+    pub fn preload(&self) -> Option<String> {
+        let mut link = String::from("<link rel=\"preload\" as=\"image\" href=\"");
+        escape(&mut link, &self.src, true).ok()?;
+        link.push('"');
+        if let Some(crossorigin) = &self.crossorigin {
+            link.push_str(" crossorigin=\"");
+            escape(&mut link, crossorigin, true).ok()?;
+            link.push('"');
+        }
+        link.push_str(Self::PRIORITY);
+        link.push('>');
+        Some(link)
+    }
+}
 
 #[derive(Default)]
 pub(super) struct Before {
     pub routes: SortedMap<ViewId, Route>,
     pub bars: SortedSet<ViewId>,
     pub page: SortedSet<ViewId>,
-    pub hero: Option<(ViewId, String)>,
+    pub hero: Option<(ViewId, HeroImage)>,
     hero_seen: bool,
 }
 
@@ -76,14 +113,19 @@ impl Before {
             || node.props.bool(PropId::Inert) == Some(true)
             || node.style.visibility == exact_kernel::Visibility::Hidden;
         if !covered && !self.hero_seen && tag_of(&node, false) == "img" {
-            if let Some(source) = props_of(&node)
-                .get("src")
-                .filter(|source| !source.starts_with("data:") && !source.starts_with("symbol:"))
-            {
+            let props = props_of(&node);
+            if let Some(source) = props.get("src").filter(|source| {
+                !source.is_empty() && !source.starts_with("data:") && !source.starts_with("symbol:")
+            }) {
                 // A first image in a repeated row is lazy; no later image replaces it.
                 self.hero_seen = true;
                 if !lazy(id) {
-                    self.hero = Some((id, source.to_owned()));
+                    let hero = HeroImage {
+                        src: source.to_owned(),
+                        crossorigin: props.get("crossorigin").cloned(),
+                        priority_at: None,
+                    };
+                    self.hero = Some((id, hero));
                 }
             }
         }

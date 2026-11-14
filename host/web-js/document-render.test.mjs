@@ -342,7 +342,7 @@ globalThis.__render = () => {
     C.prototype.renderCount = (C.prototype.renderCount ?? 0) + 1;
     return C.renderCount + ':' + C.prototype.renderCount;
   });
-  return { root: '', title: [language, zone, explicit, inherited.timeZone, inherited.hour, typeof Intl.DateTimeFormat.supportedLocalesOf].join('/'), description: caught.join(',') + '/' + counts.join(','), time: 0, answers: '[]', pending: [], open: [], readers: [], failed: [], refused: [] };
+  return { root: '', hero: '', title: [language, zone, explicit, inherited.timeZone, inherited.hour, typeof Intl.DateTimeFormat.supportedLocalesOf].join('/'), description: caught.join(',') + '/' + counts.join(','), time: 0, answers: '[]', pending: [], open: [], readers: [], failed: [], refused: [] };
 };`);
     const bundle = await Bun.build({ entrypoints: [entry], target: 'browser', format: 'iife' });
     expect(bundle.success).toBe(true);
@@ -1099,33 +1099,55 @@ component Page
   }, {}, {}, how);
 }, 240000);
 
+// The hero's preload and its `<img>`, each as the request it makes: the URL as written, `crossorigin` and priority. A
+// tag's attributes are read in order, so a word in a value is no attribute; a bare one reads ''.
+const heroRequests = page => {
+  const attributes = start => {
+    const at = page.indexOf(start);
+    if (at < 0) throw new Error(`no ${start} in ${page}`);
+    const attrs = {};
+    for (const [, name, value] of page.slice(page.indexOf(' ', at), page.indexOf('>', at)).matchAll(/\s([^\s"'>/=]+)(?:="([^"]*)")?/g)) attrs[name] ??= value ?? '';
+    return attrs;
+  };
+  const link = attributes('<link rel="preload" as="image"'), img = attributes('<img fetchpriority');
+  return [[link.href, link.crossorigin, link.fetchpriority], [img.src, img.crossorigin, img.fetchpriority]];
+};
+
 // LLP 1048.007 D5: an image a `for` repeats loads as its row comes into view, as a platform list's cells load theirs.
-// The page's own first image, likely its largest paint, is preloaded ahead of the document at high priority.
-test('both document renderers lazy-load the images a for repeats, and load a lone one at once, first', async () => {
+// The page's own first shown image with a source, likely its largest paint, is preloaded ahead of the document at high
+// priority: an image with no source makes no request and a hidden one is not shown, so neither is the hero.
+test('both document renderers lazy-load the images a for repeats, and preload the first shown image with a source', async () => {
   for (const how of ['js', 'rust']) await renderedPages(`routes nav
   home "/" render=build
 
 component Page
   state ids: string[] = ["a", "b"]
+  state avatar: string = ""
   view
     main
       for e in stack(nav) key=e.id
         for page in [e] key=page.id
-          image "https://example.com/hero.png" width=200 alt="Hero"
+          image avatar alt="Avatar"
+          column visibility="hidden"
+            image "https://example.com/hidden.png" alt="Hidden"
+          column aria-label="not inert here"
+            image "https://example.com/hero.png" width=200 alt="a src of light, no crossorigin here"
           for id in ids key=id
             image \`https://example.com/\${id}.png\` width=96 alt=id
 `, (_, html) => {
     // A page's own image, though a stack's `for` and a page-keying `for [e]` hold it, is no row.
     const page = html('');
-    expect([how, page.match(/<img [^>]*>/g)?.map(img => /loading="([^"]*)"/.exec(img)?.[1] ?? null)]).toEqual([how, [null, 'lazy', 'lazy']]);
-    expect([how, page.match(/<img [^>]*>/g)?.map(img => img.includes('fetchpriority="high"'))]).toEqual([how, [true, false, false]]);
-    const preload = page.indexOf('<link rel="preload" as="image" href="https://example.com/hero.png">');
+    expect([how, page.match(/<img [^>]*>/g)?.map(img => [/loading="([^"]*)"/.exec(img)?.[1] ?? null, img.includes('fetchpriority="high"')])])
+      .toEqual([how, [[null, false], [null, false], [null, true], ['lazy', false], ['lazy', false]]]);
+    const preload = page.indexOf('<link rel="preload" as="image" href="https://example.com/hero.png" fetchpriority="high">');
     expect([how, preload > 0 && preload < page.indexOf('<div id="exact-root"')]).toEqual([how, true]);
+    const [link, img] = heroRequests(page);
+    expect([how, link]).toEqual([how, img]);
   }, {}, {}, how);
 }, 180000);
 
 // A route the stack covers holds no hero: at a nested route, the image preloaded is the shown page's, though the covered
-// home's list of lazy rows comes first in the document.
+// home's list of lazy rows comes first in the document. An empty `crossorigin` is the anonymous mode, on the preload too.
 test('both document renderers preload the shown route\'s first image, not a covered one\'s', async () => {
   for (const how of ['js', 'rust']) await renderedPages(`routes nav
   home "/" render=build
@@ -1142,11 +1164,13 @@ component Pages
             for id in ["a", "b"] key=id
               image \`https://example.com/\${id}.png\` width=96 alt=id
           if e.name == "detail"
-            image "https://example.com/hero.png" width=200 alt="Hero"
+            image "https://example.com/hero.png?a=1&b=2" width=200 alt="Hero" crossorigin=""
 `, (_, html) => {
-    const page = html('detail'), hero = page.match(/<img [^>]*hero\.png[^>]*>/)?.[0] ?? '';
-    expect([how, page.match(/<link rel="preload" as="image"[^>]*>/g), hero.includes('fetchpriority="high"')])
-      .toEqual([how, ['<link rel="preload" as="image" href="https://example.com/hero.png">'], true]);
+    const page = html('detail');
+    expect([how, page.match(/<link rel="preload" as="image"[^>]*>/g)])
+      .toEqual([how, ['<link rel="preload" as="image" href="https://example.com/hero.png?a=1&amp;b=2" crossorigin="" fetchpriority="high">']]);
+    const [link, img] = heroRequests(page);
+    expect([how, link]).toEqual([how, img]);
     expect([how, html('').match(/<link rel="preload" as="image"[^>]*>/g)]).toEqual([how, null]);
   }, {}, {}, how);
 }, 180000);

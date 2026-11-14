@@ -2,6 +2,7 @@
 //! page is composed, for the build's `dist/` and the server alike.
 use crate::serve::deferred::{self, Checkpoints};
 use crate::Rendered;
+use exact_web::document::HeroImage;
 
 /// The capture script (LLP 1048.000 D6, 1048.001 D5): host code, inline in
 /// every document's head, that records presses — a click, or Enter or Space
@@ -456,7 +457,7 @@ pub(crate) fn body_after_boot_js(
         .as_ref()
         .and_then(|image| image.priority_at)
     {
-        html.to_mut().insert_str(at, " fetchpriority=\"high\"");
+        html.to_mut().insert_str(at, HeroImage::PRIORITY);
     }
     let mut root = String::with_capacity(document.root.len());
     if rendered.runtime_form {
@@ -503,19 +504,8 @@ pub(crate) fn body_after_boot_js(
 }
 
 /// Insert the hero's preload before the root's opening tag.
-pub(crate) fn preload_image(
-    open: &mut String,
-    shell: &str,
-    hero: Option<&exact_web::document::HeroImage>,
-) {
-    if let Some(hero) = hero {
-        let src = hero
-            .src
-            .replace('&', "&amp;")
-            .replace('<', "&lt;")
-            .replace('>', "&gt;")
-            .replace('"', "&quot;");
-        let link = format!("<link rel=\"preload\" as=\"image\" href=\"{src}\">");
+pub(crate) fn preload_image(open: &mut String, shell: &str, hero: Option<&HeroImage>) {
+    if let Some(link) = hero.and_then(HeroImage::preload) {
         open.insert_str(open.len() - root_open(shell).len(), &link);
     }
 }
