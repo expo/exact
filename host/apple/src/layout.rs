@@ -52,7 +52,7 @@ impl<D: DataSource> Host<D> {
     /// theirs, as nothing would send them again.
     pub(super) fn write(&mut self, mut batch: Batch, error: Option<&str>) -> String {
         if let Some(preloads) = &self.preloads {
-            if self.preload_accepted {
+            if self.preload_accepted && !self.preload_content.is_empty() {
                 preloads.committed(std::mem::take(&mut self.preload_content), self.runner.seq());
             }
             for fact in preloads.journal() {

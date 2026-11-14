@@ -41,6 +41,7 @@ struct Launch {
     #[cfg(test)]
     backend: Mutex<Option<Arc<dyn exact_data::secrets::Backend>>>,
     journal: Mutex<Vec<PreloadFact>>,
+    journal_pending: AtomicBool,
     marks: Mutex<Marks>,
     #[cfg(test)]
     reader: Mutex<Option<Arc<SecretReader>>>,
@@ -398,7 +399,7 @@ impl LaunchPreloads {
             .and_then(|r| url::Url::parse(&r.url).ok())
             .map(|u| u.origin().ascii_serialization())
             .unwrap_or_default();
-        self.0.journal.lock().unwrap().push(PreloadFact {
+        self.record_fact(PreloadFact {
             name: definition.name.into(),
             origin,
             outcome,
@@ -463,7 +464,7 @@ impl LaunchPreloads {
                 .iter()
                 .any(|(name, version)| versions.get(name).copied().unwrap_or(0) != *version)
             {
-                self.0.journal.lock().unwrap().push(PreloadFact {
+                self.record_fact(PreloadFact {
                     name: definition.preload.name.clone(),
                     origin: rust::origin(&definition.preload.request),
                     outcome: crate::executor::PreloadEvent::DroppedBySecret,
@@ -487,8 +488,18 @@ impl LaunchPreloads {
             .control
             .extend(vec![preload], grants, observer);
     }
+    fn record_fact(&self, fact: PreloadFact) {
+        let mut journal = self.0.journal.lock().unwrap();
+        journal.push(fact);
+        self.0.journal_pending.store(true, Ordering::Release);
+    }
     pub(crate) fn journal(&self) -> Vec<PreloadFact> {
-        let mut facts = std::mem::take(&mut *self.0.journal.lock().unwrap());
+        let mut facts = Vec::new();
+        if self.0.journal_pending.load(Ordering::Acquire) {
+            let mut journal = self.0.journal.lock().unwrap();
+            self.0.journal_pending.store(false, Ordering::Release);
+            facts = std::mem::take(&mut *journal);
+        }
         if let Some(set) = self.0.set.get() {
             facts.extend(set.control.take_journal());
         }
@@ -498,6 +509,9 @@ impl LaunchPreloads {
         self.0.marks.lock().unwrap().tickets.remove(&ticket)
     }
     pub(crate) fn committed(&self, names: Vec<String>, sequence: u64) {
+        if names.is_empty() {
+            return;
+        }
         let mut marks = self.0.marks.lock().unwrap();
         for (name, mark) in &mut marks.entries {
             if mark.committed == 0. && names.iter().any(|n| n.as_str() == name) {

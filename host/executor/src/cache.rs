@@ -1,6 +1,7 @@
 //! The app executor's private, bounded HTTP cache (LLP 1162 D4; RFC 9111).
 use super::*;
 use exact_runner::CacheMode;
+use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub(super) const CAPACITY: usize = 16 << 20;
@@ -110,6 +111,7 @@ pub(super) struct Cache {
     pub(super) bytes: usize,
     pub(super) preloads: Vec<super::preload::Held>,
     pub(super) journal: Vec<super::preload::Fact>,
+    pub(super) journal_pending: Arc<AtomicBool>,
     pub(super) clock: Arc<dyn Fn() -> Instant + Send + Sync>,
     tick: usize,
 }
@@ -126,9 +128,14 @@ impl Cache {
             bytes: 0,
             preloads: Vec::new(),
             journal: Vec::new(),
+            journal_pending: Arc::default(),
             clock: Arc::new(Instant::now),
             tick: 0,
         }
+    }
+    pub(super) fn take_preload_journal(&mut self) -> Vec<super::preload::Fact> {
+        self.journal_pending.store(false, Ordering::Release);
+        std::mem::take(&mut self.journal)
     }
     fn collect(&mut self) {
         super::preload::expire(self);
@@ -208,7 +215,15 @@ impl Cache {
 impl Core {
     /// Keep a private HTTP cache for the app's reads (LLP 1162 D4).
     pub fn enable_http_cache(&self) {
-        self.shared.state.lock().unwrap().cache = Some(Cache::new(self.grants.clone()));
+        let mut state = self.shared.state.lock().unwrap();
+        let mut cache = Cache::new(self.grants.clone());
+        // A preload control holds the old cache's pending bit: the new cache
+        // keeps that bit, cleared with the facts the old cache discards.
+        if let Some(old) = state.cache.take() {
+            old.journal_pending.store(false, Ordering::Release);
+            cache.journal_pending = old.journal_pending;
+        }
+        state.cache = Some(cache);
     }
 }
 

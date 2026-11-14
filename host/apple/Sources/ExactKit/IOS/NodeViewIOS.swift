@@ -16,6 +16,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
     // The flags, together after `id`: each `Bool` between wider fields
     // took a word of its own, and every view pays its stored properties
     // (a 768-byte block, from 1,024).
+    var clipboardListening = false
     var paintLifted = false
     var paintGhost = false
     /// The box is `draw(_:)`'s to paint: Core Animation cannot say it (`applyBoxLayer`).
@@ -115,6 +116,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
     }
     package var handlers: Set<String> = [] {
         didSet {
+            trackClipboardHandlers(true)
             updateContextGestures()
             updateSwipeGesture()
             updateLayoutPan()
@@ -256,7 +258,12 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
     static func nativeInputOwns(_ view: UIView?, below boundary: UIView) -> Bool {
         CanvasInputs.owns(view) || nativeEditor(view, below: boundary)
     }
-    weak package var presenter: Presenter?
+    weak package var presenter: Presenter? {
+        didSet {
+            if clipboardListening { oldValue?.clipboardHandlerCount -= 1; clipboardListening = false }
+            trackClipboardHandlers(true)
+        }
+    }
     /// The actual scroll port; a native list supplies its collection view.
     /// `scroll` remains the plain scroller that holds authored children.
     package var scrollView: UIScrollView? { extras?.nativeScrollView ?? scroll }
@@ -598,6 +605,8 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         web = nil
         presenter = nil
     }
+
+    deinit { if clipboardListening { presenter?.clipboardHandlerCount -= 1 } }
 
     init(id: UInt32, kind: String, presenter: Presenter) {
         self.id = id

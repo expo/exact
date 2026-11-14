@@ -67,6 +67,8 @@ fn launch_reaches_the_server_before_an_executor_and_both_cores_take_it() {
         let release = held_plan(&server, "/early", b"early");
         let set = launch(&server, vec![definition(&server, "/early")]);
         server.seen(1);
+        let control = set.control();
+        assert_eq!(control.take_journal()[0].outcome, Event::Sent);
         let (core, woke) = server.core(asynchronous, true);
         adopt(&core, set);
         for ticket in 1..=2 {
@@ -87,6 +89,8 @@ fn launch_reaches_the_server_before_an_executor_and_both_cores_take_it() {
             assert!(matches!(outcome, Outcome::Response(r) if r.body == b"early"));
         }
         assert_eq!(server.count(), 1);
+        assert_eq!(control.take_journal()[0].outcome, Event::Taken);
+        assert!(control.take_journal().is_empty());
     }
 }
 
@@ -531,6 +535,22 @@ fn grants_refuse_the_first_hop_and_redirects_and_the_journal_contains_only_origi
 }
 
 #[test]
+fn replacing_the_http_cache_clears_the_pending_bit_a_control_holds() {
+    let first = Server::new();
+    let denied = Server::new();
+    let set = launch(&first, vec![definition(&denied, "/private")]);
+    complete_set(&set);
+    let control = set.control();
+    let location = set.destination.clone();
+    let (core, _) = first.core(false, true);
+    adopt(&core, set);
+    assert!(location.journal_pending.load(Ordering::Acquire));
+    core.enable_http_cache();
+    assert!(control.take_journal().is_empty());
+    assert!(!location.journal_pending.load(Ordering::Acquire));
+}
+
+#[test]
 fn before_first_commit_takes_only_a_complete_equal_reply_and_never_waits() {
     for asynchronous in [false, true] {
         let server = Server::new();
@@ -596,6 +616,10 @@ fn dropping_a_set_or_its_adopting_executor_retires_every_launch_thread() {
         // The server holds its reply throughout cancellation and retirement.
         exited(&location);
         release.send(()).unwrap();
+        // A drain after retirement clears the pending bit, so later drains
+        // take no lock.
+        take_journal(&location);
+        assert!(!location.journal_pending.load(Ordering::Acquire));
     }
 }
 
@@ -1244,6 +1268,8 @@ fn held_request_allocations_are_charged_and_released_when_the_hold_ends() {
             let request = def.request.clone();
             let (set, clock) = fresh_clock(&server, vec![def]);
             complete_set(&set);
+            let control = set.control();
+            control.take_journal();
             let (core, woke) = server.core(asynchronous, true);
             adopt(&core, set);
             let (bytes, ready) = {
@@ -1291,7 +1317,13 @@ fn held_request_allocations_are_charged_and_released_when_the_hold_ends() {
                 !ask(&core, &woke, job(2, request)).1,
                 "secret writes still invalidate the HTTP copy"
             );
-            let facts = core.take_preload_journal();
+            let facts = control.take_journal();
+            assert!(facts.iter().any(|f| f.outcome
+                == if expired {
+                    Event::NeverTaken
+                } else {
+                    Event::DroppedBySecret
+                }));
             assert!(facts
                 .iter()
                 .all(|f| f.name == "retained" && f.origin == format!("http://{}", server.address)));

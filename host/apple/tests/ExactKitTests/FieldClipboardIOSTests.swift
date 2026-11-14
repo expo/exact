@@ -41,6 +41,48 @@ final class FieldClipboardIOSTests: XCTestCase {
         return p
     }
 
+    func testNoClipboardHandlersSkipsAncestryAndChangesAreSeenImmediately() throws {
+        let p = presenter()
+        let root = try XCTUnwrap(p.views[1]), editor = try XCTUnwrap(p.views[2])
+        root.handlers = []; editor.handlers = []
+        let copy = #selector(NodeView.copy(_:)), paste = #selector(NodeView.paste(_:))
+        let before = p.clipboardAncestryWalks
+        for _ in 0..<100 {
+            XCTAssertFalse(root.canPerformAction(copy, withSender: nil))
+            XCTAssertFalse(root.canPerformAction(paste, withSender: nil))
+        }
+        XCTAssertEqual(p.clipboardAncestryWalks, before)
+        root.handlers = ["paste"]
+        XCTAssertTrue(root.canPerformAction(paste, withSender: nil))
+        XCTAssertEqual(editor.clipboardHearer(paste)?.node.id, root.id)
+        root.props["disabled"] = "true"
+        XCTAssertNil(editor.clipboardHearer(paste))
+        root.props.removeValue(forKey: "disabled")
+        XCTAssertEqual(editor.clipboardHearer(paste)?.node.id, root.id)
+        root.handlers = []
+        let walked = p.clipboardAncestryWalks
+        XCTAssertNil(editor.clipboardHearer(paste))
+        XCTAssertEqual(p.clipboardAncestryWalks, walked)
+        root.handlers = ["paste"]
+        root.recycle()
+        XCTAssertEqual(p.clipboardHandlerCount, 0)
+        root.handlers = ["paste"]
+        XCTAssertEqual(p.clipboardHandlerCount, 1)
+        XCTAssertTrue(root.canPerformAction(paste, withSender: nil))
+        root.recycle()
+        XCTAssertEqual(p.clipboardHandlerCount, 0)
+        root.handlers = ["copy"]
+        XCTAssertEqual(p.clipboardHandlerCount, 1)
+        XCTAssertTrue(root.canPerformAction(copy, withSender: nil))
+        let other = Presenter()
+        root.presenter = other
+        XCTAssertEqual(p.clipboardHandlerCount, 0); XCTAssertEqual(other.clipboardHandlerCount, 1)
+        root.presenter = p
+        XCTAssertEqual(p.clipboardHandlerCount, 1); XCTAssertEqual(other.clipboardHandlerCount, 0)
+        p.reset()
+        XCTAssertEqual(p.clipboardHandlerCount, 0)
+    }
+
     func testATextViewsCutIsItsEventThenItsOwn() throws {
         let p = presenter()
         let editor = try XCTUnwrap(p.views[2]?.textArea)

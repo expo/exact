@@ -597,11 +597,16 @@ fn foreground_waits_for_opened_and_can_start_after_adoption() {
         .unwrap()
         .encode();
     let (_bridge, _) = boot(source.clone(), &empty, false, wake);
+    launch.journal();
     launch.signal(true, factory(&source));
     launch.signal(true, factory(&source));
     server.request();
     server.release(0);
     assert_eq!(server.count.load(Ordering::Acquire), 1);
+    assert!(launch
+        .journal()
+        .iter()
+        .any(|fact| fact.outcome == crate::executor::PreloadEvent::Sent));
 }
 
 #[test]
@@ -1215,4 +1220,47 @@ fn prepared_generations_disable_names_before_settlement_but_keep_equal_preloads(
             }
         }
     }
+}
+
+#[test]
+fn empty_launch_journal_drains_take_no_lock_and_late_facts_are_not_lost() {
+    let launch = LaunchPreloads::default();
+    {
+        let journal = launch.0.journal.lock().unwrap();
+        let reader = launch.clone();
+        let (done, drained) = channel();
+        let thread = std::thread::spawn(move || {
+            for _ in 0..100 {
+                assert!(reader.journal().is_empty());
+            }
+            done.send(()).unwrap();
+        });
+        let result = drained.recv_timeout(HANG);
+        drop(journal);
+        thread.join().unwrap();
+        result.expect("an empty drain waited for the journal lock");
+    }
+    let writer = launch.clone();
+    let thread = std::thread::spawn(move || {
+        for i in 0..1000 {
+            writer.record_fact(PreloadFact {
+                name: i.to_string(),
+                origin: String::new(),
+                outcome: crate::executor::PreloadEvent::DroppedBySecret,
+            });
+        }
+    });
+    let mut facts = Vec::new();
+    while !thread.is_finished() {
+        facts.extend(launch.journal());
+        std::thread::yield_now();
+    }
+    thread.join().unwrap();
+    facts.extend(launch.journal());
+    assert_eq!(facts.len(), 1000);
+    assert!(facts
+        .iter()
+        .enumerate()
+        .all(|(i, fact)| fact.name == i.to_string()));
+    assert!(launch.journal().is_empty());
 }
