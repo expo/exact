@@ -90,15 +90,18 @@ pub(super) fn shadows(file: &File, hidden: &[(u32, Hidden)]) -> Vec<Shadow> {
 /// the check run again, so a reference to it has no edge and the rest keep
 /// theirs. A refusal in none of them is the route table's, and the rest are
 /// checked without it. A `t(…)` is checked against `strings`, the app's tables.
-pub(super) fn declared(file: &File, strings: &Option<Arc<Strings>>) -> Shapes {
+/// With them, where each one left out is declared: a declaration of its name
+/// that checks is another's, so it has no type of its own.
+pub(super) fn declared(file: &File, strings: &Option<Arc<Strings>>) -> (Shapes, Vec<Span>) {
     enum Out {
         Shape(usize, ShapeDecl),
         Fn(usize, FnDecl),
     }
     let mut file = Cow::Borrowed(file);
+    let mut left_out = Vec::new();
     loop {
         let error = match contract_types::check_declarations(&file, strings.clone()) {
-            Ok(shapes) => return shapes,
+            Ok(shapes) => return (shapes, left_out),
             Err(error) => error,
         };
         // The last shape or function declared before the refusal.
@@ -125,6 +128,10 @@ pub(super) fn declared(file: &File, strings: &Option<Arc<Strings>>) -> Shapes {
                 (e.id, e.span, &e.message) == (error.id, error.span, &error.message)
             });
             if !same {
+                left_out.push(match &out {
+                    Out::Shape(_, shape) => shape.span,
+                    Out::Fn(_, function) => function.span,
+                });
                 continue;
             }
             // Not where the refusal is: put back.
@@ -134,7 +141,7 @@ pub(super) fn declared(file: &File, strings: &Option<Arc<Strings>>) -> Shapes {
             }
         }
         if file.routes.is_none() {
-            return Shapes::default();
+            return (Shapes::default(), left_out);
         }
         file.to_mut().routes = None;
     }
@@ -173,8 +180,9 @@ pub(super) fn file_by_file(
             file.components.push(block);
             file.components.len() - 1
         });
+        let (shapes, left_out) = declared(&file, strings);
         let types = Types {
-            shapes: declared(&file, strings),
+            shapes,
             components: Vec::new(),
         };
         let hidden: Vec<_> = hidden.into_iter().map(|h| (id as u32, h)).collect();
@@ -187,6 +195,7 @@ pub(super) fn file_by_file(
             file: &file,
             types: &types,
             typed: false,
+            left_out,
             whole: false,
             members,
             graph,

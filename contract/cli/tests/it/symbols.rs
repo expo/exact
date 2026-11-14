@@ -700,6 +700,53 @@ component App
 }
 
 #[test]
+fn a_declaration_the_check_leaves_out_has_no_type_of_its_namesake() {
+    let f = Fixture::new("types-duplicate");
+    let path = f.write(
+        "app.contract",
+        r#"shape Item
+  id: string
+shape Item
+  id: number
+fn key(value: Item): string = value.id
+fn key(value: Item): number = 1
+component App
+  view
+    text "x"
+"#,
+    );
+    let graph: Value =
+        serde_json::from_str(&contract::editor_symbols_json(&path, None).unwrap_err().json)
+            .unwrap();
+    let types = |kind: &str, name: &str| -> Vec<(u64, Option<String>)> {
+        let mut found: Vec<_> = (defs(&graph).iter())
+            .filter(|d| d["kind"] == kind && d["name"] == name)
+            .map(|d| {
+                let line = d["line"].as_u64().unwrap();
+                (
+                    line,
+                    d.get("type").and_then(Value::as_str).map(str::to_owned),
+                )
+            })
+            .collect();
+        found.sort();
+        found
+    };
+    assert_eq!(
+        types("shape", "Item"),
+        [(1, Some("{ id: string }".into())), (3, None)]
+    );
+    assert_eq!(
+        types("field", "id"),
+        [(2, Some("string".into())), (4, None)]
+    );
+    assert_eq!(
+        types("fn", "key"),
+        [(5, Some("(value: Item) => string".into())), (6, None)]
+    );
+}
+
+#[test]
 fn a_refused_check_keeps_the_declared_types_of_shapes_and_fields_only() {
     let f = Fixture::new("types-refused");
     let path = f.write(
