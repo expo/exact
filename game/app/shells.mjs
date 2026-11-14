@@ -270,9 +270,10 @@ fn main() {
   // The snapshot excludes this entire generated root, including its gitignore.
   if (!existsSync(resolve(root, '.gitignore'))) writeFileSync(resolve(root, '.gitignore'), '*\n!.gitignore\n');
   // A game without a data crate can take its Apple host from exact-game-apple, compiled once
-  // for every such game (exact_game_app::bake_shared_declaration decides). A captured lock
-  // from before that crate would refuse it, so such a game keeps its own.
-  const sharedApple = !data && !existsSync(lock);
+  // for every such game (exact_game_app::bake_shared_declaration decides). A lock captured
+  // before that crate existed would refuse it, so such a game keeps its own host. A lock
+  // captured since names it, so capturing one leaves the graph it was captured from.
+  const sharedApple = !data && (!existsSync(lock) || /^name = "exact-game-apple"$/m.test(readFileSync(lock, 'utf8')));
   for (const kind of ['gpu', 'web', 'apple', 'linux', 'windows', 'android']) {
     const shell = resolve(root, kind), shared = kind === 'apple' && sharedApple;
     // A cached build script can run from either the game or its deeper proof copy.
