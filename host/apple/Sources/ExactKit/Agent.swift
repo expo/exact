@@ -677,6 +677,7 @@ public final class Agent {
             case ("keyboard-navigation", "true"), ("keyboard-navigation", "false"): keyboardNavigation = value == "true"
             #endif
             case ("visibility-state", "visible"), ("visibility-state", "hidden"): facts.hidden = value == "hidden"
+            case ("frozen", "true"), ("frozen", "false"): facts.frozen = value == "true"
             case ("online", "true"), ("online", "false"): facts.onLine = value == "true"
             case ("can-share", "true"), ("can-share", "false"): facts.canShare = value == "true"
             case ("can-share-files", "true"), ("can-share-files", "false"): facts.canShareFiles = value == "true"
@@ -722,7 +723,7 @@ public final class Agent {
             modes = batch.modes
         }
         var pageFacts: [String: Any] = ["visibility-state": PageFacts.hidden ? "hidden" : "visible",
-                                       "online": PageFacts.onLine, "can-share": PageFacts.canShare, "can-share-files": PageFacts.canShareFiles,
+                                       "frozen": PageFacts.frozen, "online": PageFacts.onLine, "can-share": PageFacts.canShare, "can-share-files": PageFacts.canShareFiles,
                                        "can-share-pictures": PageFacts.canSharePictures, "can-open-files": PageFacts.canOpenFiles, "iframe-partition": PageFacts.iframePartition,
                                        "has-focus": PageFacts.hasFocus(session.pageWindow), "root-font-size": PageFacts.rootFontSize,
                                        "display-scale": PageFacts.displayScale(session.presenter.viewport),

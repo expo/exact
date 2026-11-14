@@ -63,6 +63,7 @@ pub(crate) fn with_text_styles(
     mut out: Vec<LowerError>,
 ) -> Vec<LowerError> {
     let root = &checked.expanded.root;
+    let controlled = roles::controlled(checked);
     routeless_header::check(checked, &mut out);
     // Track the navigation root (the outermost `navigationKey`) and its `navigationBack`.
     crate::menu_rows::notes(&root.view, &mut out);
@@ -89,6 +90,7 @@ pub(crate) fn with_text_styles(
                 out.extend(roles::button(tag, attrs, children, span).filter(|_| fresh));
                 out.extend(roles::dialog_role(tag, attrs, span).filter(|_| fresh));
                 out.extend(roles::level_without_heading(tag, attrs, span).filter(|_| fresh));
+                out.extend(roles::keys(attrs, children, span, &controlled).filter(|_| fresh));
                 if fresh {
                     line_height::multiplier(attrs, &mut out);
                 }

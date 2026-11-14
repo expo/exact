@@ -447,7 +447,8 @@ component Cart
   `formatDate(due, 0, "medium")` labels a picked `YYYY-MM-DD` day directly;
   a key keeps its calendar day at every valid offset ([dates recipe](recipes/dates-and-days.md)).
   `formatDay(then, now, offset, "day")` names a day from `now` (`Today`, `Yesterday`, else
-  the date; `"day-time"` adds the time, `"list"` is a list row's, as Mail's).
+  the date; `"day-time"` adds the time, `"list"` is a list row's, as Mail's, and
+  `"section"` a chat's day separator: a weekday within the week, else `Thu, Oct 15`).
 - `formatTime`, `formatDate`, `formatDay` and `formatNumber` follow the strings table
   the app shows: with `strings/de.json` shown they print `26.09.2026`, `13:02`,
   `1.234,5` and `Heute`, and `setLocale` moves them with the text; the examples above
@@ -1775,8 +1776,10 @@ out (LLP 1157).
   `Authorization: Bearer <jwt>`), so a test's `request` can write as another
   client; `http: (request) => Response | undefined` answers the app's other
   routes (an auth endpoint), with CORS headers added. Keep the
-  rules both run in a file with no Convex import (`convex/tiles.ts`). One
-  server serves a whole run: a test that counts clears first.
+  rules both run in a file with no Convex import (`convex/tiles.ts`). Each
+  test starts an empty stand-in, including with `database: false`. Remote
+  servers stay shared. Only `test` and `agent --test` share an ancestor's server,
+  saying so; `verify` refuses an answering local server, including an ancestor's.
 - **Driving a native host against a real deployment.** The driver seeds a
   native host's randomness (`EXACT_AGENT_SEED`, 1 by default), so two launches
   draw the same session id and Convex answers the second's writes with the
@@ -1891,6 +1894,11 @@ must still match `accept`; conversion failures fire `cancel` with a journal reas
 The view forms are element, component use, `if`/`else` (and `else if`),
 keyed `for`, exhaustive option `match`, and `children`. Wrap root regions in a
 stable element.
+A literal `role` must name a concrete ARIA role, or it is refused.
+`aria-activedescendant` names the active option while a field keeps focus
+([combobox recipe](recipes/combobox.md)); the web exposes it, and other hosts carry it
+without using it.
+
 HTML names Contract spells otherwise (the compiler names each): `div` is `column`,
 `row` or `view`; `span`, `p`, `strong`, `em`, `b` and `i` are `text`; `h1`–`h6` are
 headings, as written; `label` is `text` beside its field, which
@@ -2187,10 +2195,10 @@ menus and confirmations keep platform placement. Physical areas also accept
 `top span-left`, `bottom span-left`, `left`/`right` with `span-top`,
 `span-bottom` or `span-all`, and the four `top|bottom left|right` corners.
 Logical areas, `flip-x`, `flip-y`, named rules and area-dependent sizing are
-not implemented. Use fixed sizes, zero insets and default self-alignment
-for native parity; percentage margins are not resolved by the native layer.
-`flip-start` also exchanges `width` and `height` in CSS; the native layers keep
-the laid-out size, so give a popover that uses it equal ones.
+not implemented. Use zero insets and default self-alignment for native parity.
+Painted Apple popovers are sized in each option's region. Flips transform
+margins before percentages resolve there; `flip-start` also exchanges
+`width`/`height`, `min-width`/`min-height` and `max-width`/`max-height`.
 
 A route with `navigationPresentation="modal"` is the same sheet on the Mac
 (LLP 1115.002 D7.4), as large as its content (an authored `width` or `height`
@@ -2256,7 +2264,7 @@ lists any literal colour, font size or weight an app's `.contract` files still w
 | a `dialog` whose own `background-color` or `background-image` you write (your panel, your colours), of any rows | HTML's top layer (LLP 1035.001 D11): presented full screen over whatever is up, a sheet included, with no transition of UIKit's, laid out as written and centred in the window, over UIKit's 20% dimming. Its `animation` is its entrance; removed by an `if`, it stays until its `-exact-exit-animation` ends. `closedby="any"` closes it on a tap outside its box, Escape and VoiceOver's escape are its close request, and a field in it is centred above the keyboard. A box in the page with `z-index` stays under every sheet: use this |
 | any other `dialog` (a field, Save, Cancel), opened by `showModal(id)` or a button's `command="show-modal"` | a sheet as tall as its content, up to the large detent, its content laid out as written and centred across it (`width="100%" box-sizing="border-box"` fills it); `close(id)`, its `command="close"` button or a swipe down closes it. `closedby="none"` refuses the swipe, `"any"` also takes a tap on the page behind, and a dismissal the person made fires `cancel` (LLP 1115.000 D11.5). A form with a title bar is still a sheet route |
 | `role="tablist"`: each tab a symbol over a label / one text or image | `UITabBar` / `UISegmentedControl`, the tablist at least its native height unless `min-height` says otherwise (LLP 1059) |
-| `role="radiogroup"` of `button role="radio" aria-checked=…`, each one text or image (a value chosen from a few) | `UISegmentedControl`, as a tablist's; never a tab bar (LLP 1116.004 D5.2). Android draws Material's segmented buttons (two or more radios: equal shares of the row, the checked one filled with a check), and the Linux desktop and Windows the web's track with the checked radio raised on it. Keys of your own design: a radio that paints itself (its own background, border or radius, LLP 1104 D2), or `appearance="none"` on the `radiogroup`, keeps its buttons as you paint them; on iOS and the Mac the group keeps one Tab stop (the checked radio) and arrow keys that press the next or previous radio (Left and Right swapped right to left); on tvOS the focus engine moves between them |
+| `role="radiogroup"` of `button role="radio" aria-checked=…`, each one text or image (a value chosen from a few) | `UISegmentedControl`, as a tablist's; never a tab bar (LLP 1116.004 D5.2). Android draws Material's segmented buttons (two or more radios: equal shares of the row, the checked one filled with a check), and the Linux desktop and Windows the web's track with the checked radio raised on it. Keys of your own design: a radio that paints itself (its own background, border or radius, LLP 1104 D2), or `appearance="none"` on the `radiogroup`, keeps its buttons as you paint them; on the web, iOS, the Mac and the painted hosts (Linux, Windows and Android’s reader), the group keeps one Tab stop (the checked eligible radio, else the first) and arrow keys that press the next or previous eligible radio (Left and Right swapped right to left); on tvOS the focus engine moves between them |
 | a route whose first child is a `header` holding one heading (`text role="heading"`; an `aria-level` alone is not one), a text after it and its buttons | the navigation bar; a level-1 heading (`aria-level=1`) is a large title, in a sheet too, and any other level an inline one; the text after it the subtitle |
 | a route whose first child is a `header` holding buttons and no heading (readouts, a search field, a tablist and plain boxes around them too, nothing else) | the navigation bar with no title, its buttons trailing and the root's `navigationBack` control leading; a text or an image in it keeps the whole header in the page (`lower-header-no-bar`) |
 | a pushed route with no such `header` | a bar holding the system Back button alone (LLP 1115.000 D5.2) |
@@ -2404,7 +2412,7 @@ column navigationKey=`${e.id}` navigationPresentation="modal" navigationScroll="
 `action reload` is `refresh items`; `pending(items)` is true while it runs.
 A segmented control in the content chooses a value or switches panels: a value
 from two to five (a preset, units, a period, a filter) is a `row role="radiogroup"` of
-`button role="radio" aria-checked=…`, each pressing its value (the web gives it the
+`button role="radio" aria-checked=…`, each pressing its value (the web and painted hosts give it
 arrow keys and one Tab stop); switching panels, a `row role="tablist"` of text tabs
 outside the header. A list row's `delete=action` is its swipe to delete, UIKit's on
 iOS (`contract vocab swipe`). Other swipe actions are a hand-written swipe row, a
@@ -4360,7 +4368,7 @@ screen is never `high`, nor is any iOS or Android device natively. A game's rend
 read it to offer a quality setting. A native host answers its GPU module's tier
 once the module loads (`high` before it). Under the agent it is `high` from launch, and
 `prefer gpu-tier low` substitutes it and remakes each world's renderer at its rung.
-`exactPage` answers `visibilityState`, `onLine`, `canShare`,
+`exactPage` answers `visibilityState`, `frozen`, `onLine`, `canShare`,
 `canShareFiles` and `canSharePictures` (whether `share(files=…)` takes
 `app:/` files and an element's `"#id"`; the web never takes a picture),
 `canOpenFiles` and `hasFocus` (`document.hasFocus()`: the app's window has the
@@ -4380,6 +4388,34 @@ is the drive's (`prefer has-focus false`; `state.device`). Use dimensions,
 media preferences, page facts,
 and capability state rather than suffixing files by platform. Preference facts
 inform authored policy; the engine does not automatically remove all motion.
+
+`frozen: bool` means the host has backgrounded the app and will stop its ordinary
+work, until execution resumes. Gate a feed with `when not page.frozen`: the runner
+lets its resource or stream go in the commit that turns `frozen` true, without
+waiting for an authored cleanup handler. A sequence stops in that commit too
+(LLP 1125 D4). This is a dynamic execution fact, not a phone or desktop label:
+`visibilityState` can be hidden while `frozen` stays false.
+
+| Host | `frozen` producer |
+|---|---|
+| Web (both targets) | Page Lifecycle `freeze`/`resume` on `document`, where fired; false elsewhere |
+| Android | Stopped Activity with no successfully promoted foreground-service claim; a started Activity or promoted service keeps it false |
+| Linux desktop | Constant false |
+| Windows desktop | Constant false |
+| iOS and tvOS | Background without active audio eligible for background execution; an idle playback category grants nothing |
+| macOS | Constant false |
+| watchOS | Constant false: the live watch driver has no page lifecycle producer yet |
+| Terminal and render hosts | Constant false |
+
+A browser promises nothing after `hidden`: it may stop or discard a page without
+a `freeze` event. False does not promise continued execution. Persist data as it
+changes; do not depend on a final asynchronous cleanup. The bake and an agent
+launch answer false; `prefer frozen true` substitutes the transition, and
+`prefer frozen false` resumes it. See the [feed recipe](recipes/suspending-feed.md).
+
+Leave navigation presentation to the host first: a root `tablist` becomes UIKit's
+tab bar on iOS and a sidebar on macOS, and `navigationPresentation` chooses a
+route's presentation. Neither pointer coarseness nor `frozen` identifies a phone.
 
 `exactCanvasPerformance("world")` is an opt-in, read-only metrics resource for
 that named canvas. Declare only the fields your HUD needs, each as an option:
@@ -5039,6 +5075,8 @@ its value the same way, in a drive or a test (a tap does not open a native
 VoiceOver's reading order. An iOS simulator drive containing `tree --ax` enables
 UIKit's accessibility runtime before launch and restores the simulator's setting
 after launch. Library drives request this with `open({host: 'ios', ax: true})`.
+`verify` reads it once at each screen it checks and counts its findings as `check`'s:
+a control with no name, an element exposed while hidden, one reachable outside an open modal.
 Use `tree` to find targets, `state` for data and delivery, `layout` for
 geometry, `perf` for the work a drive cost (`perf <target> during "<op>" …`: per
 plan site, evaluations, unchanged results, instances created and retired), and
@@ -6264,7 +6302,8 @@ on (`exactDelivery`, `exactSurface`, `exactViewport().displayMode` read
 from the viewport wherever the package passes it: an alias, a `provide`, a
 `fn`; a prop's `displayMode` is the app's data; `lower-library-platform`). Not checked yet: an injected value whose
 provider is outside the package, and per-platform host entries (no syntax
-for them). Its names are its API: an app line or a Contract row naming a
+for them). A field names its active option with `aria-activedescendant`
+([combobox recipe](recipes/combobox.md)). Its names are its API: an app line or a Contract row naming a
 name under its namespace that it doesn't define, or a param line naming one
 it lacks, fails the build (`tamber-package-unknown`; the nine base names are
 no package's), and its params are named in full, a short name that names

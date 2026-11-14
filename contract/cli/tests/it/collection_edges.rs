@@ -628,18 +628,22 @@ fn bidirectional_tiny_rows_do_not_rearm_on_endpoint_key_changes() {
     assert_eq!(hits(&r), (1., 1.), "an all-fitting window must become idle");
 }
 
-#[test]
-fn replacement_estimates_do_not_rearm_bidirectional_measured_tiny_rows() {
+/// Tiny rows, both edges always within their band: a bidirectional window
+/// of 200 rows from `first`, whose `reachstart` shifts it `step` rows toward
+/// the start and whose `reachend` shifts it back while it is before `first`.
+/// 120 turns of layout-only feedback; the hits, the window's start and the
+/// queries asked.
+fn tiny_bidirectional(first: u32, step: u32) -> ((f64, f64), Option<Value>, usize) {
     let source = SOURCE
         .replace("height=32", "height=1")
-        .replace("state start = 0", "state start = 200")
+        .replace("state start = 0", &format!("state start = {first}"))
         .replace(
             "refused = fail",
-            "refused = fail\n    if start > 0\n      start = start - 100",
+            &format!("refused = fail\n    if start > 0\n      start = start - {step}"),
         )
         .replace(
             "ends = ends + 1",
-            "ends = ends + 1\n    if start < 200\n      start = start + 100",
+            &format!("ends = ends + 1\n    if start < {first}\n      start = start + {step}"),
         );
     let mut r = boot(&source);
     let mut top = 0.;
@@ -660,17 +664,35 @@ fn replacement_estimates_do_not_rearm_bidirectional_measured_tiny_rows() {
             );
         }
     }
-    // The end's shift back keeps the old last row and puts rows after it,
-    // which re-arms the end once (LLP 1010, 2026-09-29); its no-op then
-    // leaves both idle. Replacement heights still manufacture no exit.
+    assert_eq!(r.collections()[0].total_extent, 200.);
+    (hits(&r), r.slot("start").cloned(), r.data_ref().queries)
+}
+
+#[test]
+fn replacement_estimates_do_not_rearm_bidirectional_measured_tiny_rows() {
+    // Each shift replaces the whole window (200 rows, a step of 200), so its
+    // rows arrive with replacement heights and none is a page at the start
+    // (LLP 1168.000 D1.1): only those heights could re-arm an edge, and they
+    // manufacture no exit.
     assert_eq!(
-        hits(&r),
-        (1., 2.),
+        tiny_bidirectional(400, 200),
+        ((1., 1.), Some(Value::Number(400.)), 3),
         "provisional replacement heights must not manufacture an edge exit"
     );
-    assert_eq!(r.slot("start"), Some(&Value::Number(200.)));
-    assert_eq!(r.data_ref().queries, 3);
-    assert_eq!(r.collections()[0].total_extent, 200.);
+}
+
+#[test]
+fn a_bidirectional_window_pages_to_its_start_and_goes_idle() {
+    // Each shift toward the start puts 100 new rows before the first, a page
+    // at the start, which re-arms the start (LLP 1168.000 D1.1): the window
+    // pages back to row 0, where the start's last firing finds no earlier
+    // rows. The end's shift back keeps the old last row and puts rows after
+    // it, which re-arms the end once (LLP 1010, 2026-09-29). Both then go
+    // idle.
+    assert_eq!(
+        tiny_bidirectional(200, 100),
+        ((4., 2.), Some(Value::Number(0.)), 5)
+    );
 }
 
 #[test]

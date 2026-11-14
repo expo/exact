@@ -63,6 +63,49 @@ impl Margin {
     }
 }
 
+/// Whether an update put a page at a list's start, which re-arms the start
+/// edge as rows put past the last row re-arm the end (@ref LLP 1168.000
+/// D1.1; LLP 1010, the 2026-09-29 ruling's mirror): a reader still at the
+/// start when an older page lands is offered the next one. With `old` the
+/// keys before the update, `len` the rows now, and `position` and `key`
+/// reading them, a page landed when
+///
+/// - the old first row is kept with every row now before it new (a page
+///   put before it), or
+/// - the old first row stays first, a leading row, and the old second row is
+///   kept further down with every row between them new (a page put after the
+///   leading row), or the update gave rows to a leading row that was alone
+///   (the first page).
+///
+/// An arrival at the end, a reorder, an empty or identical answer, a
+/// replaced first row and a window that slid past it are none.
+pub(super) fn page_at_start<'a>(
+    old: &[Rc<str>],
+    len: usize,
+    position: impl Fn(&str) -> Option<usize>,
+    key: impl Fn(usize) -> Option<&'a str>,
+) -> bool {
+    let Some(first) = old.first().and_then(|k| position(k)) else {
+        return false;
+    };
+    // The rows in `range` are new: none is among the old keys. The set holds
+    // only the range; each old key is looked up in it once.
+    let new_between = |range: std::ops::Range<usize>| {
+        let Some(keys) = range
+            .map(&key)
+            .collect::<Option<std::collections::HashSet<&str>>>()
+        else {
+            return false;
+        };
+        !old.iter().any(|k| keys.contains(&**k))
+    };
+    match (first, old.get(1)) {
+        (0, None) => len > 1,
+        (0, Some(second)) => position(second).is_some_and(|q| q > 1 && new_between(1..q)),
+        (p, _) => new_between(0..p),
+    }
+}
+
 impl Collection {
     /// Which edge rows are within the edge band ([`Margin::band`]) of a port
     /// moving at `velocity`. Pins never qualify an edge.
@@ -94,7 +137,12 @@ impl Collection {
                         .map(|i| reach.segments.iter().any(|range| range.contains(&i))))
                 };
                 reached = within(self.reach.band(g.port_main, velocity))?;
-                if self.edge_armed != [true; 2] && self.index.range_measured(window.overscan) {
+                let measured = self.index.range_measured(window.overscan);
+                if self.start_owed && measured {
+                    self.edge_armed[0] = true;
+                    self.start_owed = false;
+                }
+                if self.edge_armed != [true; 2] && measured {
                     let at_rest = within(self.reach.band(g.port_main, 0.0))?;
                     for i in 0..2 {
                         let row = self.index.key([0, self.index.len() - 1][i]);
@@ -106,9 +154,23 @@ impl Collection {
         }
         Ok(reached)
     }
+    /// Whether an update put a page at the list's start: the rows of `old`
+    /// (the keys before it) against the rows now ([`page_at_start`]).
+    pub(super) fn page_before_start(&self, old: &[Rc<str>]) -> bool {
+        page_at_start(
+            old,
+            self.index.len(),
+            |key| self.index.position(key),
+            |i| self.index.key(i),
+        )
+    }
     /// An edge fired: disarmed until it re-arms ([`Collection::geometric_edges`]).
     pub(super) fn disarm_edge(&mut self, i: usize) {
         self.edge_armed[i] = false;
+        // A start that fired has had its page; one owed before is spent.
+        if i == 0 {
+            self.start_owed = false;
+        }
         let row = [0, self.index.len().saturating_sub(1)][i];
         self.edge_fired[i] = self.index.shared_key(row).cloned();
     }
@@ -140,6 +202,40 @@ impl Collection {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// LLP 1168.000 D1.1's cases, the keys before an update against after.
+    #[test]
+    fn a_page_at_the_start_is_new_rows_before_the_first_or_after_a_leading_row() {
+        let lands = |old: &[&str], now: &[&str]| {
+            let old: Vec<Rc<str>> = old.iter().map(|&k| Rc::from(k)).collect();
+            page_at_start(
+                &old,
+                now.len(),
+                |k| now.iter().position(|&n| n == k),
+                |i| now.get(i).copied(),
+            )
+        };
+        // A page put before the first row; one put after a leading row; the
+        // first page after a leading row alone.
+        assert!(lands(&["a", "b"], &["x", "y", "a", "b"]));
+        assert!(lands(&["s", "a", "b"], &["s", "x", "y", "a", "b"]));
+        assert!(lands(&["s"], &["s", "a", "b"]));
+        // Accepted: one row that gains rows after it, and an unrelated row
+        // put before a kept first row, read as pages.
+        assert!(lands(&["a"], &["a", "b"]));
+        assert!(lands(&["a", "b"], &["z", "a", "b"]));
+        // None: an arrival at the end, a reorder, an identical or empty
+        // answer, a replaced first row, a window that slid, rows of the old
+        // list put before the first row.
+        assert!(!lands(&["a", "b"], &["a", "b", "c"]));
+        assert!(!lands(&["a", "b"], &["b", "a"]));
+        assert!(!lands(&["a", "b"], &["a", "b"]));
+        assert!(!lands(&["a", "b"], &[]));
+        assert!(!lands(&[], &["a"]));
+        assert!(!lands(&["a", "b"], &["c", "b"]));
+        assert!(!lands(&["s", "a", "b"], &["s", "c", "d"]));
+        assert!(!lands(&["a", "b", "c"], &["c", "a", "b"]));
+    }
 
     #[test]
     fn a_margin_is_one_or_two_nonnegative_lengths() {

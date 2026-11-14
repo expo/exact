@@ -653,25 +653,9 @@ private enum Thermal {
     static func read() -> UInt32 { UInt32(ProcessInfo.processInfo.thermalState.rawValue) + 1 }
 }
 
-// A live surface asks for the session once per process; its category is the
-// app's, set by its one owner (`AudioSession`, LLP 1096 D8).
 private enum CanvasAudio {
-    nonisolated(unsafe) static var active = false
-    nonisolated(unsafe) static var wanted = false
     nonisolated(unsafe) static var interrupted = false
     nonisolated(unsafe) static var resumeBlocked = false
-    @discardableResult static func activate() -> Bool {
-        // NotificationCenter delivers on the posting thread, not necessarily main.
-        if !Thread.isMainThread { return Owner.shared.callMain { activate() } }
-        guard !ExactEnv.agentMode else { return false }
-        wanted = true
-        guard !active else { return true }
-        #if os(iOS) || os(tvOS)
-        do { try AudioSession.activate() } catch { fputs("exact audio session: \(error)\n", stderr); return false }
-        #endif
-        active = true
-        return true
-    }
 }
 
 /// Every canvas gets notifications even when its session uses the agent clock.
@@ -683,8 +667,9 @@ final class CanvasLifecycle: NSObject {
     private var wantsAudio = false
     private var resumeAllowed: Bool
     private var retryFrames = 0
-    private let activate: () -> Bool
-    init(_ owner: CanvasesHost, activate: @escaping () -> Bool = { CanvasAudio.activate() }) {
+    private let activate: (() -> Bool)?
+    private var audioHeld = false
+    init(_ owner: CanvasesHost, activate: (() -> Bool)? = nil) {
         precondition(Thread.isMainThread)
         self.owner = owner
         self.activate = activate
@@ -709,7 +694,38 @@ final class CanvasLifecycle: NSObject {
         #endif
         #endif
     }
-    deinit { NotificationCenter.default.removeObserver(self) }
+    deinit { NotificationCenter.default.removeObserver(self); releaseAudio() }
+    private var producingAudio: Bool {
+        wantsAudio && !hidden && !interrupted && owner?.visible == true
+            && owner?.entries.values.contains(where: { $0.id != 0 }) == true
+    }
+    private func takeAudio() -> Bool {
+        if let activate { return activate() }
+        #if os(iOS) || os(tvOS)
+        if audioHeld { return true }
+        do {
+            try AudioSession.hold(ObjectIdentifier(self), running: { [weak self] in self?.producingAudio ?? false })
+            audioHeld = true
+        } catch {
+            AudioSession.release(ObjectIdentifier(self))
+            fputs("exact audio session: \(error)\n", stderr)
+            return false
+        }
+        #endif
+        return true
+    }
+    private func releaseAudio() {
+        #if os(iOS) || os(tvOS)
+        guard audioHeld else { return }
+        audioHeld = false
+        AudioSession.release(ObjectIdentifier(self))
+        #endif
+    }
+    func removedCanvas() {
+        guard owner?.entries.isEmpty == true else { return }
+        wantsAudio = false
+        releaseAudio()
+    }
     private func onMain(_ work: @escaping () -> Void) {
         if Thread.isMainThread { work() } else { DispatchQueue.main.async(execute: work) }
     }
@@ -742,9 +758,12 @@ final class CanvasLifecycle: NSObject {
     private func retryActivation(excluding id: UInt32? = nil) {
         guard wantsAudio, !hidden, resumeAllowed,
               !CanvasAudio.interrupted, !CanvasAudio.resumeBlocked else { return }
-        if activate() {
+        if takeAudio() {
             retryFrames = 0
             if interrupted { interrupted = false; send(3, excluding: id) }
+            #if os(iOS) || os(tvOS)
+            AudioSession.playbackChanged()
+            #endif
         } else {
             retryFrames = 300
             if !interrupted { interrupted = true; send(2, excluding: id) }
@@ -784,14 +803,11 @@ final class CanvasLifecycle: NSObject {
     }
     func refresh(excluding id: UInt32? = nil) {
         precondition(Thread.isMainThread)
-        #if !os(macOS)
-        AppBackground.invalidate()
-        #endif
         let next = !(owner?.visible ?? false)
         owner?.updatePerformanceTimer()
         let becameVisible = hidden && !next
-        if next { CanvasAudio.active = false }
         if next != hidden { hidden = next; send(hidden ? 0 : 1, excluding: id) }
+        if next { releaseAudio() }
         if becameVisible && !CanvasAudio.interrupted {
             Self.allowRecovery(excluding: self)
         }
@@ -805,9 +821,9 @@ final class CanvasLifecycle: NSObject {
             CanvasAudio.resumeBlocked = !began && !shouldResume
             self.resumeAllowed = !began && shouldResume
             if began {
-                CanvasAudio.active = false
                 self.retryFrames = 0
                 if !self.interrupted { self.interrupted = true; self.send(2) }
+                self.releaseAudio()
             } else if self.resumeAllowed {
                 if self.wantsAudio { self.retryActivation() }
                 else if self.interrupted { self.interrupted = false; self.send(3) }
@@ -822,6 +838,8 @@ final class CanvasLifecycle: NSObject {
     /// over when the app is active again and no other app's audio plays.
     private static func heard(_ event: AudioSession.Heard) {
         switch event {
+        case .background:
+            for lifecycle in live.allObjects { lifecycle.refresh() }
         case let .interruption(began, resume):
             for lifecycle in live.allObjects { lifecycle.interruption(began: began, shouldResume: resume) }
         case let .appActive(othersPlaying):

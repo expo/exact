@@ -1,0 +1,28 @@
+// Synthetic conformance plan: a transcript that loads older pages at its start
+// (Jérémy Magrin's chat benchmark). `reachstart` asks for a page unless one is
+// on its way, and a timer lands it 30 rows before the first while the reader
+// stays at the start, where CSS anchors nothing, as a fling that reached the
+// first row before its page landed does. A page put before the first row re-arms
+// the start once measured (LLP 1168.000 D1.1), so this reader is offered each next page.
+// The source has five.
+component PagingStart
+  state older = 0
+  state loading = false
+  state pages = 0
+  action more
+    if not loading
+      loading = true
+  action land
+    if loading and pages < 5
+      older = older + 30
+      loading = false
+      pages = pages + 1
+  task arrive mount
+    every(300, land)
+  view
+    column testId="root" height="100%" display="flex" flex-direction="column"
+      text `${pages} ${pages == 1 ? "page" : "pages"}${loading ? ", loading" : ""}` testId="summary" flex-shrink=0 padding=8
+      list virtualized=true reachstart=more estimated-item-height=44 testId="feed" flex=1 min-height=0 width="100%" overflow-x="hidden"
+        for x in range(30 + older) key=(x - older)
+          row testId=`row-${x - older}` height=44 box-sizing="border-box" padding-left=12 align-items="center"
+            text `Message ${x - older}` font-size=14

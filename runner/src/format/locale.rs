@@ -39,6 +39,11 @@ enum Field {
     Time23Periods,
     DateTime,
     Days,
+    WeekdayDate,
+    WeekdayDateNames,
+    WeekdayYear,
+    WeekdayYearNames,
+    WeekdayLabels,
 }
 
 struct Record<'a>(Vec<&'a str>);
@@ -147,7 +152,7 @@ pub(super) fn formatting(
         }
         Stdlib::FormatDay => {
             let mode = style(3)?;
-            if !matches!(mode, "day" | "day-time" | "list") {
+            if !matches!(mode, "day" | "day-time" | "list" | "section") {
                 return None;
             }
             day(&r, num(0)?, num(1)?, num(2)?, mode, cycle)
@@ -326,6 +331,12 @@ fn fill(r: &Record<'_>, template: &str, wall: f64, names: &str, periods: &str) -
                 out.push_str(names.split('\u{1f}').nth(month as usize - 1).unwrap_or(""));
                 continue;
             }
+            // After the twelve months, the seven weekdays, Sunday's first.
+            "E" => {
+                let weekday = ((wall / 86_400_000.0).floor() as i64 + 4).rem_euclid(7) as usize;
+                out.push_str(names.split('\u{1f}').nth(12 + weekday).unwrap_or(""));
+                continue;
+            }
             "a" => {
                 let name = periods
                     .split('\u{1f}')
@@ -378,6 +389,21 @@ fn day(
     };
     let day = |w: f64| (w / 86_400_000.0).floor() as i64;
     let (days, apart) = (day(wall), day(wall) - day(today));
+    // Its capitals are the data's (`formats.rs`): no host maps case.
+    if mode == "section" {
+        return match apart {
+            0 => r.item(Field::Days, 0).to_owned(),
+            -1 => r.item(Field::Days, 1).to_owned(),
+            1 => r.item(Field::Days, 2).to_owned(),
+            -6..=6 => r
+                .item(Field::WeekdayLabels, (days + 4).rem_euclid(7) as usize)
+                .to_owned(),
+            _ if super::same_year(wall, today) => {
+                date(r, wall, Field::WeekdayDate, Field::WeekdayDateNames)
+            }
+            _ => date(r, wall, Field::WeekdayYear, Field::WeekdayYearNames),
+        };
+    }
     if mode == "list" {
         return match apart {
             0 => time(r, wall, cycle),

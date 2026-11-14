@@ -107,6 +107,25 @@ impl<D: DataSource> Presenter<D> {
         self.after_commit()
     }
 
+    /// Android's reader composes Activity and promoted service ownership in `Exact.executionEligible`.
+    /// Apply visibility and execution together, preserving the agent's substitute.
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn page_execution(&mut self, hidden: bool, eligible: bool) -> bool {
+        let page = self.host.runner().page();
+        let frozen = if self.agent { page.frozen } else { !eligible };
+        if page.hidden == hidden && page.frozen == frozen {
+            return false;
+        }
+        if let Some(error) = self.set_page(exact_runner::Page {
+            hidden,
+            frozen,
+            ..page
+        }) {
+            eprintln!("exact: page: {error}");
+        }
+        true
+    }
+
     /// A live design batch or snapshot frame (LLP 1121 stage 4), in place;
     /// a colour the full wide table refused is reported on the build
     /// channel (LLP 1122 D4), or to stderr with none.
@@ -391,4 +410,53 @@ pub fn scrub_frame_drawn() {
         .partition(|l| now.duration_since(l.4) > FRAME_WAIT);
     write_scrub(&late, Some(None));
     write_scrub(&fresh, Some(Some(turned)));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn activity_and_service_execution_edges_update_the_page_together() {
+        let plan = crate::test_plan("shape Page\n  frozen: bool\n  visibilityState: string\ncomponent App\n  resource page = exactPage() as shape Page\n  view\n    text `${page.frozen}`\n");
+        let (mut p, error) = Presenter::boot_with(
+            &plan,
+            (),
+            (300., 300.),
+            1.,
+            std::path::PathBuf::new(),
+            PainterChoice::Cpu,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        p.agent = false;
+        // Started; hidden with a promoted service; last claim released; foreground;
+        // failed promotion at stop; promotion while hidden; service destroyed.
+        for (hidden, eligible, frozen) in [
+            (false, true, false),
+            (true, true, false),
+            (true, false, true),
+            (false, true, false),
+            (true, false, true),
+            (true, true, false),
+            (true, false, true),
+        ] {
+            p.page_execution(hidden, eligible);
+            let page = p.host.runner().page();
+            assert_eq!(page.hidden, hidden);
+            assert_eq!(page.frozen, frozen);
+            assert!(
+                !p.page_execution(hidden, eligible),
+                "duplicate reports make no commit"
+            );
+        }
+        p.agent = true;
+        let reply = crate::agent::handle(&mut p, r#"{"op":"prefer","page":{"frozen":true}}"#);
+        assert!(!reply.contains("error"), "{reply}");
+        p.page_execution(false, true);
+        assert!(
+            p.host.runner().page().frozen,
+            "live lifecycle cannot replace prefer"
+        );
+    }
 }

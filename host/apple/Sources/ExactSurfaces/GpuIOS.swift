@@ -293,6 +293,7 @@ final class CanvasesHost {
             haptics.remove(view)
             if e.id != 0 { e.module?.destroy(e.id) }
             releasePublisher(e)
+            lifecycle.removedCanvas()
         }
     }
 

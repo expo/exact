@@ -266,3 +266,43 @@ component Proof
         box width=50 height=18 flex-shrink=0
         box width=50 height=18 flex-shrink=0
         box width=50 height=18 flex-shrink=0
+      button testId="a20" popovertarget="p20" aria-label="Open 20" appearance="none" position="absolute" left=100 top=500 width=40 height=20 padding=0
+      row id="p20" testId="p20" popover="auto" flex-wrap="wrap" margin=0 padding=0 border-width=0 position-area="bottom span-right" position-try-fallbacks="flip-start" width=60 height=180
+        box width=50 height=18 flex-shrink=0
+        box width=50 height=18 flex-shrink=0
+        box width=50 height=18 flex-shrink=0
+        box width=50 height=18 flex-shrink=0
+        box width=50 height=18 flex-shrink=0
+        box width=50 height=18 flex-shrink=0
+      button testId="a21" popovertarget="p21" aria-label="Open 21" appearance="none" position="absolute" left=100 top=500 width=40 height=20 padding=0
+      row id="p21" testId="p21" popover="auto" flex-wrap="wrap" margin=0 padding=0 border-width=0 position-area="bottom span-right" position-try-fallbacks="flip-start" width=60 height=180 min-width=90 min-height=140 max-width=110 max-height=160
+        box width=50 height=18 flex-shrink=0
+        box width=50 height=18 flex-shrink=0
+        box width=50 height=18 flex-shrink=0
+        box width=50 height=18 flex-shrink=0
+        box width=50 height=18 flex-shrink=0
+        box width=50 height=18 flex-shrink=0
+      button testId="a22" popovertarget="p22" aria-label="Open 22" appearance="none" position="absolute" left=100 top=500 width=40 height=20 padding=0
+      row id="p22" testId="p22" popover="auto" flex-wrap="wrap" margin=0 padding=0 border-width=0 position-area="bottom span-right" position-try-fallbacks="flip-start" height=180 margin-top=20 margin-right=30 margin-bottom=5 margin-left=10
+        box width=50 height=18 flex-shrink=0
+        box width=50 height=18 flex-shrink=0
+        box width=50 height=18 flex-shrink=0
+        box width=50 height=18 flex-shrink=0
+        box width=50 height=18 flex-shrink=0
+        box width=50 height=18 flex-shrink=0
+      button testId="a23" popovertarget="p23" aria-label="Open 23" appearance="none" position="absolute" left=100 top=500 width=40 height=20 padding=0
+      row id="p23" testId="p23" popover="auto" flex-wrap="wrap" margin=0 padding=0 border-width=0 position-area="bottom span-right" position-try-fallbacks="flip-start" height=180 margin-top=4 margin-right="5%" margin-bottom=8 margin-left="10%"
+        box width=50 height=18 flex-shrink=0
+        box width=50 height=18 flex-shrink=0
+        box width=50 height=18 flex-shrink=0
+        box width=50 height=18 flex-shrink=0
+        box width=50 height=18 flex-shrink=0
+        box width=50 height=18 flex-shrink=0
+      button testId="a24" popovertarget="p24" aria-label="Open 24" appearance="none" position="absolute" left=100 top=550 width=40 height=20 padding=0
+      row id="p24" testId="p24" popover="auto" flex-wrap="wrap" margin=0 padding=0 border-width=0 position-area="bottom span-right" position-try-fallbacks="flip-start flip-block" width=60 height=180 margin-top=20 margin-right=30 margin-bottom=5 margin-left=10
+        box width=50 height=18 flex-shrink=0
+        box width=50 height=18 flex-shrink=0
+        box width=50 height=18 flex-shrink=0
+        box width=50 height=18 flex-shrink=0
+        box width=50 height=18 flex-shrink=0
+        box width=50 height=18 flex-shrink=0

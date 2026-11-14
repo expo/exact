@@ -18,10 +18,14 @@ class ExtensionInvokeTest {
     @Implements(Owner::class, isInAndroidSdk = false)
     class OwnerThread : AutoCloseable {
         private val thread = Executors.newSingleThreadExecutor()
+        val queued = ArrayDeque<() -> Unit>()
+        @Implementation fun call(f: () -> Unit) { queued.addLast(f) }
+        @Implementation fun drainStore(ms: Long) = false
         var publications = 0
             private set
         @Implementation fun __constructor__(hwbuf: Boolean, fast: Boolean, priority: Int, intent: (String) -> String?) {}
         @Implementation fun <T> sync(publish: Boolean, f: () -> T): T = thread.submit<T> {
+            while (queued.isNotEmpty()) queued.removeFirst()()
             val answer = f()
             if (publish) publications++
             answer
@@ -33,6 +37,9 @@ class ExtensionInvokeTest {
     class Host {
         companion object {
             private val host = ThreadLocal<String>()
+            val visibility = ArrayList<Boolean>()
+            val eligibility = ArrayList<Boolean>()
+            @JvmStatic @Implementation fun hidden(hidden: Boolean, eligible: Boolean) { visibility.add(hidden); eligibility.add(eligible) }
             var invokeAvailable = true
             var received: String? = null
             var onChanged: (String) -> Unit = {}
@@ -54,6 +61,22 @@ class ExtensionInvokeTest {
     private fun withOwner(run: (Owner, OwnerThread) -> Unit) {
         val owner = Owner(false, false, 0) { null }
         Shadow.extract<OwnerThread>(owner).use { run(owner, it) }
+    }
+
+    @Test fun hidingReachesTheHostBeforeReturningEvenWhenTheStoreWaitExpires() {
+        withOwner { owner, thread ->
+            Exact.owner = owner
+            Host.visibility.clear()
+            try {
+                Exact.hidden(true)
+                assertFalse(Exact.drainStore(0))
+                assertEquals(listOf(true), Host.visibility)
+                assertTrue("no freeze remains queued after stop", thread.queued.isEmpty())
+                Exact.hidden(false)
+                assertEquals(listOf(true, false), Host.visibility)
+                assertEquals(2, thread.publications)
+            } finally { Exact.owner = null; Host.visibility.clear() }
+        }
     }
 
     @Test fun aMissingNativeEntryCanBeAnsweredAsNoSessionOnEitherThread() {

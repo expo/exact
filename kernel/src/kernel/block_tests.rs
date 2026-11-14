@@ -61,12 +61,14 @@ fn children(id: ViewId, children: impl IntoIterator<Item = ViewId>) -> Op {
 }
 fn is(width: f32, height: f32) -> Option<HostBlock> {
     Some(HostBlock {
+        tactic: Default::default(),
         width: BlockAxis::Is(width),
         height: BlockAxis::Is(height),
     })
 }
 fn at_most(width: f32, height: f32) -> Option<HostBlock> {
     Some(HostBlock {
+        tactic: Default::default(),
         width: BlockAxis::AtMost(width),
         height: BlockAxis::AtMost(height),
     })
@@ -541,6 +543,7 @@ fn route_fitting_tracks_retained_sizes_clears_and_its_own_basis() {
     let mut k = laid_out(small());
     let fit = |width, height| {
         Some(HostBlock {
+            tactic: Default::default(),
             width: BlockAxis::Fit(width),
             height: BlockAxis::Fit(height),
         })

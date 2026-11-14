@@ -363,3 +363,25 @@ fn a_modal_tablist_reports_its_tabs_and_takes_their_keys() {
         &[("ArrowRight", "two"), ("Tab", "close"), ("Tab", "one")],
     );
 }
+
+/// Home and End go to the first and last tab this host can focus by key
+/// (LLP 1166.000 D1), which the kernel's eligibility cannot tell: a tab with
+/// no box is focused by an action and passed over by the keys. From the
+/// first such tab Home reaches the second; from the last, End the one before.
+#[test]
+fn home_and_end_pass_a_tab_this_host_cannot_focus_by_key() {
+    let zero =
+        "width=0 height=0 min-width=0 min-height=0 padding=0 border-width=0 overflow=\"hidden\"";
+    let source = APP
+        .replace("testId=\"one\"", &format!("testId=\"one\" {zero}"))
+        .replace("testId=\"three\"", &format!("testId=\"three\" {zero}"));
+    let mut p = boot(&source);
+    let boxed = p.shown_boxes();
+    assert!(!boxed.contains(&id(&p, "one")) && !boxed.contains(&id(&p, "three")));
+    assert!(boxed.contains(&id(&p, "two")));
+    focus(&mut p, "one");
+    keys(&mut p, &[("Home", "two"), ("Home", "two")]);
+    focus(&mut p, "three");
+    keys(&mut p, &[("End", "two"), ("End", "two")]);
+    assert_eq!(p.host.runner().slot("presses"), Some(&Value::Number(0.)));
+}

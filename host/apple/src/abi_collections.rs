@@ -29,7 +29,9 @@ impl<D: DataSource> Bridge<D> {
     /// with f32 width, height and, for each, 0 for a size, 1 for a maximum,
     /// 2 for a content-fit limit that an authored size may exceed, or 3 for a
     /// position-area's region (`BlockAxis::Region`);
-    /// kind 5 takes a block back. Kinds 6 and 13 place a block (LLP 1123 D2):
+    /// then a u32 tactic: four two-bit side indices, top/right/bottom/left
+    /// (28 bytes including view and kind). Kind 5 takes a block back.
+    /// Kinds 6 and 13 place a block (LLP 1123 D2):
     /// f32 x, y, width, height, then the u32 containing view and f32 content
     /// offsets x and y (36 bytes). Kind 6 is a fixed allocation and ignores
     /// the offsets; kind 13 is a scrollport, including at offset zero.
@@ -47,10 +49,10 @@ impl<D: DataSource> Bridge<D> {
         let mut records = Vec::new();
         let mut rest = bytes;
         while rest.len() >= 8 {
-            let size = if rest[4..8] == 6u32.to_le_bytes() || rest[4..8] == 13u32.to_le_bytes() {
-                36
-            } else {
-                24
+            let size = match u32::from_le_bytes(rest[4..8].try_into().unwrap()) {
+                4 => 28,
+                6 | 13 => 36,
+                _ => 24,
             };
             let Some((record, after)) = rest.split_at_checked(size) else {
                 break;
@@ -77,7 +79,17 @@ impl<D: DataSource> Bridge<D> {
                 let axis = |length: usize, policy: usize| block_axis(edge(length), edge(policy));
                 match kind {
                     4 | 5 => {
+                        let tactic = if kind == 4 {
+                            let Some(tactic) = block_tactic(u32::from_le_bytes(word(24))) else {
+                                let out = self.refusal("block: invalid try tactic");
+                                return self.emit(out);
+                            };
+                            tactic
+                        } else {
+                            Default::default()
+                        };
                         let block = exact_kernel::HostBlock {
+                            tactic,
                             width: axis(8, 16),
                             height: axis(12, 20),
                         };
@@ -161,9 +173,21 @@ impl<D: DataSource> Bridge<D> {
     /// top, right, bottom and left, as the layout resolved them. Eight LE f32s
     /// in the output buffer, and 32; 0 when refused. Each axis is a
     /// length and a policy as `covers`' kind 4 takes them, 3 being a region.
+    /// The tactic is the side permutation in kind 4's final word.
     /// No batch: nothing is laid out, published or sent.
-    pub fn measure_block(&mut self, view: u32, lengths: [f32; 2], policies: [u32; 2]) -> u32 {
+    pub fn measure_block(
+        &mut self,
+        view: u32,
+        lengths: [f32; 2],
+        policies: [u32; 2],
+        tactic: u32,
+    ) -> u32 {
+        self.output.clear();
+        let Some(tactic) = block_tactic(tactic) else {
+            return 0;
+        };
         let block = exact_kernel::HostBlock {
+            tactic,
             width: block_axis(lengths[0], policies[0] as f32),
             height: block_axis(lengths[1], policies[1] as f32),
         };
@@ -332,4 +356,14 @@ fn block_axis(length: f32, policy: f32) -> exact_kernel::BlockAxis {
         3.0 => exact_kernel::BlockAxis::Region(length),
         _ => exact_kernel::BlockAxis::AtMost(length),
     }
+}
+
+/// Four two-bit physical side indices, least significant first.
+fn block_tactic(bits: u32) -> Option<exact_kernel::position_try::BlockTactic> {
+    if bits > 255 {
+        return None;
+    }
+    exact_kernel::position_try::BlockTactic::from_sides(std::array::from_fn(|i| {
+        ((bits >> (2 * i)) & 3) as u8
+    }))
 }

@@ -14,6 +14,8 @@ use native_timers::Timer;
 pub use retirement::{ModuleIdentity, ModuleInstance};
 mod background;
 mod commit;
+mod console;
+pub use console::Console;
 mod control;
 mod errors;
 mod reply;
@@ -557,6 +559,8 @@ pub struct Runner<D: DataSource> {
     /// What happened, one line each, for the agent API's `logs`: the last
     /// [`JOURNAL_RING`] lines, and how many were dropped before them.
     journal: std::collections::VecDeque<String>,
+    /// Where the app's `console` lines go (LLP 1027.009).
+    console: console::Out,
     /// The driver's fetch faults (LLP 1103).
     faults: faults::Faults,
     /// Device requests held for the agent (LLP 1069.007 D3): not I/O.
@@ -949,6 +953,7 @@ impl<D: DataSource> Runner<D> {
             settled: None,
             derive_store_dependent: Vec::new(),
             journal: std::collections::VecDeque::new(),
+            console: Default::default(),
             faults: faults::Faults::from_env(),
             device_holds: Vec::new(),
             held_replies: Vec::new(),

@@ -192,9 +192,10 @@ const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms));
 const swapping = (dist) => lockHeld(`${dist}.lock`);
 /** A file of generation `id` of `dist` for a request path, read whole from that build: the current one when it is
  * still `id` after the read, else the kept tree (asked again, for up to a second, while a swap holds `dist.lock`:
- * its rename lands under it); 'gone' for a generation reaped, 'busy' while a swap still holds the lock past that
- * second, null for no such file or an id that names nothing. With `miss`, no such file is the build's page for a
- * miss where it has one (`buildTreeFile`). */
+ * its rename lands under it, and while a read of the current build fails with its generation unchanged, as across a
+ * byte-identical swap); 'gone' for a generation reaped, 'busy' when either lasts past that second, null for no such
+ * file or an id that names nothing. With `miss`, no such file is the build's page for a miss where it has one
+ * (`buildTreeFile`). */
 export async function generationFile(dist, id, pathname, accept = '', { miss = false } = {}) {
   for (const end = Date.now() + 1000; ;) {
     if (generationOf(dist) === id) {
@@ -202,20 +203,29 @@ export async function generationFile(dist, id, pathname, accept = '', { miss = f
       if (found?.status === 503) return 'busy'; // (its route table unreadable: serve.mjs `buildTreeFile`)
       let body = null;
       try { body = found && readFileSync(found.path); } catch { /* moved */ }
-      if (generationOf(dist) === id) return found && body ? { ...found, body, id } : null;
+      const now = generationOf(dist);
+      if (now === id && (!found || body)) return found ? { ...found, body, id } : null;
+      if (now !== id) continue;
+      if (Date.now() > end) return 'busy';
+      await sleep(10);
       continue;
     }
-    const dir = resolve(generationsOf(dist), id);
-    if (realDirectory(dir)) {
+    const dir = resolve(generationsOf(dist), id), kept = realDirectory(dir);
+    if (kept) {
       const found = await buildTreeFileAsync(dir, pathname, accept, { miss });
       if (found?.status === 503) return 'busy';
       let body = null;
       try { body = found && readFileSync(found.path); } catch { /* reaped meanwhile */ }
       if (body) return { ...found, body, id };
-      // No such file there, unless the tree is being reaped under the swap's lock (its files go before it does).
-      if (!found && realDirectory(dir) && !swapping(dist)) return null;
     }
-    if (!swapping(dist)) return reapedIds(dist).has(id) ? 'gone' : null;
+    if (!swapping(dist)) {
+      // Since the looks above, a swap can have put the generation back in place, or kept it where the look found no
+      // kept tree, and let go of its lock
+      if (generationOf(dist) === id || (!kept && realDirectory(dir))) continue;
+      // No such file in a kept tree still there; a tree reaped under the swap's lock loses its files before it goes
+      if (kept && realDirectory(dir)) return null;
+      return reapedIds(dist).has(id) ? 'gone' : null;
+    }
     // A swap still under way past the second (a slow reap): not known yet, said as such (503), never as absent.
     if (Date.now() > end) return 'busy';
     await sleep(10);

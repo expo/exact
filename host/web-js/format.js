@@ -68,14 +68,24 @@ export function x_formatDate(ms, off, style, loc) {
   return w === null ? "" : date(w, style);
 }
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+/** Whether two wall times fall in one calendar year (runner/src/format/mod.rs `same_year`). */
+export const sameYear = (w, other) => civil(Math.floor(w / 864e5))[0] === civil(Math.floor(other / 864e5))[0];
 /** `formatDay` (LLP 1116.020 D8, runner/src/format/mod.rs `day_label`): `then`'s day counted from `now`'s at the offset.
  * "day" is Today, Yesterday, Tomorrow or the medium date, "day-time" adds ` at ` and the short time, "list" is the
- * short time today, Yesterday, the weekday two to six days back, else `M/D/YY`. */
+ * short time today, Yesterday, the weekday two to six days back, else `M/D/YY`; "section" (LLP 1168.000 D5) is Today,
+ * Yesterday, Tomorrow, the weekday two to six days either side, else `Thu, Oct 15`, with `, 2025` in another year. */
 export function x_formatDay(then, now, off, mode, loc) {
   if (loc) return other("formatDay", [then, now, off, mode], loc);
   const w = wall(then, off), n = wall(now, off);
   if (w === null || n === null) return "";
   const days = Math.floor(w / 864e5), apart = days - Math.floor(n / 864e5);
+  if (mode === "section") {
+    if (apart >= -1 && apart <= 1) return apart === 0 ? "Today" : apart === -1 ? "Yesterday" : "Tomorrow";
+    const weekday = WEEKDAYS[(((days + 4) % 7) + 7) % 7];
+    if (apart >= -6 && apart <= 6) return weekday;
+    const [year, month, day] = civil(days);
+    return `${weekday.slice(0, 3)}, ${MONTHS[month - 1].slice(0, 3)} ${day}${sameYear(w, n) ? "" : `, ${year}`}`;
+  }
   if (mode === "list") {
     if (apart === 0) return x_formatTime(then, off);
     if (apart === -1) return "Yesterday";
