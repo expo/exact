@@ -260,6 +260,7 @@ impl Core {
             forced: r.forced,
             work,
             waiting_charge: charge,
+            waited_for_preload: false,
             charge,
             limit,
             forgotten,

@@ -16,6 +16,32 @@ const DEFAULT_DEADLINE: Duration = Duration::from_secs(60);
 const MAX_PRELOADS: usize = 8;
 const MAX_BODY_BYTES: usize = 64 << 10;
 
+#[derive(Clone, Copy)]
+pub(super) enum NameWait {
+    Idle,
+    Definitions(Instant),
+    Function(Instant),
+    Ended,
+}
+enum WaitChange {
+    Definitions(bool),
+    Function(Option<Duration>),
+    Expire,
+    End,
+}
+fn change_wait(cache: &mut cache::Cache, change: WaitChange) {
+    use NameWait::*;
+    let now = (cache.clock)();
+    cache.preload_wait = match (cache.preload_wait, change) {
+        (Ended, _) | (_, WaitChange::End) => Ended,
+        (Function(due), _) if now >= due => Ended,
+        (Idle, WaitChange::Definitions(true)) => Definitions(now + DEFINITIONS_WAIT),
+        (Idle | Definitions(_), WaitChange::Function(Some(wait))) => Function(now + wait),
+        (Definitions(_), WaitChange::Definitions(false)) | (_, WaitChange::Function(None)) => Ended,
+        (wait, _) => wait,
+    };
+}
+
 /// A plain HTTP request prepared by the host, with its present secrets filled in.
 #[derive(Clone)]
 pub struct Definition {
@@ -244,6 +270,8 @@ struct Location {
     exited: Condvar,
     #[cfg(test)]
     fail_pool: std::sync::atomic::AtomicBool,
+    #[cfg(test)]
+    before_close: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
 }
 struct ThreadGuard(Arc<Location>);
 impl ThreadGuard {
@@ -323,6 +351,8 @@ impl Preloads {
             exited: Condvar::new(),
             #[cfg(test)]
             fail_pool: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(test)]
+            before_close: Mutex::new(None),
         });
         let (send, receive) = mpsc::channel();
         let set = Self {
@@ -331,11 +361,9 @@ impl Preloads {
             send,
         };
         if !indices.is_empty() {
-            if set.control().start_worker() {
-                let _ = set.send.send(Message::Start(indices, grants.into()));
-            } else {
-                update(&set.destination, cancel_all);
-            }
+            update(&set.destination, |cache| {
+                set.control().start(cache, indices, grants)
+            });
         }
         set
     }
@@ -384,7 +412,25 @@ impl Control {
             let _ = receive.recv();
         }
     }
-    fn start_worker(&self) -> bool {
+    fn start(&self, cache: &mut cache::Cache, indices: Vec<(usize, usize)>, grants: &str) -> bool {
+        if !cache.preloads_open {
+            return false;
+        }
+        if !self.start_worker(cache)
+            || self
+                .send
+                .send(Message::Start(indices, grants.into()))
+                .is_err()
+        {
+            close(cache);
+            return false;
+        }
+        true
+    }
+    fn start_worker(&self, cache: &cache::Cache) -> bool {
+        if !cache.preloads_open {
+            return false;
+        }
         let Some(Startup { receive, host }) = self.startup.lock().unwrap().take() else {
             return true;
         };
@@ -404,7 +450,7 @@ impl Control {
     /// (LLP 1162.000 D4).
     pub fn definitions_pending(&self, pending: bool) {
         update(&self.destination, |cache| {
-            cache.preload_definitions_due = pending.then(|| (cache.clock)() + DEFINITIONS_WAIT);
+            change_wait(cache, WaitChange::Definitions(pending));
         });
         let _ = self.send.send(Message::Tick);
     }
@@ -412,11 +458,8 @@ impl Control {
     /// bounded by its remaining window (LLP 1162.000 D2).
     pub fn launch_pending(&self, deadline: Option<Duration>) {
         let delay = update(&self.destination, |cache| {
-            cache.preload_definitions_due = None;
-            cache.preload_launch_due = deadline.map(|wait| (cache.clock)() + wait);
-            cache
-                .preload_launch_due
-                .map(|due| due.saturating_duration_since((cache.clock)()))
+            change_wait(cache, WaitChange::Function(deadline));
+            pending_due(cache).map(|due| due.saturating_duration_since((cache.clock)()))
         });
         if let Some(Some(delay)) = delay {
             if let Destination::Adopted(_, Some(timer)) = &*self.destination.state.lock().unwrap() {
@@ -453,7 +496,7 @@ impl Control {
             .wait_timeout_while(
                 state,
                 Duration::from_secs(10),
-                |s| matches!(s, Destination::Staging(cache) if cache.preload_definitions_due.is_some() || cache.preload_launch_due.is_some()),
+                |s| matches!(s, Destination::Staging(cache) if matches!(cache.preload_wait, NameWait::Definitions(_) | NameWait::Function(_))),
             )
             .unwrap();
         drop(state);
@@ -483,7 +526,10 @@ impl Control {
         if let Destination::Staging(cache) = &mut *self.destination.state.lock().unwrap() {
             cache.grants = grants.into();
         }
-        let range = update(&self.destination, |cache| {
+        update(&self.destination, |cache| {
+            if !cache.preloads_open {
+                return;
+            }
             let first = cache.preloads.len();
             let count = cache.preloads.iter().filter(|p| !p.prefetch).count();
             for definition in definitions.into_iter().take(MAX_PRELOADS - count) {
@@ -497,24 +543,13 @@ impl Control {
                     generation,
                 ));
             }
-            (first..cache.preloads.len())
+            let indices: Vec<_> = (first..cache.preloads.len())
                 .map(|i| (i, cache.preloads[i].generation))
-                .collect::<Vec<_>>()
-        });
-        if let Some(indices) = range.filter(|indices| !indices.is_empty()) {
-            if !self.start_worker()
-                || self
-                    .send
-                    .send(Message::Start(indices, grants.into()))
-                    .is_err()
-            {
-                update(&self.destination, |cache| {
-                    cache.preload_definitions_due = None;
-                    cache.preload_launch_due = None;
-                    cancel_all(cache);
-                });
+                .collect();
+            if !indices.is_empty() {
+                self.start(cache, indices, grants);
             }
-        }
+        });
     }
     /// Cancel uses of a changed secret before returning.
     pub fn drop_secret(&self, name: &str) {
@@ -551,7 +586,7 @@ impl Control {
 }
 impl Drop for Preloads {
     fn drop(&mut self) {
-        update(&self.destination, cancel_all);
+        update(&self.destination, close);
         *self.destination.state.lock().unwrap() = Destination::Closed;
         let _ = self.send.send(Message::Stop);
     }
@@ -771,18 +806,19 @@ fn can_take(cache: &cache::Cache, request: &Request, i: usize) -> bool {
     }
 }
 pub(super) fn pending_due(cache: &cache::Cache) -> Option<Instant> {
-    cache
-        .preload_definitions_due
-        .into_iter()
-        .chain(cache.preload_launch_due.filter(|_| cache.preload_names))
-        .filter(|due| (cache.clock)() < *due)
-        .min()
+    match cache.preload_wait {
+        NameWait::Definitions(due) => Some(due),
+        NameWait::Function(due) if cache.preload_names => Some(due),
+        _ => None,
+    }
+    .filter(|due| (cache.clock)() < *due)
 }
 fn waiting_for_name(cache: &cache::Cache, request: &Request) -> bool {
     cache.preload_names
-        && cache
-            .preload_launch_due
-            .is_some_and(|due| (cache.clock)() < due)
+        && matches!(
+            cache.preload_wait,
+            NameWait::Definitions(_) | NameWait::Function(_)
+        )
         && request.preload.as_ref().is_some_and(|name| {
             !cache.preloads.iter().any(|p| p.name == name.as_ref())
                 && !cache.preload_defined.contains(name.as_ref())
@@ -792,7 +828,7 @@ pub(super) fn waiting(state: &State, job: &Job) -> bool {
     eligible(&job.request, job.class, job.forced, job.work.is_some())
         && state.cache.as_ref().is_some_and(|c| {
             let now = (c.clock)();
-            c.preload_definitions_due.is_some_and(|due| now < due)
+            matches!(c.preload_wait, NameWait::Definitions(due) if now < due)
                 || waiting_for_name(c, &job.request)
                 || find(c, &job.request).is_some_and(|i| can_take(c, &job.request, i))
         })
@@ -800,13 +836,20 @@ pub(super) fn waiting(state: &State, job: &Job) -> bool {
 // The earliest queued request keeps room to finish before later replies
 // can fill its lane. A preload failure still needs that room (D1).
 pub(super) fn front_reservation(state: &State) -> usize {
-    if !state.jobs[0].iter().any(|job| waiting(state, job)) {
+    if !state.jobs[0]
+        .iter()
+        .any(|job| job.waited_for_preload || waiting(state, job))
+    {
         return 0;
     }
     let job = state.jobs[0].front().expect("a preload waiter");
     job.limit - job.charge
 }
 pub(super) fn reserve_front(state: &mut State) -> bool {
+    for index in 0..state.jobs[0].len() {
+        let waiting = waiting(state, &state.jobs[0][index]);
+        state.jobs[0][index].waited_for_preload |= waiting;
+    }
     let more = front_reservation(state);
     if !reads::has_room(state, 0, more) {
         return false;
@@ -836,6 +879,9 @@ pub(super) fn effect_count(state: &State) -> usize {
 }
 
 pub(super) fn serve_ready(state: &mut State) {
+    if let Some(cache) = state.cache.as_mut() {
+        expire(cache);
+    }
     if state.retired
         || state.cache.is_none()
         || state
@@ -986,12 +1032,7 @@ pub(super) fn drop_held(cache: &mut cache::Cache, i: usize, event: Event) {
 // Completion wins over a later timer observation (LLP 1162.000 D1).
 pub(super) fn expire(cache: &mut cache::Cache) {
     let now = (cache.clock)();
-    if cache.preload_definitions_due.is_some_and(|due| now >= due) {
-        cache.preload_definitions_due = None;
-    }
-    if cache.preload_launch_due.is_some_and(|due| now >= due) {
-        cache.preload_launch_due = None;
-    }
+    change_wait(cache, WaitChange::Expire);
     for i in 0..cache.preloads.len() {
         match &cache.preloads[i].reply {
             ReplyState::Pending { due, .. }
@@ -1048,6 +1089,7 @@ pub(super) fn refresh(cache: &mut cache::Cache, r: &RequestOut) {
             && r.request.preload.as_deref() == Some(held.name.as_str())
             && held.key.method == key.method
             && held.key.url == key.url;
+        // Ignore cache mode so a refresh also drops an older no-store hold (LLP 1162.000 D1).
         let equal = held.key.same_cache_key(&key)
             && held.key.redirect == key.redirect
             && held
@@ -1069,7 +1111,9 @@ fn drop_secret(cache: &mut cache::Cache, name: &str) {
         }
     }
 }
-pub(super) fn cancel_all(cache: &mut cache::Cache) {
+pub(super) fn close(cache: &mut cache::Cache) {
+    cache.preloads_open = false;
+    change_wait(cache, WaitChange::End);
     for i in 0..cache.preloads.len() {
         drop_held(cache, i, Event::Cancelled);
     }

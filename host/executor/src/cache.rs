@@ -112,8 +112,13 @@ pub(super) struct Exchange {
 
 pub(super) struct Cache {
     pub(super) preload_names: bool,
-    pub(super) preload_definitions_due: Option<Instant>,
-    pub(super) preload_launch_due: Option<Instant>,
+    // Names remain possible across definitions and the function; Ended cannot reopen.
+    // Only change_wait advances this under Location::state before adoption or
+    // Shared::state after it (LLP 1162.000 D1, D2).
+    pub(super) preload_wait: super::preload::NameWait,
+    // Admission, starts and close hold Location::state before adoption or Shared::state
+    // after it. Once closed, no live hold survives or can be admitted (LLP 1162.000 D1, D5).
+    pub(super) preloads_open: bool,
     pub(super) preload_defined: std::collections::BTreeSet<String>,
     pub(super) grants: String,
     entries: VecDeque<Arc<Entry>>,
@@ -129,8 +134,8 @@ impl Cache {
     pub(super) fn new(grants: String) -> Self {
         Self {
             preload_names: true,
-            preload_definitions_due: None,
-            preload_launch_due: None,
+            preload_wait: super::preload::NameWait::Idle,
+            preloads_open: true,
             preload_defined: Default::default(),
             grants,
             entries: VecDeque::new(),

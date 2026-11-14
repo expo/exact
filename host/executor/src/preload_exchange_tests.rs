@@ -395,6 +395,88 @@ fn different_bodies_bypass_the_http_copy_despite_different_redirect_or_cache_pol
 }
 
 #[test]
+fn a_refresh_drops_a_no_store_hold_in_every_refresh_mode() {
+    for asynchronous in [false, true] {
+        for pending in [false, true] {
+            for mode in [CacheMode::Reload, CacheMode::NoCache, CacheMode::Default] {
+                let server = Server::new();
+                let (core, woke) = server.core(asynchronous, true);
+                let (set, _clock) = fresh_clock(&server, Vec::new());
+                adopt(&core, set);
+                let old = held_plan(&server, "/a", b"old");
+                let request = server.request("/a").cache(CacheMode::NoStore);
+                start(&core, &server, request.clone(), true);
+                server.seen(1);
+                core.forget(|_| false);
+                if !pending {
+                    old.send(()).unwrap();
+                    ready(&core, 1);
+                }
+                {
+                    let state = core.shared.state.lock().unwrap();
+                    assert!(matches!(
+                        (&state.cache.as_ref().unwrap().preloads[0].reply, pending),
+                        (ReplyState::Pending { .. }, true) | (ReplyState::Ready(_), false)
+                    ));
+                }
+                server.plan("/a", Plan::new(200, &[], b"new"));
+                let mut refresh = job(2, server.request("/a").cache(mode));
+                refresh.forced = mode == CacheMode::Default;
+                let (reply, cached) = ask(&core, &woke, refresh);
+                assert!(!cached);
+                assert_eq!(reply.body, b"new");
+                assert!(matches!(
+                    core.shared
+                        .state
+                        .lock()
+                        .unwrap()
+                        .cache
+                        .as_ref()
+                        .unwrap()
+                        .preloads[0]
+                        .reply,
+                    ReplyState::Gone
+                ));
+                if pending {
+                    old.send(()).unwrap();
+                }
+                server.plan("/a", Plan::new(200, &[], b"new"));
+                let (reply, cached) = ask(&core, &woke, job(3, request));
+                assert!(!cached);
+                assert_eq!(reply.body, b"new");
+                assert_eq!(server.count(), 3);
+            }
+        }
+    }
+}
+
+#[test]
+fn a_prefetch_with_a_body_over_the_preload_bound_sends_only_its_caller() {
+    for asynchronous in [false, true] {
+        let server = Server::new();
+        let (core, woke) = server.core(asynchronous, true);
+        let release = held_plan(&server, "/query", b"caller");
+        let mut request = server.request("/query").prefetch();
+        request.method = "POST".into();
+        request.body = vec![b'x'; MAX_BODY_BYTES + 1];
+        core.run(job(1, request), None).unwrap();
+        server.seen(1);
+        {
+            let state = core.shared.state.lock().unwrap();
+            assert!(state.cache.as_ref().unwrap().preloads.is_empty());
+            assert!(state.running.iter().any(|r| r.ticket == 1));
+        }
+        assert!(core.preloads.lock().unwrap().is_none());
+        release.send(()).unwrap();
+        let (ticket, outcome, timing) = collect(&core, &woke);
+        assert_eq!(ticket, 1);
+        assert!(!timing.cached);
+        assert!(matches!(outcome, Outcome::Response(r) if r.body == b"caller"));
+        assert_eq!(server.count(), 1);
+    }
+}
+
+#[test]
 fn refreshing_a_prefetch_leaves_http_entries_to_the_cache_rules() {
     for asynchronous in [false, true] {
         for no_store in [true, false] {
@@ -749,6 +831,114 @@ fn a_holds_cache_mode_preserves_wire_headers_and_storage_policy() {
                 }
             }
         }
+    }
+}
+
+#[test]
+fn closing_a_failed_coordinator_drops_complete_and_concurrent_holds_and_stays_closed() {
+    for asynchronous in [false, true] {
+        let server = Server::new();
+        let (core, woke) = server.core(asynchronous, true);
+        let fail = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let failing = fail.clone();
+        server.plan("/complete", Plan::new(200, &[], b"complete"));
+        let set = Preloads::start(
+            vec![definition(&server, "/complete")],
+            &core.grants,
+            move || {
+                assert!(
+                    !failing.swap(false, Ordering::Relaxed),
+                    "injected preload factory panic"
+                );
+                ibex2::host::Host::new()
+            },
+        );
+        complete_set(&set);
+        let control = set.control();
+        adopt(&core, set);
+        server.plan("/prefetched", Plan::new(200, &[], b"prefetched"));
+        assert!(
+            ask(
+                &core,
+                &woke,
+                job(1, server.request("/prefetched").prefetch())
+            )
+            .1
+        );
+        let alive_server = Server::new();
+        alive_server.plan("/alive", Plan::new(200, &[], b"alive"));
+        let alive_set = launch(&alive_server, vec![definition(&alive_server, "/alive")]);
+        complete_set(&alive_set);
+        let (alive, alive_woke) = alive_server.core(asynchronous, true);
+        adopt(&alive, alive_set);
+        let (reached, paused) = channel();
+        let (resume, resume_at_close) = channel();
+        *control.destination.before_close.lock().unwrap() = Some((reached, resume_at_close));
+        fail.store(true, Ordering::Relaxed);
+        server.plan("/panic", Plan::new(200, &[], b"own"));
+        core.run(job(2, server.request("/panic").prefetch()), None)
+            .unwrap();
+        paused.recv_timeout(HANG).unwrap();
+        server.plan("/during", Plan::new(200, &[], b"own"));
+        core.run(job(3, server.request("/during").prefetch()), None)
+            .unwrap();
+        resume.send(()).unwrap();
+        exited(&control.destination);
+        let (gone, bytes) = {
+            let state = core.shared.state.lock().unwrap();
+            let cache = state.cache.as_ref().unwrap();
+            (
+                cache
+                    .preloads
+                    .iter()
+                    .all(|p| matches!(p.reply, ReplyState::Gone)),
+                cache.bytes,
+            )
+        };
+        assert!(gone);
+        assert_eq!(bytes, 0);
+        for ticket in 2..=3 {
+            let (got, outcome, timing) = collect(&core, &woke);
+            assert_eq!(got, ticket);
+            assert!(!timing.cached);
+            assert!(matches!(outcome, Outcome::Response(r) if r.body == b"own"));
+        }
+        let count = core
+            .shared
+            .state
+            .lock()
+            .unwrap()
+            .cache
+            .as_ref()
+            .unwrap()
+            .preloads
+            .len();
+        server.plan("/later", Plan::new(200, &[], b"own"));
+        assert!(!ask(&core, &woke, job(4, server.request("/later").prefetch())).1);
+        control.extend(
+            vec![definition(&server, "/refused")],
+            &core.grants,
+            Arc::new(|_, _| {}),
+        );
+        assert_eq!(
+            core.shared
+                .state
+                .lock()
+                .unwrap()
+                .cache
+                .as_ref()
+                .unwrap()
+                .preloads
+                .len(),
+            count
+        );
+        assert!(core
+            .take_preload_journal()
+            .iter()
+            .any(|f| f.name == "complete" && f.outcome == Event::Cancelled));
+        assert!(read(&alive, &alive_woke, &alive_server, 1, "/alive").1);
+        assert_eq!(server.count(), 5);
+        assert_eq!(alive_server.count(), 1);
     }
 }
 

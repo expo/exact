@@ -524,6 +524,7 @@ fn queued(ticket: u64, request: Request, forced: bool) -> Job {
         forced,
         work: None,
         waiting_charge: charge,
+        waited_for_preload: false,
         charge,
         limit,
         forgotten: false,

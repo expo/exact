@@ -11,6 +11,9 @@ impl Core {
         if !r.request.prefetch || !eligible(&r.request, r.class, r.forced, r.work.is_some()) {
             return;
         }
+        if let Some(cache) = state.cache.as_mut() {
+            expire(cache);
+        }
         // Only an unconditional read ready for the network can start a preload (LLP 1162.000 D5).
         if !reads::unblocked(state, r)
             || waiting(state, r)
@@ -22,7 +25,9 @@ impl Core {
         let Some(cache) = state.cache.as_mut() else {
             return;
         };
-        expire(cache);
+        if !cache.preloads_open {
+            return;
+        }
         if find(cache, &r.request).is_some()
             || !valid_request(&r.request)
             || cache::granted(&self.grants, &r.request).is_err()
@@ -90,16 +95,7 @@ impl Core {
             cache.preloads.len() - 1
         };
         let set = owned.as_ref().expect("preload owner");
-        if !set.control().start_worker()
-            || set
-                .send
-                .send(Message::Start(
-                    vec![(index, generation)],
-                    self.grants.clone(),
-                ))
-                .is_err()
-        {
-            drop_held(cache, index, Event::Cancelled);
-        }
+        set.control()
+            .start(cache, vec![(index, generation)], &self.grants);
     }
 }

@@ -430,8 +430,10 @@ While the function runs, a read waits only if it names a preload with no definit
 yet. It proceeds when that name is handed over, the function returns, or five
 seconds pass, then uses the ordinary holding rule. Unnamed reads and reads under
 an update selection wait only for existing holds. The manifest's definitions may
-hold any eligible read for one second. The function's deadline also aborts its
-blocking fetch. Requests handed over before it stand; later handoffs are refused.
+hold unnamed reads for one second; a missing name waits through the handoff to the
+function, or until the manifest's definitions are handed if there is no function.
+The function's deadline also aborts its blocking fetch. Requests handed over
+before it stand; later handoffs are refused.
 A panic cancels the function's requests where the build unwinds (a development
 build); a release build aborts on a panic there as anywhere in the crate.
 
@@ -451,7 +453,8 @@ or `Request::get(url).prefetch()` in Rust. On Apple, Linux, Windows and Android 
 the option starts a preload only when the app's own read would go to the network
 now as an unconditional request and could take its hold; otherwise it is the plain read.
 For example, a read waiting for earlier work or launch definitions, one taking a
-hold or using an HTTP-cache entry, and an `only-if-cached` miss start none.
+hold or using an HTTP-cache entry, an `only-if-cached` miss, and a request with a
+body over 64 KiB start none.
 A forced ask, `reload` or `no-cache` cannot take a hold. A full worker lane alone
 does not stop a preload. A skipped preload is never started later.
 The caller's fetch and the app's own later equal reads wait for that preload and

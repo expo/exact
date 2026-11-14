@@ -112,7 +112,7 @@ pub(super) fn can_start(state: &State, job: &Job) -> bool {
     {
         return false;
     }
-    true
+    !job.overlap || job.class != RequestClass::Read || room_to_start(state, job)
 }
 
 pub(super) fn has_room(state: &State, lane: usize, more: usize) -> bool {
@@ -120,14 +120,19 @@ pub(super) fn has_room(state: &State, lane: usize, more: usize) -> bool {
 }
 
 pub(super) fn room_to_start(state: &State, job: &Job) -> bool {
+    // The front job reserves even while waiting on a hold. Other reads
+    // ahead take their own reservations before this one (LLP 1162.000 D5).
     let more = state.jobs[0]
         .iter()
         .take_while(|before| before.ticket != job.ticket)
-        .filter(|before| !preload::waiting(state, before))
-        .fold(
-            job.limit - job.charge + preload::front_reservation(state),
-            |more, before| more.max(before.limit - before.charge),
-        );
+        .chain(std::iter::once(job))
+        .enumerate()
+        .filter(|(index, before)| {
+            *index == 0 || before.ticket == job.ticket || !preload::waiting(state, before)
+        })
+        .fold(0_usize, |more, (_, before)| {
+            more.saturating_add(before.limit - before.charge)
+        });
     has_room(state, 0, more)
 }
 

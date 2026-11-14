@@ -150,7 +150,7 @@ pub(super) fn run(
 ) {
     let mut launch_workers = None;
     let mut prefetch_workers = None;
-    let _pending = PendingGuard(destination.clone());
+    let _closed = CloseGuard(destination.clone());
     loop {
         let delay = update(destination, |cache| {
             expire(cache);
@@ -203,7 +203,6 @@ pub(super) fn run(
                             continue;
                         }
                         Err(_) => {
-                            update(destination, cancel_all);
                             return;
                         }
                     }
@@ -230,17 +229,15 @@ pub(super) fn run(
     }
 }
 
-struct PendingGuard(Arc<Location>);
-impl Drop for PendingGuard {
+struct CloseGuard(Arc<Location>);
+impl Drop for CloseGuard {
     fn drop(&mut self) {
-        update(&self.0, |cache| {
-            // A coordinator without a receiver cannot resolve another hold (LLP 1162.000 D1, D5).
-            for i in 0..cache.preloads.len() {
-                if matches!(cache.preloads[i].reply, ReplyState::Pending { .. }) {
-                    drop_held(cache, i, Event::Cancelled);
-                }
-            }
-        });
+        #[cfg(test)]
+        if let Some((reached, resume)) = self.0.before_close.lock().unwrap().take() {
+            let _ = reached.send(());
+            let _ = resume.recv_timeout(Duration::from_secs(10));
+        }
+        update(&self.0, close);
     }
 }
 
@@ -311,7 +308,7 @@ fn start_indices(
         }
         req.max_body = Some(cache::MAX_ENTRY);
         req.timeout = timeout.map(|ms| Duration::from_millis(u64::from(ms) + 1_000));
-        // A preload is asked for by nobody yet: Low Data Mode refuses it (LLP 1162.000 D4).
+        // A preload is asked for by nobody yet: Low Data Mode refuses it (LLP 1162 D7; LLP 1162.000 D1).
         req.speculative = true;
         if let Some((name, observer)) = &observed {
             notify_observer(observer, name, Observation::Handed);

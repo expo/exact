@@ -1,6 +1,123 @@
 use super::*;
 
 #[test]
+fn boot_cannot_settle_an_equal_hold_before_the_launch_can_define_its_name() {
+    for asynchronous in [false, true] {
+        let server = Server::new();
+        let (set, _clock) = fresh_clock(&server, Vec::new());
+        let control = set.control();
+        control.definitions_pending(true);
+        server.plan("/feed", Plan::new(200, &[], b"base"));
+        let mut base = definition(&server, "/feed");
+        base.name = "base".into();
+        control.extend(
+            vec![base],
+            &format!("net.fetch http://{}", server.address),
+            Arc::new(|_, _| {}),
+        );
+        complete_set(&set);
+        let request = job(1, server.request("/feed").preload("feed").unwrap());
+        assert!(control.settle(&request).is_none());
+        let (core, _) = server.core(asynchronous, true);
+        adopt(&core, set);
+        assert!(core.settle_preload(&request).is_none());
+        control.launch_pending(Some(Duration::from_secs(5)));
+        assert!(core.settle_preload(&request).is_none());
+        control.launch_pending(None);
+        let (outcome, timing) = core.settle_preload(&request).unwrap();
+        assert!(timing.cached);
+        assert!(matches!(outcome, Outcome::Response(r) if r.body == b"base"));
+    }
+}
+
+#[test]
+fn named_reads_wait_across_manifest_handoff_and_are_released_together() {
+    for asynchronous in [false, true] {
+        for ending in 0..4 {
+            let server = Server::new();
+            let (set, clock) = fresh_clock(&server, Vec::new());
+            let control = set.control();
+            control.definitions_pending(true);
+            server.plan("/feed", Plan::new(200, &[], b"base"));
+            let mut base = definition(&server, "/feed");
+            base.name = "base".into();
+            control.extend(
+                vec![base],
+                &format!("net.fetch http://{}", server.address),
+                Arc::new(|_, _| {}),
+            );
+            complete_set(&set);
+            let (core, woke) = server.core(asynchronous, true);
+            adopt(&core, set);
+            for ticket in 1..=2 {
+                let mut request = server.request("/feed").preload("feed").unwrap();
+                if ending == 3 {
+                    request = request.header("X-Trace", "caller");
+                }
+                if ticket == 1 {
+                    request = request.prefetch();
+                }
+                core.run(job(ticket, request), None).unwrap();
+            }
+            let snapshot = {
+                let state = core.shared.state.lock().unwrap();
+                (
+                    state.completed[0].len(),
+                    state.running.len(),
+                    state.jobs[0].len(),
+                    state.jobs[0].iter().all(|j| waiting(&state, j)),
+                    state.cache.as_ref().unwrap().preloads.len(),
+                )
+            };
+            assert_eq!(snapshot, (0, 0, 2, true, 1));
+            *clock.lock().unwrap() += DEFINITIONS_WAIT;
+            control.test_tick();
+            let completed = core.shared.state.lock().unwrap().completed[0].len();
+            assert_eq!(completed, 0);
+            if ending != 2 {
+                control.launch_pending(Some(Duration::from_secs(5)));
+            }
+            if ending == 0 {
+                server.plan("/feed", Plan::new(200, &[], b"named"));
+                let mut feed = definition(&server, "/feed");
+                feed.request = feed.request.header("X-Trace", "launch");
+                control.extend(vec![feed], &core.grants, Arc::new(|_, _| {}));
+            } else {
+                if ending == 3 {
+                    for _ in 0..2 {
+                        server.plan("/feed", Plan::new(200, &[], b"network"));
+                    }
+                }
+                if ending == 2 {
+                    control.definitions_pending(false);
+                } else {
+                    control.launch_pending(None);
+                }
+            }
+            for ticket in 1..=2 {
+                let (got, outcome, timing) = collect(&core, &woke);
+                assert_eq!(got, ticket);
+                assert_eq!(timing.cached, ending != 3);
+                let expected = match ending {
+                    0 => b"named".as_slice(),
+                    3 => b"network",
+                    _ => b"base",
+                };
+                assert!(matches!(outcome, Outcome::Response(r) if r.body == expected));
+            }
+            assert_eq!(
+                server.count(),
+                match ending {
+                    0 => 2,
+                    3 => 3,
+                    _ => 1,
+                }
+            );
+        }
+    }
+}
+
+#[test]
 fn a_named_read_waits_past_an_equal_hold_until_its_name_or_the_launch_ends() {
     for asynchronous in [false, true] {
         for prefetch in [false, true] {

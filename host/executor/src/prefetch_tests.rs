@@ -1133,7 +1133,7 @@ fn a_full_read_lane_still_starts_a_prefetch_on_its_own_workers() {
         let server = Server::new();
         let (core, woke, _) = runtime(&server, asynchronous, false);
         let mut releases = Vec::new();
-        for ticket in 1..=INDEPENDENT as u64 + 1 {
+        for ticket in 1..=INDEPENDENT as u64 {
             let path = format!("/{ticket}");
             releases.push(held_plan(&server, &path, b"read"));
             core.run(job(ticket, server.request(&path)), None).unwrap();
@@ -1146,9 +1146,8 @@ fn a_full_read_lane_still_starts_a_prefetch_on_its_own_workers() {
         {
             let state = core.shared.state.lock().unwrap();
             assert_eq!(state.running.len(), INDEPENDENT);
-            assert!(state.jobs[0]
-                .iter()
-                .any(|j| j.ticket == INDEPENDENT as u64 + 1));
+            assert_eq!(state.jobs[0].len(), 1);
+            assert_eq!(state.jobs[0][0].ticket, 20);
             assert!(matches!(
                 state.cache.as_ref().unwrap().preloads[0].reply,
                 ReplyState::Pending { .. }
@@ -1159,12 +1158,12 @@ fn a_full_read_lane_still_starts_a_prefetch_on_its_own_workers() {
         for release in releases {
             release.send(()).unwrap();
         }
-        for ticket in 1..=INDEPENDENT as u64 + 1 {
+        for ticket in 1..=INDEPENDENT as u64 {
             expect(&core, &woke, ticket, b"read", false);
         }
         expect(&core, &woke, 20, b"held", true);
         assert!(read(&core, &woke, &server, 21, "/next").1);
-        assert_eq!(server.count(), INDEPENDENT + 2);
+        assert_eq!(server.count(), INDEPENDENT + 1);
     }
 }
 
@@ -1398,65 +1397,5 @@ fn a_prefetch_takes_an_existing_named_hold_with_different_headers() {
     }
 }
 
-#[test]
-fn a_prefetch_waiting_for_response_bytes_sends_itself_when_room_returns() {
-    for asynchronous in [false, true] {
-        let server = Server::new();
-        let (core, woke, _) = runtime(&server, asynchronous, false);
-        let retained = BYTES[0] - (1 << 20);
-        core.shared.state.lock().unwrap().bytes[0] = retained;
-        server.plan("/next", Plan::new(200, &[], b"caller"));
-        core.run(job(1, server.request("/next").prefetch()), None)
-            .unwrap();
-        let holds = {
-            let mut state = core.shared.state.lock().unwrap();
-            let holds = state.cache.as_ref().unwrap().preloads.len();
-            state.bytes[0] -= retained;
-            core.shared.ready.notify_all();
-            holds
-        };
-        expect(&core, &woke, 1, b"caller", false);
-        assert_eq!(holds, 0);
-        assert_eq!(server.count(), 1);
-    }
-}
-
-#[test]
-fn a_prefetch_does_not_pass_an_earlier_read_short_of_response_bytes() {
-    for asynchronous in [false, true] {
-        for waiting in [false, true] {
-            let server = Server::new();
-            let release = held_plan(&server, "/ahead", b"launch");
-            let mut def = definition(&server, "/ahead");
-            def.request.method = "POST".into();
-            def.request.body = vec![b'x'; MAX_BODY_BYTES];
-            let ahead = def.request.clone();
-            let (set, _clock) = fresh_clock(&server, if waiting { vec![def] } else { Vec::new() });
-            let (core, woke) = server.core(asynchronous, true);
-            adopt(&core, set);
-            let request = server.request("/next").prefetch();
-            let (_, _, next_limit) = reads::reservation(&request, true).unwrap();
-            let (_, ahead_charge, _) = reads::reservation(&ahead, true).unwrap();
-            let retained = BYTES[0] - (next_limit + ahead_charge);
-            core.shared.state.lock().unwrap().bytes[0] = retained;
-            core.run(job(1, ahead), None).unwrap();
-            if !asynchronous && !waiting {
-                server.seen(1);
-            }
-            server.plan("/next", Plan::new(200, &[], b"caller"));
-            core.run(job(2, request), None).unwrap();
-            let holds = {
-                let mut state = core.shared.state.lock().unwrap();
-                let holds = state.cache.as_ref().unwrap().preloads.len();
-                state.bytes[0] -= retained;
-                core.shared.ready.notify_all();
-                holds
-            };
-            release.send(()).unwrap();
-            expect(&core, &woke, 1, b"launch", waiting);
-            expect(&core, &woke, 2, b"caller", false);
-            assert_eq!(holds, usize::from(waiting));
-            assert_eq!(server.count(), 2);
-        }
-    }
-}
+#[path = "prefetch_byte_tests.rs"]
+mod bytes;
