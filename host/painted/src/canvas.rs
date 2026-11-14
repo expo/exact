@@ -881,7 +881,6 @@ impl Backend for Recorder {
     fn shared_end(&mut self) {
         self.shared_close();
     }
-
     fn row_reusable(&self, id: u32, _: (f32, f32)) -> bool {
         self.shared_row_reusable(id)
     }
