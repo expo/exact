@@ -532,7 +532,10 @@ in world space to the same limits the tick applies. The default `None` keeps
 today's unbounded translation. Infinite limits leave an axis unbounded; NaN or
 reversed bounds are ignored. Only the frame's own translation is limited: a frame
 with no unshown pointer motion draws the camera where its tick put it. Children
-receive the camera's clamped translation.
+receive the camera's clamped translation. Between ticks, the part of the latest
+tick not yet drawn is limited the same way, so a tick that stopped at a limit
+does not hold the drawn camera there when a newer sample turns back. This
+assumes the camera's parent, if any, does not move between ticks.
 For a target-based camera, add the eye-to-target offset to the target limits.
 After the release tick, set `delta` to zero: any tick-driven coast uses normal
 interpolation and needs no frame-time adjustment. This adds no spring or

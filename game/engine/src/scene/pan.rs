@@ -27,7 +27,9 @@ pub struct PointerPan {
     /// Minimum and maximum world-space camera position after this frame's
     /// translation. None leaves it unbounded. NaN or reversed bounds are
     /// ignored. Infinite limits leave an axis unbounded. A frame with no
-    /// unshown pointer motion is not moved.
+    /// unshown pointer motion is not moved. The tick must apply the same
+    /// limits: the frame redoes the latest tick's clamp to find how far it
+    /// moved the camera.
     pub bounds: Option<[Vec3; 2]>,
 }
 impl PointerPan {

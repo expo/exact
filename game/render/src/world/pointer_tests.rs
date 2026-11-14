@@ -449,3 +449,85 @@ fn pointer_pan_bounds_leave_a_camera_with_no_unshown_motion_where_its_tick_put_i
     }));
     assert_eq!(feed.frame(&w, 1., 1.).camera_position, Vec3::X * 5.);
 }
+
+const EDGE: f32 = 1.;
+const BOUNDS: [Vec3; 2] = [
+    Vec3::new(-EDGE, f32::NEG_INFINITY, f32::NEG_INFINITY),
+    Vec3::new(EDGE, f32::INFINITY, f32::INFINITY),
+];
+/// `Panning` whose tick clamps the camera at the same limits it presents.
+struct ClampedPanning;
+impl Game for ClampedPanning {
+    const ID: &'static str = "pointer-pan-clamped";
+    const HZ: u32 = 120;
+    type Args = ();
+    fn setup(w: &mut World, args: &()) {
+        Panning::setup(w, args);
+        w.get_mut::<Transform>("camera").unwrap().position.x = 0.;
+    }
+    fn tick(w: &mut World, input: &Input, args: &()) {
+        Panning::tick(w, input, args);
+        let mut camera = w.get_mut::<Transform>("camera").unwrap();
+        camera.position = camera.position.clamp(BOUNDS[0], BOUNDS[1]);
+    }
+    fn present(p: &mut Present<'_>, args: &()) {
+        Panning::present(p, args);
+        let camera = p.named("camera").unwrap();
+        let mut pan = *p.get::<PointerPan>(camera).unwrap();
+        pan.bounds = Some(BOUNDS);
+        p.insert(camera, pan);
+    }
+}
+
+#[test]
+fn a_clamped_tick_does_not_hold_the_drawn_camera_at_the_edge() {
+    let mut sim = Sim::<ClampedPanning>::new(()).unwrap();
+    let mut feed = Feed::default();
+    let mut writes = Recording::default();
+    feed.feed_to(sim.world(), &mut writes).unwrap();
+    sim.advance(0., Clock::Seekable);
+    touch_clamped(&mut sim, PointerPhase::Down, 0., 0., 0.);
+    // 60 points would move the camera 1.5; the tick at 8.3 ms clamps it to 1.
+    touch_clamped(&mut sim, PointerPhase::Move, 60., 60., 1.);
+    // A newer sample, after that tick, turns back by 10 points.
+    touch_clamped(&mut sim, PointerPhase::Move, 50., -10., 9.);
+    sim.advance_with(12.5, Clock::Seekable, |w, left| {
+        if left < 2 {
+            feed.feed_to(w, &mut writes).unwrap();
+        }
+    });
+    let camera = sim.world().get::<Transform>("camera").unwrap().position.x;
+    assert_eq!(camera, EDGE, "the tick clamped");
+    assert!((sim.alpha() - 0.5).abs() < 0.01, "{}", sim.alpha());
+    let sample = sim.frame_pointer(feed.pointer_pan().unwrap()).unwrap();
+    assert_eq!(sample.position.x, 50.);
+    feed.pointer_sample(Some(sample));
+    let shown = feed.frame(sim.world(), sim.alpha(), 1.).camera_position.x;
+    // The clamped camera moved back by the newer sample, not held at 1.
+    let expected = EDGE - 10. * HORIZONTAL.x;
+    assert!((shown - expected).abs() < 1e-5, "{shown} != {expected}");
+    // The next tick consumes that sample: the drawn camera stays, no jump.
+    sim.advance_with(20.8, Clock::Seekable, |w, left| {
+        if left < 2 {
+            feed.feed_to(w, &mut writes).unwrap();
+        }
+    });
+    assert!((sim.alpha() - 0.5).abs() < 0.01, "{}", sim.alpha());
+    let sample = sim.frame_pointer(feed.pointer_pan().unwrap()).unwrap();
+    feed.pointer_sample(Some(sample));
+    let next = feed.frame(sim.world(), sim.alpha(), 1.).camera_position.x;
+    assert!((next - expected).abs() < 1e-5, "{next} != {expected}");
+}
+fn touch_clamped(sim: &mut Sim<ClampedPanning>, phase: PointerPhase, x: f32, dx: f32, at_ms: f64) {
+    sim.input(InputEvent::Pointer {
+        id: 1,
+        phase,
+        x,
+        y: 0.,
+        dx,
+        dy: 0.,
+        buttons: 1,
+        at_ms,
+        player: 0,
+    });
+}

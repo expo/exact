@@ -470,8 +470,15 @@ impl Scene {
                         c,
                     )
                 });
-        self.pointer
-            .frame(&mut camera_pose, &mut self.attachments.output, alpha);
+        let tick_move = self
+            .camera
+            .map_or(Vec3::ZERO, |(h, _)| h.curr.position - h.prev.position);
+        self.pointer.frame(
+            &mut camera_pose,
+            tick_move,
+            &mut self.attachments.output,
+            alpha,
+        );
         if !pixels {
             if let exact_game::Projection::Orthographic { integer_scale, .. } =
                 &mut camera.projection
