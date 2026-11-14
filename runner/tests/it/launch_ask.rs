@@ -22,6 +22,126 @@ struct Feed {
 }
 
 #[test]
+fn shelf_asks_for_discover_only_on_its_tab() {
+    #[derive(Default)]
+    struct Shelf(std::collections::BTreeMap<String, Value>);
+    impl DataSource for Shelf {
+        fn bind(&mut self, plan: &exact_plan::Plan) {
+            for row in &plan.resources {
+                if let Ok(value) = exact_runner::surface_record::decode(plan, row.ty, None) {
+                    self.0.insert(plan.str(row.source).into(), value);
+                }
+            }
+        }
+        fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
+            match source {
+                "library" => Ok(Value::record(vec![
+                    Value::Bool(true),
+                    Value::list(vec![]),
+                    Value::Number(12.),
+                    Value::Number(0.),
+                    Value::str("—"),
+                ])),
+                _ => self
+                    .0
+                    .get(source)
+                    .cloned()
+                    .ok_or_else(|| DataError::UnknownSource(source.into())),
+            }
+        }
+
+        fn answer(
+            &mut self,
+            _: &mut Store,
+            source: &str,
+            args: &[Value],
+        ) -> Result<Answer, DataError> {
+            match source {
+                "subjectWorks" | "setPage" | "removeBook" => Ok(Answer::Later(Request::get(
+                    &format!("https://example.test/{source}"),
+                ))),
+                _ => self.query(source, args).map(Answer::Now),
+            }
+        }
+
+        fn parse(
+            &mut self,
+            _: &mut Store,
+            source: &str,
+            _: &[Value],
+            _: Outcome,
+        ) -> Result<Answer, DataError> {
+            Ok(Answer::Now(if source == "subjectWorks" {
+                Value::record(vec![Value::Bool(true), Value::str(""), Value::list(vec![])])
+            } else {
+                Value::record(vec![Value::Bool(true)])
+            }))
+        }
+    }
+
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../apps/shelf/app.contract");
+    let mut r = Runner::boot(
+        contract::compile_path(&path).unwrap(),
+        Shelf::default(),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    assert!(r.pending().is_empty(), "the library asks no Discover work");
+    assert!(r.take_requests().is_empty());
+    for (action, args) in [
+        ("turnTo", vec![Value::str("seed-2"), Value::Number(130.)]),
+        ("swipeRemove", vec![Value::str("seed-2")]),
+    ] {
+        r.act(action, args).unwrap();
+        let request = one_request(&mut r);
+        assert_eq!(r.pending(), [("changed".into(), request.ticket)]);
+        r.fulfill(
+            request.ticket,
+            Outcome::Response(Response {
+                status: 200,
+                headers: vec![],
+                body: vec![],
+            }),
+        )
+        .unwrap();
+        r.land_then();
+        assert!(
+            r.pending().is_empty(),
+            "the mutation settled without Discover"
+        );
+    }
+    r.act("pick", vec![Value::str("discover")]).unwrap();
+    let request = one_request(&mut r);
+    assert_eq!(r.pending(), [("works".into(), request.ticket)]);
+    r.act("pick", vec![Value::str("stats")]).unwrap();
+    assert!(
+        !r.holds(request.ticket),
+        "leaving Discover cancels its read"
+    );
+    assert!(r.pending().is_empty());
+    r.act("chooseSubject", vec![Value::str("fantasy")]).unwrap();
+    assert!(r.take_requests().is_empty());
+    r.act("pick", vec![Value::str("discover")]).unwrap();
+    let request = one_request(&mut r);
+    r.fulfill(
+        request.ticket,
+        Outcome::Response(Response {
+            status: 200,
+            headers: vec![],
+            body: vec![],
+        }),
+    )
+    .unwrap();
+    assert!(r.pending().is_empty());
+    assert!(r
+        .failed_resources()
+        .iter()
+        .all(|(name, _)| *name != "works"));
+}
+
+#[test]
 fn changing_only_prefetch_keeps_the_request_but_changing_its_body_replaces_it() {
     struct Source;
     impl DataSource for Source {
@@ -105,7 +225,8 @@ fn launch() -> Runner<Feed> {
     r
 }
 
-fn one_request(r: &mut Runner<Feed>) -> RequestOut {
+#[track_caller]
+fn one_request(r: &mut Runner<impl DataSource>) -> RequestOut {
     let mut requests = r.take_requests();
     assert_eq!(requests.len(), 1, "{requests:?}");
     requests.pop().unwrap()

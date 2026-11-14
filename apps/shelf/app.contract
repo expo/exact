@@ -148,7 +148,7 @@ component Shelf
 
   resource time = exactTime() as shape Time
   resource lib = library() as shape Library else empty(ready=false, goal=12, avgText="—")
-  resource works = subjectWorks(subject) as shape Subject else empty(ok=true)
+  resource works = subjectWorks(subject) when nav.tab == "discover" as shape Subject else empty(ok=true)
   mutation changed as shape Ack queue refreshes lib then saved
   // The add sheet's own: the sheet closes only once the book is stored.
   mutation added as shape Ack queue refreshes lib then addEnded
