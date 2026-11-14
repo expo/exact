@@ -882,7 +882,7 @@ component NativeFixture
         button press=hush testId="root-toast" position="absolute" top=60 left=16 right=16 padding=12 background-color="#111827" border-radius=8
           text toast color="#ffffff"
       if overlayShown
-        column testId="root-overlay" role="dialog" aria-label="Overlay" position="absolute" top=0 right=0 bottom=0 left=0 z-index=10 background-color="#000000cc" align-items="center" justify-content="center"
+        column testId="root-overlay" position="absolute" top=0 right=0 bottom=0 left=0 z-index=10 background-color="#000000cc" align-items="center" justify-content="center"
           button press=hideOverlay testId="hide-overlay" padding=12 background-color="#ffffff"
             text "Close"
 

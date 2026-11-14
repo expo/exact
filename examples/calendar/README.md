@@ -24,15 +24,17 @@ other apps outside `apps/`. The common engine remains under
 ## Layout and interaction
 
 At widths of 860 pixels or more, the month has an inspector on the right and a
-centered editor. Narrower windows use a date sheet, a floating add button with
-Event, Plan, Todo and Stickers choices, and a bottom editor. The choice follows
+modal editor. Narrower windows use a date sheet and a floating add button whose
+popover offers Event, Plan, Todo and Stickers. The choice follows
 window width on every platform. Resizing preserves the selected date, visible
 month and editor draft; an active drag or sheet gesture is cancelled.
 
 Select a date to inspect it. Edit an item from its row, mark a todo complete with
 its circle, and delete from the editor or the row's hover button. Use the date
 sheet's Close button or backdrop to dismiss it, or drag its handle to resize or
-close it. The editor can also be dismissed using Cancel or its handle.
+close it. The editor is a platform sheet, dismissed with Cancel, Escape or the platform’s
+sheet gesture. Theme and item-type pickers are popovers, dismissed by Escape or
+a press outside them.
 
 Drag an inspector item or palette sticker onto a date. In compact mode, items
 and stickers in the grid can also be dragged. A touch holds for 300 ms first;
