@@ -82,7 +82,7 @@ impl CacheMode {
 }
 
 impl super::Request {
-    /// Set the prefetch option; currently a plain fetch on every host (LLP 1162.000 D5).
+    /// Start a preload alongside the caller's ordinary read on native hosts (LLP 1162.000 D5).
     pub fn prefetch(mut self) -> Self {
         self.prefetch = true;
         self

@@ -45,7 +45,7 @@ impl Key {
 struct Entry {
     key: Key,
     // Secret writes reach HTTP copies after the holds release their keys (LLP 1162.000 D3).
-    preloads: u8,
+    preloads: u16,
     response: Response,
     stored: Instant,
     age: Duration,
@@ -637,6 +637,7 @@ pub(super) fn store_preload(
     started: Instant,
     redirected: bool,
 ) {
+    // Only launch slots retain secret dependencies after expiry (LLP 1162.000 D3, D5).
     if cache.preloads[index].store
         && !redirected
         && eligible(request, RequestClass::Read)
@@ -649,7 +650,11 @@ pub(super) fn store_preload(
             !Directives::of(&request.headers).no_store,
             response,
             false,
-            1 << index,
+            if cache.preloads[index].prefetch {
+                0
+            } else {
+                1 << index
+            },
             Instant::now(),
             SystemTime::now(),
         );
@@ -664,7 +669,7 @@ fn store_response(
     store: bool,
     response: &mut Response,
     cached: bool,
-    preloads: u8,
+    preloads: u16,
     now: Instant,
     wall: SystemTime,
 ) {
@@ -850,6 +855,13 @@ fn drop_urls(state: &mut State, urls: &[String]) {
 }
 #[allow(dead_code)] // Some shells expose no launch entry (LLP 1162.000 D4).
 pub(super) fn drop_preload_copy(cache: &mut Cache, index: usize) {
+    if cache.preloads[index].prefetch {
+        if let Some(request) = &cache.preloads[index].request {
+            cache.drop_key(&Key::of(request));
+        }
+        cache.collect();
+        return;
+    }
     for i in (0..cache.entries.len()).rev() {
         if cache.entries[i].preloads & (1 << index) != 0 {
             cache.remove(i);

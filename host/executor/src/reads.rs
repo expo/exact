@@ -19,7 +19,12 @@ pub(super) fn safe_read(request: &Request, work: bool, class: RequestClass) -> b
 
 // A made handoff has ended for scheduling (LLP 1120 D3). Otherwise each
 // class waits for all earlier classes except its peers (LLP 1162 D1).
-fn waits_for(class: RequestClass, before: RequestClass) -> bool {
+pub(super) fn waits_for(class: RequestClass, before: RequestClass, overlap: bool) -> bool {
+    let before = if overlap {
+        before
+    } else {
+        RequestClass::Ordered
+    };
     match class {
         RequestClass::Read => before != RequestClass::Read,
         RequestClass::Parallel(m) => before != RequestClass::Parallel(m),
@@ -82,7 +87,7 @@ pub(super) fn can_start(state: &State, job: &Job) -> bool {
         } else {
             RequestClass::Ordered
         };
-        if waits_for(class, before) {
+        if waits_for(class, run.class, run.overlap) {
             return false;
         }
         overlapping += usize::from(run.overlap);

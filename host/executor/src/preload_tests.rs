@@ -1465,3 +1465,6 @@ fn launch_fetches_and_preloads_keep_the_sources_scope_at_redirects() {
     assert_eq!(first.count(), 2);
     assert_eq!(outside.count(), 0);
 }
+
+#[path = "prefetch_tests.rs"]
+mod prefetch;

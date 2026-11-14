@@ -1,7 +1,12 @@
-//! Replies fetched before the executor exists (LLP 1162.000 D1, D3, D4).
+//! Held launch and prefetch replies (LLP 1162.000 D1, D3–D5).
 use super::*;
 use ibex2::boundary::HostError;
-use ibex2::stdlib::fetch_async::{Collected, FetchEvents, HeaderCaps};
+use ibex2::stdlib::fetch_async::Collected;
+#[path = "preload_fetch.rs"]
+mod fetch;
+use fetch::run;
+#[path = "prefetch.rs"]
+mod prefetch;
 use std::sync::{mpsc, Weak};
 use std::time::{Duration, Instant};
 
@@ -107,10 +112,12 @@ enum ReplyState {
     Gone,
 }
 pub(super) struct Held {
+    generation: usize,
+    pub(super) prefetch: bool,
     name: String,
     origin: String,
     secrets: Vec<String>,
-    request: Option<Request>,
+    pub(super) request: Option<Request>,
     key: Equal,
     reply: ReplyState,
     taken: bool,
@@ -141,7 +148,12 @@ impl Equal {
     }
 }
 impl Held {
-    fn new(definition: Definition, now: Instant, observer: Option<Observer>) -> Self {
+    fn new(
+        definition: Definition,
+        now: Instant,
+        observer: Option<Observer>,
+        generation: usize,
+    ) -> Self {
         let deadline = definition
             .deadline_ms
             .or(definition.request.timeout_ms)
@@ -150,6 +162,8 @@ impl Held {
             .map(|u| u.origin().ascii_serialization())
             .unwrap_or_default();
         Self {
+            generation,
+            prefetch: false,
             key: if definition.request.body.len() <= MAX_BODY_BYTES {
                 Equal::of(&definition.request)
             } else {
@@ -226,9 +240,9 @@ enum Destination {
     Closed,
 }
 enum Message {
-    Reply(usize, Result<Collected, HostError>, Instant),
+    Reply(usize, usize, Result<Collected, HostError>, Instant),
     Hop(Box<dyn FnOnce() + Send>),
-    Start(std::ops::Range<usize>, String),
+    Start(Vec<(usize, usize)>, String),
     Barrier(mpsc::Sender<()>),
     Tick,
     Stop,
@@ -265,12 +279,18 @@ impl Preloads {
         let mut cache = cache::Cache::new(grants.into());
         cache.clock = clock;
         let now = (cache.clock)();
-        cache.preloads = definitions
-            .into_iter()
-            .take(MAX_PRELOADS)
-            .map(|definition| Held::new(definition, now, None))
-            .collect();
-        let count = cache.preloads.len();
+        for definition in definitions.into_iter().take(MAX_PRELOADS) {
+            let generation = cache.touch();
+            cache
+                .preloads
+                .push(Held::new(definition, now, None, generation));
+        }
+        let indices = cache
+            .preloads
+            .iter()
+            .enumerate()
+            .map(|(i, p)| (i, p.generation))
+            .collect::<Vec<_>>();
         let destination = Arc::new(Location {
             state: Mutex::new(Destination::Staging(Box::new(cache))),
             changed: Condvar::new(),
@@ -283,9 +303,12 @@ impl Preloads {
             destination,
             send,
         };
-        if count > 0 {
-            set.control().start_worker();
-            let _ = set.send.send(Message::Start(0..count, grants.into()));
+        if !indices.is_empty() {
+            if set.control().start_worker() {
+                let _ = set.send.send(Message::Start(indices, grants.into()));
+            } else {
+                update(&set.destination, cancel_all);
+            }
         }
         set
     }
@@ -334,9 +357,9 @@ impl Control {
             let _ = receive.recv();
         }
     }
-    fn start_worker(&self) {
+    fn start_worker(&self) -> bool {
         let Some(Startup { receive, host }) = self.startup.lock().unwrap().take() else {
-            return;
+            return true;
         };
         let destination = self.destination.clone();
         let send = self.send.clone();
@@ -347,9 +370,7 @@ impl Control {
                 let _guard = thread_guard;
                 run(&destination, &send, receive, &host)
             });
-        if spawned.is_err() {
-            update(&self.destination, cancel_all);
-        }
+        spawned.is_ok()
     }
     /// A boot can dispatch before its launch thread has read the definitions;
     /// hold those reads for at most one second without delaying its first batch
@@ -437,21 +458,28 @@ impl Control {
         }
         let range = update(&self.destination, |cache| {
             let first = cache.preloads.len();
-            for definition in definitions.into_iter().take(MAX_PRELOADS - first) {
+            let count = cache.preloads.iter().filter(|p| !p.prefetch).count();
+            for definition in definitions.into_iter().take(MAX_PRELOADS - count) {
                 cache.preload_defined.remove(&definition.name);
                 let now = (cache.clock)();
-                cache
-                    .preloads
-                    .push(Held::new(definition, now, Some(observer.clone())));
+                let generation = cache.touch();
+                cache.preloads.push(Held::new(
+                    definition,
+                    now,
+                    Some(observer.clone()),
+                    generation,
+                ));
             }
-            first..cache.preloads.len()
+            (first..cache.preloads.len())
+                .map(|i| (i, cache.preloads[i].generation))
+                .collect::<Vec<_>>()
         });
-        if let Some(range) = range.filter(|range| !range.is_empty()) {
-            self.start_worker();
-            if self
-                .send
-                .send(Message::Start(range, grants.into()))
-                .is_err()
+        if let Some(indices) = range.filter(|indices| !indices.is_empty()) {
+            if !self.start_worker()
+                || self
+                    .send
+                    .send(Message::Start(indices, grants.into()))
+                    .is_err()
             {
                 update(&self.destination, |cache| {
                     cache.preload_definitions_due = None;
@@ -860,7 +888,7 @@ fn taken(cache: &mut cache::Cache, i: usize, ticket: u64) {
     if let ReplyState::Ready(r) = &mut held.reply {
         r.used = used;
     }
-    if !held.taken {
+    if !held.taken && !held.prefetch {
         cache.journal.push(held.fact(Event::Taken));
         held.taken = true;
     }
@@ -876,7 +904,7 @@ pub(super) fn drop_held(cache: &mut cache::Cache, i: usize, event: Event) {
         ReplyState::Ready(r) => r.bytes,
         ReplyState::Gone => return,
     };
-    if event != Event::NeverTaken || !held.taken {
+    if !held.prefetch && (event != Event::NeverTaken || !held.taken) {
         cache.journal.push(held.fact(event));
     }
     held.request = None;
@@ -955,8 +983,8 @@ pub(super) fn refresh(cache: &mut cache::Cache, r: &RequestOut) {
                 .as_ref()
                 .is_some_and(|request| request.body == r.request.body);
         if named || equal {
-            drop_held(cache, i, Event::DroppedByRefresh);
             cache::drop_preload_copy(cache, i);
+            drop_held(cache, i, Event::DroppedByRefresh);
         }
     }
 }
@@ -972,188 +1000,6 @@ fn drop_secret(cache: &mut cache::Cache, name: &str) {
 pub(super) fn cancel_all(cache: &mut cache::Cache) {
     for i in 0..cache.preloads.len() {
         drop_held(cache, i, Event::Cancelled);
-    }
-}
-
-struct Events {
-    send: mpsc::Sender<Message>,
-    index: usize,
-    clock: Arc<dyn Fn() -> Instant + Send + Sync>,
-    answered_at: Arc<Mutex<Option<Answered>>>,
-    observed: Option<(String, Observer)>,
-    visited: Mutex<Vec<String>>,
-}
-impl FetchEvents for Events {
-    fn outcome(&self, result: Result<Collected, HostError>) {
-        let at = (self.clock)();
-        *self.answered_at.lock().unwrap() = Some(Answered {
-            at,
-            visited: std::mem::take(&mut *self.visited.lock().unwrap()),
-        });
-        if result.is_ok() {
-            if let Some((name, observer)) = &self.observed {
-                observer(name, Observation::Complete);
-            }
-        }
-        let _ = self.send.send(Message::Reply(self.index, result, at));
-    }
-    fn next_hop(&self, url: &str, start: Box<dyn FnOnce() + Send>) {
-        self.visited.lock().unwrap().push(url.into());
-        let _ = self.send.send(Message::Hop(start));
-    }
-}
-
-fn finish(
-    cache: &mut cache::Cache,
-    index: usize,
-    result: Result<Collected, HostError>,
-    completed: Instant,
-) {
-    let held = &cache.preloads[index];
-    let ReplyState::Pending { due, .. } = &held.reply else {
-        return;
-    };
-    if completed >= *due {
-        drop_held(cache, index, Event::Cancelled);
-        return;
-    }
-    let reply = match result {
-        Ok(reply) => reply,
-        Err(e) => {
-            let event = match e {
-                HostError::Denied { .. } | HostError::DeniedRedirect { .. } => Event::RefusedGrant,
-                _ => Event::Failed,
-            };
-            drop_held(cache, index, event);
-            return;
-        }
-    };
-    let visited = std::mem::take(
-        &mut held
-            .answered_at
-            .as_ref()
-            .expect("pending exchange")
-            .lock()
-            .unwrap()
-            .as_mut()
-            .expect("completed exchange")
-            .visited,
-    );
-    let started = held.started;
-    let request = held.request.as_ref().expect("pending request");
-    let mut response = Response {
-        status: reply.status,
-        headers: reply.headers.entries().to_vec(),
-        body: reply.body,
-    };
-    let bytes = response_bytes(&response)
-        + visited.capacity() * std::mem::size_of::<String>()
-        + visited.iter().map(String::capacity).sum::<usize>()
-        + std::mem::size_of::<Held>()
-        + held.name.capacity()
-        + held.origin.capacity()
-        + held.secrets.capacity() * std::mem::size_of::<String>()
-        + held.secrets.iter().map(String::capacity).sum::<usize>()
-        + held.key.method.capacity()
-        + held.key.url.capacity()
-        + cache::header_bytes(&held.key.headers)
-        + request.method.capacity()
-        + request.url.capacity()
-        + request.body.capacity()
-        + request.grants.as_ref().map_or(0, String::capacity)
-        + request.preload.as_ref().map_or(0, |name| name.len())
-        + request.protocols.capacity() * std::mem::size_of::<String>()
-        + request
-            .protocols
-            .iter()
-            .map(String::capacity)
-            .sum::<usize>()
-        + cache::header_bytes(&request.headers)
-        + std::mem::size_of::<Mutex<Option<Answered>>>()
-        + 2 * std::mem::size_of::<usize>();
-    let request = request.clone();
-    if bytes > cache::MAX_ENTRY || !cache.room(bytes) {
-        drop_held(cache, index, Event::Oversized);
-        return;
-    }
-    let used = cache.touch();
-    cache.preloads[index].reply = ReplyState::Ready(Ready {
-        response: response.clone(),
-        visited,
-        completed,
-        bytes,
-        used,
-    });
-    cache.charge(bytes);
-    cache::store_preload(
-        cache,
-        index,
-        &request,
-        &mut response,
-        started,
-        reply.redirected,
-    );
-}
-
-fn run(
-    destination: &Arc<Location>,
-    send: &mpsc::Sender<Message>,
-    receive: mpsc::Receiver<Message>,
-    host: &StreamHost,
-) {
-    // Adapt the binding itself so every host honours its supplied transport (D4).
-    let guards: Vec<_> = (0..MAX_PRELOADS)
-        .map(|_| ThreadGuard::new(destination))
-        .collect();
-    let workers = match ibex2::stdlib::fetch_async::BoundedWorkerPool::with_worker_guards(
-        guards,
-        MAX_PRELOADS,
-    ) {
-        Ok(workers) => Arc::new(workers),
-        Err(_) => {
-            update(destination, cancel_all);
-            return;
-        }
-    };
-    loop {
-        let delay = update(destination, |cache| {
-            expire(cache);
-            let now = (cache.clock)();
-            cache
-                .preloads
-                .iter()
-                .filter_map(|p| match &p.reply {
-                    ReplyState::Pending { due, .. } => Some(*due),
-                    ReplyState::Ready(r) => Some(r.completed + HOLD),
-                    ReplyState::Gone => None,
-                })
-                .chain(pending_due(cache))
-                .min()
-                .map(|at| at.saturating_duration_since(now))
-        });
-        let Some(delay) = delay else {
-            return;
-        };
-        let message = match delay {
-            Some(delay) => receive.recv_timeout(delay),
-            None => receive
-                .recv()
-                .map_err(|_| mpsc::RecvTimeoutError::Disconnected),
-        };
-        match message {
-            Ok(Message::Start(indices, grants)) => {
-                start_indices(destination, send, host, &grants, &workers, indices)
-            }
-            Ok(Message::Reply(i, result, at)) => {
-                update(destination, |c| finish(c, i, result, at));
-            }
-            Ok(Message::Hop(start)) => start(),
-            Ok(Message::Barrier(ready)) => {
-                let _ = ready.send(());
-            }
-            Ok(Message::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => return,
-            Ok(Message::Tick) | Err(mpsc::RecvTimeoutError::Timeout) => {}
-        }
     }
 }
 
@@ -1243,79 +1089,6 @@ pub fn launch_fetch(
             body: r.body,
         })
         .map_err(|_| "launch fetch failed".into())
-}
-
-fn start_indices(
-    destination: &Arc<Location>,
-    send: &mpsc::Sender<Message>,
-    host: &StreamHost,
-    launch_grants: &str,
-    workers: &Arc<ibex2::stdlib::fetch_async::BoundedWorkerPool>,
-    indices: std::ops::Range<usize>,
-) {
-    for i in indices {
-        let start = update(destination, |cache| {
-            expire(cache);
-            let held = &cache.preloads[i];
-            let ReplyState::Pending { abort, .. } = &held.reply else {
-                return None;
-            };
-            let request = held.request.as_ref().expect("pending request");
-            if !valid_request(request) {
-                drop_held(cache, i, Event::Refused);
-                return None;
-            }
-            if cache::granted(launch_grants, request).is_err() {
-                drop_held(cache, i, Event::RefusedGrant);
-                return None;
-            }
-            let start = (
-                request.clone(),
-                abort.clone(),
-                launch_grants.to_owned(),
-                cache.clock.clone(),
-                held.answered_at.as_ref().expect("pending exchange").clone(),
-                held.observer.clone().map(|o| (held.name.clone(), o)),
-            );
-            cache.journal.push(held.fact(Event::Sent));
-            Some(start)
-        })
-        .flatten();
-        let Some((request, abort, grants, clock, answered_at, observed)) = start else {
-            continue;
-        };
-        let grants = exact_data::storage::scope(&grants, request.grants.as_deref())
-            .and_then(|s| ibex2::grant::GrantSet::parse(&exact_runner::io_grants(s)))
-            .expect("checked grants");
-        let fetch = reach::gate_fetch(host().endow(grants).fetch, request.reach);
-        let transport = Arc::new(fetch.blocking_adapter(workers.clone()));
-        let visited = Mutex::new(vec![request.url.clone()]);
-        let mut req = fetch_request(request, false);
-        req.max_body = Some(cache::MAX_ENTRY);
-        // A preload is asked for by nobody yet: Low Data Mode refuses it (LLP 1162.000 D4).
-        req.speculative = true;
-        if let Some((name, observer)) = &observed {
-            observer(name, Observation::Handed);
-        }
-        fetch.start_async(
-            transport.clone(),
-            req,
-            None,
-            abort.signal(),
-            HeaderCaps {
-                bytes: MAX_HEADERS,
-                entries: 1024,
-            },
-            Arc::new(Events {
-                send: send.clone(),
-                index: i,
-                clock,
-                answered_at,
-                observed,
-                visited,
-            }),
-        );
-    }
 }
 
 #[cfg(test)]
