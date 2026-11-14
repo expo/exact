@@ -71,7 +71,7 @@ fn usage() -> String {
     format!("usage:
   {build}
   contract migrate <file.contract>
-  contract symbols <file.contract> [--stdin] [--name <exact-name>]
+  contract symbols <file.contract> [--stdin] [--editor] [--name <exact-name>]
   contract sources <file.contract>
   contract fmt [--check | --stdout] <file.contract>
   contract fmt --uses <file.contract>
@@ -197,14 +197,19 @@ fn gallery(args: &[String]) -> ExitCode {
 }
 
 fn symbols(args: &[String]) -> ExitCode {
-    const USAGE: &str = "usage: contract symbols <file.contract> [--stdin] [--name <exact-name>]
-  --stdin: the file's text is stdin's, read as if saved at <file.contract>";
-    // `--stdin`, anywhere once but as `--name`'s value (a literal ID may be
-    // spelled so): the rest is matched without it.
-    let (mut stdin, mut rest) = (0, Vec::new());
+    const USAGE: &str =
+        "usage: contract symbols <file.contract> [--stdin] [--editor] [--name <exact-name>]
+  --stdin: the file's text is stdin's, read as if saved at <file.contract>
+  --editor: also each definition's `type`, `shapes`, and each view element (`elements`)";
+    // `--stdin` and `--editor`, anywhere once but as `--name`'s value (a
+    // literal ID may be spelled so): the rest is matched without them.
+    let (mut stdin, mut editor, mut rest) = (0, 0, Vec::new());
     for (i, arg) in args.iter().enumerate() {
-        if arg == "--stdin" && (i == 0 || args[i - 1] != "--name") {
+        let flag = i == 0 || args[i - 1] != "--name";
+        if flag && arg == "--stdin" {
             stdin += 1;
+        } else if flag && arg == "--editor" {
+            editor += 1;
         } else {
             rest.push(arg.clone());
         }
@@ -224,22 +229,24 @@ fn symbols(args: &[String]) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    if stdin > 1 {
+    if stdin > 1 || editor > 1 {
         eprintln!("{USAGE}");
         return ExitCode::from(2);
     }
     let path = std::path::Path::new(input);
+    let query = match editor {
+        0 => contract::symbols_json,
+        _ => contract::editor_symbols_json,
+    };
     let symbols = if stdin == 1 {
         let mut text = String::new();
         if let Err(cause) = std::io::Read::read_to_string(&mut std::io::stdin(), &mut text) {
             eprintln!("contract symbols: stdin: {cause}");
             return ExitCode::from(1);
         }
-        contract::with_contract_texts(vec![(path.into(), text)], || {
-            contract::symbols_json(path, name)
-        })
+        contract::with_contract_texts(vec![(path.into(), text)], || query(path, name))
     } else {
-        contract::symbols_json(path, name)
+        query(path, name)
     };
     match symbols {
         Ok(json) => {
