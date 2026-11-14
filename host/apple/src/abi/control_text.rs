@@ -69,7 +69,8 @@ impl<D: DataSource> Bridge<D> {
     /// left, the viewport's width and height, the regions' count (20, or 0
     /// when every region is the safe area) and their insets, then, with 16,
     /// the segments' count and their `x y w h`, then, with 32, the software
-    /// keyboard's overlap (LLP 1039 D9).
+    /// keyboard's overlap (LLP 1039 D9), then, with 64, owner block and
+    /// placement records in `exact_host_covers`' format.
     pub fn view(&mut self, len: usize) -> u32 {
         let bytes = self.input.get(..len).unwrap_or(&[]);
         let word = |i: usize| {
@@ -93,8 +94,30 @@ impl<D: DataSource> Bridge<D> {
                 .checked_add(10 + count + usize::from(given(16)) + usize::from(given(32)))?
                 .checked_mul(4)
         });
-        if (count != 0 && count != 20) || length != Some(bytes.len()) {
+        if (count != 0 && count != 20)
+            || !length.is_some_and(|n| {
+                if given(64) {
+                    n <= bytes.len()
+                } else {
+                    n == bytes.len()
+                }
+            })
+        {
             return self.refuse("view: malformed");
+        }
+        let end = length.unwrap();
+        let mut owners = super::collections::BlockChanges::default();
+        if given(64) {
+            let Ok(records) = super::collections::records(&bytes[end..]) else {
+                return self.refuse("view: malformed blocks");
+            };
+            for record in records {
+                match owners.push(record) {
+                    Ok(true) => {}
+                    Ok(false) => return self.refuse("view: invalid block record"),
+                    Err(_) => return self.refuse("view: invalid try tactic"),
+                }
+            }
         }
         let rects = rects.unwrap_or(0);
         let (width, height) = (float(1), float(2));
@@ -103,12 +126,21 @@ impl<D: DataSource> Bridge<D> {
         let size = given(8).then(|| (float(7), float(8)));
         let values: Vec<f32> = (10..10 + count).map(float).collect();
         let regions = given(4).then(|| crate::Host::<D>::regions_from(&values));
-        let last = bytes.len() - usize::from(given(32)) * 4;
+        let last = end - usize::from(given(32)) * 4;
         let segments = given(16)
             .then(|| super::segments::segment_rects(&bytes[(11 + count) * 4..last], rects as u32));
         let keyboard = given(32).then(|| float(last / 4));
         let out = self.host.as_mut().map_or_else(not_booted, |h| {
-            h.set_view(screen, insets, regions, size, segments, keyboard)
+            h.set_view(
+                screen,
+                insets,
+                regions,
+                size,
+                segments,
+                keyboard,
+                &owners.blocks,
+                &owners.placements,
+            )
         });
         self.emit(out)
     }

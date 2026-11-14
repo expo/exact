@@ -98,6 +98,58 @@ final class PageEdgesIOSTests: XCTestCase {
         XCTAssertEqual(top.convert(top.bounds, to: nil).minY, safe.top, accuracy: 0.5, "the content shows where it did")
     }
 
+    func testAnEmptyResizeRefitsTheDocument() throws {
+        guard hostedWindowScene() != nil else { throw missing("scene", "an embedded page resizes inside a scene's safe area") }
+        let (session, view) = try fixture("FIXED_PAGE")
+        let p = session.presenter
+        let origin = CGPoint(x: view.safeAreaInsets.left + 20, y: view.safeAreaInsets.top + 20)
+        view.frame = CGRect(origin: origin, size: CGSize(width: 300, height: 500))
+        view.fit()
+        waitForActivation(session)
+        XCTAssertEqual(p.pageMargins, .zero, "the embedded view is inside the safe area")
+        XCTAssertEqual(p.root.bounds.size, view.bounds.size)
+        XCTAssertEqual(p.viewport.contentSize, view.bounds.size)
+        let list = try node(session, "list")
+        XCTAssertEqual(list.bounds.size, CGSize(width: 100, height: 100))
+        for size in [CGSize(width: 200, height: 300), CGSize(width: 300, height: 500)] {
+            let applied = session.appliedBatches
+            view.frame.size = size
+            view.fit()
+            XCTAssertEqual(session.appliedBatches, applied, "the fixed root produces no runtime operations")
+            XCTAssertEqual(p.pageMargins, .zero, "the margins did not change")
+            XCTAssertEqual(list.bounds.size, CGSize(width: 100, height: 100))
+            XCTAssertEqual(p.root.bounds.size, size, "the document follows the viewport")
+            XCTAssertEqual(p.viewport.contentSize, size, "a fitting page has no blank scroll range")
+        }
+    }
+
+    func testAnEmptyResizeRefitsTheEdgeBands() throws {
+        guard hostedWindowScene() != nil else { throw missing("scene", "the home indicator's band belongs to a scene window") }
+        let (session, view) = try fixture("FIXED_PAGE")
+        let p = session.presenter, host = try XCTUnwrap(host?.view)
+        let bottom = host.safeAreaInsets.bottom
+        XCTAssertGreaterThan(bottom, 0, "the window has a home indicator")
+        func resize(_ height: CGFloat) {
+            view.frame = CGRect(x: 20, y: host.bounds.maxY - height - bottom, width: 200, height: height + bottom)
+            view.fit()
+        }
+        resize(300)
+        waitForActivation(session)
+        let list = try node(session, "list")
+        let margins = p.pageMargins
+        XCTAssertEqual(margins, UIEdgeInsets(top: 0, left: 0, bottom: bottom, right: 0))
+        XCTAssertEqual(list.pageBand.bottom, 0)
+        for height: CGFloat in [100, 300] {
+            let applied = session.appliedBatches
+            resize(height)
+            XCTAssertEqual(session.appliedBatches, applied, "the fixed root produces no runtime operations")
+            XCTAssertEqual(p.pageMargins, margins, "the margins did not change")
+            XCTAssertEqual(p.root.bounds.size, CGSize(width: 200, height: height))
+            XCTAssertEqual(p.viewport.contentSize, view.bounds.size)
+            XCTAssertEqual(list.pageBand.bottom, height == 100 ? bottom : 0, accuracy: 0.5, "only a scroller at the page's foot reaches into its band")
+        }
+    }
+
     func testTheScrollerAtTheEdgesReachesIntoTheBands() throws {
         guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "the status bar and the safe area are a scene window's") }
         let (session, view) = try fixture()

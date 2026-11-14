@@ -948,7 +948,8 @@ package final class Runtime {
     /// insets, the layout regions (`.some(nil)` when every region is the
     /// safe area), the viewport, the segments' rects on the grid the
     /// kernel has (a keyboard's) and the software keyboard's overlap
-    /// (`exactViewport().keyboardHeight`), in one batch under one layout.
+    /// (`exactViewport().keyboardHeight`), with native blocks and placements,
+    /// in one batch under one layout.
     package struct ViewChange {
         package var screen: CGSize?? = nil
         package var insets: (top: CGFloat, right: CGFloat, bottom: CGFloat, left: CGFloat)? = nil
@@ -956,7 +957,9 @@ package final class Runtime {
         package var size: CGSize? = nil
         package var segments: [CGRect]? = nil
         package var keyboard: CGFloat? = nil
-        package var isEmpty: Bool { screen == nil && insets == nil && regions == nil && size == nil && segments == nil && keyboard == nil }
+        /// Native block and placement records, as `exact_host_covers` takes them.
+        package var blocks = Data()
+        package var isEmpty: Bool { screen == nil && insets == nil && regions == nil && size == nil && segments == nil && keyboard == nil && blocks.isEmpty }
         package init(screen: CGSize?? = nil, insets: (top: CGFloat, right: CGFloat, bottom: CGFloat, left: CGFloat)? = nil,
                      regions: [CGFloat]?? = nil, size: CGSize? = nil) {
             self.screen = screen; self.insets = insets; self.regions = regions; self.size = size
@@ -971,6 +974,7 @@ package final class Runtime {
         if change.size != nil { mask |= 8 }
         if change.segments != nil { mask |= 16 }
         if change.keyboard != nil { mask |= 32 }
+        if !change.blocks.isEmpty { mask |= 64 }
         let screen = (change.screen ?? nil) ?? .zero, insets = change.insets ?? (0, 0, 0, 0), size = change.size ?? .zero
         let floats = [screen.width, screen.height, insets.top, insets.right, insets.bottom, insets.left, size.width, size.height]
         let rects = change.segments.map { rects in [UInt32(rects.count)] + rects.flatMap { [$0.minX, $0.minY, $0.width, $0.height].map { Float($0).bitPattern } } } ?? []
@@ -979,6 +983,7 @@ package final class Runtime {
         for word in [mask] + floats.map({ Float($0).bitPattern }) + [UInt32(regions.count)] + regions.map({ Float($0).bitPattern }) + rects + keyboard {
             withUnsafeBytes(of: word.littleEndian) { bytes.append(contentsOf: $0) }
         }
+        bytes.append(change.blocks)
         return on { read(exact_view(rt, write(bytes))) }
     }
 

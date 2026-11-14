@@ -1049,7 +1049,7 @@ public final class ExactSession {
     private(set) var routerOp: [String: Any]?
 
     /// A batch from a timer, a scroll event or a host's measurement: one that
-    /// changes nothing only moves the clock. An app's timer that writes nothing
+    /// changes nothing skips the presentation pass. An app's timer that writes nothing
     /// (a poll that finds no news), a `scroll=` handler whose writes show
     /// nowhere (every frame of a fling) and a size layout already had (a list
     /// row's symbol, which the kernel measured) still commit, and the presenter's
@@ -1058,7 +1058,7 @@ public final class ExactSession {
     /// before its handler ran is reconciled by the pass (a refused tab), and
     /// the agent's clock seeks native animations through it. Slices published
     /// before it land first (T4), and it is asked again (a fling's fills).
-    func applyUnlessEmpty(_ batch: Batch, scrolled: Bool = false) {
+    func applyUnlessEmpty(_ batch: Batch, scrolled: Bool = false, resized: Bool = false) {
         guard !batch.busy, !batch.held else { return }
         guard !applying else { apply(batch); return }
         if !landing, ownerInFlight, hasPublished() {
@@ -1073,6 +1073,13 @@ public final class ExactSession {
         if let q = batch.seq { natives.hatchClock.seq = q.1 } // its commits are the hatches' latest
         timerDue = batch.timerDueMs; timerLanding = batch.landing
         scheduleClock(due: batch.timerDueMs)
+        // Fixed roots can emit no operations while their viewport changes.
+        if resized {
+            presenter.fitDocument()
+            #if os(iOS) || os(tvOS)
+            presenter.reachPageEdges()
+            #endif
+        }
         // What the pass did that a scroll moves (`scrolledWithoutPass`).
         if scrolled { presenter.scrolledWithoutPass() }
         drainReports()
@@ -1331,7 +1338,7 @@ public final class ExactSession {
         if let screen = change.screen { screenSize = screen }
         let batch = runtime.view(change)
         if let fold, batch.error == nil { presenter.fold = fold }
-        apply(batch)
+        applyUnlessEmpty(batch, scrolled: true, resized: change.size != nil)
     }
     private(set) var screenSize: CGSize? // the screen last told, for the agent's synthetic segments
     /// The device's posture and the viewport segments a fold makes (LLP 1078 D4, D5): the view's reading,

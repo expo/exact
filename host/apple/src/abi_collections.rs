@@ -46,74 +46,21 @@ impl<D: DataSource> Bridge<D> {
     /// height, a NaN keeping that axis, and two unused.
     pub fn covers(&mut self, len: usize) -> u32 {
         let bytes = self.input.get(..len).unwrap_or(&[]);
-        let mut records = Vec::new();
-        let mut rest = bytes;
-        while rest.len() >= 8 {
-            let size = match u32::from_le_bytes(rest[4..8].try_into().unwrap()) {
-                4 => 28,
-                6 | 13 => 36,
-                _ => 24,
-            };
-            let Some((record, after)) = rest.split_at_checked(size) else {
-                break;
-            };
-            records.push(record);
-            rest = after;
-        }
-        let out = if !rest.is_empty() {
-            self.refusal("covers: truncated record")
-        } else {
-            let (mut covers, mut blocks, mut placements, mut margins, mut lists, mut restyles) = (
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-            );
+        let out = if let Ok(records) = records(bytes) {
+            let (mut covers, mut margins, mut lists, mut restyles) =
+                (Vec::new(), Vec::new(), Vec::new(), Vec::new());
             let mut locals = Vec::new();
+            let mut owners = BlockChanges::default();
             for r in records {
+                match owners.push(r) {
+                    Ok(true) => continue,
+                    Ok(false) => {}
+                    Err(why) => return self.refuse(why),
+                }
                 let word = |i: usize| [r[i], r[i + 1], r[i + 2], r[i + 3]];
                 let edge = |i: usize| f32::from_le_bytes(word(i));
                 let (view, kind) = (u32::from_le_bytes(word(0)), u32::from_le_bytes(word(4)));
-                let axis = |length: usize, policy: usize| block_axis(edge(length), edge(policy));
                 match kind {
-                    4 | 5 => {
-                        let tactic = if kind == 4 {
-                            let Some(tactic) = block_tactic(u32::from_le_bytes(word(24))) else {
-                                let out = self.refusal("block: invalid try tactic");
-                                return self.emit(out);
-                            };
-                            tactic
-                        } else {
-                            Default::default()
-                        };
-                        let block = exact_kernel::HostBlock {
-                            tactic,
-                            width: axis(8, 16),
-                            height: axis(12, 20),
-                        };
-                        blocks.push((view, (kind == 4).then_some(block)));
-                        if kind == 5 {
-                            placements.push((view, None));
-                        }
-                    }
-                    6 | 13 => {
-                        let rect = [8, 12, 16, 20].map(|i| f64::from(edge(i)));
-                        let offset = [f64::from(edge(28)), f64::from(edge(32))];
-                        if !offset.iter().all(|value| value.is_finite()) {
-                            continue;
-                        }
-                        placements.push((
-                            view,
-                            Some((
-                                rect,
-                                u32::from_le_bytes(word(24)),
-                                (kind == 13).then_some(offset),
-                            )),
-                        ));
-                    }
-                    7 => placements.push((view, None)),
                     8 => margins.push((
                         view,
                         Some(exact_kernel::GroupedMargins {
@@ -155,14 +102,16 @@ impl<D: DataSource> Bridge<D> {
             self.host.as_mut().map_or_else(not_booted, |h| {
                 h.set_claims(
                     &covers,
-                    &blocks,
-                    &placements,
+                    &owners.blocks,
+                    &owners.placements,
                     &margins,
                     &lists,
                     &restyles,
                     &locals,
                 )
             })
+        } else {
+            self.refusal("covers: truncated record")
         };
         self.emit(out)
     }
@@ -366,4 +315,80 @@ fn block_tactic(bits: u32) -> Option<exact_kernel::position_try::BlockTactic> {
     exact_kernel::position_try::BlockTactic::from_sides(std::array::from_fn(|i| {
         ((bits >> (2 * i)) & 3) as u8
     }))
+}
+
+/// Shared record boundaries for covers and a viewport's owner changes.
+pub(super) fn records(bytes: &[u8]) -> Result<Vec<&[u8]>, &'static str> {
+    let mut records = Vec::new();
+    let mut rest = bytes;
+    while rest.len() >= 8 {
+        let size = match u32::from_le_bytes(rest[4..8].try_into().unwrap()) {
+            4 => 28,
+            6 | 13 => 36,
+            _ => 24,
+        };
+        let Some((record, after)) = rest.split_at_checked(size) else {
+            return Err("covers: truncated record");
+        };
+        records.push(record);
+        rest = after;
+    }
+    if rest.is_empty() {
+        Ok(records)
+    } else {
+        Err("covers: truncated record")
+    }
+}
+
+#[derive(Default)]
+pub(super) struct BlockChanges {
+    pub blocks: Vec<(u32, Option<exact_kernel::HostBlock>)>,
+    pub placements: Vec<(u32, Option<exact_runner::BlockPlacement>)>,
+}
+
+impl BlockChanges {
+    /// Whether this record is an owner allocation or placement; an error
+    /// for a block whose try tactic is no side permutation.
+    pub fn push(&mut self, r: &[u8]) -> Result<bool, &'static str> {
+        let word = |i: usize| [r[i], r[i + 1], r[i + 2], r[i + 3]];
+        let edge = |i: usize| f32::from_le_bytes(word(i));
+        let (view, kind) = (u32::from_le_bytes(word(0)), u32::from_le_bytes(word(4)));
+        let axis = |length: usize, policy: usize| block_axis(edge(length), edge(policy));
+        match kind {
+            4 | 5 => {
+                let tactic = if kind == 4 {
+                    block_tactic(u32::from_le_bytes(word(24))).ok_or("block: invalid try tactic")?
+                } else {
+                    Default::default()
+                };
+                let block = exact_kernel::HostBlock {
+                    tactic,
+                    width: axis(8, 16),
+                    height: axis(12, 20),
+                };
+                self.blocks.push((view, (kind == 4).then_some(block)));
+                if kind == 5 {
+                    self.placements.push((view, None));
+                }
+            }
+            6 | 13 => {
+                let rect = [8, 12, 16, 20].map(|i| f64::from(edge(i)));
+                let offset = [f64::from(edge(28)), f64::from(edge(32))];
+                if !offset.iter().all(|value| value.is_finite()) {
+                    return Ok(true);
+                }
+                self.placements.push((
+                    view,
+                    Some((
+                        rect,
+                        u32::from_le_bytes(word(24)),
+                        (kind == 13).then_some(offset),
+                    )),
+                ));
+            }
+            7 => self.placements.push((view, None)),
+            _ => return Ok(false),
+        }
+        Ok(true)
+    }
 }

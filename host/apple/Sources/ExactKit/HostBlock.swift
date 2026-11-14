@@ -60,28 +60,33 @@ extension Runtime {
     /// reads (LLP 1123 D2). `shows` shows a split's own placeholder, or hides
     /// it again (kinds 14 and 15, LLP 1116.006 D2), in the same layout.
     func blocks(_ blocks: [(UInt32, HostBlock?)], placements: [(UInt32, BlockPlacement?)] = [], shows: [(UInt32, Bool)] = []) -> Batch {
-        return on {
-            var bytes = Data(capacity: (blocks.count + placements.count + shows.count) * 36)
-            let append = { (words: [UInt32]) in
-                for word in words { withUnsafeBytes(of: word.littleEndian) { bytes.append(contentsOf: $0) } }
-            }
-            for (view, shown) in shows { append([view, shown ? 14 : 15, 0, 0, 0, 0]) }
-            for (view, block) in blocks {
-                let width = block?.width.wire, height = block?.height.wire
-                let lengths = [width?.length ?? 0, height?.length ?? 0, width?.policy ?? 0, height?.policy ?? 0].map { Float($0).bitPattern }
-                append([view, block == nil ? 5 : 4] + lengths + (block.map { [$0.tactic.sides] } ?? []))
-            }
-            for (view, placement) in placements {
-                guard let placement else {
-                    append([view, 7, 0, 0, 0, 0])
-                    continue
-                }
-                let r = placement.rect
-                let offset = placement.contentOffset ?? .zero
-                append([view, placement.contentOffset == nil ? 6 : 13] + [r.minX, r.minY, r.width, r.height].map { Float($0).bitPattern } + [placement.within] + [offset.x, offset.y].map { Float($0).bitPattern })
-            }
-            return read(exact_host_covers(rt, write(bytes)))
+        let bytes = Self.blockRecords(blocks, placements: placements, shows: shows)
+        return self.blocks(bytes)
+    }
+
+    func blocks(_ records: Data) -> Batch { on { read(exact_host_covers(rt, write(records))) } }
+
+    static func blockRecords(_ blocks: [(UInt32, HostBlock?)], placements: [(UInt32, BlockPlacement?)] = [], shows: [(UInt32, Bool)] = []) -> Data {
+        var bytes = Data(capacity: (blocks.count + placements.count + shows.count) * 36)
+        let append = { (words: [UInt32]) in
+            for word in words { withUnsafeBytes(of: word.littleEndian) { bytes.append(contentsOf: $0) } }
         }
+        for (view, shown) in shows { append([view, shown ? 14 : 15, 0, 0, 0, 0]) }
+        for (view, block) in blocks {
+            let width = block?.width.wire, height = block?.height.wire
+            let lengths = [width?.length ?? 0, height?.length ?? 0, width?.policy ?? 0, height?.policy ?? 0].map { Float($0).bitPattern }
+            append([view, block == nil ? 5 : 4] + lengths + (block.map { [$0.tactic.sides] } ?? []))
+        }
+        for (view, placement) in placements {
+            guard let placement else {
+                append([view, 7, 0, 0, 0, 0])
+                continue
+            }
+            let r = placement.rect
+            let offset = placement.contentOffset ?? .zero
+            append([view, placement.contentOffset == nil ? 6 : 13] + [r.minX, r.minY, r.width, r.height].map { Float($0).bitPattern } + [placement.within] + [offset.x, offset.y].map { Float($0).bitPattern })
+        }
+        return bytes
     }
 }
 

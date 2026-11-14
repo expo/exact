@@ -111,6 +111,8 @@ fn the_view_told_at_once_is_laid_out_as_told_one_by_one() {
         Some((402., 874.)),
         None,
         None,
+        &[],
+        &[],
     );
     assert!(!batch.contains("\"error\":\""), "{batch}");
     assert_eq!(frames(&together), frames(&apart));
@@ -120,7 +122,16 @@ fn the_view_told_at_once_is_laid_out_as_told_one_by_one() {
     );
     assert_eq!(padding_left(&together, "margins"), 20.);
     // Only what is given changes: the insets alone.
-    together.set_view(None, Some([0., 0., 0., 0.]), None, None, None, None);
+    together.set_view(
+        None,
+        Some([0., 0., 0., 0.]),
+        None,
+        None,
+        None,
+        None,
+        &[],
+        &[],
+    );
     apart.set_insets(0., 0., 0., 0.);
     assert_eq!(frames(&together), frames(&apart));
     // A keyboard folded like a laptop: the viewport and the lower segment's
@@ -143,6 +154,8 @@ fn the_view_told_at_once_is_laid_out_as_told_one_by_one() {
         Some((402., 455.)),
         Some(stacked(15.)),
         None,
+        &[],
+        &[],
     );
     assert!(!batch.contains("\"error\":\""), "{batch}");
     assert_eq!(frames(&together), frames(&apart));
@@ -157,6 +170,8 @@ fn the_view_told_at_once_is_laid_out_as_told_one_by_one() {
         None,
         Some(stacked(15.)[..1].to_vec()),
         None,
+        &[],
+        &[],
     );
     assert!(refused.contains("segments off the grid"), "{refused}");
     assert_eq!(
@@ -209,6 +224,8 @@ component App
         Some((500., 900.)),
         None,
         None,
+        &[],
+        &[],
     );
     assert!(refused.contains("viewport:"), "{refused}");
     assert_eq!(padding_left(&h, "margins"), 12.);
@@ -219,12 +236,21 @@ component App
         (Some([0., 0., 0., 18.]), Some((f32::NAN, 900.))),
         (Some([f32::NAN, 0., 0., 18.]), Some((500., 900.))),
     ] {
-        let refused = h.set_view(None, insets, None, size, None, None);
+        let refused = h.set_view(None, insets, None, size, None, None, &[], &[]);
         assert!(refused.contains("error"), "{refused}");
         assert_eq!(h.runner().kernel().env(), before);
         assert_eq!(h.runner().viewport(), viewport);
     }
-    h.set_view(None, Some([0., 0., 0., 16.]), None, None, None, None);
+    h.set_view(
+        None,
+        Some([0., 0., 0., 16.]),
+        None,
+        None,
+        None,
+        None,
+        &[],
+        &[],
+    );
     assert_eq!(padding_left(&h, "margins"), 16.);
     assert_eq!(width(&h), 16.);
 }
@@ -243,7 +269,16 @@ fn the_keyboard_rides_the_view() {
             serde_json::from_str(&exact_runner::agent::state(h.runner())).unwrap();
         state["resources"]["v"].clone()
     };
-    let batch = h.set_view(None, None, None, Some((402., 538.)), None, Some(336.));
+    let batch = h.set_view(
+        None,
+        None,
+        None,
+        Some((402., 538.)),
+        None,
+        Some(336.),
+        &[],
+        &[],
+    );
     assert!(!batch.contains("\"error\":\""), "{batch}");
     assert_eq!(
         read(&h),
@@ -255,9 +290,9 @@ fn the_keyboard_rides_the_view() {
         1,
         "{logs}"
     );
-    h.set_view(None, None, None, None, None, Some(0.));
+    h.set_view(None, None, None, None, None, Some(0.), &[], &[]);
     assert_eq!(read(&h)["keyboardHeight"], 0);
-    let refused = h.set_view(None, None, None, None, None, Some(-1.));
+    let refused = h.set_view(None, None, None, None, None, Some(-1.), &[], &[]);
     assert!(refused.contains("viewport:"), "{refused}");
     assert_eq!(read(&h)["keyboardHeight"], 0);
 }

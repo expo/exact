@@ -204,6 +204,7 @@ final class OwnerBlocks {
     /// placement unless it is presented.
     private(set) var told: [UInt32: (block: HostBlock, placement: BlockPlacement?)] = [:]
     private var resetting = false, revealOwed = false
+    private var viewChanges = 0
     /// Each block's rectangle in its root's coordinates (`BatchOp.blockRect`),
     /// as the last layout sent it: what an open popover is reported by.
     private(set) var blockRects: [UInt32: CGRect] = [:]
@@ -280,6 +281,13 @@ final class OwnerBlocks {
         return boxes
     }
 
+    /// UIKit may report several routes while a viewport change lays out its containers.
+    func beginViewChange() { viewChanges += 1 }
+    func endViewChange() {
+        viewChanges -= 1
+        if viewChanges == 0 { publish() }
+    }
+
     /// Gives each route a window shows its block, and an ordinary one its
     /// placement. A route out of the window keeps what it had; a route no
     /// navigation holds gives its block back. Waits for a batch being
@@ -287,7 +295,7 @@ final class OwnerBlocks {
     /// samples what to tell when it tells it, so a report that waited tells
     /// what is current, and the ones behind it what changed since: none.
     func publish() {
-        guard !resetting, !presenter.resetting else { return } // (a sheet a reset dismisses is the old tree's: never told the runtime replacing it)
+        guard viewChanges == 0, !resetting, !presenter.resetting else { return } // (a sheet a reset dismisses is the old tree's: never told the runtime replacing it)
         presenter.nativeGeometry.changed()
         if presenter.applying {
             presenter.afterBatch { [weak self] in self?.publish() }
@@ -301,13 +309,26 @@ final class OwnerBlocks {
 
     /// What changed since the runtime was last told, told now.
     private func tell() {
-        guard !resetting, !presenter.resetting, let session = presenter.session, session.state != .destroyed else { return }
+        guard viewChanges == 0, !resetting, !presenter.resetting, let session = presenter.session, session.state != .destroyed else { return }
         // A callback the runtime waits on can make no runtime call: tell
         // once it returns, as `ExactView.fit` resizes then
         if Owner.shared.isServingMain {
             DispatchQueue.main.async { [weak self] in self?.publish() }
             return
         }
+        let records = takeChanges()
+        if !records.isEmpty {
+            session.applyUnlessEmpty(session.runtime.blocks(records), scrolled: true)
+        }
+        revealIfOwed()
+    }
+
+    /// Sample after UIKit has established containing bounds. A pending fill keeps
+    /// its deferred report, which samples again when that fill lands.
+    func takeChanges() -> Data {
+        guard !resetting, !presenter.resetting, !presenter.applying,
+              !Owner.shared.isServingMain, let session = presenter.session,
+              session.state != .destroyed, !session.fillInFlight else { return Data() }
         var now: [UInt32: (block: HostBlock, placement: BlockPlacement?)] = [:]
         for (id, block) in presenter.menus.sheets.containingBlocks { now[id] = (block, nil) }
         for (route, view, block, shown, presented) in routes {
@@ -335,9 +356,10 @@ final class OwnerBlocks {
         // A block taken back forgets its placement with it
         blocks += told.keys.filter { now[$0] == nil && presenter.views[$0] != nil }.map { ($0, nil) }
         told = now
-        if !blocks.isEmpty || !placements.isEmpty {
-            session.applyUnlessEmpty(session.runtime.blocks(blocks, placements: placements), scrolled: true)
-        }
+        return Runtime.blockRecords(blocks, placements: placements)
+    }
+
+    private func revealIfOwed() {
         // Reveal against the blocks just told, after their pending fill
         if revealOwed {
             revealOwed = false
