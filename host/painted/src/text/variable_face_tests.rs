@@ -48,12 +48,11 @@ fn declared_assets(weights: &[[u16; 2]], assets: Assets) -> (TextEngine, u16) {
 }
 
 fn shape(engine: &mut TextEngine, family: u16, weight: u16) -> Rc<Paragraph> {
-    let style = exact_kernel::StyleProps {
-        font_family: family,
-        font_weight: weight,
-        font_size: 32.,
-        ..Default::default()
-    };
+    let style = exact_kernel::StyleProps::default().with_rows(|rows| {
+        rows.font_family = family;
+        rows.font_weight = weight;
+        rows.font_size = 32.;
+    });
     engine.paragraph(&crate::paint::text_spec(&style, TEXT), None)
 }
 
@@ -345,13 +344,12 @@ fn width_range_draws(assets: Assets) {
         .unwrap() as u16;
     let mut engine = TextEngine::with_catalog(catalog);
     let mut drawn = |stretch: f32| {
-        let style = exact_kernel::StyleProps {
-            font_family: family,
-            font_weight: 700,
-            font_stretch: stretch,
-            font_size: 32.,
-            ..Default::default()
-        };
+        let style = exact_kernel::StyleProps::default().with_rows(|rows| {
+            rows.font_family = family;
+            rows.font_weight = 700;
+            rows.font_stretch = stretch;
+            rows.font_size = 32.;
+        });
         let p = engine.paragraph(&crate::paint::text_spec(&style, TEXT), None);
         let face = &p.lines().faces[0];
         let axis = |tag: &[u8; 4]| {
@@ -406,14 +404,14 @@ fn font_variation_settings_win_for_their_own_axes() {
         .unwrap() as u16;
     let mut engine = TextEngine::with_catalog(catalog);
     let mut drawn = |weight: u16, stretch: f32, settings: &str| {
-        let style = exact_kernel::StyleProps {
-            font_family: family,
-            font_weight: weight,
-            font_stretch: stretch,
-            font_variation_settings: exact_kernel::style::FontVariations::parse(settings).unwrap(),
-            font_size: 32.,
-            ..Default::default()
-        };
+        let style = exact_kernel::StyleProps::default().with_rows(|rows| {
+            rows.font_family = family;
+            rows.font_weight = weight;
+            rows.font_stretch = stretch;
+            rows.font_variation_settings =
+                exact_kernel::style::FontVariations::parse(settings).unwrap();
+            rows.font_size = 32.;
+        });
         let p = engine.paragraph(&crate::paint::text_spec(&style, TEXT), None);
         let coords = p.lines().faces[0].coords.to_vec();
         (p.width, coords)

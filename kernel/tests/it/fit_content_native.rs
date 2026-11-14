@@ -203,7 +203,7 @@ fn a_native_buttons_viewport_padding_is_the_screens() {
         // The face UIKit draws (`exact_press_face`) has the padding the
         // measure had (Astra's review): the screen's 84.4, not the sheet's.
         let face = k.button_face_style(3).unwrap();
-        match face.button.padding_top {
+        match face.button.padding_top.clone() {
             Dimension::Points(p) => assert!((p - (fit - 20.0)).abs() < 0.01, "{sheet}: {p}"),
             other => panic!("{other:?}"),
         }

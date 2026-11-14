@@ -829,12 +829,12 @@ pub(super) fn narrow_tab_geometry_follows_root_metrics_and_authored_rows() {
                     assert_eq!(rows.title.font_size, 18.0);
                     assert_eq!(
                         [
-                            rows.button.padding_top,
-                            rows.button.padding_right,
-                            rows.button.padding_bottom,
-                            rows.button.padding_left
+                            &rows.button.padding_top,
+                            &rows.button.padding_right,
+                            &rows.button.padding_bottom,
+                            &rows.button.padding_left
                         ],
-                        [const { exact_kernel::Dimension::Points(2.0) }; 4]
+                        [&exact_kernel::Dimension::Points(2.0); 4]
                     );
                 }
             }

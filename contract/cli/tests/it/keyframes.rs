@@ -27,7 +27,7 @@ fn animation(r: &Runner<NoData>, test_id: &str) -> (bool, Animations) {
     let node = k.node_by_key(k.find_by_test_id(test_id)[0]).unwrap();
     (
         node.style.mask.has(StyleId::Animation),
-        node.style.animation.clone(),
+        (*node.style.animation).clone(),
     )
 }
 

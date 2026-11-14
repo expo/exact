@@ -97,6 +97,9 @@ struct StyleRow {
     rare: bool,
     #[serde(default)]
     cold: bool,
+    /// Kept outside the ordinary rows so a per-node value does not duplicate them.
+    #[serde(default)]
+    separate: bool,
     /// A parser family linked when a plan binds this row (LLP 1047 D2).
     #[serde(default)]
     capability: Option<String>,
@@ -1016,65 +1019,7 @@ fn generate(schema: &Schema, digest: u64) -> String {
         .unwrap();
     }
     writeln!(w, "        changed\n    }}\n}}").unwrap();
-    // ---- StyleProps ------------------------------------------------------
-    writeln!(
-        w,
-        "/// Every style row plus the mask of rows explicitly set. Doubles as a masked patch:"
-    )
-    .unwrap();
-    writeln!(
-        w,
-        "/// only rows whose mask bit is set are meaningful when applied."
-    )
-    .unwrap();
-    writeln!(w, "#[derive(Debug, Clone, PartialEq)]").unwrap();
-    writeln!(w, "pub struct StyleProps {{").unwrap();
-    for row in schema.styles.iter().filter(|r| !r.rare && !r.cold) {
-        writeln!(
-            w,
-            "    pub {}: {},",
-            row.field,
-            parse_codec(&row.codec).rust_type()
-        )
-        .unwrap();
-    }
-    writeln!(w, "    /// Rows explicitly set.").unwrap();
-    writeln!(w, "    pub mask: StyleMask,").unwrap();
-    w.push_str("    /// The declarations the author wrote on this node (@ref LLP 1115.000 D2): an attribute or a class's row,\n    /// never one the compiler implied or one only inherited. Bits outside `mask` request CSS unset.\n    pub written: StyleMask,\n");
-    writeln!(
-        w,
-        "    /// The rows authored in `rem`/`em`, which the kernel keeps resolved (LLP 1069.000 D3)."
-    )
-    .unwrap();
-    writeln!(w, "    pub relative: crate::style::relative::Relative,").unwrap();
-    writeln!(
-        w,
-        "    /// The rows few nodes set ([`RareRows`]).\n    pub rare: Rare,"
-    )
-    .unwrap();
-    writeln!(
-        w,
-        "    /// Effect rows, shared until written.\n    pub cold: Cold,"
-    )
-    .unwrap();
-    writeln!(w, "}}").unwrap();
-    emit_rare(w, schema);
-    emit_cold(w, schema);
-    writeln!(w, "impl Default for StyleProps {{").unwrap();
-    writeln!(w, "    fn default() -> Self {{").unwrap();
-    writeln!(w, "        StyleProps {{").unwrap();
-    for row in schema.styles.iter().filter(|r| !r.rare && !r.cold) {
-        let codec = parse_codec(&row.codec);
-        let default = default_of(&codec, &row.default, &row.field, &schema.colors);
-        writeln!(w, "            {}: {},", row.field, default).unwrap();
-    }
-    w.push_str("            mask: StyleMask::EMPTY,\n            written: StyleMask::EMPTY,\n");
-    writeln!(w, "            relative: Default::default(),").unwrap();
-    writeln!(w, "            rare: Rare::default(),").unwrap();
-    writeln!(w, "            cold: Cold::default(),").unwrap();
-    writeln!(w, "        }}").unwrap();
-    writeln!(w, "    }}").unwrap();
-    writeln!(w, "}}").unwrap();
+    emit_style_storage(w, schema);
     writeln!(w, "impl StyleProps {{").unwrap();
     writeln!(
         w,
@@ -1194,10 +1139,16 @@ fn generate(schema: &Schema, digest: u64) -> String {
             continue;
         }
         let codec = parse_codec(&row.codec);
+        let decoded = codec.decode_expr(&id, row.admits_auto);
+        let decoded = if row.separate {
+            format!("({decoded}).into()")
+        } else {
+            decoded
+        };
         writeln!(
             w,
             "        if mask.has(StyleId::{id}) {{ out.{f} = {}; }}",
-            codec.decode_expr(&id, row.admits_auto),
+            decoded,
             f = at(row)
         )
         .unwrap();
@@ -1318,6 +1269,11 @@ fn generate(schema: &Schema, digest: u64) -> String {
             Codec::CssValue { path, error, .. } => format!("{path}::parse(&value.css_text(id)?).ok_or(StyleValueError::{error} {{ style: id }})?"),
             Codec::Tracks => "GridTracks::parse(&value.css_text(id)?).ok_or(StyleValueError::BadGridTracks { style: id })?".to_string(),
             Codec::Placement => "GridPlacement::parse(&value.css_text(id)?).ok_or(StyleValueError::BadGridPlacement { style: id })?".to_string(),
+        };
+        let conv = if row.separate {
+            format!("({conv}).into()")
+        } else {
+            conv
         };
         match groups.iter_mut().find(|(c, _)| *c == conv) {
             Some((_, rows)) => rows.push((id, at(row))),

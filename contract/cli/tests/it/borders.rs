@@ -259,10 +259,10 @@ fn border_radius_takes_one_to_four_corners() {
     let corners = |id: &str| {
         let s = style_of(&r, id);
         [
-            s.border_radius_top_left,
-            s.border_radius_top_right,
-            s.border_radius_bottom_right,
-            s.border_radius_bottom_left,
+            &s.border_radius_top_left,
+            &s.border_radius_top_right,
+            &s.border_radius_bottom_right,
+            &s.border_radius_bottom_left,
         ]
         .map(|c| format!("{c:?}"))
     };
@@ -402,10 +402,10 @@ fn a_computed_shorthand_list_is_refused_naming_the_longhands() {
     let radii = style_of(&r, "radii");
     assert_eq!(
         [
-            radii.border_radius_top_left,
-            radii.border_radius_top_right,
-            radii.border_radius_bottom_right,
-            radii.border_radius_bottom_left,
+            &radii.border_radius_top_left,
+            &radii.border_radius_top_right,
+            &radii.border_radius_bottom_right,
+            &radii.border_radius_bottom_left,
         ]
         .map(|c| format!("{c:?}")),
         [
@@ -566,10 +566,10 @@ fn a_choice_of_corner_lists_sets_each_corner() {
     let corners = |id: &str| {
         let s = style_of(&r, id);
         [
-            s.border_radius_top_left,
-            s.border_radius_top_right,
-            s.border_radius_bottom_right,
-            s.border_radius_bottom_left,
+            &s.border_radius_top_left,
+            &s.border_radius_top_right,
+            &s.border_radius_bottom_right,
+            &s.border_radius_bottom_left,
         ]
         .map(|d| format!("{d:?}"))
     };

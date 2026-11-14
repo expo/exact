@@ -212,10 +212,9 @@ fn paint_only_reuses_metrics_but_source_and_metric_changes_do_not() {
         ),
     );
     assert_eq!(state.borrow().calls, 2);
-    let mut style = StyleProps {
-        font_size: 19.0,
-        ..StyleProps::default()
-    };
+    let mut style = StyleProps::default().with_rows(|rows| {
+        rows.font_size = 19.0;
+    });
     style.mask.set(StyleId::FontSize);
     k.apply(
         0,

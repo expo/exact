@@ -366,8 +366,8 @@ fn containing_width(kernel: &Kernel, view: ViewId, viewport: f64) -> f64 {
             (node.frame.width as f64
                 - left as f64
                 - right as f64
-                - length(kernel, node.id, style.padding_left, basis)
-                - length(kernel, node.id, style.padding_right, basis)
+                - length(kernel, node.id, style.padding_left.clone(), basis)
+                - length(kernel, node.id, style.padding_right.clone(), basis)
                 - covered)
                 .max(0.)
         })

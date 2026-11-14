@@ -335,10 +335,9 @@ mod tests {
     #[test]
     fn defaults_authored_areas_margins_and_context_points() {
         let env = Env::default();
-        let mut s = StyleProps {
-            margin_top: Dimension::Points(4.),
-            ..Default::default()
-        };
+        let mut s = StyleProps::default().with_rows(|rows| {
+            rows.margin_top = Dimension::Points(4.);
+        });
         assert_eq!(
             origin(
                 &s,

@@ -1400,11 +1400,10 @@ mod tests {
     #[test]
     fn installed_normal_monospace_is_used_for_normal_code() {
         let mut engine = TextEngine::new();
-        let style = exact_kernel::StyleProps {
-            font_family: 5,
-            font_size: 16.0,
-            ..exact_kernel::StyleProps::default()
-        };
+        let style = exact_kernel::StyleProps::default().with_rows(|rows| {
+            rows.font_family = 5;
+            rows.font_size = 16.0;
+        });
         let spec = crate::paint::text_spec(&style, "let section = 0;");
         let paragraph = engine.paragraph(&spec, Some(300.0));
         let Some(glyph) = paragraph

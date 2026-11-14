@@ -130,12 +130,11 @@ fn failed_font_admission_continues_to_good_fallback() {
 
 fn code_spec(text: &str) -> Spec {
     // Code keeps its lines and spaces: `pre-wrap`, as a `<pre>` would.
-    let style = StyleProps {
-        font_family: 5,
-        font_size: 13.,
-        white_space: exact_kernel::WhiteSpace::PreWrap,
-        ..StyleProps::default()
-    };
+    let style = StyleProps::default().with_rows(|rows| {
+        rows.font_family = 5;
+        rows.font_size = 13.;
+        rows.white_space = exact_kernel::WhiteSpace::PreWrap;
+    });
     let mut spec = crate::paint::text_spec(&style, text);
     spec.strut.line_height = Some(20.);
     spec.runs[0].line_height = Some(20.);
@@ -229,11 +228,10 @@ fn real_thread_code_transfer_matches_ordinary_geometry_glyphs_and_pixels() {
     let mut engine = TextEngine::with_catalog(catalog);
     let (recipe, raster) = freeze_catalog(&engine).unwrap();
     let (mut k, _) = request(recipe.catalog_label(), 572.);
-    let mut style = StyleProps {
-        font_family: 5,
-        font_size: 13.,
-        ..StyleProps::default()
-    };
+    let mut style = StyleProps::default().with_rows(|rows| {
+        rows.font_family = 5;
+        rows.font_size = 13.;
+    });
     style.mask.set(StyleId::FontFamily);
     style.mask.set(StyleId::FontSize);
     style.mask.set(StyleId::WhiteSpace);

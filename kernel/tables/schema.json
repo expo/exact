@@ -3932,7 +3932,7 @@
       "field": "animation",
       "codec": "animations",
       "_comment": "@ref LLP 1055 D5: CSS `animation`, each entry with its resolved @keyframes (grammar: `_animations`).",
-      "cold": true
+      "separate": true
     },
     {
       "bit": 112,

@@ -139,11 +139,10 @@ mod tests {
     }
     fn spec(value: &str) -> Spec {
         crate::paint::text_spec(
-            &StyleProps {
-                font_size: 16.,
-                white_space: WhiteSpace::PreWrap,
-                ..Default::default()
-            },
+            &StyleProps::default().with_rows(|rows| {
+                rows.font_size = 16.;
+                rows.white_space = WhiteSpace::PreWrap;
+            }),
             value,
         )
     }

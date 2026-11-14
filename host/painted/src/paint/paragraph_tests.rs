@@ -325,10 +325,9 @@ fn own_text_suppresses_inline_descendants_in_measurement_and_paint() {
 
 #[test]
 fn identical_fonts_keep_distinct_run_colors_and_source_nodes() {
-    let style = StyleProps {
-        font_size: 24.0,
-        ..StyleProps::default()
-    };
+    let style = StyleProps::default().with_rows(|rows| {
+        rows.font_size = 24.0;
+    });
     let mut spec = text_spec(&style, "MMMM ");
     spec.runs.push(Run::from_style(
         "WWWW",
@@ -1055,10 +1054,9 @@ fn paint_ranks_survive_repaints_and_scroll_until_a_kernel_commit() {
     );
     let id = p.host().kernel().find_by_test_id("row")[0];
     let id = p.host().kernel().node_by_key(id).unwrap().id;
-    let mut style = exact_kernel::StyleProps {
-        opacity: 0.5,
-        ..Default::default()
-    };
+    let mut style = exact_kernel::StyleProps::default().with_rows(|rows| {
+        rows.opacity = 0.5;
+    });
     style.mask.set(exact_kernel::StyleId::Opacity);
     p.host
         .runner_mut()

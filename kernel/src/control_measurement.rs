@@ -222,7 +222,7 @@ impl ButtonFaceStyle {
         let length = |d: crate::Dimension, basis: Option<f32>| {
             crate::Dimension::Points(d.at_basis(env, basis.unwrap_or(0.0)).max(0.0))
         };
-        let s = &mut self.button;
+        let s = &mut *self.button.ordinary;
         for side in [
             &mut s.padding_top,
             &mut s.padding_right,

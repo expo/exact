@@ -3,11 +3,10 @@ use super::*;
 use exact_textflow::FlowShape;
 fn spec(text: &str) -> Spec {
     crate::paint::text_spec(
-        &exact_kernel::StyleProps {
-            font_size: 16.0,
-            line_height: exact_kernel::LineHeight::Number(1.5),
-            ..Default::default()
-        },
+        &exact_kernel::StyleProps::default().with_rows(|rows| {
+            rows.font_size = 16.0;
+            rows.line_height = exact_kernel::LineHeight::Number(1.5);
+        }),
         text,
     )
 }
@@ -265,12 +264,11 @@ fn pre_line_flows_the_lines_its_plain_layout_has() {
     // @ref LLP 1053 §0 G5 — flowed text breaks where plain text does.
     let mut engine = TextEngine::new();
     let s = crate::paint::text_spec(
-        &exact_kernel::StyleProps {
-            font_size: 16.0,
-            line_height: exact_kernel::LineHeight::Number(1.5),
-            white_space: exact_kernel::WhiteSpace::PreLine,
-            ..Default::default()
-        },
+        &exact_kernel::StyleProps::default().with_rows(|rows| {
+            rows.font_size = 16.0;
+            rows.line_height = exact_kernel::LineHeight::Number(1.5);
+            rows.white_space = exact_kernel::WhiteSpace::PreLine;
+        }),
         "A    B  \n\n  C",
     );
     assert_eq!(s.runs[0].text, "A B\n\nC");

@@ -272,10 +272,9 @@ mod tests {
 
     #[test]
     fn looks_compose_hover_then_focus_over_the_base() {
-        let mut hover = StyleProps {
-            opacity: 0.5,
-            ..Default::default()
-        };
+        let mut hover = StyleProps::default().with_rows(|rows| {
+            rows.opacity = 0.5;
+        });
         hover.mask.set(exact_kernel::StyleId::Opacity);
         let looks = [
             (LOOK_HOVER, hover.clone()),

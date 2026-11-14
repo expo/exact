@@ -615,10 +615,10 @@ fn hosts_receive_resolved_padding_and_each_corner() {
     assert_eq!(s.padding_right, Dimension::Points(17.0));
     assert_eq!(
         [
-            s.border_radius_top_left,
-            s.border_radius_top_right,
-            s.border_radius_bottom_right,
-            s.border_radius_bottom_left
+            s.border_radius_top_left.clone(),
+            s.border_radius_top_right.clone(),
+            s.border_radius_bottom_right.clone(),
+            s.border_radius_bottom_left.clone()
         ],
         [
             Dimension::Points(5.0),

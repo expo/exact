@@ -32,7 +32,7 @@ fn patch(id: StyleId, animations: &Animations) -> Box<StyleProps> {
     let mut s = StyleProps::default();
     match id {
         StyleId::ExitAnimation => s.rare.exit_animation = animations.clone(),
-        _ => s.animation = animations.clone(),
+        _ => s.animation = animations.clone().into(),
     }
     s.mask.set(id);
     Box::new(s)
@@ -57,7 +57,7 @@ fn dark_values_and_shadows_round_trip_through_exwf_bit_for_bit() {
     ];
     let mut k = Kernel::with_monospace();
     k.apply_frame(&wire::encode(0, 1, &ops)).unwrap();
-    assert_eq!(k.node(1).unwrap().style.animation, row);
+    assert_eq!(*k.node(1).unwrap().style.animation, row);
 }
 
 #[test]
@@ -167,4 +167,143 @@ fn an_animation_waits_for_its_row_unless_its_trigger_is_none() {
     let sync = k.motion_sync(&receipt);
     assert_eq!(sync.animations.len(), 1);
     assert_eq!(sync.animations[0].1, row, "running, from its start");
+}
+
+#[test]
+fn delayed_lights_keep_independent_timing_through_patches_and_clears() {
+    use exact_kernel::{motion::motion_node, StyleMask};
+    use exact_motion::{Engine, Property, Value};
+
+    exact_kernel::timeline::link();
+    let light = |delay| {
+        let mut animations =
+            Animations::parse(&format!("pulse 1s linear {delay}ms infinite both")).unwrap();
+        let frames = Keyframes::parse("from{opacity:0}to{opacity:1}").unwrap();
+        animations.resolve(|_| Some(&frames));
+        let mut style = patch(StyleId::Animation, &animations);
+        for (id, value) in [
+            (StyleId::AnimationTimeline, "-exact-clock(Beat)"),
+            (StyleId::BoxShadow, "0 0 8px #ff8800"),
+        ] {
+            style
+                .set_dynamic(id, &StyleValue::Text(value.into()))
+                .unwrap();
+        }
+        style.written = style.mask;
+        style
+    };
+    let mut k = Kernel::with_monospace();
+    let receipt = k
+        .apply_frame(&wire::encode(
+            0,
+            1,
+            &[
+                Op::CreateView {
+                    id: 1,
+                    node_type: NodeType::View,
+                },
+                Op::CreateView {
+                    id: 2,
+                    node_type: NodeType::View,
+                },
+                Op::CreateView {
+                    id: 3,
+                    node_type: NodeType::View,
+                },
+                Op::SetStyle {
+                    id: 2,
+                    patch: light(0),
+                },
+                Op::SetStyle {
+                    id: 3,
+                    patch: light(250),
+                },
+                Op::SetChildren {
+                    id: 1,
+                    children: vec![2, 3],
+                },
+                Op::AttachRoot { id: 1 },
+            ],
+        ))
+        .unwrap();
+    let a = motion_node(k.node(2).unwrap().key);
+    let b = motion_node(k.node(3).unwrap().key);
+    let mut engine = Engine::new();
+    k.motion_sync(&receipt).apply(&mut engine).unwrap();
+    let sample = |engine: &Engine, id| {
+        let play = &engine.animation_plays(id)[0];
+        play.animation
+            .sample(
+                play.local(engine.now()),
+                Property::Opacity,
+                Value::scalar(1.0),
+            )
+            .unwrap()
+            .x
+    };
+    engine.advance(0.5).unwrap();
+    assert_eq!(sample(&engine, a), 0.5);
+    assert_eq!(sample(&engine, b), 0.25);
+    let start = engine.animation_plays(b)[0].start;
+    let receipt = k
+        .apply(
+            0,
+            2,
+            &[Op::SetStyle {
+                id: 3,
+                patch: light(100),
+            }],
+        )
+        .unwrap();
+    k.motion_sync(&receipt).apply(&mut engine).unwrap();
+    assert_eq!(
+        engine.animation_plays(b)[0].start,
+        start,
+        "retimed in place"
+    );
+    assert_eq!(sample(&engine, a), 0.5);
+    assert_eq!(sample(&engine, b), 0.4);
+    assert_eq!(k.node(2).unwrap().style.animation.0[0].delay, 0.0);
+    assert_eq!(
+        k.node(3)
+            .unwrap()
+            .computed_style(StyleMask::ALL)
+            .animation
+            .0[0]
+            .delay,
+        0.1
+    );
+    let animation = StyleMask::of(StyleId::Animation);
+    for (batch, written) in [(3, true), (4, false)] {
+        let receipt = k
+            .apply(
+                0,
+                batch,
+                &[Op::ClearStyle {
+                    id: 3,
+                    mask: animation,
+                    written,
+                }],
+            )
+            .unwrap();
+        k.motion_sync(&receipt).apply(&mut engine).unwrap();
+        let node = k.node(3).unwrap();
+        assert!(!node.style.mask.has(StyleId::Animation));
+        assert_eq!(node.style.written.has(StyleId::Animation), written);
+        assert!(node.style.animation.0.is_empty());
+        assert!(engine.animation_plays(b).is_empty());
+        assert_eq!(sample(&engine, a), 0.5);
+    }
+    let receipt = k
+        .apply(
+            0,
+            5,
+            &[Op::SetStyle {
+                id: 3,
+                patch: light(250),
+            }],
+        )
+        .unwrap();
+    k.motion_sync(&receipt).apply(&mut engine).unwrap();
+    assert_eq!(sample(&engine, b), 0.25, "rejoins the live clock");
 }

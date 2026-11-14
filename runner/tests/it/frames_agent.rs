@@ -23,36 +23,32 @@ fn frames_answer_each_node_in_preorder_with_its_bits() {
         "/",
     )
     .unwrap();
-    let mut root = StyleProps {
-        width: Dimension::Points(600.),
-        height: Dimension::Points(400.),
-        ..Default::default()
-    };
+    let mut root = StyleProps::default().with_rows(|rows| {
+        rows.width = Dimension::Points(600.);
+        rows.height = Dimension::Points(400.);
+    });
     root.mask.set(StyleId::Width);
     root.mask.set(StyleId::Height);
-    let mut moved = StyleProps {
-        width: Dimension::Points(100.),
-        height: Dimension::Points(50.),
-        ..Default::default()
-    };
+    let mut moved = StyleProps::default().with_rows(|rows| {
+        rows.width = Dimension::Points(100.);
+        rows.height = Dimension::Points(50.);
+    });
     moved.mask.set(StyleId::Width);
     moved.mask.set(StyleId::Height);
     moved.translate = Vec2 { x: 10., y: 0. };
     moved.mask.set(StyleId::Translate);
     // Declared, but the initial value: `translate: 0` moves nothing.
-    let mut still = StyleProps {
-        width: Dimension::Points(100.),
-        height: Dimension::Points(50.),
-        ..Default::default()
-    };
+    let mut still = StyleProps::default().with_rows(|rows| {
+        rows.width = Dimension::Points(100.);
+        rows.height = Dimension::Points(50.);
+    });
     still.mask.set(StyleId::Width);
     still.mask.set(StyleId::Height);
     still.mask.set(StyleId::Translate);
     still.mask.set(StyleId::Scale);
-    let mut gone = StyleProps {
-        display: exact_kernel::Display::None,
-        ..Default::default()
-    };
+    let mut gone = StyleProps::default().with_rows(|rows| {
+        rows.display = exact_kernel::Display::None;
+    });
     gone.mask.set(StyleId::Display);
     let ops = [
         Op::CreateView {
@@ -125,19 +121,17 @@ fn a_blocks_root_is_answered_in_its_block() {
     )
     .unwrap();
     let sized = |w: f32, h: f32| {
-        let mut s = StyleProps {
-            width: Dimension::Points(w),
-            height: Dimension::Points(h),
-            ..Default::default()
-        };
+        let mut s = StyleProps::default().with_rows(|rows| {
+            rows.width = Dimension::Points(w);
+            rows.height = Dimension::Points(h);
+        });
         s.mask.set(StyleId::Width);
         s.mask.set(StyleId::Height);
         s
     };
-    let mut half = StyleProps {
-        width: Dimension::Percent(50.),
-        ..Default::default()
-    };
+    let mut half = StyleProps::default().with_rows(|rows| {
+        rows.width = Dimension::Percent(50.);
+    });
     half.mask.set(StyleId::Width);
     let mut ops: Vec<Op> = (2..=6)
         .map(|id| Op::CreateView {

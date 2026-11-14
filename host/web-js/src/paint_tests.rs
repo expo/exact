@@ -1049,7 +1049,7 @@ fn bound_animation_stacking_matches_kernel() {
         let mut style = exact_kernel::StyleProps::default();
         if let Ok(mut list) = exact_motion::Animations::parse(&value) {
             list.resolve(|name| rules.get(name));
-            style.animation = list;
+            style.animation = list.into();
             style.mask.set(StyleId::Animation);
         }
         let own = exact_kernel::paint_order::own_from(exact_kernel::paint_order::Facts {
