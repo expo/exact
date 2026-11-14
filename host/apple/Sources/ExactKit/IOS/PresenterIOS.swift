@@ -864,6 +864,13 @@ package final class Presenter {
         let anewFrom = placedAnew.count
         let rowsOnly = onlyListRows(batch)
         if batch.controls { controls.facesChanged() }
+        #if os(iOS)
+        var contextReferencesChanged = batch.ops.contains {
+            let source = views[$0.id] ?? leaving[$0.id]?.view
+            return $0.props["contextPopover"] != nil || $0.clear.contains("contextPopover")
+                || $0.op == .destroy && (source?.props["contextPopover"] != nil || source?.hasInlineContextPopover == true)
+        }
+        #endif
         // An op inside an animation UIKit has open only if its view showed in the last frame (`moveOrPlace`).
         func applyOp(_ op: BatchOp, _ kind: BatchOp.Kind, _ id: UInt32) {
             switch kind {
@@ -916,6 +923,9 @@ package final class Presenter {
                 if v.kind == "list" { listViews[id] = v }
                 if v.isParagraph { textViews[id] = v }
             case .paragraph:
+                #if os(iOS)
+                if views[id]?.hasInlineContextPopover == true || op.runs.contains(where: { $0.props["contextPopover"] != nil }) { contextReferencesChanged = true }
+                #endif
                 applyParagraph(id, op.runs)
             case .props:
                 fragmentOffsetsWritten(op)
@@ -962,6 +972,9 @@ package final class Presenter {
             case .exit:
                 if flats.isFlat(id) { flats.promote(id) }
                 beginExit(id)
+                #if os(iOS)
+                if leaving[id]?.members.contains(where: { $0.props["contextPopover"] != nil || $0.hasInlineContextPopover }) == true { contextReferencesChanged = true }
+                #endif
             case .flight:
                 if let from = (op.payload["from"] as? NSNumber)?.uint32Value, flats.isFlat(from) { flats.promote(from) }
                 beginFlight(op)
@@ -1051,6 +1064,15 @@ package final class Presenter {
             if animating { moveOrPlace(kind == .create ? nil : views[id] ?? leaving[id]?.view) { applyOp(op, kind, id) } } else { applyOp(op, kind, id) }
         }
         schemes.end(); regridMoved() // every override and move made: the traits before anything reads them
+        #if os(iOS)
+        // A reference changes default corners and shadow even when the material stays the same.
+        if contextReferencesChanged {
+            for popover in carrying("popover") where popover.props["defaultSurface"] == "true" {
+                popover.updateMaterial()
+                popover.setNeedsDisplay()
+            }
+        }
+        #endif
         flats.flush()
         // A view the flush promoted and mounted may have moved its children.
         while !gridMoved.isEmpty { regridMoved(); flats.flush() }
