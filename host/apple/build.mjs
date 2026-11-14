@@ -925,7 +925,7 @@ async function main(args, lockHeld = false) {
   // the resolver's app-owned `embed` directory, with `ExactKit` at
   // `host/apple`. With --archive it also builds the IPA; --embed alone
   // builds no Swift. The sample hosts prove that the same pieces link.
-  const { link: appleLink, products: swiftCapabilities } = appleComposition(buildReceipt.graph, linksByPlan(production, args), app.manifest.link, bakedCompat.reach?.auth?.sessions === true);
+  const { link: appleLink, products: swiftCapabilities } = appleComposition(buildReceipt.graph, linksByPlan(production, args), app.manifest.link, bakedCompat);
   if (args.includes('--embed')) {
     const platform = ios ? (device ? 'ios' : 'ios-simulator') : 'macos';
     const gpu = hasGpu ? (frameworkBundles ? 'ExactGpu.framework/ExactGpu' : loadName) : null;

@@ -1,5 +1,6 @@
 import Foundation
 import XCTest
+import ExactPresence
 @testable import ExactKit
 
 // It compiles its plans with the Contract compiler through `Process`, which iOS lacks; the
@@ -9,6 +10,7 @@ import XCTest
 /// (`GenerationStamp`): a reload keeps the session but starts a runner that
 /// numbers its calls and nodes from the start again.
 final class GenerationStampTests: XCTestCase {
+    override class func setUp() { super.setUp(); ExactPresence.install() }
     private var sessions: [ExactSession] = []
     override func tearDown() { sessions.forEach { $0.destroy() }; sessions = []; super.tearDown() }
 

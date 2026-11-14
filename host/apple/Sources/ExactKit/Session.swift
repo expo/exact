@@ -514,7 +514,7 @@ public final class ExactSession {
         self.label = label
         let runtime = Runtime()
         runtime.useNativeTimers(true)
-        PresenceKeychain.install(); LocalNetworkFact.install() // before the first boot reads the backend (LLP 1133.010 D6), the fact (LLP 1133.036 D8)
+        LocalNetworkFact.install() // before the first boot reads the fact (LLP 1133.036 D8)
         if ActivityLibrary.packaged { runtime.linkActivities() }
         // Motion starts at the first frame that shows it, until an agent owns the clock (LLP 1003.001 D7).
         if !ExactEnv.agentFreezes { _ = runtime.startOnFrame(true, at: 0) }

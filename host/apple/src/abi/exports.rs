@@ -24,6 +24,7 @@ macro_rules! host {
     ($data:ty, $plan:expr, $compat:expr, $delivery:expr, $api:expr, $new:expr, $region:expr) => {
         $crate::grouped_list_exports!();
         $crate::markup_exports!();
+        $crate::presence_exports!();
 
         $crate::host!(@core $data, $plan, $compat, $delivery, $api, $new, $region, $crate::link::ALL);
     };
@@ -1265,15 +1266,6 @@ macro_rules! host {
         #[no_mangle]
         pub extern "C" fn exact_presence(rt: u32, len: usize) -> u32 {
             $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, true, |b, _| b.presence(len), |_| 0)
-        }
-
-        /// The keychain the presence backend keeps locked items in (LLP
-        /// 1133.010 D6), ExactKit's; once a process, before the first boot.
-        #[no_mangle]
-        pub extern "C" fn exact_on_presence_keychain(
-            keychain: Option<$crate::presence_secrets::KeychainFn>,
-        ) {
-            $crate::presence_secrets::on_keychain(keychain);
         }
 
         /// A native button's title and symbol (LLP 1069.011 D5), JSON;

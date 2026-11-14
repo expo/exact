@@ -388,7 +388,8 @@ impl Endowed {
 
 /// [`endow_bound`] and, for a fresh session, what its stores held (a reload
 /// carries the running store): [`crate::link::IoLinks`]'s endowment.
-pub fn endowed(grants: &str, app_id: &str, fresh: bool) -> Endowed {
+/// `PRESENCE` links the vault only when the composition names it.
+pub fn endowed<const PRESENCE: bool>(grants: &str, app_id: &str, fresh: bool) -> Endowed {
     let (bindings, unbound) = endow_bound(grants, app_id, fresh);
     let prefs = Prefs::of(app_id);
     let agent = std::env::var_os("EXACT_AGENT").is_some();
@@ -396,11 +397,14 @@ pub fn endowed(grants: &str, app_id: &str, fresh: bool) -> Endowed {
     // locked items in the keychain too, behind the platform's check, which it
     // binds (`--bind local-auth`): the conformance suite's real items.
     let platform = !agent || std::env::var("EXACT_STORE").as_deref() == Ok("real");
-    let presence = match !platform {
-        true => crate::presence_secrets::agent_backend(bindings.as_ref(), grants, agent)
+    let presence = match (PRESENCE, !platform) {
+        (false, _) => None,
+        (true, true) => crate::presence_secrets::agent_backend(bindings.as_ref(), grants, agent)
             .map(|b| (b, None)),
-        false => crate::presence_secrets::keychain_backend(bindings.as_ref(), grants, app_id)
-            .map(|(b, service)| (b, Some(service))),
+        (true, false) => {
+            crate::presence_secrets::keychain_backend(bindings.as_ref(), grants, app_id)
+                .map(|(b, service)| (b, Some(service)))
+        }
     };
     let (mut snapshot, unread_kept) = match bindings.as_ref().filter(|_| fresh) {
         Some(b) => {
@@ -409,7 +413,7 @@ pub fn endowed(grants: &str, app_id: &str, fresh: bool) -> Endowed {
         }
         None => Default::default(),
     };
-    if let Some((backend, keystore)) = presence.as_ref().filter(|_| fresh) {
+    if let Some((backend, keystore)) = presence.as_ref().filter(|_| fresh && PRESENCE) {
         let capable = keystore.is_none() || crate::presence_secrets::keychain_capable();
         snapshot.extend(backend.snapshot_entries(capable));
     }

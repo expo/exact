@@ -138,7 +138,7 @@ impl KeptStore for CountedStore {
     }
 }
 fn endowed(grants: &str, app: &str, fresh: bool) -> crate::store::Endowed {
-    let mut endowed = crate::store::endowed(grants, app, fresh);
+    let mut endowed = crate::store::endowed::<true>(grants, app, fresh);
     if let Some(store) = endowed.secrets.take() {
         endowed.secrets = Some(Box::new(CountedStore(store, READS.with(Clone::clone))));
     }

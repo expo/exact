@@ -38,6 +38,7 @@ let capabilities: [(name: String, target: String, define: String)] = [
     ("auth_session", "ExactAuthSession", "EXACT_LINK_AUTH_SESSION"),
     ("numerals", "ExactNumerals", "EXACT_LINK_NUMERALS"),
     ("tips", "ExactTips", "EXACT_LINK_TIPS"),
+    ("presence", "ExactPresence", "EXACT_LINK_PRESENCE"),
 ].filter { links($0.name) }
 
 // `swift test` builds every target a package declares, and the two UIKit
@@ -87,6 +88,7 @@ let core: [Target] = [
     .target(name: "ExactAuthSession", dependencies: ["ExactKit"], path: "Sources/ExactAuthSession"),
     .target(name: "ExactNumerals", dependencies: ["ExactKit"], path: "Sources/ExactNumerals"),
     .target(name: "ExactTips", dependencies: ["ExactKit"], path: "Sources/ExactTips"),
+    .target(name: "ExactPresence", dependencies: ["ExactKit", "CExact"], path: "Sources/ExactPresence"),
     .target(name: "ExactLaunchParts", dependencies: ["ExactKit"], path: launchParts,
             swiftSettings: launchPartsTarget.map { [.unsafeFlags(["-target", $0])] } ?? []),
     .target(name: "ExactComposition", dependencies: [.target(name: "ExactKit")] + (composition == "updating" ? [.target(name: "ExactUpdates")] : [])
@@ -123,7 +125,7 @@ let tests: [Target] = [
     .target(name: "ExactNowPlaying", path: "videoarm", exclude: ["VideoArm.swift", "PictureInPicture.swift"], sources: ["NowPlaying.swift"]),
     // The share extension's Swift (LLP 1133.024 D4), which links no Exact runtime; build.mjs compiles the appex itself.
     .target(name: "ExactShare", path: "share"),
-    .testTarget(name: "ExactKitTests", dependencies: ["ExactPackage", "MediaCaptureImplementation", "SignInImplementation", "PasskeysImplementation", "ExactWidgetTimeline", "ExactCore", "ExactSnapshot", "ExactKit", "ExactUpdates", "ExactGroupedLists", "ExactMarkdown", "ExactSurfaces", "ExactDrag", "ExactMediaPicker", "ExactAuthSession", "ExactNumerals", "ExactTips", "ExactSoundRender", "ExactNowPlaying", "ExactShare"], path: "tests/ExactKitTests",
+    .testTarget(name: "ExactKitTests", dependencies: ["ExactPackage", "MediaCaptureImplementation", "SignInImplementation", "PasskeysImplementation", "ExactWidgetTimeline", "ExactCore", "ExactSnapshot", "ExactKit", "ExactUpdates", "ExactGroupedLists", "ExactMarkdown", "ExactSurfaces", "ExactDrag", "ExactMediaPicker", "ExactAuthSession", "ExactNumerals", "ExactTips", "ExactPresence", "ExactSoundRender", "ExactNowPlaying", "ExactShare"], path: "tests/ExactKitTests",
                 resources: [.copy("ColorFixtures"), .copy("SnapshotFixtures")], swiftSettings: devTools + gallerySettings + caltrainSettings),
 ]
 
@@ -153,6 +155,7 @@ let package = Package(
         .library(name: "ExactAuthSession", targets: ["ExactAuthSession"]),
         .library(name: "ExactNumerals", targets: ["ExactNumerals"]),
         .library(name: "ExactTips", targets: ["ExactTips"]),
+        .library(name: "ExactPresence", targets: ["ExactPresence"]),
         .executable(name: "ExactWatch", targets: ["ExactWatch"]),
         .executable(name: "ExactMac", targets: ["ExactMac"]),
         .executable(name: "ExactIOS", targets: ["ExactIOS"]),

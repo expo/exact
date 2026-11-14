@@ -1124,7 +1124,8 @@ uint32_t exact_auth(ExactRuntime rt, size_t len);
  * "message":…}. Returns 0; the next pump settles the call. Never journaled. */
 uint32_t exact_presence(ExactRuntime rt, size_t len);
 
-/* The keychain the presence backend keeps locked items in (D6). Called on
+/* The keychain the presence backend keeps locked items in (D6), exported
+ * when the composition links presence. Called on
  * the runtime's thread, synchronously; answered with done(reply, status,
  * bytes, len) before it returns: status 0 done, 1 not found or not capable,
  * below 0 failed with a message. op 1 add {"service","account","policy"}

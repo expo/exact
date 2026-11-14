@@ -398,21 +398,26 @@ test('package frameworks retain category-only dependencies and weak-link APIs ne
   assert.deepEqual(systemFrameworks(packages, 'macos', '14.0'), ['-Xlinker', '-weak_framework', '-Xlinker', 'FoundationModels']);
 });
 
-test('production links what the plan uses, the manifest names and the grants open; development all but the photo picker and sign-in sheet, which it links as production would (LLP 1047.001.000 E, F)', () => {
+test('production links the baked set; development links costly frameworks by use (LLP 1047.001.000 E, F)', () => {
   const graph = { uses: ['markdown', 'picker'] };
-  assert.deepEqual(appleComposition(graph, true), { link: 'markdown,picker', products: ['ExactMarkdown'] });
-  assert.deepEqual(appleComposition({ uses: [] }, true), { link: 'none', products: [] });
-  assert.deepEqual(appleComposition(graph, true, [], true).products, ['ExactMarkdown', 'ExactAuthSession']);
-  assert.deepEqual(appleComposition(graph, false).products, ['ExactGroupedLists', 'ExactMarkdown', 'ExactSurfaces', 'ExactDrag']);
-  assert.deepEqual(appleComposition({ uses: ['picker', 'media_picker'] }, false, [], true).products,
-    ['ExactGroupedLists', 'ExactMarkdown', 'ExactSurfaces', 'ExactDrag', 'ExactMediaPicker', 'ExactAuthSession']);
-  assert.deepEqual(appleComposition(graph, false, ['auth_session']).products.at(-1), 'ExactAuthSession');
-  assert.deepEqual(appleComposition({ uses: ['numerals'] }, false).products.at(-1), 'ExactNumerals');
+  const baked = linked => ({ inputs: { linked } });
+  const auth = { inputs: { linked: ['auth_session', 'media_picker', 'numerals', 'tips'] }, reach: { auth: { sessions: true } } };
+  assert.deepEqual(appleComposition(graph, true, [], baked(graph.uses)), { link: 'markdown,picker', products: ['ExactMarkdown'] });
+  assert.deepEqual(appleComposition({ uses: [] }, true, [], baked([])), { link: 'none', products: [] });
+  assert.deepEqual(appleComposition(graph, true, [], baked([...graph.uses, 'auth_session'])).products, ['ExactMarkdown', 'ExactAuthSession']);
+  assert.deepEqual(appleComposition(graph, false).products, ['ExactGroupedLists', 'ExactMarkdown', 'ExactSurfaces', 'ExactDrag', 'ExactPresence']);
+  assert.deepEqual(appleComposition(graph, false, [], auth).products,
+    ['ExactGroupedLists', 'ExactMarkdown', 'ExactSurfaces', 'ExactDrag', 'ExactAuthSession', 'ExactPresence']);
+  assert.deepEqual(appleComposition({ uses: ['picker', 'media_picker'] }, false, [], auth).products,
+    ['ExactGroupedLists', 'ExactMarkdown', 'ExactSurfaces', 'ExactDrag', 'ExactMediaPicker', 'ExactAuthSession', 'ExactPresence']);
+  assert.deepEqual(appleComposition(graph, false, ['auth_session']).products.includes('ExactAuthSession'), true);
+  assert.deepEqual(appleComposition({ uses: ['numerals'] }, false).products.includes('ExactNumerals'), true);
   assert.ok(!appleComposition(graph, false).products.includes('ExactNumerals'));
   // TipKit and SwiftUI cost every launch: a tip links them in development too only by use.
-  assert.deepEqual(appleComposition({ uses: ['tips'] }, false).products.at(-1), 'ExactTips');
+  assert.deepEqual(appleComposition({ uses: ['tips'] }, false).products.includes('ExactTips'), true);
   assert.ok(!appleComposition(graph, false).products.includes('ExactTips'));
   assert.equal(appleComposition(undefined, false).link, 'all');
+  assert.equal(appleComposition(graph, true).link, 'all');
 });
 
 // The production hello bake that `metrics.mjs --long` measures (`IOS_HELLO_BYTES`), when one is on disk:
@@ -422,6 +427,27 @@ const helloBake = () => {
   if (!existsSync(clients)) return [];
   return readdirSync(clients).map((d) => join(clients, d, 'com.exact.hello/ios-simulator/aarch64-apple-ios-sim/embedded/production/standalone/Hello.dSYM/Contents/Resources/DWARF/Hello')).filter(existsSync);
 };
+test('presence links its Swift backend by grants or ahead in production and stays available in development', () => {
+  const baked = linked => ({ inputs: { linked } });
+  assert.deepEqual(appleComposition({ uses: ['io', 'presence'] }, true, [], baked(['io', 'presence'])),
+    { link: 'io,presence', products: ['ExactPresence'] });
+  assert.deepEqual(appleComposition({ uses: ['io'] }, true, [], baked(['io'])).products, []);
+  assert.deepEqual(appleComposition({ uses: [] }, true, ['presence'], baked(['presence'])).products, ['ExactPresence']);
+  assert.ok(appleComposition({ uses: [] }, false).products.includes('ExactPresence'));
+});
+
+test('production Swift follows the baked linked set when the grant ceiling is unknown', () => {
+  const compat = { inputs: { grantCeiling: null, linked: ['io', 'presence', 'auth_session'] } };
+  assert.deepEqual(appleComposition({ uses: [] }, true, [], compat),
+    { link: 'io,presence,auth_session', products: ['ExactAuthSession', 'ExactPresence'] });
+});
+
+test.skipIf(process.platform !== 'darwin' || helloBake().length === 0)('hello links no presence backend without a presence grant', () => {
+  for (const symbols of helloBake()) {
+    const names = spawnSync('nm', [symbols], { encoding: 'utf8', maxBuffer: 1 << 28 }).stdout;
+    assert.deepEqual(names.split('\n').filter(s => /PresenceKeychain|PresenceCheck|presenceKeychainHook|presence_secrets|exact_on_presence_keychain/.test(s)), []);
+  }
+});
 // The executor's cache, which parses URLs and grants, and the process's launch work stay out of it.
 test.skipIf(process.platform !== 'darwin' || helloBake().length === 0)('an app whose plan and grants open no I/O links no launch preloads (LLP 1047.001)', () => {
   for (const symbols of helloBake()) {
