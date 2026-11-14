@@ -754,8 +754,7 @@ fn opportunities(text: &str, words: &[usize]) -> Vec<usize> {
             } else if latin1(previous) && latin1(ch) && !(previous == '-' && !ch.is_ascii()) {
                 chrome::breaks(previous, ch)
             } else {
-                let next = text[at + ch.len_utf8()..].chars().next();
-                listed || east_asian_break(before_before, previous, ch, next)
+                listed || east_asian_break(text, at, ch)
             };
             if open {
                 result.push(at);
@@ -769,17 +768,23 @@ fn opportunities(text: &str, words: &[usize]) -> Vec<usize> {
 }
 
 /// Breaks Chrome takes that `unicode-linebreak`'s Unicode 15.0 pair table,
-/// blind to East_Asian_Width, misses: before a full-width opening bracket after
-/// a letter or digit (UAX #14 LB30), and before an opening or after a closing
-/// quotation mark between East Asian characters (Unicode 15.1 LB19a). Never
-/// where either side's class forbids a break. `before_before` is `'\0'` at the
-/// start of the text, `next` is `None` at its end.
-fn east_asian_break(before_before: char, previous: char, ch: char, next: Option<char>) -> bool {
+/// blind to East_Asian_Width, misses before `ch` at `at`: before a full-width
+/// opening bracket after a letter or digit (UAX #14 LB30), and before an opening
+/// or after a closing quotation mark between East Asian characters (Unicode 15.1
+/// LB19a). Never where either side's class forbids a break.
+fn east_asian_break(text: &str, at: usize, ch: char) -> bool {
     use BreakClass::*;
+    let Some((start, previous)) = base_before(text, at) else {
+        return false;
+    };
+    let before_before = base_before(text, start).map(|(_, c)| c);
+    let next = text[at + ch.len_utf8()..]
+        .chars()
+        .find(|&c| break_property(c as u32) != CombiningMark);
     let (left, right) = (break_property(previous as u32), break_property(ch as u32));
     let glued = matches!(
         left,
-        OpenPunctuation | NonBreakingGlue | WordJoiner | ZeroWidthJoiner | CombiningMark | Before
+        OpenPunctuation | NonBreakingGlue | WordJoiner | ZeroWidthJoiner | Before
     ) || matches!(
         right,
         ClosePunctuation
@@ -804,31 +809,70 @@ fn east_asian_break(before_before: char, previous: char, ch: char, next: Option<
             && right == OpenPunctuation
             && wide(ch))
             || (right == Quotation && initial(ch) && wide(previous) && next.is_some_and(wide))
-            || (left == Quotation && last(previous) && wide(before_before) && wide(ch)))
+            || (left == Quotation && last(previous) && before_before.is_some_and(wide) && wide(ch)))
 }
 
-/// East_Asian_Width F, W or H by block: CJK, kana, Hangul, Yi, the CJK
-/// symbol, compatibility and full/half-width forms (not emoji).
-fn wide(ch: char) -> bool {
-    matches!(
-        ch,
-        '\u{1100}'..='\u{115f}'
-            | '\u{2e80}'..='\u{303e}'
-            | '\u{3041}'..='\u{33ff}'
-            | '\u{3400}'..='\u{4dbf}'
-            | '\u{4e00}'..='\u{9fff}'
-            | '\u{a000}'..='\u{a4cf}'
-            | '\u{a960}'..='\u{a97f}'
-            | '\u{ac00}'..='\u{d7a3}'
-            | '\u{f900}'..='\u{faff}'
-            | '\u{fe10}'..='\u{fe19}'
-            | '\u{fe30}'..='\u{fe6f}'
-            | '\u{ff00}'..='\u{ffdc}'
-            | '\u{ffe0}'..='\u{ffee}'
-            | '\u{1f200}'..='\u{1f2ff}'
-            | '\u{20000}'..='\u{3fffd}'
-    )
+/// The character ending before `end`, where it starts, with a combining mark
+/// standing for its base (UAX #14 LB9) or, with none, for a letter (LB10).
+fn base_before(text: &str, end: usize) -> Option<(usize, char)> {
+    use BreakClass::*;
+    let mut chars = text[..end].char_indices().rev();
+    let (mut at, mut ch) = chars.next()?;
+    while break_property(ch as u32) == CombiningMark {
+        match chars.next() {
+            Some((i, c))
+                if !matches!(
+                    break_property(c as u32),
+                    Mandatory | CarriageReturn | LineFeed | NextLine | Space | ZeroWidthSpace
+                ) =>
+            {
+                (at, ch) = (i, c)
+            }
+            _ => return Some((at, 'a')),
+        }
+    }
+    Some((at, ch))
 }
+
+/// East_Asian_Width F, W or H.
+fn wide(ch: char) -> bool {
+    let at = WIDE.partition_point(|&(_, last)| last < ch as u32);
+    WIDE.get(at).is_some_and(|&(first, _)| first <= ch as u32)
+}
+// The runs of East_Asian_Width F, W or H, first and last code point, from
+// Unicode 16.0 `EastAsianWidth.txt`. Generated; not edited by hand.
+#[rustfmt::skip]
+const WIDE: [(u32, u32); 128] = [
+    (0x1100, 0x115f), (0x20a9, 0x20a9), (0x231a, 0x231b), (0x2329, 0x232a), (0x23e9, 0x23ec),
+    (0x23f0, 0x23f0), (0x23f3, 0x23f3), (0x25fd, 0x25fe), (0x2614, 0x2615), (0x2630, 0x2637),
+    (0x2648, 0x2653), (0x267f, 0x267f), (0x268a, 0x268f), (0x2693, 0x2693), (0x26a1, 0x26a1),
+    (0x26aa, 0x26ab), (0x26bd, 0x26be), (0x26c4, 0x26c5), (0x26ce, 0x26ce), (0x26d4, 0x26d4),
+    (0x26ea, 0x26ea), (0x26f2, 0x26f3), (0x26f5, 0x26f5), (0x26fa, 0x26fa), (0x26fd, 0x26fd),
+    (0x2705, 0x2705), (0x270a, 0x270b), (0x2728, 0x2728), (0x274c, 0x274c), (0x274e, 0x274e),
+    (0x2753, 0x2755), (0x2757, 0x2757), (0x2795, 0x2797), (0x27b0, 0x27b0), (0x27bf, 0x27bf),
+    (0x2b1b, 0x2b1c), (0x2b50, 0x2b50), (0x2b55, 0x2b55), (0x2e80, 0x2e99), (0x2e9b, 0x2ef3),
+    (0x2f00, 0x2fd5), (0x2ff0, 0x303e), (0x3041, 0x3096), (0x3099, 0x30ff), (0x3105, 0x312f),
+    (0x3131, 0x318e), (0x3190, 0x31e5), (0x31ef, 0x321e), (0x3220, 0x3247), (0x3250, 0xa48c),
+    (0xa490, 0xa4c6), (0xa960, 0xa97c), (0xac00, 0xd7a3), (0xf900, 0xfaff), (0xfe10, 0xfe19),
+    (0xfe30, 0xfe52), (0xfe54, 0xfe66), (0xfe68, 0xfe6b), (0xff01, 0xffbe), (0xffc2, 0xffc7),
+    (0xffca, 0xffcf), (0xffd2, 0xffd7), (0xffda, 0xffdc), (0xffe0, 0xffe6), (0xffe8, 0xffee),
+    (0x16fe0, 0x16fe4), (0x16ff0, 0x16ff1), (0x17000, 0x187f7), (0x18800, 0x18cd5),
+    (0x18cff, 0x18d08), (0x1aff0, 0x1aff3), (0x1aff5, 0x1affb), (0x1affd, 0x1affe),
+    (0x1b000, 0x1b122), (0x1b132, 0x1b132), (0x1b150, 0x1b152), (0x1b155, 0x1b155),
+    (0x1b164, 0x1b167), (0x1b170, 0x1b2fb), (0x1d300, 0x1d356), (0x1d360, 0x1d376),
+    (0x1f004, 0x1f004), (0x1f0cf, 0x1f0cf), (0x1f18e, 0x1f18e), (0x1f191, 0x1f19a),
+    (0x1f200, 0x1f202), (0x1f210, 0x1f23b), (0x1f240, 0x1f248), (0x1f250, 0x1f251),
+    (0x1f260, 0x1f265), (0x1f300, 0x1f320), (0x1f32d, 0x1f335), (0x1f337, 0x1f37c),
+    (0x1f37e, 0x1f393), (0x1f3a0, 0x1f3ca), (0x1f3cf, 0x1f3d3), (0x1f3e0, 0x1f3f0),
+    (0x1f3f4, 0x1f3f4), (0x1f3f8, 0x1f43e), (0x1f440, 0x1f440), (0x1f442, 0x1f4fc),
+    (0x1f4ff, 0x1f53d), (0x1f54b, 0x1f54e), (0x1f550, 0x1f567), (0x1f57a, 0x1f57a),
+    (0x1f595, 0x1f596), (0x1f5a4, 0x1f5a4), (0x1f5fb, 0x1f64f), (0x1f680, 0x1f6c5),
+    (0x1f6cc, 0x1f6cc), (0x1f6d0, 0x1f6d2), (0x1f6d5, 0x1f6d7), (0x1f6dc, 0x1f6df),
+    (0x1f6eb, 0x1f6ec), (0x1f6f4, 0x1f6fc), (0x1f7e0, 0x1f7eb), (0x1f7f0, 0x1f7f0),
+    (0x1f90c, 0x1f93a), (0x1f93c, 0x1f945), (0x1f947, 0x1f9ff), (0x1fa70, 0x1fa7c),
+    (0x1fa80, 0x1fa89), (0x1fa8f, 0x1fac6), (0x1face, 0x1fadc), (0x1fadf, 0x1fae9),
+    (0x1faf0, 0x1faf8), (0x20000, 0x2fffd), (0x30000, 0x3fffd),
+];
 fn advance(n: f32) -> f32 {
     if n.is_finite() {
         n.max(0.0)
