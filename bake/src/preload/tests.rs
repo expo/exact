@@ -154,20 +154,8 @@ fn fetch_and_preloads_use_the_same_forbidden_headers() {
 }
 
 #[test]
-fn header_values_must_be_field_values_before_they_are_normalized() {
-    for value in [
-        "ok\nX-Other: yes",
-        "bad\rvalue",
-        "nul\0byte",
-        "\nvalue",
-        "value\r",
-        " leading",
-        "trailing ",
-        "\tleading",
-        "trailing\t",
-        "wide\u{100}",
-        "Bearer {secret:session}\n",
-    ] {
+fn header_values_must_be_field_values_after_fetch_normalisation() {
+    for value in ["ok\nX-Other: yes", "bad\rvalue", "nul\0byte", "wide\u{100}"] {
         let error =
             entry(json!({"url":"https://api.example", "headers":{"X-Note":value}})).unwrap_err();
         assert!(error.starts_with("preload.feed.headers.X-Note:"), "{error}");
@@ -177,6 +165,13 @@ fn header_values_must_be_field_values_before_they_are_normalized() {
         "has space\tinside",
         "Bearer {secret:session}",
         "byte\u{ff}",
+        "\nvalue",
+        "value\r",
+        " leading",
+        "trailing ",
+        "\tleading",
+        "trailing\t",
+        "Bearer {secret:session}\n",
     ] {
         assert!(entry(json!({"url":"https://api.example", "headers":{"X-Note":value}})).is_ok());
     }
@@ -375,5 +370,43 @@ fn expanded_build_values_obey_header_body_and_secret_origin_checks() {
             error.starts_with(&format!("preload.feed.{field}:")),
             "{error}"
         );
+    }
+}
+
+#[test]
+fn build_headers_follow_fetch_normalisation() {
+    for launch in [false, true] {
+        for value in [
+            "Bearer abc\n",
+            "Bearer abc ",
+            " \t\r\nBearer abc\n\r\t ",
+            "bad\rheader",
+            "bad\nheader",
+            "bad\0header",
+        ] {
+            let result = check(
+                vec![(
+                    "feed".into(),
+                    json!({"url":"https://api.example/", "headers":{"Authorization":"{env:TOKEN}"}}),
+                )],
+                Some(GRANTS),
+                &[json!({"name":"TOKEN","launch":launch})],
+                &json!({"TOKEN":{"value":value}}),
+                true,
+            );
+            if value.starts_with("bad") {
+                assert!(result
+                    .unwrap_err()
+                    .contains("preload.feed.headers.Authorization"));
+            } else {
+                let parsed = result.unwrap();
+                if !launch {
+                    assert_eq!(
+                        parsed[0]["headers"][0][1],
+                        json!([["literal", "Bearer abc"]])
+                    );
+                }
+            }
+        }
     }
 }

@@ -1,5 +1,6 @@
 //! Process-start requests and their boot handoff (LLP 1162.000 D4).
 use crate::executor::{Io, Preload, PreloadControl, PreloadFact, PreloadObservation, Preloads};
+use exact_executor::preload::preload_url;
 use exact_runner::{request::PreloadWhen, DataSource, Runner};
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -377,7 +378,7 @@ impl LaunchPreloads {
         outcome: crate::executor::PreloadEvent,
     ) {
         let origin = definition
-            .fill(|_| Some("redacted".into()))
+            .fill(|_| Some("redacted".into()), preload_url)
             .ok()
             .and_then(|r| url::Url::parse(&r.url).ok())
             .map(|u| u.origin().ascii_serialization())

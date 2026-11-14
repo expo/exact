@@ -265,7 +265,20 @@ fn check(
         )?;
         let target = placeholder(&url);
         if let Some(first) = url.iter().position(|part| part[0] == "secret") {
-            if exact_runner::request::secret_in_origin(&target, &placeholder(&url[..first])) {
+            if exact_runner::request::secret_in_origin(
+                &target,
+                &placeholder(&url[..first]),
+                |target| {
+                    url::parse(target, None).ok().map(|parsed| {
+                        (
+                            parsed.protocol,
+                            parsed.username,
+                            parsed.password,
+                            parsed.host,
+                        )
+                    })
+                },
+            ) {
                 return Err(fail(
                     "url",
                     "secret references are allowed only in the URL path or query",
@@ -360,10 +373,14 @@ fn check(
                 let value = value
                     .as_str()
                     .ok_or_else(|| fail(&field, "expected a string"))?;
-                let parts = template(&field, value)?;
+                let mut parts = template(&field, value)?;
                 let filled = placeholder(&parts);
-                if !fetch::is_valid_value(&filled) || fetch::normalize_value(&filled) != filled {
+                let normalised = fetch::normalize_value(&filled);
+                if !fetch::is_valid_value(normalised) {
                     return Err(fail(&field, "expected a Fetch field value"));
+                }
+                if parts.iter().all(|p| p[0] == "literal") {
+                    parts = vec![json!(["literal", normalised])];
                 }
                 headers.push(json!([key, parts]));
             }

@@ -14,7 +14,7 @@ import { resolve, relative, dirname, basename, join, sep, isAbsolute, toNamespac
 // The bake writes the binding's generator beside this file in its stage (js/bake/src/resident.rs `BINDING`).
 import { moduleBinding, languageModelToolCheck, languageModelToolNote, languageModelTools, languageModelToolSources, TOOL_CHECK, unownedTools } from './__exact_binding.mjs';
 // And the settings' reader beside it (resident.rs `ENV`).
-import { envReads, inlineSettings } from './__exact_env.mjs';
+import { checkPreloadBackend, envReads, inlineSettings } from './__exact_env.mjs';
 import { grantsDeclaration, launchGrants as grantsWithLaunches, launchModule, launchSource } from './__exact_launch_setting.mjs';
 export { launchModule, launchSource };
 // And the check of what package code may use (resident.rs `PORTABLE`).
@@ -980,6 +980,7 @@ export function configure(stage, incremental=false, parse, web=false) {
       if (!selection) throw error;
       throw Object.assign(new Error(`${selection.source}: ${error.message.replace(/^EXACT_BACKEND_ORIGIN: /,'')}`),{code:'backend-selection'});
     }
+    checkPreloadBackend(app,settings.record,literalBackendOrigin(settings.code,parse),selection);
     const launched=Object.keys(settings.record).filter(name=>settings.record[name].launch);
     launchModule(stage,web ? [] : launched);
     const after=developmentGrants(launchGrants(injected,parse,launched),parse);

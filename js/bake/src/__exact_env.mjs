@@ -20,7 +20,7 @@ const entryName = entry => entry !== null && typeof entry === 'object' && !Array
   && Object.keys(entry).every(key => key === 'name' || key === 'launch') && ['boolean', 'undefined'].includes(typeof entry.launch) ? entry.name : entry;
 const manifestOf = app => {
   let manifest = {};
-  try { manifest = JSON.parse(readFileSync(resolve(app, 'app.json'), 'utf8')); } catch { /* no manifest: none declared */ }
+  try { manifest = JSON.parse(readFileSync(resolve(app, existsSync(resolve(app, '.shells/app.json')) ? '.shells/app.json' : 'app.json'), 'utf8')); } catch { /* no manifest: none declared */ }
   return manifest;
 };
 
@@ -243,19 +243,36 @@ export function inlineSettings(code, app, parse, env = process.env, { launches =
       edits.push([wrapper.start, wrapper.expression.start, ''], [wrapper.expression.end, wrapper.end, '']);
     }
   }
-  for (const [preload, entry] of Object.entries(preloads)) {
-    const fields = [['url', entry.url], ['body', entry.body], ...Object.entries(entry.headers ?? {}).map(([key, value]) => [`headers.${key}`, value])];
-    for (const [field, text] of fields) if (typeof text === 'string') for (const reference of text.matchAll(/{{|{env:([^{}]*)}/g)) {
-      const name = reference[1];
-      if (name === undefined) continue;
-      if (!declared.includes(name)) refusals.push(`preload.${preload}.${field}: setting ${name} is not declared in app.json's env`);
-      else if (typeof record[name]?.value !== 'string') refusals.push(`preload.${preload}.${field}: setting ${name} has no build value or ?? default`);
-    }
+  for (const [preload, field, name] of preloadSettings(preloads)) {
+    if (!declared.includes(name)) refusals.push(`preload.${preload}.${field}: setting ${name} is not declared in app.json's env`);
+    else if (typeof record[name]?.value !== 'string') refusals.push(`preload.${preload}.${field}: setting ${name} has no build value or ?? default`);
   }
   if (refusals.length) throw new Error(refusals.join('\n'));
   for (const [start, end, value] of edits.sort((a, b) => b[0] - a[0])) code = code.slice(0, start) + value + code.slice(end);
   if (launches && reads.some(read => launch.has(read.name))) code += `\nimport { launched as ${local} } from './__exact_launch';\n`;
   return { code, record };
+}
+
+function* preloadSettings(preloads) {
+  for (const [preload, entry] of Object.entries(preloads)) {
+    const fields = [['url', entry.url], ['body', entry.body], ...Object.entries(entry.headers ?? {}).map(([key, value]) => [`headers.${key}`, value])];
+    for (const [field, text] of fields) if (typeof text === 'string') for (const reference of text.matchAll(/{{|{env:([^{}]*)}/g)) {
+      if (reference[1] !== undefined) yield [preload, field, reference[1]];
+    }
+  }
+}
+
+/** A backend selection rewrites a code literal, not the setting the preload reads (LLP 1162.000 D2). */
+export function checkPreloadBackend(app, record, previous, selection) {
+  if (!selection || !previous || previous === selection.origin) return;
+  const refusals = [];
+  for (const [preload, field, name] of preloadSettings(manifestOf(app).preload ?? {})) {
+    const value = record[name]?.value;
+    let url; try { url = new URL(value); } catch { continue; }
+    if (url.origin === previous && url.pathname === '/' && !url.search && !url.hash)
+      refusals.push(`preload.${preload}.${field}: setting ${name} is ${value}, but ${selection.source} selects ${selection.origin} by rewriting app.ts's origin literal; the preload cannot use that setting with this selection`);
+  }
+  if (refusals.length) throw new Error(refusals.join('\n'));
 }
 
 /** Each `import.meta.env` in the captured module `file`, the app's or a package's, as `{ start, end, why }`: once

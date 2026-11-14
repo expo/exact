@@ -85,7 +85,15 @@ mod tests {
             when: PreloadWhen::Start,
             secrets: &[],
         };
-        assert_eq!(preload.fill(|_| panic!("no secrets")).unwrap(), request);
+        assert_eq!(
+            preload
+                .fill(
+                    |_| panic!("no secrets"),
+                    exact_executor::preload::preload_url,
+                )
+                .unwrap(),
+            request
+        );
         let mut rendering = crate::Module::new(
             Vec::<u8>::new(),
             "test.preload-setting",

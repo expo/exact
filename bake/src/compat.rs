@@ -333,12 +333,13 @@ pub fn compatibility_id_pinned(
     };
     crate::reach::parsed(app_dir, grants, rust_grants, trust == "production")?;
     let ceiling = rust_grants.map(|rust| grant_union(grants.unwrap_or(""), rust));
+    // Android uses the Linux bake; its launch parts read the build fallback (LLP 1153.002 D2).
     let preloads = crate::preload::checked(
         app_dir,
         manifest,
         ceiling.as_deref().or(grants),
         settings,
-        !matches!(platform, "web" | "android"),
+        platform != "web",
     )?;
     // @ref LLP 1100 D1 — a colour this platform can't show is refused here.
     // The app's plan, compiled once here: its colours checked, and (stage

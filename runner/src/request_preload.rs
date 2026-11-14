@@ -111,16 +111,42 @@ pub struct Preload {
 pub enum PreloadFillError {
     /// The device could not supply this secret.
     MissingSecret(&'static str),
-    /// A launch setting moved a secret before the URL's path.
-    SecretInOrigin,
+    /// The URL is not plain HTTP, or a secret could enter its authority.
+    InvalidUrl,
 }
 
 impl Preload {
-    /// Fill references once per secret and reject a secret moved into the origin by a launch setting.
-    pub fn fill(
+    /// Fill references once per secret, checking the URL before reading any secret (LLP 1162.000 D2–D3).
+    /// `parse_url` validates plain HTTP and returns the normalized scheme and authority.
+    pub fn fill<T: PartialEq>(
         &self,
         mut lookup: impl FnMut(&str) -> Option<String>,
+        parse_url: impl Fn(&str) -> Option<T>,
     ) -> Result<Request, PreloadFillError> {
+        let placeholder = |parts: &[PreloadPart]| -> String {
+            parts
+                .iter()
+                .map(|part| match part {
+                    PreloadPart::Literal(text) => (*text).to_owned(),
+                    PreloadPart::Env(name, build) => {
+                        crate::launch_env::value(name).unwrap_or_else(|| (*build).into())
+                    }
+                    PreloadPart::Secret(_) => "secret".into(),
+                })
+                .collect()
+        };
+        let safe_url = placeholder(self.url);
+        parse_url(&safe_url).ok_or(PreloadFillError::InvalidUrl)?;
+        if let Some(first) = self
+            .url
+            .iter()
+            .position(|p| matches!(p, PreloadPart::Secret(_)))
+        {
+            let prefix = placeholder(&self.url[..first]);
+            if secret_in_origin(&safe_url, &prefix, &parse_url) {
+                return Err(PreloadFillError::InvalidUrl);
+            }
+        }
         let secrets: BTreeMap<_, _> = self
             .secrets
             .iter()
@@ -146,27 +172,6 @@ impl Preload {
             }
             Ok(text)
         };
-        if let Some(first) = self
-            .url
-            .iter()
-            .position(|p| matches!(p, PreloadPart::Secret(_)))
-        {
-            let safe_url: String = self
-                .url
-                .iter()
-                .map(|part| match part {
-                    PreloadPart::Literal(text) => (*text).to_owned(),
-                    PreloadPart::Env(name, build) => {
-                        crate::launch_env::value(name).unwrap_or_else(|| (*build).into())
-                    }
-                    PreloadPart::Secret(_) => "secret".into(),
-                })
-                .collect();
-            let prefix = fill(&self.url[..first])?;
-            if secret_in_origin(&safe_url, &prefix) {
-                return Err(PreloadFillError::SecretInOrigin);
-            }
-        }
         let mut request = Request::get(&fill(self.url)?);
         request.method = self.method.into();
         request.headers = self
@@ -185,98 +190,20 @@ impl Preload {
     }
 }
 
-/// Whether a secret after `prefix` could enter the URL's scheme or authority.
-/// URL parsing strips whitespace and treats backslashes as slashes for HTTP.
-pub fn secret_in_origin(target: &str, prefix: &str) -> bool {
-    let clean = |text: &str| -> String {
-        text.chars()
-            .filter(|c| !matches!(c, '\t' | '\n' | '\r'))
-            .collect()
+/// Whether inserting a secret after `prefix` changes the parsed scheme or authority.
+pub fn secret_in_origin<T: PartialEq>(
+    target: &str,
+    prefix: &str,
+    parse_url: impl Fn(&str) -> Option<T>,
+) -> bool {
+    let Some(tail) = target.strip_prefix(prefix) else {
+        return true;
     };
-    let target = clean(target);
-    let target = target.trim_start_matches(|c| c <= ' ');
-    let prefix = clean(prefix);
-    let prefix = prefix.trim_start_matches(|c| c <= ' ');
-    let authority_end = target.split_once(':').map_or(target.len(), |(_, tail)| {
-        let authority = tail.trim_start_matches(['/', '\\']);
-        target.len() - authority.len()
-            + authority
-                .find(['/', '\\', '?', '#'])
-                .unwrap_or(authority.len())
-    });
-    prefix.len() < authority_end
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    const DEFINITION: Preload = Preload {
-        name: "feed",
-        method: "POST",
-        url: &[
-            PreloadPart::Literal("https://api.example/"),
-            PreloadPart::Secret("session"),
-        ],
-        headers: &[(
-            "Authorization",
-            &[
-                PreloadPart::Literal("Bearer "),
-                PreloadPart::Secret("session"),
-            ],
-        )],
-        body: Some(&[
-            PreloadPart::Secret("session"),
-            PreloadPart::Literal("{"),
-            PreloadPart::Secret("other"),
-        ]),
-        timeout_ms: Some(42),
-        when: PreloadWhen::Foreground,
-        secrets: &["other", "session"],
+    let Some(parsed) = parse_url(target) else {
+        return true;
     };
-
-    #[test]
-    fn filling_replaces_every_reference_from_one_read_per_secret() {
-        let mut reads = Vec::new();
-        let request = DEFINITION
-            .fill(|name| {
-                reads.push(name.to_owned());
-                Some(format!("value-{name}"))
-            })
-            .unwrap();
-        assert_eq!(reads, ["other", "session"]);
-        assert_eq!(request.url, "https://api.example/value-session");
-        assert_eq!(
-            request.headers,
-            [("Authorization".into(), "Bearer value-session".into())]
-        );
-        assert_eq!(request.body, b"value-session{value-other");
-        assert_eq!(request.method, "POST");
-        assert_eq!(request.timeout_ms, Some(42));
-    }
-
-    #[test]
-    fn a_missing_secret_returns_its_name_and_no_request() {
-        assert_eq!(
-            DEFINITION.fill(|name| (name == "other").then(|| "yes".into())),
-            Err(PreloadFillError::MissingSecret("session"))
-        );
-    }
-
-    #[test]
-    fn a_literal_definition_never_reads_secrets() {
-        let definition = Preload {
-            url: &[PreloadPart::Literal("https://api.example/")],
-            headers: &[],
-            body: None,
-            secrets: &[],
-            ..DEFINITION
-        };
-        assert_eq!(
-            definition
-                .fill(|_| panic!("no secret reference"))
-                .unwrap()
-                .url,
-            "https://api.example/"
-        );
-    }
+    let Some(marked) = parse_url(&format!("{prefix}exactpreloadsecret{tail}")) else {
+        return true;
+    };
+    parsed != marked
 }

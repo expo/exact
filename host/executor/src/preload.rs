@@ -63,23 +63,31 @@ impl Definition {
         lookup: impl FnMut(&str) -> Option<String>,
     ) -> Result<Self, Fact> {
         use ibex2::stdlib::fetch;
-        let request = definition.fill(lookup).map_err(|error| Fact {
+        let mut request = definition.fill(lookup, preload_url).map_err(|error| Fact {
             name: definition.name.into(),
-            origin: definition
-                .fill(|_| Some("redacted".into()))
-                .ok()
-                .map(|r| origin(&r))
-                .unwrap_or_default(),
+            origin: match error {
+                exact_runner::request::PreloadFillError::InvalidUrl => String::new(),
+                exact_runner::request::PreloadFillError::MissingSecret(_) => definition
+                    .fill(|_| Some("redacted".into()), preload_url)
+                    .ok()
+                    .map(|r| origin(&r))
+                    .unwrap_or_default(),
+            },
             outcome: match error {
                 exact_runner::request::PreloadFillError::MissingSecret(_) => Event::MissingSecret,
-                exact_runner::request::PreloadFillError::SecretInOrigin => Event::InvalidUrl,
+                exact_runner::request::PreloadFillError::InvalidUrl => Event::InvalidUrl,
             },
         })?;
-        let invalid = if url::Url::parse(&request.url).is_err() {
+        for (_, value) in &mut request.headers {
+            *value = fetch::normalize_value(value).to_owned();
+        }
+        let invalid = if preload_url(&request.url).is_none() {
             Some(Event::InvalidUrl)
-        } else if request.headers.iter().any(|(_, value)| {
-            !fetch::is_valid_value(value) || fetch::normalize_value(value) != value
-        }) {
+        } else if request
+            .headers
+            .iter()
+            .any(|(_, value)| !fetch::is_valid_value(value))
+        {
             Some(Event::InvalidHeader)
         } else {
             None
@@ -87,7 +95,11 @@ impl Definition {
         if let Some(outcome) = invalid {
             return Err(Fact {
                 name: definition.name.into(),
-                origin: origin(&request),
+                origin: if outcome == Event::InvalidUrl {
+                    String::new()
+                } else {
+                    origin(&request)
+                },
                 outcome,
             });
         }
@@ -99,6 +111,25 @@ impl Definition {
         })
     }
 }
+/// Validate a preload URL with the sender's parser and return its normalized scheme and authority
+/// for the secret-boundary check (LLP 1162.000 D2–D3).
+pub fn preload_url(target: &str) -> Option<String> {
+    let parsed = ibex2::stdlib::url::parse(target, None).ok()?;
+    let userinfo = target.split_once(':').is_some_and(|(_, tail)| {
+        tail.trim_start_matches(['/', '\\'])
+            .split(['/', '\\', '?', '#'])
+            .next()
+            .is_some_and(|authority| authority.contains('@'))
+    });
+    (matches!(parsed.protocol.as_str(), "http:" | "https:")
+        && !parsed.hostname.is_empty()
+        && !userinfo
+        && parsed.username.is_empty()
+        && parsed.password.is_empty()
+        && !parsed.href.contains('#'))
+    .then_some(parsed.origin)
+}
+
 fn origin(request: &Request) -> String {
     url::Url::parse(&request.url)
         .map(|u| u.origin().ascii_serialization())
@@ -1264,21 +1295,7 @@ pub(super) fn close(cache: &mut cache::Cache) {
 /// Runtime checks for requests supplied by Rust, including filled manifest references.
 pub fn valid_request(request: &Request) -> bool {
     use ibex2::stdlib::fetch::{is_valid_name, is_valid_value, normalize_value, Headers};
-    let Ok(url) = url::Url::parse(&request.url) else {
-        return false;
-    };
-    let userinfo = request.url.split_once(':').is_some_and(|(_, tail)| {
-        tail.trim_start_matches(['/', '\\'])
-            .split(['/', '\\', '?', '#'])
-            .next()
-            .is_some_and(|authority| authority.contains('@'))
-    });
-    if !matches!(url.scheme(), "http" | "https")
-        || url.host_str().is_none()
-        || userinfo
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.fragment().is_some()
+    if preload_url(&request.url).is_none()
         || !is_valid_name(&request.method)
         || !request.is_plain_http()
         || request.body.len() > MAX_BODY_BYTES

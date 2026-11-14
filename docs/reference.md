@@ -451,7 +451,11 @@ manifest's `env`, including in a URL's origin. It must have a build value (a
 module's `??` default counts). The bake writes a fixed setting's value into the
 request. A setting marked `launch: true` uses the same process-wide nonempty
 launch value as `import.meta.env.NAME`, falling back to the build's value
-(LLP 1153.002 D2). Android and the web use the build's value. Filled URLs remain
+(LLP 1153.002 D2). Android keeps the launch part and reads its build fallback;
+the web folds it at bake.
+A backend selection (`EXACT_BACKEND_ORIGIN`, `--backend` or a saved selection)
+rewrites the module's `origin` literal, not its setting. The build refuses a
+preload that names a setting at the origin the selection replaces. Filled URLs remain
 subject to the binary's grants; invalid filled headers send nothing. The journal
 names the filled origin, without the path, query, headers or body.
 The bake checks at most eight entries against fetch and `secret.keep` grants.

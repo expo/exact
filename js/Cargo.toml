@@ -43,6 +43,7 @@ hermes-lean-sys = { path = "../vendor/ibex/crates/hermes-lean-sys", default-feat
 
 [dev-dependencies]
 caltrain-data = { path = "../apps/caltrain/data" }
+exact-executor = { path = "../host/executor" }
 # The storage composer a host stacks over the module (LLP 1097 D5).
 exact-data-host = { path = "../data/host" }
 exact-logic = { path = "../logic" }

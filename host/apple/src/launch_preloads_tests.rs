@@ -194,7 +194,7 @@ impl DataSource for Source {
             return Ok(Answer::Now(Value::record(vec![Value::str("changed")])));
         }
         if source == "first" && self.first_unloaded {
-            let url = self.definitions[0].fill(|_| None).unwrap().url;
+            let url = self.definitions[0].fill(|_| None, preload_url).unwrap().url;
             return Ok(Answer::Later(exact_runner::Request::get(&format!(
                 "{url}/first"
             ))));
@@ -202,7 +202,7 @@ impl DataSource for Source {
         if source == "named" {
             return Ok(Answer::Later(
                 self.definitions[0]
-                    .fill(|_| None)
+                    .fill(|_| None, preload_url)
                     .unwrap()
                     .header("X-Trace", "new")
                     .preload("feed")
@@ -211,7 +211,7 @@ impl DataSource for Source {
         }
         Ok(Answer::Later(
             self.definitions[usize::from(source == "after")]
-                .fill(|_| Some("present-secret".into()))
+                .fill(|_| Some("present-secret".into()), preload_url)
                 .unwrap(),
         ))
     }
@@ -232,7 +232,9 @@ impl DataSource for Source {
                 previous, 0,
                 "boot settled a request produced by a fulfillment"
             );
-            return Ok(Answer::Later(self.definitions[0].fill(|_| None).unwrap()));
+            return Ok(Answer::Later(
+                self.definitions[0].fill(|_| None, preload_url).unwrap(),
+            ));
         }
         if source == "timeline" {
             return Ok(Answer::Now(Value::list(vec![Value::record(vec![
@@ -375,14 +377,15 @@ fn plan() -> Vec<u8> {
 }
 
 #[test]
-fn invalid_filled_headers_and_urls_are_named_without_sending_or_exposing_values() {
-    for (value, invalid_url) in [
-        ("ok\nX-Other: yes", false),
-        ("\rvalue", false),
-        ("nul\0byte", false),
-        (" leading", false),
-        ("trailing\t", false),
-        ("secret-value", true),
+fn filled_headers_follow_fetch_and_invalid_requests_do_not_expose_values() {
+    for (value, invalid_url, accepted) in [
+        ("ok\nX-Other: yes", false, false),
+        ("bad\rvalue", false, false),
+        ("\rvalue", false, true),
+        ("nul\0byte", false, false),
+        (" leading", false, true),
+        ("trailing\t", false, true),
+        ("secret-value", true, false),
     ] {
         let server = Server::new(1);
         let mut source = server.source(PreloadWhen::Start, true);
@@ -405,6 +408,19 @@ fn invalid_filled_headers_and_urls_are_named_without_sending_or_exposing_values(
         }));
         launch.begin(false, factory(&source));
         launch.0.set.get().unwrap().control.wait_definitions();
+        if accepted {
+            let sent = server.request().to_ascii_lowercase();
+            let normalised = ibex2::stdlib::fetch::normalize_value(value);
+            assert!(
+                sent.contains(&format!("authorization: {normalised}\r\n")),
+                "{sent}"
+            );
+            server.release(0);
+            ready(&launch);
+            assert!(!format!("{:?}", launch.journal()).contains(normalised));
+            assert_eq!(server.count.load(Ordering::Acquire), 1);
+            continue;
+        }
         let facts = launch.journal();
         assert_eq!(facts.len(), 1, "{facts:?}");
         assert_eq!(facts[0].name, "feed");
@@ -1111,7 +1127,9 @@ fn prepared_generations_disable_names_before_settlement_but_keep_equal_preloads(
             self.base.query(name, args)
         }
         fn answer(&mut self, _: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
-            let mut request = self.base.definitions[0].fill(|_| None).unwrap();
+            let mut request = self.base.definitions[0]
+                .fill(|_| None, preload_url)
+                .unwrap();
             request.body = self.body.to_vec();
             Ok(Answer::Later(request.preload("feed").unwrap()))
         }
