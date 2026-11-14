@@ -3,7 +3,7 @@
 # exact2 by path, as an app outside the repository does.
 [workspace]
 members = ["engine", "derive", "bake", "render", "physics", "audio", "app"]
-exclude = ["games", "bench", "app/apple"]
+exclude = ["games", "bench"]
 resolver = "2"
 
 [workspace.package]
