@@ -953,6 +953,18 @@ a second removal made `??a=1` the name `a` rather than `?a`. `url.rs`
 tests the parse; `js/tests/it/pure.rs` compares construction, a URL's
 view, lookup and mutation with Chrome. Replay on a refresh.
 
+## Local patch 42, an app folder read or copied as a file is `EISDIR`
+
+`stdlib/app_fs_unix.rs` refuses `readFile` of an `app:/` folder, and
+`copyFile` from one, with `EISDIR` (os error 21), as a write to one already
+is and as the web's store refuses all three, so the app's `code` is the same
+on Unix hosts as on the web. Windows still answers `failed` for these
+(`windows_directory.rs` refuses with no filesystem code), and the test
+asserts the folder codes only under `cfg(unix)`. `copy` checks its source before it opens the target, so a
+folder's copy no longer leaves an empty file behind. `js/tests/it/storage.rs`
+checks both codes and that no file is made. Replay on a refresh unless
+upstream refuses folders so.
+
 ## Terminal heap exhaustion
 
 The borrowed adapter propagates native engine exceptions through installation,
