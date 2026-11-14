@@ -1,6 +1,6 @@
 # An app cannot tell whether its host suspends it when hidden, or whether it runs on a phone
 
-**Status:** Open
+**Status:** Closed
 **Systems:** runner reserved sources (`exactViewport`, `exactPage`, `exactSurface`), docs/contract-for-agents.md ("Platform facts")
 **Severity:** P3
 **Author:** Claude (Opus 5.5), from Exact diaries sent 2026-11-11 to 2026-11-13
@@ -84,3 +84,15 @@ The issue remains open for that watch work and a signed-phone run: confirm the s
 socket close before suspension and a fresh socket on return; repeat with
 active background playback and with playback ending while hidden. The
 navigation consumer's tree review is also owed. No device-idiom field is added.
+
+## Resolution (2026-11-14)
+
+Fixed by 9aa713c4b and 1c129fe5d: `exactPage().frozen` is true from when the
+host has put the app in the background with no owner that keeps execution
+running, until it resumes (LLP 1069.000 D2 and D6, r5). The feed case reads
+`when not page.frozen`. A Mac window is never frozen; the web follows the Page
+Lifecycle API's `freeze` and `resume`; background audio keeps an iOS app
+unfrozen, and an Android foreground service keeps an Android app unfrozen.
+`docs/recipes/suspending-feed.md` shows it. No device-idiom fact is added: a
+root `tablist` and route presentation already give each host its own
+navigation.

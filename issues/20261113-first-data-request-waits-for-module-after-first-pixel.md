@@ -67,3 +67,11 @@ LLP 1027.008 Part 1 (D1 to D3) is built. For an owner-placed TypeScript module, 
 Simulator check, a direction only: Weatherlight, a development build on an iPhone 18 Pro simulator (iOS 27.0), six warm launches under the agent per build, the same tree with the old `SessionActivation.swift` as the control. The first draw to the end of the activating `dataReady` took 98 to 117 ms (median 110) as before and 66 to 114 ms (median 75) with Part 1. The evaluation took 6 to 9 ms. Under the agent, location is substituted, so the forecast asked nothing; the requests timed were the native and storage ones.
 
 Still open: Q1 (asking from the owner, which would take the remaining main-queue turn off the path), Part 2 (evaluation before the boot), and the iPhone measurement of Part 1 against the same build without it (LLP 1027.008 §8 step 2).
+
+A limit on Part 1's gain: the main thread still makes synchronous calls into
+the owner outside activation (a layout outside an owner callback reads
+`session.view`, a queued collection flush sends its feedback, `drainFill` waits
+for a slice). One made while the evaluation runs waits for it. Before Part 1 the
+same call waited one turn later, so nothing waits longer than it did, but a large
+module's overlap with the main thread's first turn is lost whenever that turn
+makes such a call.
