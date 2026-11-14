@@ -39,6 +39,7 @@ public final class ExactView: NSView {
     @objc public func stopSpeaking(_ sender: Any?) { Self.speech.stopSpeaking(at: .immediate) }
     private static let speech = AVSpeechSynthesizer()
     private var lastSize = CGSize.zero
+    private var lastScreen: CGSize?
     private var fitPending = false
     private var lastDisplayScale: CGFloat = 0
     private var shortcutMonitor: Any?
@@ -283,14 +284,20 @@ public final class ExactView: NSView {
             // the standalone adapter booted it before the window showed.
             lastSize = size
             session.boot(size: size)
-            syncInsets()
-            return
+            guard session.booted else { return }
         }
-        if size != lastSize {
+        var change = Runtime.ViewChange()
+        if size != lastScreen {
+            lastScreen = size
+            change.screen = .some(size)
+        }
+        let resized = size != lastSize
+        if resized {
             lastSize = size
-            session.resize(size)
-            session.natives.scopesChanged()
+            change.size = size
         }
+        session.view(change)
+        if resized { session.natives.scopesChanged() }
         syncInsets()
     }
 
@@ -439,10 +446,11 @@ public final class ExactView: NSView {
     private var regionsTold = false, titlebarTold = false
 
     /// After a restart from a new plan: the new runner knows nothing of the
-    /// insets — hand them over again, and fit the root. AppKit has no fold
+    /// window offer and insets — hand them over again, and fit the root. AppKit has no fold
     /// (LLP 1078 D5): `continuous`, one segment, told once at every boot so
     /// the facts are never the bake's — or what an agent preferred.
     func rebooted() {
+        lastScreen = nil
         let i = session.presenter.insets
         if i.top != 0 || i.left != 0 || i.bottom != 0 || i.right != 0 { session.insets(top: i.top, right: i.right, bottom: i.bottom, left: i.left) }
         regionsTold = false; titlebarTold = false  // the next fit tells the new runner

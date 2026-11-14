@@ -38,8 +38,7 @@ bun exact.mjs ios --device --release --unsigned --json
 No profile, identity or icon needed. `--unsigned --run` refuses: stock iPhones
 cannot launch it. `--archive .exact/app.ipa` adds an IPA for re-signing and
 requires a square AppIcon of at least 512 px; its path is relative to the
-working directory. iOS optimizes for size (games: speed);
-`--optimize speed` overrides.
+working directory. iOS builds balanced (games: speed); `--optimize` overrides.
 
 **Android APK**, no adb contact:
 

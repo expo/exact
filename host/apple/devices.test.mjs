@@ -3,12 +3,124 @@
 import { test, expect } from 'bun:test';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 import { decodePng, encodePng } from '../../scripts/png.mjs';
 import { chooseSimulator, crashReports, crashSummary, crashWatch, forwardedEnv, installedAlready, simulator, withDisplay, withMaterials, phoneBridge, phoneStartupFailure, softwareKeyboard, replacedNote, keepInstalledRelease } from './devices.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createConnection } from 'node:net';
 import { once } from 'node:events';
+
+test('Mac signing uses the selected team and never chooses the first of several identities', async () => {
+  const { macIdentity } = await import('./devices.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-mac-identities-'));
+  const saved = { PATH: process.env.PATH, EXACT_IDENTITY: process.env.EXACT_IDENTITY, DEVELOPMENT_TEAM: process.env.DEVELOPMENT_TEAM, EXACT_MAC_PROFILE: process.env.EXACT_MAC_PROFILE };
+  const first = createHash('sha1').update('FIRST').digest('hex').toUpperCase(), selected = createHash('sha1').update('SELECTED').digest('hex').toUpperCase();
+  const identities = resolve(dir, 'identities');
+  const list = (ids) => writeFileSync(identities, ids.map((sha, i) => `${i + 1}) ${sha} "Apple Development: Developer ${i}"`).join('\n'));
+  const said = [], log = console.error;
+  try {
+    writeFileSync(resolve(dir, 'security'), `#!/bin/sh\ncase "$1" in\ncms) /bin/cat "$4" ;;\nfind-identity) /bin/cat '${identities}' ;;\nfind-certificate) /usr/bin/printf '%s\\n' '-----BEGIN CERTIFICATE-----' 'FIRST' '-----END CERTIFICATE-----' '-----BEGIN CERTIFICATE-----' 'SELECTED' '-----END CERTIFICATE-----' ;;\nesac\n`);
+    writeFileSync(resolve(dir, 'openssl'), `#!/bin/sh\nif [ "$1" = smime ]; then /bin/cat "$6"; exit; fi\ncase "$(/bin/cat)" in\n*FIRST*) /bin/cat '${dir}/first-cert' ;;\n*) /bin/cat '${dir}/selected-cert' ;;\nesac\n`);
+    const certificate = (name, team, sha1, expires) => writeFileSync(resolve(dir, name + '-cert'), `subject=OU = ${team}\nsha1 Fingerprint=${sha1}\nnotAfter=${expires}\n`);
+    certificate('first', 'FIRSTTEAM0', first, 'Nov 14 00:00:00 2098 GMT');
+    certificate('selected', 'CHOSENTEAM', selected, 'Nov 14 00:00:00 2099 GMT');
+    for (const tool of ['security', 'openssl']) chmodSync(resolve(dir, tool), 0o755);
+    process.env.PATH = `${dir}:${saved.PATH}`;
+    delete process.env.EXACT_IDENTITY;
+    delete process.env.EXACT_MAC_PROFILE;
+    process.env.DEVELOPMENT_TEAM = ' CHOSENTEAM ';
+    console.error = (line) => said.push(line);
+    list([first, selected]);
+    expect(macIdentity()).toBe(selected);
+    list([selected, first]);
+    expect(macIdentity()).toBe(selected);
+    process.env.DEVELOPMENT_TEAM = 'MISSING';
+    expect(() => macIdentity()).toThrow('no valid "Apple Development" identity for team MISSING');
+    const named = resolve(dir, 'named.provisionprofile');
+    writeFileSync(named, '<plist><dict><key>DeveloperCertificates</key><array><data>U0VMRUNURUQ=</data></array><key>Name</key><string>Named Mac</string><key>TeamIdentifier</key><array><string>CHOSENTEAM</string></array><key>Platform</key><array><string>OSX</string></array><key>ExpirationDate</key><date>2099-01-01T00:00:00Z</date><key>ProvisionedDevices</key><array><string>THIS-MAC</string></array><key>Entitlements</key><dict><key>com.apple.application-identifier</key><string>CHOSENTEAM.com.example.profile</string><key>com.apple.developer.aps-environment</key><string>development</string></dict></dict></plist>');
+    expect((await import('./devices.mjs')).decodeProfile(named, 'linux').team).toBe('CHOSENTEAM');
+    list([selected]);
+    process.env.EXACT_MAC_PROFILE = named;
+    const { macSigning, macProfile } = await import('./presence.mjs');
+    const signed = macSigning({ id: 'com.example.profile' }, { reach: { profileEntitlements: ['com.apple.developer.aps-environment'] } }, {
+      current: macIdentity(), log: () => {}, teamOf: sha => sha === selected ? 'CHOSENTEAM' : null,
+      identityFor: p => { expect(p.team).toBe('CHOSENTEAM'); return selected; },
+      find: (a, required, options) => macProfile(a, required, { ...options, installed: [], udid: 'THIS-MAC' }) });
+    expect(signed.sha1).toBe(selected);
+    expect(signed.provisioning.profile.team).toBe('CHOSENTEAM');
+    delete process.env.EXACT_MAC_PROFILE;
+    list([first, selected]);
+    process.env.EXACT_IDENTITY = '-';
+    expect(macIdentity()).toBe('-');
+    process.env.EXACT_IDENTITY = first;
+    expect(macIdentity()).toBe(first);
+    delete process.env.EXACT_IDENTITY;
+    delete process.env.DEVELOPMENT_TEAM;
+    expect(macIdentity()).toBeNull();
+    certificate('first', 'CHOSENTEAM', first, 'Nov 14 00:00:00 2098 GMT');
+    for (const order of [[first, selected], [selected, first]]) {
+      list(order);
+      said.length = 0;
+      const current = macIdentity();
+      expect(current).toBe(selected);
+      expect(macSigning({ id: 'com.example.secret' }, { inputs: { grantCeiling: 'secret.keep token' } }, { current }).sha1).toBe(selected);
+      expect(said).toEqual([]);
+      expect((await import('./devices.mjs')).identity('CHOSENTEAM')).toBe(selected);
+    }
+    certificate('first', 'FIRSTTEAM0', first, 'Nov 14 00:00:00 2098 GMT');
+    expect(() => macSigning({ id: 'com.example.secret' }, { inputs: { grantCeiling: 'secret.keep token' } }, {
+      current: macIdentity(), find: () => null, log: () => {} })).toThrow(/DEVELOPMENT_TEAM=<team.*EXACT_IDENTITY=<sha1>.*EXACT_IDENTITY=-.*login.keychain.*prompt/i);
+    list([selected]);
+    expect(macIdentity()).toBe(selected);
+    list([]);
+    expect(macIdentity()).toBeNull();
+  } finally {
+    console.error = log;
+    for (const [key, value] of Object.entries(saved)) if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('profiles authorize the newest common certificate, including embedded Mac widgets', async () => {
+  const { identity, decodeProfile } = await import('./devices.mjs');
+  const { macSigning, macProfileIdentity } = await import('./presence.mjs');
+  const team = 'TESTTEAM00', der = ['older certificate', 'newer certificate'];
+  const hashes = der.map(bytes => createHash('sha1').update(bytes).digest('hex').toUpperCase());
+  const read = (command, args, options) => ({ status: 0, stdout: command === 'security'
+    ? args[0] === 'find-identity' ? hashes.map((sha, i) => `${i + 1}) ${sha} "Apple Development: Test"`).join('\n')
+      : der.map(bytes => `-----BEGIN CERTIFICATE-----\n${bytes}\n-----END CERTIFICATE-----`).join('\n')
+    : `subject=OU = ${team}\nsha1 Fingerprint=${hashes[options.input.includes(der[0]) ? 0 : 1]}\nnotAfter=Nov 14 00:00:00 ${options.input.includes(der[0]) ? 2098 : 2099} GMT\n` });
+  const profile = (name, certificates) => decodeProfile('/' + name, 'linux', { read: () => ({ status: 0, stdout:
+    `<plist><dict><key>Name</key><string>${name}</string><key>TeamIdentifier</key><array><string>${team}</string></array>
+    <key>DeveloperCertificates</key><array>${certificates.map(bytes => `<data>\n${Buffer.from(bytes).toString('base64')}\n</data>`).join('')}</array></dict></plist>` }) });
+  const owner = profile('App', der), extension = profile('Widgets', [der[0]]);
+  const env = {}, find = (team, options) => identity(team, { ...options, read, env });
+  expect(identity(team, { read, env })).toBe(hashes[1]);
+  expect(identity(team, { read, env, profiles: [extension] })).toBe(hashes[0]);
+  expect(identity(team, { read, env, profiles: [owner, extension] })).toBe(hashes[0]);
+  const identityFor = (p, current, options) => macProfileIdentity(p, current, { ...options, find, teamOf: () => team });
+  const app = { id: 'com.example.profile', manifest: { widgets: [{ families: ['systemSmall'] }] } };
+  const widgets = { team, profiles: { app: owner, extension } };
+  const options = { current: hashes[1], widgets, identityFor, teamOf: () => team, log: () => {},
+    widgetProfiles: () => widgets.profiles, find: () => owner };
+  // Widget-only builds and builds with grant entitlements must agree on one authorized certificate.
+  for (const compat of [{}, { reach: { profileEntitlements: ['com.apple.developer.aps-environment'] } }]) {
+    expect(macSigning(app, compat, options).sha1).toBe(hashes[0]);
+  }
+  const olderOwner = profile('Older app', [der[0]]);
+  const grants = { reach: { profileEntitlements: ['com.apple.developer.aps-environment'] } };
+  expect(macSigning({ id: app.id }, grants, { ...options, widgets: null, find: () => olderOwner }).sha1).toBe(hashes[0]);
+  env.EXACT_IDENTITY = hashes[1];
+  expect(() => identity(team, { read, env, profiles: [extension] })).toThrow(/Widgets.*does not authorize.*EXACT_IDENTITY/);
+  expect(() => identity(team, { read, env, profiles: [olderOwner] })).toThrow(/Older app.*does not authorize.*EXACT_IDENTITY/);
+  expect(() => macSigning(app, {}, options)).toThrow(/Widgets.*does not authorize.*EXACT_IDENTITY/);
+  env.EXACT_IDENTITY = hashes[0];
+  expect(identity(team, { read, env, profiles: [owner, extension] })).toBe(hashes[0]);
+  delete env.EXACT_IDENTITY;
+  expect(() => identity(team, { read, env, profiles: [profile('Empty', [])] })).toThrow(/no valid.*authorized.*Empty/);
+  expect(() => identity(team, { read, env, profiles: [profile('New only', [der[1]]), extension] })).toThrow(/no valid.*authorized.*New only.*Widgets/);
+});
 
 test('phone startup failures distinguish reported locks from possible prompts and retain diagnostics', () => {
   const locked = phoneStartupFailure('the app exited', ['app: FBSOpenApplicationErrorDomain: Locked']);
@@ -884,7 +996,7 @@ test('a Mac build signs push from a development or Developer ID profile that all
   const app = { id: 'com.example.profile' };
   const compat = { reach: { profileEntitlements: ['com.apple.developer.aps-environment'] }, inputs: { grantCeiling: 'device.notifications n\ndevice.push' } };
   const development = await fixtureProfile({ mac: true, devices: ['TEST-MAC'], push: 'development' });
-  const developerId = await fixtureProfile({ mac: true, allDevices: true, push: 'production' });
+  const dist = 'C'.repeat(40), developerId = { ...await fixtureProfile({ mac: true, allDevices: true, push: 'production' }), certificates: [dist] };
   const noPush = await fixtureProfile({ mac: true, devices: ['TEST-MAC'], push: null });
   const iosOne = await fixtureProfile({ devices: ['TEST-MAC'], push: 'development' });
   const installed = [noPush, iosOne, development, developerId];
@@ -900,13 +1012,13 @@ test('a Mac build signs push from a development or Developer ID profile that all
   expect(shipped.entitlements['com.apple.developer.aps-environment']).toBe('production');
   // The identity is the profile's team's, whichever names it: the development one by team, its certificate checked
   // as an explicit EXACT_IDENTITY's is; a Developer ID one of another team is refused.
-  const teams = { DEV: ['TESTTEAM00', false], OTHER: ['OTHERTEAM0', false], SHA: ['TESTTEAM00', true] };
+  const teams = { DEV: ['TESTTEAM00', false], OTHER: ['OTHERTEAM0', false], [dist]: ['TESTTEAM00', true] };
   const teamOf = (sha1, distribution) => teams[sha1]?.[1] === distribution ? teams[sha1][0] : null;
   expect(macProfileIdentity(development, 'X', { find: () => 'DEV', teamOf })).toBe('DEV');
   expect(() => macProfileIdentity(development, 'X', { find: () => 'OTHER', teamOf })).toThrow(/is team TESTTEAM00's, and OTHER is not that team's Apple Development identity/);
-  expect(() => macProfileIdentity(development, 'X', { find: () => 'SHA', teamOf })).toThrow(/not that team's Apple Development identity/);
+  expect(() => macProfileIdentity(development, 'X', { find: () => dist, teamOf })).toThrow(/not that team's Apple Development identity/);
   expect(() => macProfileIdentity(development, 'X', { find: () => '-', teamOf })).toThrow(/not that team's Apple Development identity/);
-  expect(macProfileIdentity(developerId, 'SHA', { distribution: true, teamOf })).toBe('SHA');
+  expect(macProfileIdentity(developerId, dist, { distribution: true, teamOf })).toBe(dist);
   expect(() => macProfileIdentity(developerId, 'DEV', { distribution: true, teamOf })).toThrow(/is team TESTTEAM00's; sign with that team's Developer ID/);
   // No profile allows push: the build signs none and says what the app reports; a release ships so (§9 P7), where
   // a row a release must keep is refused.
@@ -942,7 +1054,7 @@ test('a Mac build with widgets and push resolves one profile and one team for bo
   expect(widgets.profiles.app).toBe(newest);
   const otherTeam = { ...both, team: 'OTHERTEAM0', path: '/other' };
   const find = (a, required, options) => macProfile(a, required, { ...options, installed: [otherTeam], named: null, udid: 'TEST-MAC' });
-  const signed = macSigning(app, compat, { current: 'DEV', widgets, find, widgetProfiles, log: () => {} });
+  const signed = macSigning(app, compat, { current: 'DEV', widgets, find, widgetProfiles, identityFor: () => 'DEV', log: () => {} });
   expect(signed.provisioning.profile).toBe(both);
   expect(signed.widgets.profiles.app).toBe(both);
   expect(signed.widgets.profiles.extension).toBe(extension);
@@ -950,7 +1062,7 @@ test('a Mac build with widgets and push resolves one profile and one team for bo
   expect(signed.provisioning.entitlements['com.apple.developer.team-identifier']).toBe(team);
   // No profile of the widgets' team does both: the grants sign nothing, and another team's profile is never taken.
   const said = [];
-  const alone = macSigning(app, compat, { current: 'DEV', widgets, find, log: (l) => said.push(l),
+  const alone = macSigning(app, compat, { current: 'DEV', widgets, find, identityFor: () => 'DEV', log: (l) => said.push(l),
     widgetProfiles: (options) => macWidgetProfiles({ ...options, installed: [newest, extension], named: null, udid: 'TEST-MAC' }) });
   expect(alone).toEqual({ provisioning: null, widgets, sha1: 'DEV' });
   expect(said[0]).toMatch(/with the Mac widgets' App Group and shared Keychain group for team TESTTEAM00 \(one profile signs both\)/);

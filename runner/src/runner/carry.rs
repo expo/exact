@@ -21,6 +21,10 @@ pub struct Carried {
     pub panels: crate::instance::tabs::CarriedPanels,
     /// Resource name → (source name, arguments, value).
     pub resources: Vec<(String, String, Vec<Value>, Value)>,
+    /// Kept entries waiting for their identifying arguments (LLP 1027.005
+    /// D3, 2026-11-13): (resource name, source name, identifying arguments,
+    /// digest of the stored entry).
+    pub waiting: Vec<(String, String, Vec<Value>, u64)>,
     /// The resources whose answer came from a stream still open: a
     /// replacement that takes the answer shows it and asks again, opening
     /// the stream anew, since the old one ends with the runner that had it.
@@ -91,6 +95,7 @@ impl<D: super::DataSource> super::Runner<D> {
                     })
                 })
                 .collect(),
+            waiting: self.carry_waiting(),
             streams: (self.pending.iter())
                 .filter(|p| !p.in_flight())
                 .filter_map(|p| match p.target {

@@ -43,6 +43,7 @@ class AuthTest {
                 if (answer == "opened") opened += id else answers += id to answer
             }
             @JvmStatic @Implementation fun requests(): IntArray? = pending.getAndSet(null)
+            @JvmStatic @Implementation fun background(applying: Boolean) = -1.0
         }
     }
 

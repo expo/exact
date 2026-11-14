@@ -7,7 +7,7 @@ import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync,
 import { homedir, tmpdir } from 'node:os';
 import { delimiter, resolve, toNamespacedPath } from 'node:path';
 import { HERMES_INSTALLER, PINNED_RUST, hermesBundle, hermesLeanSysRoots } from './app.mjs';
-import { androidHermes, checkHermesBundles, appleCrossTargets, appleSetupTargets, platformRowNames } from './exact.mjs';
+import { androidHermes, checkHermesBundles, appleCrossTargets, appleSetupTargets, hermesRefusal, platformRowNames, shellPath } from './exact.mjs';
 import { iosAssets, iosTarget, entitlements, infoPlist, macInfoPlist, documentTypes, importedTypes, exportedTypes, writeUsageStrings, designCompatible, COMPATIBLE_SDK, moduleTripleFor } from '../host/apple/build.mjs';
 import { HOST_SDKS, olderVersion, useXcode, xcodeRefusal } from '../host/apple/devices.mjs';
 import { encodePng } from './png.mjs';
@@ -22,24 +22,24 @@ test('Apple production optimization defaults, manifest choices and command-line 
   const { appleProduction } = await import('../host/apple/link.mjs');
   const { appleArtifacts } = await import('../host/apple/build.mjs');
   for (const [platform, destination] of [['ios', 'ios'], ['ios', 'ios-simulator'], ['tvos', 'tvos'], ['tvos', 'tvos-simulator'], ['macos', 'macos']]) {
-    for (const game of [false, true]) for (const embed of [false, true]) for (const manifest of [undefined, 'speed', 'size']) for (const cli of [undefined, 'speed', 'size']) {
+    for (const game of [false, true]) for (const embed of [false, true]) for (const manifest of [undefined, 'speed', 'size', 'balanced']) for (const cli of [undefined, 'speed', 'size', 'balanced']) {
       const key = platform === 'macos' ? 'macos' : 'ios';
       const app = { dir: import.meta.dir, target: '/fixture/target', id: 'test.fixture', name: 'fixture', displayName: 'Fixture', manifest: { ...(game ? { game: { crate: 'fixture-logic' } } : {}), host: { [key]: { optimize: manifest } } } };
       const args = [...(embed ? ['--embed'] : []), ...(cli ? ['--optimize', cli] : [])];
-      const expected = cli ?? manifest ?? (game ? 'speed' : embed || platform !== 'macos' ? 'size' : 'speed');
-      if (game && expected === 'size') {
-        assert.throws(() => appleProduction(app, platform, args), /games cannot optimize for size because their generated Cargo workspace has no size profile; use speed/);
+      const expected = cli ?? manifest ?? (game ? 'speed' : embed ? 'size' : platform !== 'macos' ? 'balanced' : 'speed');
+      if (game && expected !== 'speed') {
+        assert.throws(() => appleProduction(app, platform, args), new RegExp(`games cannot optimize for ${expected} because their generated Cargo workspace has no ${expected} profile; use speed`));
         continue;
       }
       const selected = appleProduction(app, platform, args);
-      assert.deepEqual(selected, { optimize: expected, profile: expected === 'size' ? 'size' : 'release' });
+      assert.deepEqual(selected, { optimize: expected, profile: expected === 'speed' ? 'release' : expected });
       const paths = appleArtifacts(app, { destination, trust: 'production', ...(embed || cli ? { optimize: selected.optimize } : {}) });
-      assert.ok(paths.swift.endsWith(expected === 'size' ? '-size' : '-whole'), JSON.stringify({ platform, args, manifest, paths }));
+      assert.ok(paths.swift.endsWith(expected === 'speed' ? '-whole' : `-${expected}`), JSON.stringify({ platform, args, manifest, paths }));
       const development = appleArtifacts(app, { destination, trust: 'development' });
-      assert.doesNotMatch(development.swift, /-(size|whole)$/);
+      assert.doesNotMatch(development.swift, /-(size|balanced|whole)$/);
     }
   }
-  for (const args of [['--optimize', 'other'], ['--optimize']]) assert.throws(() => appleProduction({ manifest: {} }, 'ios', args), /--optimize is speed or size/);
+  for (const args of [['--optimize', 'other'], ['--optimize']]) assert.throws(() => appleProduction({ manifest: {} }, 'ios', args), /--optimize is speed, size or balanced/);
   const trust = process.env.EXACT_UPDATE_TRUST;
   process.env.EXACT_UPDATE_TRUST = 'production';
   try {
@@ -294,6 +294,15 @@ test('iOS Hermes preflight selects the pinned digest and exact installer command
     assert.equal(simulator.installed, false);
     assert.equal(simulator.root, intelSimulator.root, 'both simulator triples select the universal bundle');
     assert.equal(simulator.fix, `cargo run --manifest-path ${HERMES_INSTALLER} -- --target aarch64-apple-ios-sim`);
+    // A build that finds it missing (a fresh HOME, a copied checkout) names this checkout's setup first, then the
+    // installer's line for the bundle alone (LLP 1168.000 D4.5).
+    const said = hermesRefusal(simulator, env), setup = `bun ${shellPath(resolve(import.meta.dir, 'exact.mjs'))} setup`;
+    assert.ok(said.startsWith('the pinned Hermes bundle for aarch64-apple-ios-sim is not installed: '), said);
+    assert.ok(said.includes(`\`${setup}\` installs it and the rest a native build needs`), said);
+    assert.ok(said.indexOf(setup) < said.indexOf(simulator.fix) && said.endsWith(simulator.fix), said);
+    // The tvOS device's bundle, which setup does not install, is named with its installer line alone.
+    const tv = hermesBundle('aarch64-apple-tvos', env), tvSaid = hermesRefusal(tv, env);
+    assert.ok(!tvSaid.includes(setup) && tvSaid.includes('exact setup does not install this one') && tvSaid.endsWith(tv.fix), tvSaid);
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
 
@@ -1183,23 +1192,21 @@ test('a refused parent prevents use of a stale companion bundle', async () => {
 });
 
 
-test('Mac signing preflight falls back without a development identity and reads hardware only for Mac profiles', async () => {
+test('Mac signing preflight requires an identity or explicit omission and reads hardware only for Mac profiles', async () => {
   const { macWidgetSigning, widgetSigningTeam, macHardwareID, macWidgetProfiles } = await import('../host/apple/widgets.mjs');
   const { profile } = await import('../host/apple/devices.mjs');
   const app = { id: 'com.exact.test', manifest: { widgets: [{ kind: 'public', families: ['systemSmall'] }] } };
   const messages = [];
-  assert.equal(macWidgetSigning(app, null, { log: text => messages.push(text) }), null);
+  assert.throws(() => macWidgetSigning(app, null), /Apple Development.*EXACT_IDENTITY=-.*without the extension/);
+  assert.equal(macWidgetSigning(app, '-', { log: text => messages.push(text) }), null);
   assert.equal(messages.length, 1); assert.match(messages[0], /EXACT_IDENTITY/);
   const certificates = [{ subject: 'CN=Apple Development: Fixture\nOU=0123456789', fingerprint: 'AA' },
     { subject: 'CN=Developer ID Application: Fixture\nOU=0123456789', fingerprint: 'BB' }];
   assert.equal(widgetSigningTeam('AA', { certificates }), '0123456789');
   assert.equal(widgetSigningTeam('Apple Development: Fixture', { certificates }), '0123456789');
-  assert.equal(macWidgetSigning(app, 'BB', { certificates, log: text => messages.push(text) }), null);
-  assert.match(messages.at(-1), /Developer ID.*ad hoc.*EXACT_IDENTITY.*Apple Development/);
-  assert.equal(macWidgetSigning(app, null, { distribution: true, log: text => messages.push(text) }), null);
-  assert.match(messages.at(-1), /EXACT_IDENTITY.*Developer ID Application/);
-  assert.doesNotMatch(messages.at(-1), /Apple Development/);
-  assert.throws(() => macWidgetSigning(app, 'AA', { certificates, distribution: true }), /Developer ID Application.*EXACT_IDENTITY names Apple Development/);
+  assert.throws(() => macWidgetSigning(app, 'BB', { certificates }), /Apple Development.*EXACT_IDENTITY/);
+  assert.throws(() => macWidgetSigning(app, null, { distribution: true }), /Developer ID Application.*EXACT_DEVELOPER_ID/);
+  assert.throws(() => macWidgetSigning(app, 'AA', { certificates, distribution: true }), /Developer ID Application.*EXACT_DEVELOPER_ID names Apple Development/);
   assert.equal(widgetSigningTeam('BB', { certificates, distribution: true }), '0123456789');
   // Captured SPHardwareDataType property list; hardware and provisioning ids redacted separately.
   const capture = readFileSync(new URL('../host/apple/tests/fixtures/mac-hardware.json', import.meta.url), 'utf8');

@@ -255,15 +255,10 @@ enum SnapshotColor {
 /// Bundle and loose-file lookup share the containing app, including a Mac appex's extra Contents level.
 public enum SnapshotBundles {
     public static func containingApp(of bundle: Bundle) -> Bundle? {
-        var url = bundle.bundleURL
-        guard url.pathExtension == "appex" else { return nil }
-        #if os(macOS)
-        url.deleteLastPathComponent()
-        #endif
-        return Bundle(url: url.deletingLastPathComponent().deletingLastPathComponent())
+        IconAsset.containingApp(of: bundle)
     }
     public static func all(for bundle: Bundle) -> [Bundle] {
-        [bundle] + (containingApp(of: bundle).map { [$0] } ?? [])
+        IconAsset.bundles(for: bundle)
     }
     public static func imageRoots(for bundle: Bundle) -> [URL] {
         all(for: bundle).compactMap(\.resourceURL)

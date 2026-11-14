@@ -1,5 +1,5 @@
-// Run by `test` or `verify`: the app's server, empty, for the whole run.
-test "an item is added for everyone, and another person's arrives on the next poll; a refusal and a lost server are said in words, in place; a locked one can't be deleted; who is signed in is kept"
+// `test` and `verify` start each test on an empty server.
+test "an item is added; refusals and a lost server keep the form in place"
   expect tree has "empty-add"
   tap "add-item"
   clock settle
@@ -29,6 +29,12 @@ test "an item is added for everyone, and another person's arrives on the next po
   clock settle
   expect state lib.items.0 .title == "Eggs"
   expect state lib.items.1 .title == "Milk"
+
+test "a lost poll keeps the list; a locked item cannot be deleted; another person’s write arrives"
+  request POST "/items" {"title": "Milk", "notes": "Two litres"} as ada
+  request POST "/items" {"title": "Eggs"} as ada
+  clock +4000
+  clock data
   fail fetch "http://127.0.0.1:8787"
   clock +4000
   expect tree has "item-2"
@@ -60,8 +66,13 @@ test "an item is added for everyone, and another person's arrives on the next po
   clock data
   expect state lib.items.0 .title == "Bread"
   expect state lib.items.1 .title == "Eggs"
-  back
-  clock settle
+
+test "switching people hides the previous answer; who is signed in is kept"
+  request POST "/items" {"title": "Milk"} as ada
+  request POST "/items" {"title": "Eggs"} as ada
+  request POST "/items" {"title": "Bread"} as grace
+  clock +4000
+  clock data
   expect state persona == "ada"
   expect text "persona" == "Ada Lovelace"
   tap "persona"
@@ -80,6 +91,7 @@ test "an item is added for everyone, and another person's arrives on the next po
   tap "retry"
   clock data
   expect state lib.owner == "grace"
+  request DELETE "/items/1" as grace
   request PATCH "/items/2" {"locked": false} as grace
   request DELETE "/items/2" as grace
   request DELETE "/items/3" as grace

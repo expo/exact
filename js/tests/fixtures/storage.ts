@@ -381,6 +381,10 @@ async function work(_source:string, args:unknown[], store:Store, storage:Storage
       () => storage.fs.readdir(data + "/note"),
       () => storage.fs.mkdir(data + "/full").then(() => storage.fs.writeFile(data + "/full/x", new Uint8Array([1]))).then(() => storage.fs.rm(data + "/full")),
       () => storage.sqlite.open("app:/data/other.db"),
+      // A folder where a file is read or copied from is EISDIR, as on the web; the copy makes no file.
+      () => storage.fs.mkdir(data + "/folder").then(() => storage.fs.readFile(data + "/folder")),
+      () => storage.fs.copyFile(data + "/folder", data + "/folder-copy"),
+      () => storage.fs.stat(data + "/folder-copy"),
     ];
     for (const step of steps) {
       try { await step(); out.push("ok"); } catch (e:any) { out.push(e.kind + " " + e.code + " " + e.message); }

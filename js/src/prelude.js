@@ -13,7 +13,7 @@
   // (op, a, b) -> string | undefined, js/src/door.rs's ops: 1 a request, 2-4 and 18-20 the store, 5 storage,
   // 6 native, 7 pure, 8 secure randomness drawn, 9/10 canvas, 11 the agent's random bytes, 12 auth, 13 a journal line,
   // 16 a request withdrawn unsent, 21 the runner's clock as the call began, 22 module work's state (module-work.js), 23
-  // a handed-out request the app aborted, 27 a native request/call id.
+  // a handed-out request the app aborted, 27 a native request/call id, 28 a setting's value from the launch (launch.js).
   var host = global.__exact_host;
   delete global.__exact_host;
   var browserSecrets = global.__exact_browser_secrets;
@@ -35,6 +35,14 @@
   delete global.__exact_time;
   var tracker = global.HermesInternal;
   time.refuseClock(tracker);
+  // What the runtime itself says through `console`: natively a line that is
+  // not the app's, so no host writes it to the platform's log
+  // (js/src/console.js, LLP 1027.009 D1); in a browser realm, its console.
+  var runtimeLine =
+    global.__exact_runtime_line ||
+    function (line) {
+      if (global.console) global.console.error(line);
+    };
   // The runtime's own journal line (LLP 1097 D8): a failed storage
   // operation, an unhandled rejection. Natively it is the runner's journal
   // (`logs`) as it is; a realm without that door writes it to its console.
@@ -45,7 +53,7 @@
     } catch (e) {
       written = undefined;
     }
-    if (written !== "1" && global.console) global.console.error(String(line));
+    if (written !== "1") runtimeLine(String(line));
   }
   // The bake answers on an engine without some of Intl's constructors, where `new Intl.Collator()` says only
   // "undefined cannot be used as a constructor" (expo/exact#447). At bake such an error names the ones missing.
@@ -380,6 +388,7 @@
     host: host,
     binary: binary,
     journal: journal,
+    runtimeLine: runtimeLine,
     pending: pending,
     work: work,
     background: background,
@@ -1014,7 +1023,7 @@
         lastEventId: "",
         coalesced: 0,
         kind: o.failed.kind,
-        message: o.failed.message,
+        message: launchRefusal(o.failed, call.streamUrl).message,
         status: 0,
       };
     else
@@ -1316,6 +1325,14 @@
       copyBytes: copyBytes,
       toBase64: toBase64,
     });
+  // A refusal at the origin of a setting a launch gave names the setting (js/src/launch.js, LLP 1153.002 D3); a realm
+  // without it has no launch.
+  var launchRefusal =
+    global.__exact_launch_refusal ||
+    function (failed) {
+      return failed;
+    };
+  delete global.__exact_launch_refusal;
   global.__exact_fulfill = function (ticket, outcomeJson) {
     var p = settled(Number(ticket));
     if (!p) return;
@@ -1329,7 +1346,7 @@
     if (o.failed && o.failed.kind === "Timeout" && p.timed) timers.expire(p.signal);
     // A reply delivered after the signal aborts still rejects with that signal's reason.
     if (p.signal && p.signal.aborted) p.reject(p.signal.reason);
-    else if (o.failed) p.reject(new FetchError(o.failed));
+    else if (o.failed) p.reject(new FetchError(launchRefusal(o.failed, p.url)));
     else p.resolve(hostReply(o.response, p.bodyTo, p.head));
   };
 })(globalThis);

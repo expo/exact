@@ -1,5 +1,5 @@
 // @fixture/vault's prebuilt library and the package that declares it (LLP 1154 §3 item 4), built as a package with
-// native code is published: the Rust library uses system SQLite on Apple and bundled SQLite elsewhere. It is compiled as
+// native code is published: the Rust library bundles SQLite on every target. It is compiled as
 // a dynamic library for this machine's targets, each target's file is put at a file: URL under `<out>/libraries/`,
 // and a copy of the package at `<out>/package/` declares each by that URL and its SHA-256 in exact.json
 // `native.library`. The checkout's exact.json names no target, so an app built from it is refused by name.
@@ -16,13 +16,14 @@ import { createHash } from 'node:crypto';
 import { cpSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { appleCargo } from '../../../../scripts/cargo-check.mjs';
 
 export const pkg = resolve(import.meta.dir, '..'), ANSWER = 4217;
 export const TARGET = /^host: (.+)$/m.exec(spawnSync('rustc', ['-vV'], { encoding: 'utf8' }).stdout)[1];
 const mac = process.platform === 'darwin';
 
 const run = (cmd, args, cwd, env = process.env) => {
-  const r = spawnSync(cmd, args, { cwd, env, encoding: 'utf8', maxBuffer: 1 << 28 });
+  const r = spawnSync(...appleCargo(cmd, args, { cwd, env, encoding: 'utf8', maxBuffer: 1 << 28 }));
   if (r.status !== 0) throw new Error(`${cmd} ${args.join(' ')} (exit ${r.status}):\n${r.stdout}\n${r.stderr}`);
   return r.stdout;
 };

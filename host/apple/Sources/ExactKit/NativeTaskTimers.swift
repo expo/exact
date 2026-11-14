@@ -90,9 +90,13 @@ final class NativeTaskTimers {
 }
 
 extension ExactSession {
-    /// A batch that changes nothing: it shows nothing new (`showsNothing`), has no orientation readback or error to log and moves no hold, the
-    /// wake lock (LLP 1125 D11) or word on work the app must finish (`Holds.swift`). Its timer deadline is the caller's to compare.
-    func changesNothing(_ batch: Batch) -> Bool { showsNothing(batch) && batch.orientation == nil && batch.error == nil && batch.wakelock == nil && batch.mustFinish == nil }
+    /// A batch that changes nothing: it shows nothing new (`showsNothing`), has no orientation
+    /// readback or diagnostics and moves no wake lock (LLP 1125 D11) or work the app must
+    /// finish (`Holds.swift`). Its timer deadline is the caller's to compare.
+    func changesNothing(_ batch: Batch) -> Bool {
+        showsNothing(batch) && batch.orientation == nil && batch.error == nil && batch.wakelock == nil && batch.mustFinish == nil
+            && batch.alerts.isEmpty && batch.journal.isEmpty
+    }
     /// A batch that changes nothing the presenter shows: it leaves the screen as it is (no ops, control's
     /// viewless contents, LLP 1069.011 §9, page facts, or an orientation request that changes the lock or
     /// turns the scene), asks for no canvas image, and leaves the motion, spatial, frame-task, canvas and owed-draw state as they stand.

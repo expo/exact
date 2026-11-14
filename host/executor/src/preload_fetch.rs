@@ -277,7 +277,7 @@ fn start_indices(
                 held.observer.clone().map(|o| (held.name.clone(), o)),
             );
             if !held.prefetch {
-                cache.journal.push(held.fact(Event::Sent));
+                cache.record_preload_fact(held.fact(Event::Sent));
             }
             Some(start)
         })

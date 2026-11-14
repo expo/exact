@@ -1047,6 +1047,39 @@ const DAYS: &[(f64, f64, f64, &str, &str, &str)] = &[
     (253402300799999.0, 253402300799999.0, 0.0, "Today", "Today at 11:59 PM", "11:59 PM"),
 ];
 
+/// `formatDay`'s `"section"` (LLP 1168.000 D5) in `en-US`, from Saturday
+/// 2026-11-14 12:00 UTC, as LLP 1168.000's table prints it: the words, a
+/// weekday six days either side, a date with its weekday past them, and the
+/// year only in another year; the year's turn either way.
+#[rustfmt::skip]
+const SECTIONS: &[(f64, f64, &str)] = &[
+    (1794657600000.0, 1794657600000.0, "Today"), // 2026-11-14
+    (1794614340000.0, 1794657600000.0, "Yesterday"), // 2026-11-13
+    (1794700800000.0, 1794657600000.0, "Tomorrow"), // 2026-11-15
+    (1794484800000.0, 1794657600000.0, "Thursday"), // 2026-11-12
+    (1794398400000.0, 1794657600000.0, "Wednesday"), // 2026-11-11
+    (1794139200000.0, 1794657600000.0, "Sunday"), // 2026-11-08
+    (1794916800000.0, 1794657600000.0, "Tuesday"), // 2026-11-17
+    (1795176000000.0, 1794657600000.0, "Friday"), // 2026-11-20
+    (1794052800000.0, 1794657600000.0, "Sat, Nov 7"), // 2026-11-07
+    (1795262400000.0, 1794657600000.0, "Sat, Nov 21"), // 2026-11-21
+    (1792065600000.0, 1794657600000.0, "Thu, Oct 15"), // 2026-10-15
+    (1795521600000.0, 1794657600000.0, "Tue, Nov 24"), // 2026-11-24
+    (1746360000000.0, 1794657600000.0, "Sun, May 4, 2025"), // 2025-05-04
+    (1798200000000.0, 1798977600000.0, "Fri, Dec 25, 2026"), // 2026-12-25
+    (1799755200000.0, 1798632000000.0, "Tue, Jan 12, 2027"), // 2027-01-12
+];
+
+#[test]
+fn a_section_label_names_a_chat_s_day() {
+    let wrong: Vec<String> = SECTIONS
+        .iter()
+        .filter(|&&(then, now, want)| day(then, now, 0.0, "section") != Some(Value::str(want)))
+        .map(|(then, _, want)| format!("{then}: {want}"))
+        .collect();
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}
+
 fn day(then: f64, now: f64, offset: f64, mode: &str) -> Option<Value> {
     formatting(
         Stdlib::FormatDay,

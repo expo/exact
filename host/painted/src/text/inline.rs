@@ -212,10 +212,9 @@ mod tests {
             ],
             "DejaVu Sans",
         ));
-        let style = StyleProps {
-            white_space: WhiteSpace::Pre,
-            ..Default::default()
-        };
+        let style = StyleProps::default().with_rows(|rows| {
+            rows.white_space = WhiteSpace::Pre;
+        });
         for sep in [
             "\n", "\r\n", "\r", "\u{1c}", "\u{1d}", "\u{1e}", "\u{85}", "\u{2029}",
         ] {

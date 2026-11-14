@@ -475,6 +475,12 @@ data_source! {
         let _ = owner;
     }
 
+    /// This source answers a process that renders the web's pages, at build
+    /// or while serving: what it renders must be what the browser's bundle
+    /// reads, so a setting a launch may give reads the build's value (LLP
+    /// 1153.002 D2). Called before activation; a wrapper passes it on.
+    fn render_web(&mut self) {}
+
     /// Host-selected application directories. Configuration records paths only;
     /// implementations must defer opening storage until after first pixel.
     fn configure_storage(
@@ -652,6 +658,10 @@ data_source! {
     /// D8): console output, including a refused answer's turn, plus failed
     /// storage and unhandled rejections. The runner writes them to the
     /// journal after each answer and reply, and after a background round.
+    /// A line the app's `console` wrote is marked with its method
+    /// ([`Console::mark`](crate::Console::mark)): the runner journals it as
+    /// `console: …` and hands it to the host's sink
+    /// ([`Runner::set_console`](crate::Runner::set_console), LLP 1027.009).
     fn take_logs(&mut self) -> Vec<String> {
         Vec::new()
     }

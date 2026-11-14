@@ -53,6 +53,15 @@ final class DialogHost {
     func inspectionOwns(_ view: NSView) -> Bool { entries.contains { $0.backdrop === view } }
     func projects(_ node: NodeView) -> Bool { entries.contains { $0.dialog === node } }
     var presented: [NodeView] { entries.map(\.dialog) }
+    /// A painted backdrop accepts clicks independently of its dialog's CSS.
+    /// AppKit's sheets have no authored backdrop hit in the page window.
+    var backdrop: TopLayerBackdrop? {
+        guard let presenter, let entry = entries.last, entry.sheet == nil,
+              entry.backdrop.window != nil, !entry.backdrop.isHiddenOrHasHiddenAncestor else { return nil }
+        let clip = presenter.viewport.contentView
+        let rect = clip.convertNativePresentation(entry.backdrop.visibleRect, from: entry.backdrop)
+        return (entry.dialog.id, rect.offsetBy(dx: -clip.bounds.minX, dy: -clip.bounds.minY), nil)
+    }
     init(_ presenter: Presenter) { self.presenter = presenter }
 
     func owns(_ node: NodeView) -> Bool { entries.contains { $0.dialog === node } }

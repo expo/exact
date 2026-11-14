@@ -156,17 +156,19 @@ fn load_symbols(bytes: &[u8]) -> Result<Symbols, String> {
 pub(crate) fn when_loaded(bytes: &[u8], wake: Box<dyn FnOnce() + Send>) {
     let digest = format!("{:x}", Sha256::digest(bytes));
     let mut waiters = WAITERS.lock().unwrap_or_else(|e| e.into_inner());
-    let loaded = RETAINED
-        .lock()
-        .ok()
-        .and_then(|r| r.modules.get(&digest).map(|e| e.get().is_some()))
-        .unwrap_or(true);
+    let loaded = is_loaded(&RETAINED, &digest);
     if loaded {
         drop(waiters);
         wake();
     } else {
         waiters.push((digest, wake));
     }
+}
+
+fn is_loaded(retained: &Mutex<Retained>, digest: &str) -> bool {
+    retained
+        .lock()
+        .is_ok_and(|r| r.modules.get(digest).is_some_and(|e| e.get().is_some()))
 }
 
 /// The image with `digest` finished loading: wake whoever waits for it.
@@ -366,6 +368,32 @@ impl Drop for Native {
             unsafe { (self.symbols.destroy)(self.session) }
         }
     }
+}
+
+#[test]
+fn absent_and_poisoned_images_are_not_loaded() {
+    let retained = Mutex::new(Retained::default());
+    let absent = is_loaded(&retained, "absent");
+    let _ = std::panic::catch_unwind(|| {
+        let _guard = retained.lock().unwrap();
+        panic!("poison this test's retained state");
+    });
+    assert_eq!((absent, is_loaded(&retained, "absent")), (false, false));
+}
+
+#[test]
+fn an_unreserved_image_does_not_wake_a_retry() {
+    let (send, received) = mpsc::channel();
+    when_loaded(
+        b"unreserved readiness test image",
+        Box::new(move || {
+            let _ = send.send(());
+        }),
+    );
+    assert!(matches!(
+        received.try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
 }
 
 #[cfg(all(test, unix))]

@@ -9,6 +9,8 @@
 //! reuses the host's element and CSS rules (`exact_web::host::template`),
 //! and `exact-web` already depends on `contract`.
 
+#[cfg(test)]
+mod aria_tests;
 mod base_scale;
 #[cfg(test)]
 mod base_scale_tests;

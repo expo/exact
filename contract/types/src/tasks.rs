@@ -14,14 +14,46 @@ pub(crate) mod sequences;
 /// root's gated task does each, so the message shows both.
 pub(crate) fn child_owns(root: &str, child: &Component) -> String {
     let name = &child.name;
-    if child.resources.is_empty() && child.mutations.is_empty() {
+    let resource = child
+        .resources
+        .iter()
+        .find(|r| !contract_syntax::inline::reads_device(r));
+    if resource.is_none() && child.mutations.is_empty() {
         return format!(
             "only the root, the root file's first component (`{root}`), may declare a `task`: a timer is the app's; `{name}` is a child, which may own state, derives, and actions. Move the task into `{root}` with the state that gates it, and pass `{name}` that state and the actions that set it as props. A press-and-hold: in `{root}`, `state holding = false`, `task charging when holding` with `every(16, step)` under it, and `action hold(on: bool)` that sets `holding = on`; then `{name}(charge=charge, down=hold(true), up=hold(false))`, whose `props` declare `down: action` and `up: action` and whose view binds `pointerdown=down pointerup=up` (docs/recipes/timer-in-a-component.md). To act when a sheet or route opens, gate the task on what shows `{name}` and key it on what opens it again: `task reveal when top(nav).name == \"icons\" key=top(nav).id` with `change(reveal)` under it. Or, if `{name}` is the app, move it above `{root}`"
         );
     }
+    // The example is the child's first request named with the child's
+    // prefix: `Canvas`'s `feed` is `canvasFeed`.
+    let prefix = lower_first(name);
+    let first = resource
+        .map(|r| &r.name)
+        .or(child.mutations.first().map(|m| &m.name))
+        .map_or(String::new(), |n| upper_first(n));
+    let example = format!("{prefix}{first}");
+    let gate = resource.map_or(String::new(), |r| {
+        format!(
+            " Gate a resource that only one tab or screen reads on that tab or screen showing, and it asks nothing while hidden: `resource {example} = {}(…) when nav.tab == \"…\"`.",
+            r.source
+        )
+    });
     format!(
-        "only the root, the root file's first component (`{root}`), may declare a `resource`, `mutation`, or `task`; `{name}` is a child, which may own state, derives, and actions. Move this declaration into `{root}` and pass what `{name}` needs as props; or, if `{name}` is the app, move it above `{root}`"
+        "only the root, the root file's first component (`{root}`), may declare a `resource`, `mutation`, or `task`; `{name}` is a child, which may own state, derives, and actions. Declare `{name}`'s resources, mutations and tasks in `{root}`, named with the feature's prefix (`{example}`); a `members {root}` block in a file of their own, which `{root}` lists with `members \"./{prefix}.contract\"`, keeps them together. Pass `{name}` their values and the actions that send them as props (docs/contract-for-agents.md, \"A feature's requests\").{gate} Or, if `{name}` is the app, move it above `{root}`"
     )
+}
+
+/// `s` with its first letter lowercased: a feature's prefix.
+fn lower_first(s: &str) -> String {
+    let mut c = s.chars();
+    c.next()
+        .map_or(String::new(), |f| f.to_lowercase().chain(c).collect())
+}
+
+/// `s` with its first letter uppercased: a name after a prefix.
+fn upper_first(s: &str) -> String {
+    let mut c = s.chars();
+    c.next()
+        .map_or(String::new(), |f| f.to_uppercase().chain(c).collect())
 }
 
 /// Check every task of `c` in the component's scope.

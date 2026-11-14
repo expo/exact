@@ -1,4 +1,5 @@
 fn validate(schema: &Schema) {
+    validate_roles(schema);
     validate_controls(schema);
     validate_style_hosts(schema);
     let mut roles = BTreeSet::new();

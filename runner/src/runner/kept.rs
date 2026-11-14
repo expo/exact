@@ -36,8 +36,9 @@ pub(super) struct Keeping {
     pub(super) too_big: Vec<usize>,
     /// The resources said to be kept under an argument of this launch's own, once each
     pub(super) of_launch: Vec<usize>,
-    /// Kept answers this boot refused, by resource, with why: journaled
-    /// with the ones it shows, so a refusal is never silent.
+    /// The kept answers a settlement refused, set waiting or showed once
+    /// their identity matched, by resource, with the line that says so:
+    /// journaled when its commit stands, so a refusal is never silent.
     pub(super) refused: Vec<(usize, String)>,
     /// Whether a module source declared `kept` keeps its answers (LLP
     /// 1133.015 D4): always, but in a private session.
@@ -67,37 +68,6 @@ pub(super) fn kept_module(plan: &exact_plan::Plan, i: usize) -> bool {
 /// for the module (LLP 1162.001 D4).
 pub(super) fn waits_for_module(plan: &exact_plan::Plan, source: &str) -> bool {
     !exact_plan::runner_owned_source(source) && plan.fetch_named(source).is_none()
-}
-
-/// Note that resource `i`'s kept answer, kept for `kept`, was refused
-/// for this launch's identifying `now` (or, with `now` unknown, because
-/// they read a store reader still on its fallback). Once per resource.
-pub(super) fn refuse(
-    keeping: &mut Keeping,
-    plan: &exact_plan::Plan,
-    i: usize,
-    kept: &[Value],
-    now: Option<&[Value]>,
-) {
-    if keeping.refused.iter().any(|(r, _)| *r == i) {
-        return;
-    }
-    let json = |args: &[Value]| {
-        let mut out = String::new();
-        crate::agent::untyped_json(&Value::list(args.to_vec()), &mut out);
-        out
-    };
-    let why = match now {
-        Some(now) => format!(
-            "this launch asks for {}",
-            super::lines::shortened(&json(now))
-        ),
-        None => "this launch's arguments read a store reader still on its fallback".into(),
-    };
-    let name = plan.str(plan.resources[i].name);
-    keeping
-        .refused
-        .push((i, super::lines::kept_refused(name, Some(&json(kept)), &why)));
 }
 
 /// The kept entries in `names` that no resource of `plan` seeds. A cold
@@ -218,23 +188,6 @@ pub(super) fn decode(bytes: &[u8]) -> Option<(Vec<Value>, Value)> {
 }
 
 impl<D: DataSource> Runner<D> {
-    /// Whether resource `i`'s identifying call arguments (not its `with`
-    /// context) read, directly or through derives, a store-reading resource
-    /// still on its fallback, its compiled answer or placeholder, before its
-    /// source is ready: its identity is not yet known, so its kept answer
-    /// must wait. An account resource with no kept answer of its own shows
-    /// its placeholder (`did: ""`), and that empty id would match whatever
-    /// another launch kept (LLP 1027.005 D3, 2026-10-10). Kept seeds,
-    /// carried and checkpoint answers and non-store values are known.
-    pub(super) fn identity_unknown(&self, i: usize, states: &[Option<ResourceState>]) -> bool {
-        self.identity_reads(i, |r| {
-            self.resources[r].store_reader
-                && states[r]
-                    .as_ref()
-                    .is_some_and(|s| s.placeholder || s.value.is_compiled())
-        })
-    }
-
     /// Whether resource `i`'s identifying arguments read a resource of a
     /// source declared in Contract, a list's included, which no kept answer
     /// seeds.
@@ -249,28 +202,43 @@ impl<D: DataSource> Runner<D> {
     /// through derives, a resource `hit` names.
     fn identity_reads(&self, i: usize, hit: impl Fn(usize) -> bool) -> bool {
         use crate::instance::Input;
+        self.identity_inputs(
+            i,
+            |_| true,
+            |input| match input {
+                Input::Resource(r) | Input::PendingResource(r) | Input::FailedResource(r) => hit(r),
+                _ => false,
+            },
+        )
+    }
+
+    /// Whether `visit` returned true for an input that resource `i`'s
+    /// identifying arguments the `arg` filter passes read, directly or
+    /// through derives; it is not called again once it has.
+    pub(super) fn identity_inputs(
+        &self,
+        i: usize,
+        arg: impl Fn(usize) -> bool,
+        mut visit: impl FnMut(crate::instance::Input) -> bool,
+    ) -> bool {
+        use crate::instance::Input;
         let deps = self.sites.deps();
         let row = self.resource_row(i).clone();
         let identity = row.args.len as usize - usize::from(row.context);
-        let mut work: Vec<_> = row
-            .args
-            .iter()
-            .take(identity)
-            .map(|a| deps.reads_of(&self.plan, self.plan.arg(a).expr))
+        let mut work: Vec<_> = (row.args.iter().take(identity).enumerate())
+            .filter(|&(k, _)| arg(k))
+            .map(|(_, a)| deps.reads_of(&self.plan, self.plan.arg(a).expr))
             .collect();
         let mut derives = vec![false; self.plan.derives.len()];
         while let Some(reads) = work.pop() {
             for input in deps.inputs(&reads) {
                 match input {
-                    Input::Resource(r) | Input::PendingResource(r) | Input::FailedResource(r)
-                        if hit(r) =>
-                    {
-                        return true;
-                    }
                     Input::Derive(d) if !derives[d] => {
                         derives[d] = true;
                         work.push(deps.derives[d].clone());
                     }
+                    Input::Derive(_) => {}
+                    input if visit(input) => return true,
                     _ => {}
                 }
             }
@@ -474,6 +442,7 @@ impl<D: DataSource> Runner<D> {
         if self.member(i).is_some() {
             return;
         }
+        self.answered_waiting(i, args, false);
         let surface = self.keeping.modules
             && kept_surface(&self.plan, i)
             && crate::surface_record::surface_name(&self.plan, self.resource_row(i))
@@ -495,6 +464,7 @@ impl<D: DataSource> Runner<D> {
             return;
         }
         if !surface && self.identity_reads_declared(i) {
+            self.answered_waiting(i, args, true);
             self.store
                 .forget_kept(&kept_name(self.plan.str(self.resource_row(i).name)));
             return;
@@ -533,6 +503,7 @@ impl<D: DataSource> Runner<D> {
         if !fits(args, value) {
             // An older answer kept for it would show stale at the next launch: forget it (with the commit), and
             // say so once
+            self.answered_waiting(i, args, true);
             self.store.forget_kept(&name);
             if !self.keeping.too_big.contains(&i) {
                 self.keeping.too_big.push(i);
@@ -546,6 +517,7 @@ impl<D: DataSource> Runner<D> {
             return;
         }
         self.say_of_launch(i, args);
+        self.answered_waiting(i, args, true);
         let entry = encode(args, value);
         self.make_room(&name, entry.len());
         self.store.keep(&name, entry);

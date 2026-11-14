@@ -87,6 +87,7 @@ extension Presenter {
             if sub === o.clipBox { return ("clip", id) }
             if sub === o.metal || sub === o.overlay { return ("canvas", id) }
             if sub === o.field || sub === o.textArea || sub === o.textAreaScroll { return ("editor", id) }
+            if o.inlineKeyViews.values.contains(where: { $0 === sub }) { return ("editor", id) }
             if sub === o.scroll { return ("scroll", id) }
             if sub === o.video || sub === o.web || sub is FrameScaleHolder { return ("heavy", id) }
             if sub === controls.controls[id] { return ("control", id) }

@@ -52,7 +52,7 @@ impl<D: DataSource> Host<D> {
     /// theirs, as nothing would send them again.
     pub(super) fn write(&mut self, mut batch: Batch, error: Option<&str>) -> String {
         if let Some(preloads) = &self.preloads {
-            if self.preload_accepted {
+            if self.preload_accepted && !self.preload_content.is_empty() {
                 preloads.committed(std::mem::take(&mut self.preload_content), self.runner.seq());
             }
             for fact in preloads.journal() {
@@ -124,6 +124,8 @@ impl<D: DataSource> Host<D> {
     }
 
     pub(super) fn record_layout(&mut self, receipt: &exact_kernel::LayoutReceipt) {
+        self.route_overflow.dirty |=
+            !receipt.updated.is_empty() || !receipt.flow_changed.is_empty();
         self.pending_layout
             .extend(receipt.updated.iter().chain(&receipt.flow_changed).copied());
     }
@@ -848,6 +850,7 @@ mod tests {
         let _ = h.measure_block(
             root,
             exact_kernel::HostBlock {
+                tactic: Default::default(),
                 width: exact_kernel::BlockAxis::Is(300.0),
                 height: exact_kernel::BlockAxis::AtMost(300.0),
             },

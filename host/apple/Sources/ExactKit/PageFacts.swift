@@ -1,5 +1,6 @@
 // The page's facts (LLP 1069.000 D2, D3): whether any of the app can be
-// seen (`visibilityState`), whether the device is online (`onLine`), whether
+// seen (`visibilityState`), whether ordinary execution will stop (`frozen`),
+// whether the device is online (`onLine`), whether
 // a share sheet exists (`canShare`, LLP 1069.003 D5) and takes files and
 // pictures (`canShareFiles`, `canSharePictures`, LLP 1125 D12), whether
 // the document pickers do (`canOpenFiles`), whether the session's window has
@@ -26,7 +27,7 @@ import Network
 
 package enum PageFacts {
     /// What an agent's `prefer` set, in place of the platform's readings.
-    nonisolated(unsafe) static var agent = (hidden: false, onLine: true, canShare: true, canShareFiles: true, canSharePictures: true, canOpenFiles: true, hasFocus: true, iframePartition: true, rootFontSize: Double?.none) {
+    nonisolated(unsafe) static var agent = (hidden: false, frozen: false, onLine: true, canShare: true, canShareFiles: true, canSharePictures: true, canOpenFiles: true, hasFocus: true, iframePartition: true, rootFontSize: Double?.none) {
         didSet { changed() }
     }
     /// What the build channel's `pin` set (LLP 1122 D4), over the platform's
@@ -51,7 +52,7 @@ package enum PageFacts {
     /// The drive's values stand in for the machine's (LLP 1069.007 D2, D8).
     package static let substituted = ExactEnv.agentMode && ExactEnv.environment["EXACT_DEVICE"] != "real"
     private static let agentChanged = Notification.Name("ExactPageFactsChanged")
-    private static func changed() { NotificationCenter.default.post(name: agentChanged, object: nil) }
+    static func changed() { NotificationCenter.default.post(name: agentChanged, object: nil) }
 
     /// One path monitor for the process, started at the first read of
     /// `onLine`: by a session whose plan reads it, or by a native module's
@@ -311,21 +312,22 @@ package enum PageFacts {
         #endif
     }
 
-    /// The system is about to suspend the app (LLP 1125 D4): iOS and tvOS
-    /// in the background, unless a `playback` session keeps it running. A
+    /// Ordinary execution will stop (LLP 1069.000 D2; LLP 1125 D4): iOS and tvOS
+    /// in the background, unless active audio keeps it running. A
     /// Mac app is never suspended for being hidden.
-    static var suspended: Bool {
-        #if os(macOS)
-        return false
+    static var frozen: Bool {
+        if substituted { return agent.frozen }
+        #if os(iOS) || os(tvOS)
+        return AppBackground.now && !AudioSession.backgroundExecutionEligible()
         #else
-        return hidden && !AudioSession.playsInBackground
+        return false
         #endif
     }
 
     /// The ABI's form (`exact_set_page`) for a session whose focus is read
     /// of `window` and whose view is in `page`: bit 0 hidden, bit 1 offline,
     /// bit 2 a share sheet, bit 3 the document pickers, bit 4 without focus,
-    /// bit 7 about to be suspended, bits 8 and 9 a share takes files and
+    /// bit 7 frozen, bits 8 and 9 a share takes files and
     /// pictures, bit 10 put away, bits 11–12 the GPU tier, bit 13 an
     /// iframe's `partition` honoured, bit 14 the background told apart from
     /// visibility and bit 15 its value (macOS), bits 16–31 the restores. A
@@ -333,7 +335,7 @@ package enum PageFacts {
     static func bits(_ window: FocusWindow?, page: FocusWindow? = nil, readsOnLine: Bool = true) -> UInt32 {
         let online = readsOnLine ? onLine : lastOnLine
         let transitions = (persisted(page) ? 1024 : 0) | UInt32(restores(page) & 0xFFFF) << 16
-        return (hidden ? 1 : 0) | (online ? 0 : 2) | (canShare ? 4 : 0) | (canOpenFiles ? 8 : 0) | (hasFocus(window) ? 0 : 16) | (suspended ? 128 : 0) | (canShareFiles ? 256 : 0) | (canSharePictures ? 512 : 0) | (tier & 3) << 11 | (iframePartition ? 8192 : 0) | backgroundBits | transitions
+        return (hidden ? 1 : 0) | (online ? 0 : 2) | (canShare ? 4 : 0) | (canOpenFiles ? 8 : 0) | (hasFocus(window) ? 0 : 16) | (frozen ? 128 : 0) | (canShareFiles ? 256 : 0) | (canSharePictures ? 512 : 0) | (tier & 3) << 11 | (iframePartition ? 8192 : 0) | backgroundBits | transitions
     }
 
     /// The background, apart from visibility (LLP 1133.025 D11 item 7). A
@@ -374,10 +376,10 @@ package enum PageFacts {
                          UIScene.didActivateNotification, UIScene.willDeactivateNotification,
                          UIContentSizeCategory.didChangeNotification, agentChanged]
         #endif
-        return workspace.map {
-            NotificationCenter.default.addObserver(forName: $0, object: nil, queue: .main) { _ in
+        return workspace.map { name in
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { _ in
                 #if !os(macOS)
-                AppBackground.invalidate()
+                AppBackground.heard(name)
                 DispatchQueue.main.async { changed() }
                 #endif
                 changed()
@@ -399,6 +401,9 @@ extension ExactSession {
         // Out of the foreground, a press hands nothing on (PressHandoffIOS).
         if view?.window?.windowScene?.activationState != .foregroundActive { presenter.supersedePress() }
         #endif
+        // Keep URLSession running through the bounded close wait in setPage.
+        freezeCloseHold.moved(PageFacts.frozen)
+        defer { freezeCloseHold.moved(false) }
         let reads = runtime.readsOnLine()
         readsOnLineKnown = (generation, reads)
         apply(runtime.setPage(PageFacts.bits(pageWindow, page: view?.window, readsOnLine: reads)))
@@ -432,9 +437,9 @@ extension ExactSession {
 /// Whether the app is in the background, read from UIKit once per change.
 /// `applicationState` crosses into the scene machinery on every read — about
 /// 5 ms/s of the iPhone's main thread when the canvases asked each frame of
-/// the Extra Heavy feed at rest — so it is read once and read again after a
-/// lifecycle notification: at it, and a main-queue turn later, since UIKit's
-/// "will" notifications precede the state's update.
+/// the Extra Heavy feed at rest — so UIKit is read at first use and
+/// lifecycle notifications update the cache. Background and foreground edges are
+/// authoritative even before UIKit updates `applicationState`.
 package enum AppBackground {
     nonisolated(unsafe) private static var cached: Bool?
     nonisolated(unsafe) private static var observing = false
@@ -446,13 +451,22 @@ package enum AppBackground {
         return value
     }
     package static func invalidate() { cached = nil }
+    static func heard(_ name: Notification.Name) {
+        switch name {
+        case UIApplication.didEnterBackgroundNotification:
+            guard cached != true else { return }
+            cached = true
+            AudioSession.enteredBackground()
+        case UIApplication.willEnterForegroundNotification, UIApplication.didBecomeActiveNotification: cached = false
+        default: break
+        }
+    }
     private static func observe() {
         observing = true
         for name in [UIApplication.willResignActiveNotification, UIApplication.didEnterBackgroundNotification,
                      UIApplication.willEnterForegroundNotification, UIApplication.didBecomeActiveNotification] {
             NotificationCenter.default.addObserver(forName: name, object: nil, queue: nil) { _ in
-                invalidate()
-                DispatchQueue.main.async { invalidate() }
+                heard(name)
             }
         }
     }

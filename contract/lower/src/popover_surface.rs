@@ -20,18 +20,50 @@ fn surface(name: &str) -> bool {
         || name.starts_with("border") && !name.ends_with("radius")
 }
 
-/// The mark on a popover whose author wrote no surface on it or its class
-/// (a row the compiler implied, a sheet's, is no author's). A menu
-/// (`role="menu"`) is the platform's menu, never painted, so it has none.
-pub(crate) fn implied(attrs: &[Attr], span: Span) -> Option<Attr> {
+fn authored(attrs: &[Attr]) -> bool {
+    attrs.iter().any(|a| a.written && surface(&a.name))
+}
+
+/// The mark on a popover whose author wrote no surface on it or its active
+/// class arm (a sheet's implied row is no author's). Read classes before
+/// expansion: an absent row and an authored `none` must stay distinct.
+/// A menu (`role="menu"`) is the platform's menu, never painted.
+pub(crate) fn implied<'s>(
+    attrs: &[Attr],
+    span: Span,
+    style: &dyn Fn(&str) -> Option<&'s [Attr]>,
+) -> Option<Attr> {
     let menu = attrs
         .iter()
         .any(|a| a.name == "role" && matches!(&a.value, Expr::Str(r, _) if r == "menu"));
     let popover = attrs.iter().any(|a| a.name == "popover") && !menu;
-    let said = attrs.iter().any(|a| a.written && surface(&a.name));
-    (popover && !said).then(|| Attr {
+    if !popover || authored(attrs) {
+        return None;
+    }
+    let bare = |name: &str| !style(name).is_some_and(authored);
+    let value = match attrs.iter().find(|a| a.name == "class").map(|a| &a.value) {
+        Some(Expr::Ident(name, _)) => Expr::Bool(bare(name), span),
+        Some(Expr::Ternary(cond, yes, no, _)) => {
+            let (Expr::Ident(yes, _), Expr::Ident(no, _)) = (&**yes, &**no) else {
+                unreachable!("class rows checked before default surface")
+            };
+            let (yes, no) = (bare(yes), bare(no));
+            if yes == no {
+                Expr::Bool(yes, span)
+            } else {
+                Expr::Ternary(
+                    cond.clone(),
+                    Box::new(Expr::Bool(yes, span)),
+                    Box::new(Expr::Bool(no, span)),
+                    span,
+                )
+            }
+        }
+        _ => Expr::Bool(true, span),
+    };
+    (!matches!(value, Expr::Bool(false, _))).then(|| Attr {
         name: "defaultSurface".into(),
-        value: Expr::Bool(true, span),
+        value,
         span,
         written: crate::IMPLIED,
     })

@@ -28,7 +28,8 @@ cargo run --manifest-path vendor/ibex/crates/hermes-lean-sys-installer/Cargo.tom
 The verified install lives under `~/.cargo/hermes-lean-sys/`. Exact sets
 `HERMES_LEAN_SYS_OFFLINE=1` in `.cargo/config.toml`, so an ordinary build
 neither downloads a bundle nor compiles Hermes; a missing install fails with
-the one-time command. `HERMES_LEAN_SYS_DIR` remains a development override.
+the one-time command, after `exact setup` where an iOS or tvOS build lacks a
+bundle setup installs. `HERMES_LEAN_SYS_DIR` remains a development override.
 The v6 set supports macOS, Linux, Windows, Android arm64, iOS devices and the
 universal iOS Simulator, plus tvOS devices and the arm64 tvOS Simulator. Exact
 selects Ibex's English `intl` data tier on Linux and Android, not
@@ -36,14 +37,17 @@ selects Ibex's English `intl` data tier on Linux and Android, not
 Android's receipt enables Intl and binds the English ICU tier. A Rust-only app
 needs no engine at run time.
 `exact setup` installs the host bundle and, on macOS, the iOS and tvOS Simulator
-bundles, and the iOS device bundle where Xcode's iphoneos SDK is installed.
+bundles, and the iOS device bundle where Xcode's iphoneos SDK is installed. The
+bundles live under `$HOME/.cargo`, and setup also fetches the locked crates: a
+copied or archived checkout, or a fresh `HOME`, needs `exact setup` again.
 `exact setup --check` runs Ibex's own offline resolver validation over that
 same set. On a CI worker, `bun <exact2>/scripts/exact.mjs setup --check
 --platform ios --device` checks the archive's prerequisites; `--platform
 android` checks the APK/AAB prerequisites, including JDK 17+ and the NDK's
 actual compiler paths. A scoped check fails when any of its rows is missing
-and does not check unrelated web tools. `--platform` is check-only; install
-commands are in the platform's CI recipe. The general check still reports
+and does not check unrelated web tools. Native `--platform` scopes are check-only;
+install commands are in the platform's CI recipe. `setup --platform web` installs
+[web prerequisites](#web-ci-preparation). The general check still reports
 optional tools separately (LLP 1086 D6).
 
 ### Windows painter
@@ -203,6 +207,30 @@ An action's definition carries `writes`: the states and mutations its body
 assigns or sends, inferred (an action declares none), in slot order: router
 state, states, then mutations, each as declared.
 
+`symbols --editor` adds what an editor integration reads
+(`editors/content-mapper`, LLP 1035.005.003); nothing else asks for it, and without the flag none
+of it is computed. A definition the type checker types carries `type`, its type in TypeScript as
+`contract types` writes it in `app.d.ts`'s summary: a state, derive, prop,
+inject, resource, mutation (`T | null`), local or parameter by its value, a shape
+by its fields, a field by its value, an action or `fn` as a function of its
+parameters. An enum is the union of its strings, `"a" | "b"`. A shape inside a type is written by its name,
+and `shapes` lists each shape used so, its `name` and its fields as `type`,
+`{ id: string }`. A shape TypeScript cannot name, one with a hyphen (`A-B`) or
+named as a reserved word (`class`), is written in a type by an alias no shape
+has (`A_B`, `class_`), which its row in `shapes` gives as `as`. When loading stopped and each file was read on its own, a
+shape also has the `file` it was read in: two files may declare different
+shapes of one name. A bare `action` prop or inject has no `type`: its arity is
+what it is called with.
+A route, component, source, style, task or ID has no `type`. When the type
+check refused, only what is declared keeps one: shapes, fields, and `fn`s and
+their parameters.
+`elements` lists each view element as written, for an editor's hover and
+completion: its `tag` (the compiler's name for it; an `h2` is a `text`), its
+place and `component`, and `attrs`, each attribute written on it with the place
+of its name and, for a string literal value, `string` with the value and its
+place, quotes included. A button's one argument, which becomes its `text` child, is no element
+of its own. A `--name` query has no `elements`.
+
 When the program is refused, `symbols` still prints what it found, adds an
 `errors` array of the refusals in `build --json`'s form, writes them to stderr
 and exits 1. A declaration or member the syntax refused is absent, and so is
@@ -257,6 +285,15 @@ Only the named file's text is replaced. Unsaved text writes no file but
 it regenerated it), and `bun exact.mjs contract build app.contract --stdin`
 neither refreshes the types `app.ts` imports nor type-checks `app.ts`.
 `--stdin` takes no `--entry`.
+
+`build --stdin-as <used.contract>` reads stdin as the text of a file the named
+one uses, for the unsaved buffer of a file that is built with its app:
+
+```sh
+contract build app.contract --json --errors-only --stdin-as lib/row.contract < buffer
+```
+
+It is `--stdin` in every other way, and the two are not given together.
 
 `build --map -o <file.plan>` also writes `<file.plan>.map.json`, keyed by
 SHA-256 of the plan bytes. Each plan node has its original file and range,
@@ -1112,7 +1149,8 @@ it is copied before the bundle is sealed, so it is inside the seal. Only code
 goes under `Helpers/`, where `codesign` refuses a file that is not.
 
 `host.ios.resources` (iOS, iPadOS and tvOS) takes the same entries for files a data
-module reads: `to` is under `Resources/`, and the tree lands in the bundle's
+module reads by path (large, binary, or opened by a native module; data the app ships
+and only reads is a JSON file `app.ts` imports, [shipped data](recipes/shipped-data.md)): `to` is under `Resources/`, and the tree lands in the bundle's
 `ExactResources/` folder, which holds nothing else and is what `bundle:/` names there,
 so `fs.read bundle:/<to>` (`fs.read bundle:/Resources/server` for the entry
 above) reads it on both hosts. A tree holds no links (`bundle:` follows none)
@@ -1155,6 +1193,32 @@ receipt, and signed GPU frameworks (primary and named modules). Copy those
 frameworks intact into the embedding app's `Frameworks/`; their binaries must
 retain the baked digests.
 
+### Mac development signing
+
+`EXACT_IDENTITY=<certificate-sha1>` selects a Keychain signing identity;
+`EXACT_IDENTITY=-` selects ad hoc signing for a local build. Otherwise,
+`DEVELOPMENT_TEAM=<team-id>` selects that team's Apple Development identity.
+A build chooses the newest valid certificate of the selected team authorized by
+the app’s profile and every embedded extension’s profile, when present. An explicit
+identity excluded by any of those profiles is refused. With no team selected, certificates of one team select that team automatically. Certificates
+of several teams require an installed macOS profile that resolves the team before
+choosing widgets, a share extension or grant entitlements. If profiles do not
+resolve it, the build refuses and names `DEVELOPMENT_TEAM=<team-id>`,
+`EXACT_IDENTITY=<sha1>` and `EXACT_IDENTITY=-`. This applies to every app,
+including an ordinary `secret.keep` app. With no identity at all, a build without
+profile requirements or extensions can still sign ad hoc. Developer ID profile
+ambiguity names `EXACT_DEVELOPER_ID=<sha1>`, the release identity selector.
+
+Certificate signing keeps the app's login Keychain access stable across
+rebuilds (LLP 1018 D7). Before each local development sign (`--timestamp=none`),
+the build prints the identity and file on stderr. Each has a 30-second limit.
+A failure retains the tool's error and explains how to allow access to the
+signing key. Mac development failures also name `EXACT_IDENTITY=-` as a way
+to build ad hoc; device failures never suggest it. Timestamped release signing
+has no such limit. Ad hoc signing cannot authorize provisioning-profile
+entitlements, Mac widgets or a share extension. Rebuilding an ad hoc app can
+prompt again for stored login-keychain items, blocking the first frame.
+
 ### Mac provisioning profiles
 
 Some entitlements hold on a Mac only under a provisioning profile that
@@ -1165,10 +1229,16 @@ Attest's environment (`device.attestation`), the Declared Age Range
 (`secret.keep` with a presence policy), and a passkey's associated domains
 (`auth.passkey`). An app whose grants need any of them is built from the
 newest installed macOS profile for its id (or the team's wildcard) that allows
-them all: a development profile that names this Mac for a development build, a
-Developer ID one for `exact release`. `EXACT_MAC_PROFILE=<path>` names one, and
-the build says why a named one does not fit. The build signs with that
-profile's team's identity (Apple Development, or `EXACT_DEVELOPER_ID` for a
+them all, within `DEVELOPMENT_TEAM` when set: a development profile that names
+this Mac for a development build, a Developer ID one for `exact release`.
+An already resolved identity restricts automatic profile selection to its team.
+`EXACT_MAC_PROFILE=<path>` names one, and
+the build says why a named one does not fit. A named profile overrides
+`DEVELOPMENT_TEAM`, as on devices. A team selected by `DEVELOPMENT_TEAM`
+requires a suitable profile. An explicit `EXACT_IDENTITY` overrides that setting;
+without a suitable profile for its certificate's team, a development build keeps
+the certificate, signs no profile entitlements and logs each grant's effect.
+With a profile, the build signs with its team's identity (Apple Development, or `EXACT_DEVELOPER_ID` for a
 release; one `EXACT_IDENTITY` or `EXACT_DEVELOPER_ID` names must be of that
 kind and team, or the build is refused), writes the application identifier,
 the team and each entitlement (an environment `development` under a
@@ -1186,6 +1256,29 @@ chosen among the profiles that grant the widgets' App Group and shared
 Keychain group and the grants' entitlements; with none that grants both, the
 grants sign nothing. An ad hoc build (`EXACT_IDENTITY=-`) signs no profile's
 entitlements.
+
+### Web CI preparation
+
+For a website's `web-build` and `test web` on Linux, install Bun at the version in
+Exact's `package.json` and rustup, then check out the desired Exact commit at the path
+the app's `exact.mjs` uses. From the app directory, run:
+
+```sh
+bun <exact2>/scripts/exact.mjs setup --platform web
+bun install --frozen-lockfile
+bun exact.mjs test web
+```
+
+The scoped setup installs the pinned stable and nightly Rust, the nightly's `rust-src`,
+`llvm-tools`, clippy and `wasm32-unknown-unknown` target, its standard-library dependencies,
+wasm-bindgen, Binaryen, Exact's `node_modules`, Playwright's Chromium and headless shell,
+and Exact's locked crates. The wasm tools serve Markdown, motion, the markup editor,
+text flow, Rust data modules and GPU modules as well as `--wasm` builds. `CHROME` may
+name an installed browser instead. Setup reports the same required rows as
+`setup --check --platform web`. It skips native targets, Hermes, game preparation and
+the native-build disk warning. Games need the full `setup`. On a minimal Linux image,
+`bun <exact2>/node_modules/playwright-core/cli.js install-deps chromium` installs
+Chromium's system libraries.
 
 ### Native CI preparation
 
@@ -1207,7 +1300,9 @@ module.exports = {
 };
 ```
 
-Match both identifiers to Exact's app id. Link the EAS project and install
+Match `ios.bundleIdentifier` to Exact's `app.id` and `android.package` to
+`host.android.id` (default: `app.id` with hyphens replaced by underscores).
+Link the EAS project and install
 `expo-modules-autolinking` as a development dependency for EAS's config
 resolver (`bun add --dev expo-modules-autolinking`; commit the lockfile).
 EAS CLI reads it from the app's `node_modules` on the machine that runs
@@ -1497,10 +1592,13 @@ The motion and altimeter packages also declare `8FFB.1` for converting sensor
 events to timestamps. Other packages declare their own uses beside their Apple
 implementation. The build includes only the packages the app links. Hermes is
 statically linked; its surviving calls are covered in the containing bundle.
-Apple builds use the system SQLite, avoiding the bundled SQLite filesystem-type
-probes, for which no approved disk-space reason applies. Exact declares no
-disk-space use; an unaccounted-for disk-space import fails packaging on
-platforms subject to required-reason reporting.
+Apple builds bundle SQLite. On iOS, tvOS and watchOS, its filesystem-type
+probe is replaced with an empty result and filesystem-specific locking is
+disabled: neither has an approved disk-space reason. This omits SQLite's
+FAT/exFAT inode workaround and proxy locking, which app-container storage does
+not need. macOS retains both. Recheck the probe's uses when updating SQLite.
+Exact declares no disk-space use; an unaccounted-for disk-space import fails
+packaging on platforms subject to required-reason reporting.
 
 Put an Apple-format `PrivacyInfo.xcprivacy` beside your `app.json` to add your
 app's declarations. A package puts the same file beside its Apple implementation's
@@ -1746,7 +1844,7 @@ The globals beyond the language are the browser's on the web and these on Hermes
 | `queueMicrotask`, `Promise` | |
 | `scheduler.yield()` | Ends the answer's turn; it goes on in a new one with a budget of its own (below). Outside an answer's turn it resolves at once; for an answer let go it rejects with an `AbortError`. `scheduler.postTask` refuses |
 | `Intl.NumberFormat`, `Intl.DateTimeFormat`, `Intl.Collator`, `localeCompare`, `toLocaleString` | On Android, the pinned v6 bundle carries receipt-bound English ICU data: Hermes's ICU backend supplies `Collator` and Ibex supplies `NumberFormat` and `DateTimeFormat`. Date formatting needs an explicit timestamp. No `Intl.PluralRules`, `RelativeTimeFormat`, `ListFormat`, `Segmenter` or `DisplayNames` (Apple's engine; Linux's is built `--intl`). `Intl.Locale` is the prelude's on every Hermes host (the engine has none): a tag parsed and canonicalized as Chrome does, its options and getters, and `getWeekInfo()` with Chrome's `{firstDay, weekend}` from CLDR's week data, by the tag's region, its `-u-rg-`, or its language's likely region (two-letter languages and a few others; another reads Monday and a Saturday-Sunday weekend), and `-u-fw-`. It has no `maximize`, `minimize` or other `get…()` list, does not canonicalize aliases (`iw` stays `iw`, `en-840` keeps `840`, and its week is then the default, Monday, where Chrome's is `en-US`'s), a formatter given a `Locale` object rather than its string uses the default locale, and `structuredClone` copies a `Locale` as `{}` where Chrome refuses it. Apple's `ja-JP` long date puts a space before the weekday (`10月6日 火曜日`, Chrome `10月6日火曜日`). Apple's engine has no `notation: "compact"`: the prelude formats its short display as Chrome does for a decimal in en, en-GB, en-IN, de, fr, fr-CA, es, es-MX, it, pt, pt-PT, nl, sv, da, nb, fi, pl, ru, uk, cs, tr, ja, zh, zh-TW, ko, hi, he, id, th and vi (and their regions); `compactDisplay: "long"`, another locale or a compact currency is printed in full and said once in the logs. Apple's engine rounds a tie to even and ignores `roundingMode` (`$0.82` for 0.825 dollars, Chrome `$0.83`); the prelude rounds the number first, as Chrome does: from its shortest digits, by the formatter's `roundingMode` (half away from zero unless it names another), which `resolvedOptions()` then reports; a compact it prints in full rounds so too, to its style's digits (`$0.83` for a compact 0.825 dollars). A `unit` keeps the engine's rounding, since that engine converts it to the locale's unit (`0.622mi` for 1 kilometer). Apple's engine has no `formatToParts` |
-| `console` | To the runner's logs after each answer and reply, including refused calls; available through the agent's `logs` on native hosts. Outside a drive the web writes it to the browser's console too, and an Android development build to logcat under the tag `exact-app` (`adb logcat -s exact-app`). An Android release build and the other native hosts keep it for `logs` alone |
+| `console` | To the runner's logs after each answer and reply, including refused calls; available through the agent's `logs` on native hosts. Each line the app's code logs also goes to the system's log: on Apple the unified log, subsystem the app's bundle identifier, category `console` (`console.debug` at debug level, `console.error` at error, the rest at the default level), and on Linux and Windows standard error, as `console: …`, in every build, where anyone with the device can read it; on Android logcat under the tag `exact-app` (`adb logcat -s exact-app`) at the method's priority, in a development build only. Outside a drive the web writes it to the browser's console too |
 
 A `net.fetch` line names one origin (`https://api.example.com`), every host
 under one domain (`https://*.example.com`), or a whole scheme, written as CSP
@@ -1989,9 +2087,15 @@ answers; `doc:/` handles do not need that store.
 Generated declarations export Ibex2's `Storage` and related types; Rust sources
 can use the same implementations through `ibex2::host`.
 
-On Apple, SQLite is the OS library, so its SQL version follows the OS. Other
-native hosts bundle the pinned SQLite. A native production build links SQLite
-only when the app grants `sqlite.open`
+Native hosts, including Apple, bundle the pinned SQLite (3.54.1). Apple's
+minimum supported OS versions have older SQLite libraries than rusqlite
+requires (3.45.3), so linking the OS library can prevent the app from launching.
+Rust and TypeScript storage share the bundled provider. Swift code in the same
+process must not open a database the Rust provider owns: Apple's launch-service
+dylibs still link system SQLite (`host/apple/launch-parts.mjs`), and closing a
+file through another copy can release the provider's POSIX locks
+([SQLite's locking rules](https://sqlite.org/howtocorrupt.html#posix_advisory_locks_canceled_by_a_separate_thread_doing_close_)).
+A native production build links SQLite only when the app grants `sqlite.open`
 or names `"sqlite"` in the manifest's `link` list. Naming it without the grant
 links unused code: adding `sqlite.open` changes the compatibility identity and
 requires a new binary, even when SQLite was linked. Development builds and
@@ -3812,6 +3916,41 @@ An agent drive refuses an occupied fixture port unless its launch record and lis
 process belong to this app directory and origin. Choose a free port with `--backend`
 or `PORT` when another checkout holds it. Ordinary app servers keep their authored ports.
 
+**A setting a launch gives** (LLP 1153.002). Beside a name, app.json's `env` takes
+`{ "name": "API_BASE_URL", "launch": true }`, and app.ts reads it as any setting, in a
+top-level `const API = import.meta.env.API_BASE_URL ?? '…'`. Its build's value (the
+environment, `.env.local`, `.env`, the default) is what the web and Android read (the web's
+bundles inline it), what a process that renders the web's pages reads, at build or while
+serving, and what the bake's own evaluation reads, so the first frame it compiles. On Apple
+platforms, Linux and Windows, a non-empty value in the launched process's environment replaces
+it, read once in the process, so every instance in that launch (a worker's, a reload's, an
+update's) reads the same, and every answer the bake compiled but an `else` placeholder's is
+asked again once the module loads: `SIMCTL_CHILD_API_BASE_URL=… xcrun simctl launch <udid>
+<bundle-id>` on a simulator, an XCUITest's `app.launchEnvironment["API_BASE_URL"]`, `xcrun
+devicectl device process launch --environment-variables '{"API_BASE_URL": "…"}'` on a phone,
+the process's environment on a desktop. A placeholder (`resource r = load() … else
+fallback()`) is the bake's for every launch, so one made from a marked setting shows the
+build's value until its resource answers, and after that if the answer fails. A native module
+is not the way to read one: this read holds the value before the module's first request.
+Grants are fixed at build, so a grant over a marked name is refused at bake: grant what a
+launch may name (`net.fetch https:`, `net.fetch http:`, or each origin), and a `fetch` outside
+them is refused naming the setting its origin came from (a socket's refusal does not name it).
+The bake adds `env.launch <NAME>` to the module's grants for each marked name, and a
+host answers a launch's value only for a name its grants carry, so nothing else of the
+environment is read; app.ts may not write the line, and an update that marks a new name changes
+the grants, which takes a new binary. A name that begins with `EXACT_` is the host's and cannot
+be marked. The build's record (`.exact-build.json`'s and the receipt's `env`) says `"launch":
+true` beside the value and its source. A module that reads one needs `typescriptRuntime` 14: an
+older binary's prelude cannot give it the launch's value, so a signed update of it goes to no
+such binary. A drive judges a build by the environment it starts the app with, where a marked
+name set is the launch's, not a change to the build: the Linux, macOS and Windows drives start
+the app with their own environment and what `open({env: ...})` adds, and the iOS simulator
+drive with each `SIMCTL_CHILD_<NAME>` of its own environment and what `open({env: ...})`
+passes; the Android and web drives count it. Whatever set a marked name in that environment, the
+app reads it as the launch's value: a test, a launcher, a shell that exports it for something else
+(another project, CI), or Bun, which loads the `.env` files of the driver's working directory into
+it, `.env.<NODE_ENV>` among them (`.env.development` by default), which the build does not read.
+
 The producer captures local imports, type-checks, bundles with Rolldown, compiles HBC, and
 bakes with an empty store. It writes `app.plan`, `app.js`, `app.hbc`, generated
 types, and an `app.module.json` pairing receipt into a **new** directory; it
@@ -3983,6 +4122,8 @@ and dialogs are hidden, and open ones answer. For an Inspect overlay,
 point, front to back. Both are action snapshots; `frame(id)` gives each
 returned node's box for an outline. Point reads skip inert subtrees and use
 the presenter's placement and order for open top-layer content.
+The front modal's native backdrop names its dialog or presented route where it accepts input,
+below any later popover, without exposing the page or a lower modal.
 
 | Scope | Swift (`ExactModule`) | Page module (`modules/web/index.js`) |
 |---|---|---|
@@ -4328,14 +4469,15 @@ Debug assertions and overflow checks remain enabled; the normal development
 profile still leaves app and engine code unoptimized. Tests keep their full frame
 counts. Use release builds when comparing application frame costs.
 
-Production Apple builds optimize Rust and ExactKit for size on iOS and tvOS,
-and for speed on macOS. Embeds default to size on every Apple platform;
-a game keeps speed.
+Production Apple builds are balanced on iOS and tvOS, and optimize for speed on
+macOS. Embeds default to size on every Apple platform; a game keeps speed.
 `host.ios.optimize` (also used by tvOS) or `host.macos.optimize` in app.json
-selects `"size"` or `"speed"`; `--optimize speed|size` overrides it. Size uses
-Cargo's `size` profile and Swift `-Osize -internalize-at-link`; speed uses
-`release` and `-O`. Games refuse size because their generated Cargo workspace
-has no `size` profile.
+selects `"speed"`, `"size"` or `"balanced"`; `--optimize speed|size|balanced`
+overrides it. Size uses Cargo's `size` profile and Swift `-Osize
+-internalize-at-link`; speed uses `release` and `-O`; balanced uses the
+`balanced` profile (size, with the engine's hot crates at opt-level 3) and
+`-O`. Games refuse size and balanced because their generated Cargo workspace
+has neither profile.
 Development builds keep `host-dev` (LLP 1047.001 D9).
 
 An unset `EXACT_UPDATE_TRUST` bakes development trust. A development binary

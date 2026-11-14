@@ -289,7 +289,7 @@ fn an_unknown_aria_name_lists_the_carried_ones() {
     };
     let count = refused("aria-rowcount");
     assert!(
-        count.contains("`aria-rowcount` is ARIA's, and Contract does not carry it yet; Contract carries aria-atomic, aria-busy, aria-checked, "),
+        count.contains("`aria-rowcount` is ARIA's, and Contract does not carry it yet; Contract carries aria-activedescendant, aria-atomic, aria-busy, aria-checked, "),
         "{count}"
     );
     assert!(
@@ -393,4 +393,87 @@ fn a_button_in_a_button_is_named_and_presses_alone() {
         (r.slot("rows"), r.slot("listens")),
         (Some(&Value::Number(0.0)), Some(&Value::Number(1.0)))
     );
+}
+
+#[test]
+fn unknown_roles_are_refused_with_unambiguous_spelling() {
+    for (role, hint) in [
+        ("tabpanle", Some("tabpanel")),
+        ("buton", Some("button")),
+        ("tabpanex", Some("tabpanel")),
+        ("not-a-role", None),
+        ("tabe tabpanle", None),
+        ("future tabpanle", Some("tabpanel")),
+    ] {
+        let error = contract::compile(&format!("component App\n  view\n    box role=\"{role}\"\n"))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("lower-unknown-role"), "{error}");
+        if let Some(hint) = hint {
+            assert!(
+                error.contains(&format!("did you mean `{hint}`?")),
+                "{error}"
+            );
+        } else {
+            assert!(!error.contains("did you mean"), "{error}");
+        }
+    }
+}
+
+#[test]
+fn abstract_roles_need_a_concrete_fallback() {
+    for role in [
+        "command",
+        "composite",
+        "input",
+        "landmark",
+        "range",
+        "roletype",
+        "section",
+        "sectionhead",
+        "select",
+        "structure",
+        "widget",
+        "window",
+    ] {
+        let error = contract::compile(&format!(
+            "component App\n  view\n    box role=\"future {role}\"\n"
+        ))
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("lower-unknown-role"), "{error}");
+        assert!(
+            error.contains("ARIA forbids authors to write an abstract role"),
+            "{error}"
+        );
+        boot(&format!(
+            "component App\n  view\n    box role=\"{role} list\"\n"
+        ));
+    }
+}
+
+#[test]
+fn role_fallbacks_and_computed_roles_compile() {
+    boot(include_str!(
+        "../../../../host/web-js/conformance/list-items.contract"
+    ));
+    boot("component App\n  state dynamic = \"future-role\"\n  view\n    column\n      box role=dynamic\n      box role=(dynamic == \"future-role\" ? \"status\" : \"alert\")\n      box role=\"future\tLIST\"\n");
+    let error = contract::compile("component App\n  state done = false\n  view\n    box role=(done ? \"status\" : \"tabpanle\")\n")
+        .unwrap_err().to_string();
+    assert!(error.contains("did you mean `tabpanel`?"), "{error}");
+    boot("component App\n  state on = false\n  view\n    box role=(on ? \"status\" : \"\")\n");
+    for role in exact_kernel::ARIA_ROLES {
+        boot(&format!("component App\n  view\n    box role=\"{role}\"\n"));
+    }
+}
+
+#[test]
+fn an_active_descendant_is_carried_on_any_element_and_follows_state() {
+    let mut r = boot("component App\n  state active = \"option-a\"\n  action clear\n    active = \"\"\n  view\n    column\n      input role=\"combobox\" aria-activedescendant=active testId=\"field\"\n      box aria-activedescendant=\"option-b\" testId=\"box\"\n      button \"Clear\" press=clear testId=\"clear\"\n");
+    let id = PropId::AccessibilityActiveDescendant;
+    assert_eq!(prop(&r, "field", id).as_deref(), Some("option-a"));
+    assert_eq!(prop(&r, "box", id).as_deref(), Some("option-b"));
+    let clear = view_of(&r, "clear");
+    r.dispatch(clear, Event::Press).unwrap();
+    assert_eq!(prop(&r, "field", id).as_deref(), Some(""));
 }

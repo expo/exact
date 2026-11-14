@@ -14,9 +14,9 @@
 // a label only.
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { buildTreeFileAsync as buildTreeFile, replaceBuild, sendStaticBody, webContentType } from '../web/serve.mjs';
+import { buildTreeFileAsync as buildTreeFile, copyStaticTreeIfPresent, replaceBuild, sendStaticBody, webContentType } from '../web/serve.mjs';
 import { EXE, depInfoOf, fresh } from './module.mjs';
 
 /** The gallery's build cache: under the app's nearest `node_modules` (which
@@ -99,8 +99,10 @@ export function galleryLoop({ app, root, appDist, channel = () => null, client, 
         const next = readFileSync(resolve(source, name));
         if (!existsSync(resolve(live, name)) || !next.equals(readFileSync(resolve(live, name)))) writeFileSync(resolve(live, name), next);
       }
-      const link = (dir) => { try { return lstatSync(resolve(dir, 'assets')).isSymbolicLink() ? readlinkSync(resolve(dir, 'assets')) : null; } catch { return null; } };
-      if (link(source) !== link(live)) { rmSync(resolve(live, 'assets'), { force: true }); if (link(source)) symlinkSync(link(source), resolve(live, 'assets')); }
+      // The generated source links the app's assets for compilation; the JS builder requires real static trees.
+      const assets = resolve(live, 'assets');
+      rmSync(assets, { recursive: true, force: true });
+      copyStaticTreeIfPresent(resolve(app.dir, 'assets'), assets);
       log(made.output.trim().split('\n').pop());
       // The JS target's build, rendering no pages, into its own stage: nothing of the app's build is shared.
       rmSync(stage, { recursive: true, force: true });
@@ -219,7 +221,7 @@ export function galleryLoop({ app, root, appDist, channel = () => null, client, 
         return true;
       }
       ensure();
-      // Its assets are the app's (its own `assets` is a link the builder copies as one): from the app's dist.
+      // Its assets are served from the app's dist.
       if (rest.startsWith('/assets/')) {
         const found = await buildTreeFile(appDist, rest, req.headers.accept);
         if (!found) { res.writeHead(404, { 'cache-control': 'no-store' }); res.end(); return true; }

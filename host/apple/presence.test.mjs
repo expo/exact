@@ -1,5 +1,7 @@
 import { test, expect } from 'bun:test';
-import { presenceLines, macProvisioning, macProfileNeeds } from './presence.mjs';
+import { presenceLines, macProvisioning, macProfileNeeds, macProfile, macSigning, macProfileIdentity } from './presence.mjs';
+import { macWidgetSigning, macWidgetProfiles, widgetSigningTeam, macWidgetGroup } from './widgets.mjs';
+import { shareInfo, macShareEntitlements } from './extensions.mjs';
 
 // LLP 1133.010 D7: what a macOS build without a profile says of the lines only a profile can sign, and the release
 // build it refuses.
@@ -7,6 +9,163 @@ const app = { id: 'com.example.lock' };
 const ceiling = ['net.fetch https://x', 'secret.keep token user-presence optional', 'secret.keep key biometry-any apple.orWatch', 'secret.keep plain'].join('\n');
 const none = () => null;
 const bake = (grantCeiling, profileEntitlements = []) => ({ inputs: { grantCeiling }, reach: { profileEntitlements } });
+
+test('Mac widgets, share and push resolve ambiguous identities from profiles before choosing extensions', () => {
+  const owner = { id: 'com.example.profile', manifest: { widgets: [{ families: ['systemSmall'] }], share_target: {} } };
+  const a = 'A'.repeat(40), b = 'B'.repeat(40), teams = { [a]: 'FIRSTTEAM0', [b]: 'CHOSENTEAM' };
+  const certificates = Object.entries(teams).map(([fingerprint, team]) => ({ fingerprint, subject: `CN=Apple Development: ${team}\nOU=${team}` }));
+  const teamOf = sha => widgetSigningTeam(sha, { certificates });
+  const profile = (team, id = owner.id, days = 100) => ({ team, prefix: team, appId: `${team}.${id}`, name: `${team} ${id}`, path: `/profiles/${team}/${id}`,
+    platforms: ['OSX'], devices: ['THIS-MAC'], dev: true, method: 'development', expires: new Date(Date.now() + days * 864e5),
+    groups: [`${team}.${owner.id}.widgets`], keychain: [`${team}.*`], entitlements: ['com.apple.developer.aps-environment'], aps: 'development' });
+  const chosen = profile('CHOSENTEAM'), extension = profile('CHOSENTEAM', `${owner.id}.widgets`);
+  let installed = [chosen, extension];
+  const profiles = { named: null, udid: 'THIS-MAC' };
+  const widgetProfiles = options => macWidgetProfiles({ ...options, ...profiles, installed });
+  const identityFor = (p, current, options) => macProfileIdentity(p, current, { ...options, find: team => Object.keys(teams).find(sha => teams[sha] === team), teamOf });
+  const find = (app, required, options) => macProfile(app, required, { ...options, ...profiles, installed });
+  const said = [];
+  const options = { current: null, identities: () => [], find, widgetProfiles, identityFor, teamOf, log: line => said.push(line),
+    signWidgets: (app, sha, options) => macWidgetSigning(app, sha, { ...options, certificates, profiles: { ...profiles, installed } }) };
+  const push = bake('device.push', ['com.apple.developer.aps-environment']);
+  const signed = macSigning(owner, push, options);
+  expect(signed.sha1).toBe(b);
+  expect(signed.widgets.team).toBe('CHOSENTEAM');
+  expect(signed.widgets.profiles.extension).toBe(extension);
+  expect(signed.provisioning.profile).toBe(chosen);
+  expect(signed.shareTeam).toBe('CHOSENTEAM');
+  const group = macWidgetGroup(owner, signed.shareTeam);
+  expect(group).toBe('CHOSENTEAM.com.example.profile.widgets');
+  expect(shareInfo(owner, group).ExactShareGroup).toBe(group);
+  expect(macShareEntitlements(group)).toContain(group);
+  expect(said.join('\n')).not.toContain('ad hoc');
+  // Share-only and grant-only apps also resolve the team's identity, without a widget to choose it.
+  expect(macSigning({ ...owner, manifest: { share_target: {} } }, bake(''), options).shareTeam).toBe('CHOSENTEAM');
+  expect(macSigning({ ...owner, manifest: {} }, push, options).sha1).toBe(b);
+  installed = [...installed, profile('FIRSTTEAM0', owner.id, 300), profile('FIRSTTEAM0', `${owner.id}.widgets`, 300)];
+  for (const manifest of [owner.manifest, { share_target: {} }, {}]) {
+    let message;
+    try { macSigning({ ...owner, manifest }, push, options); } catch (error) { message = error.message; }
+    expect(message).toMatch(/several teams .*DEVELOPMENT_TEAM=<team-id> or EXACT_IDENTITY=<sha1>.*EXACT_IDENTITY=-/);
+    for (const capability of ['push', 'App Attest', 'age range', 'keychain-access groups', 'passkeys', 'extensions', 'login-keychain']) expect(message).toContain(capability);
+  }
+  // An explicit team wins over the other team's later expiry; a named profile overrides it as on devices.
+  const saved = process.env.DEVELOPMENT_TEAM;
+  try {
+    process.env.DEVELOPMENT_TEAM = 'CHOSENTEAM';
+    const selected = macSigning({ ...owner, manifest: {} }, push, options);
+    expect(selected.sha1).toBe(b);
+    expect(selected.provisioning.profile).toBe(chosen);
+    const named = installed.find(p => p.team === 'FIRSTTEAM0');
+    expect(macProfile(owner, [], { installed, named, udid: 'THIS-MAC' })).toBe(named);
+    const share = macSigning({ ...owner, manifest: { share_target: {} } }, push, { ...options, current: b,
+      find: (app, required, options) => macProfile(app, required, { ...options, installed, named, udid: 'THIS-MAC' }) });
+    expect(share.sha1).toBe(a);
+    expect(share.shareTeam).toBe('FIRSTTEAM0');
+    installed = installed.filter(p => p.team === 'FIRSTTEAM0');
+    expect(() => macSigning({ ...owner, manifest: {} }, push, options)).toThrow(/no suitable .*CHOSENTEAM \(DEVELOPMENT_TEAM\)/);
+  } finally { if (saved === undefined) delete process.env.DEVELOPMENT_TEAM; else process.env.DEVELOPMENT_TEAM = saved; }
+  installed = [];
+  expect(() => macSigning(owner, push, options)).toThrow(/Mac extensions .*DEVELOPMENT_TEAM=<team-id> or EXACT_IDENTITY=<sha1>/);
+  expect(macSigning({ ...owner, manifest: {} }, bake(''), options).sha1).toBeNull();
+  expect(macSigning(owner, push, { ...options, current: '-' }).widgets).toBeNull();
+  expect(said.join('\n')).toContain('this build is signed ad hoc (EXACT_IDENTITY=-)');
+});
+
+test('named Mac widget profiles resolve before unrelated candidates, installed or external', () => {
+  const owner = { id: 'com.example.widget', manifest: { widgets: [{ families: ['systemSmall'] }] } };
+  const profile = (team, id = owner.id) => ({ team, prefix: team, appId: `${team}.${id}`, name: `${team} ${id}`, path: `/profiles/${team}/${id}`,
+    platforms: ['OSX'], devices: ['THIS-MAC'], dev: true, method: 'development', expires: new Date('2099-01-01'),
+    groups: [`${team}.${owner.id}.widgets`], keychain: [`${team}.*`], entitlements: [] });
+  const named = profile('CHOSENTEAM'), extension = profile('CHOSENTEAM', `${owner.id}.widgets`);
+  for (const external of [false, true]) {
+    const installed = [profile('OTHERTEAM0'), profile('OTHERTEAM0', `${owner.id}.widgets`), extension, ...(external ? [] : [named])];
+    const profiles = { installed, named, udid: 'THIS-MAC' };
+    const signed = macSigning(owner, bake(''), { current: null, namedWidgetProfile: named,
+      find: (a, required, options) => macProfile(a, required, { installed, named: null, udid: 'THIS-MAC', ...options }),
+      widgetProfiles: options => macWidgetProfiles({ ...options, ...profiles }),
+      identityFor: p => `identity of ${p.team}`, teamOf: () => 'CHOSENTEAM',
+      signWidgets: () => ({ team: 'CHOSENTEAM', profiles: macWidgetProfiles({ app: owner, team: 'CHOSENTEAM', ...profiles }) }) });
+    expect(signed.sha1).toBe('identity of CHOSENTEAM');
+    expect(signed.widgets.profiles.app).toBe(named);
+  }
+});
+
+test('a resolved Mac identity restricts grant profiles to its team without requiring a profile', () => {
+  const profile = team => ({ team, prefix: team, name: team, appId: `${team}.${app.id}`, platforms: ['OSX'],
+    devices: ['THIS-MAC'], method: 'development', dev: true, expires: new Date('2099-01-01'), keychain: [`${team}.*`],
+    entitlements: ['com.apple.developer.aps-environment', 'com.apple.developer.devicecheck.appattest-environment',
+      'com.apple.developer.declared-age-range', 'com.apple.developer.associated-domains'], aps: 'development' });
+  const chosen = profile('CHOSENTEAM'), other = profile('OTHERTEAM0'), said = [];
+  let installed = [other, chosen];
+  const options = { current: 'sole-identity', teamOf: () => 'CHOSENTEAM', identityFor: () => 'sole-identity', log: line => said.push(line),
+    find: (a, required, options) => macProfile(a, required, { ...options, installed, named: null, udid: 'THIS-MAC' }) };
+  const compat = bake('device.push\nsecret.keep key user-presence\nauth.passkey example.com', chosen.entitlements.slice(0, 3));
+  expect(macSigning(app, compat, options).provisioning.profile).toBe(chosen);
+  installed = [other];
+  const saved = { DEVELOPMENT_TEAM: process.env.DEVELOPMENT_TEAM, EXACT_IDENTITY: process.env.EXACT_IDENTITY };
+  try {
+    process.env.DEVELOPMENT_TEAM = 'OTHERTEAM0';
+    process.env.EXACT_IDENTITY = 'sole-identity';
+    const signed = macSigning(app, compat, options);
+    expect(signed.sha1).toBe('sole-identity');
+    expect(signed.provisioning).toBeNull();
+    for (const effect of ['pushPermissionState().available is false', 'attestationStatus().available is false',
+      'ageRangeStatus().available is false', 'presenceSecrets is false', 'getClientCapabilities().available is false']) expect(said.join('\n')).toContain(effect);
+    said.length = 0;
+    const owner = { ...app, manifest: { widgets: [{ families: ['systemSmall'] }] } };
+    const widget = macSigning(owner, compat, { ...options, widgetProfiles: none,
+      signWidgets: () => ({ team: 'CHOSENTEAM' }) });
+    expect(widget.sha1).toBe('sole-identity');
+    expect(widget.provisioning).toBeNull();
+    expect(said).toHaveLength(5);
+  } finally {
+    for (const [key, value] of Object.entries(saved)) if (value === undefined) delete process.env[key]; else process.env[key] = value;
+  }
+});
+
+test('Developer ID profile ambiguity names its own identity selector', () => {
+  const installed = ['FIRSTTEAM0', 'CHOSENTEAM'].map(team => ({ team, prefix: team, name: team, appId: `${team}.${app.id}`,
+    platforms: ['OSX'], method: 'developerid', dev: false, devices: [], keychain: [], expires: new Date('2099-01-01'),
+    entitlements: ['com.apple.developer.aps-environment'], aps: 'production' }));
+  for (const manifest of [{}, { share_target: {} }]) {
+    let failure;
+    try { macSigning({ ...app, manifest }, bake('device.push', ['com.apple.developer.aps-environment']), {
+      current: null, distribution: true, find: (a, required, options) => macProfile(a, required, { ...options, installed, named: null, team: null }) }); }
+    catch (error) { failure = error.message; }
+    expect(failure).toContain('EXACT_DEVELOPER_ID=<sha1>');
+    expect(failure).not.toContain('DEVELOPMENT_TEAM');
+    expect(failure).not.toContain('EXACT_IDENTITY');
+    expect(failure).not.toContain('Apple Development');
+  }
+});
+
+test('Mac extension refusals name the ad hoc escape and the distribution identity', () => {
+  for (const manifest of [{ widgets: [{ families: ['systemSmall'] }] }, { share_target: {} }]) {
+    const owner = { id: app.id, manifest };
+    expect(() => macSigning(owner, bake(''), { current: null, find: none })).toThrow(/EXACT_IDENTITY=-.*without.*extension/);
+    expect(() => macSigning(owner, bake(''), { current: null, distribution: true, find: none })).toThrow(/EXACT_DEVELOPER_ID/);
+  }
+  const owner = { id: app.id, manifest: { widgets: [{ families: ['systemSmall'] }] } };
+  expect(() => macWidgetSigning(owner, null)).toThrow(/EXACT_IDENTITY=-.*without.*extension/);
+  expect(() => macWidgetSigning(owner, null, { distribution: true })).toThrow(/EXACT_DEVELOPER_ID/);
+});
+
+test('macSigning keeps DEVELOPMENT_TEAM despite another team having a later profile', () => {
+  const saved = process.env.DEVELOPMENT_TEAM;
+  try {
+    process.env.DEVELOPMENT_TEAM = 'CHOSENTEAM';
+    const profile = (team, days) => ({ name: team, team, prefix: team, appId: `${team}.${app.id}`, platforms: ['OSX'],
+      devices: ['THIS-MAC'], method: 'development', dev: true, expires: new Date(Date.now() + days * 864e5),
+      entitlements: ['com.apple.developer.aps-environment'], aps: 'development', keychain: [] });
+    const chosen = profile('CHOSENTEAM', 100), other = profile('OTHERTEAM0', 300);
+    const options = { current: 'chosen-identity', log: () => {}, identityFor: p => `identity of ${p.team}`,
+      find: (a, required, options) => macProfile(a, required, { ...options, installed: [chosen, other], named: null, udid: 'THIS-MAC' }) };
+    const signed = macSigning(app, bake('device.push', ['com.apple.developer.aps-environment']), options);
+    expect(signed.provisioning.profile).toBe(chosen);
+    expect(signed.sha1).toBe('identity of CHOSENTEAM');
+  } finally { if (saved === undefined) delete process.env.DEVELOPMENT_TEAM; else process.env.DEVELOPMENT_TEAM = saved; }
+});
 
 test('reads the lines that keep a name locked, and which are optional', () => {
   expect(presenceLines(ceiling)).toEqual([{ name: 'token', optional: true }, { name: 'key', optional: false }]);

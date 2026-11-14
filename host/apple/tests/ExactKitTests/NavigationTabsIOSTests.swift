@@ -675,6 +675,7 @@ final class NavigationTabsIOSTests: XCTestCase {
         let overlayNode = { session.presenter.views.values.first { $0.props["testId"] == "root-overlay" } }
         until("the overlay mounts") { overlayNode() != nil }
         let overlay = try node(session, "root-overlay")
+        XCTAssertNil(overlay.props["accessibilityRole"], "this fixture tests layering, not modal presentation")
         let parent = try XCTUnwrap(overlay.superview)
         XCTAssertTrue(tabs.view.superview === parent, "the overlay and the tab container are siblings")
         XCTAssertGreaterThan(overlay.layer.zPosition, tabs.view.layer.zPosition, "the overlay paints over the tabs")

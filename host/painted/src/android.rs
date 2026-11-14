@@ -57,15 +57,36 @@ extern "C" {
 
 /// One line to logcat under `exact`.
 pub fn log(text: &str) {
-    log_as(c"exact", text);
+    log_as(c"exact", 4, text);
 }
 
-/// One line to logcat under `tag`, at the info priority.
-pub fn log_as(tag: &CStr, text: &str) {
+/// One line to logcat under `tag` at `priority`, an `android_LogPriority`
+/// (3 debug, 4 info, 5 warn, 6 error).
+fn log_as(tag: &CStr, priority: c_int, text: &str) {
     if let Ok(text) = CString::new(text.replace('\0', " ")) {
         // SAFETY: both strings are NUL-terminated and live across the call.
-        unsafe { __android_log_write(4, tag.as_ptr(), text.as_ptr()) };
+        unsafe { __android_log_write(priority, tag.as_ptr(), text.as_ptr()) };
     }
+}
+
+/// One line of the app's `console` to logcat under `exact-app` (`adb logcat
+/// -s exact-app`), at its method's priority, when `EXACT_LOG_CONSOLE=1`: the
+/// reader sets it in a development build, so a release build writes none
+/// (LLP 1027.009 D1). The presenter's sink calls it for each runner it shows.
+pub fn console(method: exact_runner::Console, text: &str) {
+    use exact_runner::Console;
+    static ON: std::sync::LazyLock<bool> =
+        std::sync::LazyLock::new(|| std::env::var("EXACT_LOG_CONSOLE").is_ok_and(|v| v == "1"));
+    if !*ON {
+        return;
+    }
+    let priority = match method {
+        Console::Debug => 3,
+        Console::Log | Console::Info => 4,
+        Console::Warn => 5,
+        Console::Error => 6,
+    };
+    log_as(c"exact-app", priority, text);
 }
 
 /// Send this process's stdout and stderr to logcat, line by line: the host

@@ -135,8 +135,9 @@ impl Module {
             Ok(owned) => owned
                 .into_iter()
                 .for_each(|(resource, op)| store.stage_answer_socket(resource, op)),
-            Err(why) => (self.logs).push(format!(
-                "answer `{source}` failed: {why}; socket frames were refused"
+            Err(why) => (self.logs).push((
+                None,
+                format!("answer `{source}` failed: {why}; socket frames were refused"),
             )),
         }
     }

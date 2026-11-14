@@ -1,6 +1,5 @@
 // Mosaic against server.ts, the stand-in `test` starts: the socket, both
-// queries and both mutations, through @exact/convex. One server serves the
-// whole run, so a test that counts strokes clears the board first.
+// queries and both mutations, through @exact/convex. Each test starts empty.
 
 test "the board arrives over the socket, blank"
   clock data
@@ -11,8 +10,6 @@ test "the board arrives over the socket, blank"
   expect state live.status == "ready"
 
 test "a stroke shows in the board and in the latest strokes together"
-  clock data
-  tap "clear"
   clock data
   type "painter" "Ada"
   tap "hue-6"
@@ -32,8 +29,6 @@ test "a stroke shows in the board and in the latest strokes together"
   expect state recent.1 .index == 13
 
 test "clear empties the board for everyone"
-  clock data
-  tap "clear"
   clock data
   tap "tile-7"
   clock data

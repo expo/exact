@@ -197,9 +197,6 @@ fn magnitude(value: number): number = max(value, 0 - value)
 fn boundedMonth(value: number): number = max(22800, min(25211, value))
 fn keyStep(name: string): number = name == "ArrowLeft" ? -1 : (name == "ArrowRight" ? 1 : (name == "ArrowUp" ? -7 : (name == "ArrowDown" ? 7 : 0)))
 
-keyframes dialogIn
-  from opacity=0 scale=0.97
-  to opacity=1 scale=1
 keyframes monthIn
   from opacity=0
   to opacity=1

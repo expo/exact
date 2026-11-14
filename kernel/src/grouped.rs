@@ -113,9 +113,11 @@ pub struct GroupedRow {
     /// The leading symbol's Apple name ("" for an icon token with none).
     pub symbol: Option<String>,
     /// The leading symbol's icon token form (after `symbol:`) when it has
-    /// no Apple name but a template path, which the host draws as the
-    /// cell's template image (LLP 1121 D10, stage 9 A2); `None` otherwise.
+    /// no Apple name but an SVG source: a template path or a raster asset
+    /// in the Apple catalog (LLP 1121 D10); `None` otherwise.
     pub icon: Option<String>,
+    /// Whether the leading icon retains its file's colours.
+    pub icon_multicolor: bool,
     /// The title.
     pub title: Option<String>,
     /// The second text: a value beside the title, or a subtitle under it.
@@ -268,14 +270,14 @@ fn apple_symbol(node: &NodeRef<'_>) -> Option<String> {
         .then(|| name.to_owned())
 }
 
-/// The icon token form `role` is when it has no SF Symbol and a template
-/// path: the host draws that path where Apple has no symbol (stage 9 A2).
+/// An SVG icon with no SF Symbol: Apple draws its template path or its
+/// build-time raster asset.
 fn drawn_icon(role: &str) -> Option<&str> {
     let icon = crate::Icon::parse(role)?;
-    (icon.sf.is_empty() && !icon.path.is_empty()).then_some(role)
+    (icon.sf.is_empty() && (!icon.path.is_empty() || !icon.svg.is_empty())).then_some(role)
 }
 
-/// The icon token form a symbol image draws by its path (`drawn_icon`).
+/// The icon token form a symbol image draws (`drawn_icon`).
 fn icon_of(node: &NodeRef<'_>) -> Option<String> {
     let role = node
         .props
@@ -517,6 +519,10 @@ impl Kernel {
             if let Some(symbol) = apple_symbol(first) {
                 out.symbol = Some(symbol);
                 out.icon = icon_of(first);
+                let mut rows = StyleMask::EMPTY;
+                rows.set(StyleId::SymbolRendering);
+                out.icon_multicolor = first.computed_style(rows).symbol_rendering
+                    == crate::generated::SymbolRendering::Multicolor;
                 rest = after;
             }
         }

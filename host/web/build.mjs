@@ -50,7 +50,7 @@ import { interfaceStyle, withInterfaceStyle, withLook } from './look.mjs';
 import { webIconLinks, webThemeColors } from '../../scripts/app-icons.mjs';
 import { appManifestDigest, appSources, buildFileCards, copyStaticTreeIfPresent, listAssets, hostingNotes, planRouteTable, publicFileCards, replaceBuild, webEnvelope, moduleCards, MODULE_FILES } from './serve.mjs';
 import { foreignBeside } from './generations.mjs';
-import { writeAppleAssociation } from './association.mjs';
+import { androidAssociation, writeAppleAssociation } from './association.mjs';
 import { cargoInputPaths, compilerPaths } from '../../scripts/cargo-dep-info.mjs';
 
 const SDK_ROOT = fileURLToPath(new URL('../..', import.meta.url));
@@ -681,7 +681,7 @@ writeAppleAssociation(stage, app, { webcredentials });
 // Android's statement (LLP 1133.011 D6): the package may use this domain's passkeys, for each certificate the app
 // lists. Every other RP ID's two entries are printed, for the domain that serves it.
 const certificates = app.manifest.host?.android?.certificates ?? [];
-const androidStatement = { relation: ['delegate_permission/common.get_login_creds'], target: { namespace: 'android_app', package_name: app.id, sha256_cert_fingerprints: certificates } };
+const androidStatement = androidAssociation(app.manifest);
 if (passkeyHere && certificates.length) {
   mkdirSync(resolve(stage, '.well-known'), { recursive: true });
   writeFileSync(resolve(stage, '.well-known/assetlinks.json'), JSON.stringify([androidStatement], null, 2) + '\n');

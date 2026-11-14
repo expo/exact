@@ -29,9 +29,22 @@ fn boot(margin: &str) -> Runner<NoData> {
   action prepend
     n = n + 20
     older = older + 20
+  action prepend11
+    n = n + 11
+    older = older + 11
+  state gen = 0
+  action empty
+    gen = gen + 1
+  action clear
+    n = 0
+  action refill
+    n = 220
+  state swap = false
+  action reorder
+    swap = not swap
   view
     list virtualized=true height=320 estimated-item-height=32 reachstart=onStart reachend=onEnd{margin}
-      for x in range(n) key=(x - older)
+      for x in range(n + gen * 0) key=(swap and x - older < 2 ? 1 - (x - older) : x - older)
         text `${{x - older}}` height=32
 "
     );
@@ -236,5 +249,209 @@ fn a_page_that_lands_within_a_flings_band_rearms_its_edge_by_the_band_at_rest() 
     send(&mut r, 400.);
     assert_eq!(hits(&r), [1., 0.]);
     send(&mut r, 300.);
+    assert_eq!(hits(&r), [2., 0.]);
+}
+
+/// A list at its top, before its first row, as a fling leaves a transcript
+/// whose older page has not landed, where `reachstart` has fired once. A
+/// list anchors nothing at offset 0, so the reader stays at the start.
+fn at_top(margin: &str) -> Runner<NoData> {
+    let mut r = boot(margin);
+    send(&mut r, 1000.);
+    fling(&mut r, 0., -4000.);
+    send(&mut r, 0.);
+    assert_eq!(hits(&r), [1., 0.]);
+    r
+}
+
+/// LLP 1168.000 D1.1: a page that lands before the first row re-arms the
+/// start, once the window is measured; the reader still at the top is offered
+/// the next page with no further fling.
+#[test]
+fn a_page_that_lands_at_the_top_rearms_the_start() {
+    for margin in ["", " reach-margin=\"500%\""] {
+        let mut r = at_top(margin);
+        r.act("prepend", vec![]).unwrap();
+        assert_eq!(
+            r.collections()[0].correction,
+            None,
+            "nothing anchors at offset 0"
+        );
+        // A report that measures none of the page's rows: no page yet.
+        unmeasured(&mut r, 0.);
+        assert_eq!(
+            hits(&r),
+            [1., 0.],
+            "{margin}: not before the window is measured"
+        );
+        send(&mut r, 0.);
+        assert_eq!(hits(&r), [2., 0.], "{margin}: the next page is asked for");
+        send(&mut r, 0.);
+        assert_eq!(hits(&r), [2., 0.], "{margin}: once");
+    }
+}
+
+/// An empty page, an arrival at the end and a reorder that moves the first
+/// row down are no page before the start.
+#[test]
+fn only_new_rows_before_the_first_rearm_the_start() {
+    for action in ["empty", "grow", "reorder"] {
+        let mut r = at_top("");
+        r.act(action, vec![]).unwrap();
+        send(&mut r, 0.);
+        send(&mut r, 0.);
+        assert_eq!(hits(&r), [1., 0.], "{action}");
+    }
+}
+
+/// A report at rest at `offset` that measures each mounted row at
+/// `size(its index)`.
+fn sized(r: &mut Runner<NoData>, offset: f64, size: impl Fn(usize) -> f64) {
+    let c = &r.collections()[0];
+    let feedback = CollectionFeedback {
+        view: c.view,
+        revision: c.revision,
+        scroll_sequence: c.scroll_sequence + 1,
+        offset,
+        port_cross: 640.,
+        port_main: 320.,
+        cross: 640.,
+        padding: [0.0; 2],
+        measurements: (c.rows.iter())
+            .map(|row| exact_runner::RowMeasurement {
+                view: row.view,
+                epoch: row.epoch,
+                size: size(row.index),
+            })
+            .collect(),
+        focus_view: None,
+        interaction_view: None,
+    };
+    let result = r
+        .collection_feedback_filled(feedback, CollectionFill::default())
+        .unwrap();
+    assert!(result.error.is_none(), "{:?}", result.error);
+}
+
+/// LLP 1168.000 §2.4's boundary: a 330 px page lands above a reader held on
+/// the old first row (offset 330), so the new first row, 32 px tall, ends
+/// 22 px inside the one-port band before a 320 px port, and `reachstart`
+/// fires again once the page is measured.
+#[test]
+fn a_page_whose_first_row_overlaps_the_band_by_22_px_fires_the_start() {
+    let mut r = at_top("");
+    r.act("prepend11", vec![]).unwrap();
+    // The page: its new first row of 32 px and ten of 29.8, so the old first
+    // row starts at 330, where the reader is held.
+    let size = |i: usize| {
+        if i < 11 {
+            if i == 0 {
+                32.
+            } else {
+                29.8
+            }
+        } else {
+            32.
+        }
+    };
+    sized(&mut r, 330., size);
+    sized(&mut r, 330., size);
+    assert_eq!(hits(&r), [2., 0.]);
+}
+
+/// A report at rest at `offset` that measures no row.
+fn unmeasured(r: &mut Runner<NoData>, offset: f64) {
+    let c = &r.collections()[0];
+    let feedback = CollectionFeedback {
+        view: c.view,
+        revision: c.revision,
+        scroll_sequence: c.scroll_sequence + 1,
+        offset,
+        port_cross: 640.,
+        port_main: 320.,
+        cross: 640.,
+        padding: [0.0; 2],
+        measurements: vec![],
+        focus_view: None,
+        interaction_view: None,
+    };
+    let result = r
+        .collection_feedback_filled(feedback, CollectionFill::default())
+        .unwrap();
+    assert!(result.error.is_none(), "{:?}", result.error);
+}
+
+/// A start already armed that fires for a page before its window is
+/// measured has had that page: it does not fire again once measured. An
+/// emptied list forgets a page it was owed.
+#[test]
+fn a_page_owed_to_the_start_is_spent_by_the_start_firing_or_an_empty_list() {
+    let mut r = boot("");
+    send(&mut r, 1000.);
+    r.act("prepend", vec![]).unwrap();
+    unmeasured(&mut r, 0.);
+    assert_eq!(hits(&r), [1., 0.]);
+    send(&mut r, 0.);
+    send(&mut r, 0.);
+    assert_eq!(hits(&r), [1., 0.], "spent by the firing");
+    let mut r = at_top("");
+    r.act("prepend", vec![]).unwrap();
+    r.act("clear", vec![]).unwrap();
+    r.act("refill", vec![]).unwrap();
+    unmeasured(&mut r, 0.);
+    assert_eq!(hits(&r), [2., 0.], "an emptied list re-arms its edges");
+    send(&mut r, 0.);
+    send(&mut r, 0.);
+    assert_eq!(hits(&r), [2., 0.], "and owes no page from before it");
+}
+
+/// An owed start survives an unrelated update before the window is measured
+/// and is paid once; a build-only report pays it without dispatching, and the
+/// next immediate report dispatches it, once.
+#[test]
+fn an_owed_start_is_paid_once_across_an_arrival_and_a_build_only_report() {
+    let mut r = at_top("");
+    r.act("prepend", vec![]).unwrap();
+    r.act("grow", vec![]).unwrap();
+    unmeasured(&mut r, 0.);
+    send(&mut r, 0.);
+    send(&mut r, 0.);
+    assert_eq!(hits(&r), [2., 0.]);
+    let mut r = at_top("");
+    r.act("prepend", vec![]).unwrap();
+    let c = &r.collections()[0];
+    let built_only = CollectionFeedback {
+        view: c.view,
+        revision: c.revision,
+        scroll_sequence: c.scroll_sequence + 1,
+        offset: 0.,
+        port_cross: 640.,
+        port_main: 320.,
+        cross: 640.,
+        padding: [0.0; 2],
+        measurements: c
+            .rows
+            .iter()
+            .map(|row| exact_runner::RowMeasurement {
+                view: row.view,
+                epoch: row.epoch,
+                size: 32.,
+            })
+            .collect(),
+        focus_view: None,
+        interaction_view: None,
+    };
+    let fill = CollectionFill {
+        create_only: true,
+        ..Default::default()
+    };
+    r.collection_feedback_filled(built_only, fill).unwrap();
+    assert_eq!(
+        hits(&r),
+        [1., 0.],
+        "a build-only report runs no edge action"
+    );
+    send(&mut r, 0.);
+    send(&mut r, 0.);
     assert_eq!(hits(&r), [2., 0.]);
 }

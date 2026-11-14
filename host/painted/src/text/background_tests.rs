@@ -18,10 +18,9 @@ fn engine() -> TextEngine {
 }
 
 fn spec(texts: &[&str]) -> Spec {
-    let style = StyleProps {
-        font_size: 16.0,
-        ..Default::default()
-    };
+    let style = StyleProps::default().with_rows(|rows| {
+        rows.font_size = 16.0;
+    });
     let mut spec = crate::paint::text_spec(&style, "");
     spec.runs = texts
         .iter()

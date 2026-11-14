@@ -78,6 +78,6 @@ in the source; dependencies do not sequence requests ([guide](../contract-for-ag
 
 **Across launches:** reading `native.available` or calling `native.call` makes a
 resource read device state; its answer can be kept and shown before the next fetch.
-Resolve a launch endpoint once in a mount mutation, then pass it as a resource
-argument; keep native access out of fetch sources. Copy [a native module](native-module.md).
+Keep native access out of fetch sources ([a native module](native-module.md)); an endpoint a
+launch gives is a setting (`contract vocab env`).
 `with` controls boot admission, not persistence. `state.resourceStatus` explains retained answers.

@@ -113,7 +113,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     private val completions = android.os.Handler(Looper.getMainLooper())
     private val async = (context as Activity).intent.getStringExtra("async") != "0"
     /** Timers, and the paint a scroll owes once it pauses (only then the collection pass it left behind). */
-    private val timer = Runnable { if (prefetch && Native.owed()) Native.refine(-1, 0f); pump() }
+    private val timer = Runnable { if (running && prefetch && Native.owed()) Native.refine(-1, 0f); pump() }
     /** step or pump took this frame's stream: onDraw replays it without asking again. */
     private var taken = false
     /** The last take was a move: no new drawing, only the groups' translations. */
@@ -205,8 +205,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
      * made after it (the activity made again) watches its own, and this one must not take that one's streams. */
     private var wakes: Wakes? = null
 
-    /** Whether the activity is started. Stopped, the view asks for no frame (LLP 1115.001 D15.2): no turn at a vsync,
-     * no timer, no layer sampled; the first frame after it starts again shows what changed meanwhile. */
+    /** Whether the activity is started. Stopped, only tasks run; frames and layer sampling wait for its return. */
     private var running = true
 
     /** The activity stopped ([on] false) or started again. The host is told only by the view that reads it
@@ -228,6 +227,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         frames.removeFrameCallback(sampler); samplerPosted = false
         frames.removeFrameCallback(holder); holdFrom = 0L
         removeCallbacks(timer); removeCallbacks(refiner)
+        if (host && owner == null && started) schedule()
     }
 
     /** A finger's scroll, its fling and its ends ([Scrolling], LLP 1115.001 D7), and the fingers past a touch's first. */
@@ -474,6 +474,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     override fun onDetachedFromWindow() {
         moduleTouches.stopped()
         running(false, host = false)
+        removeCallbacks(timer)
         scrolling.stopped()
         val frames = android.view.Choreographer.getInstance()
         for (callback in listOf(laterFrame, regroupFrame, turn, sampler, holder)) frames.removeFrameCallback(callback)
@@ -999,7 +1000,8 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     }
     /** A wake (a reply, a picture, a timer): draw only when the stream changed. */
     internal fun pump() {
-        if (owner != null || !running) return // the owner publishes what a key or a reply changed
+        if (owner != null) return // the owner publishes what a key or a reply changed
+        if (!running) { if (wakes != null) schedule(); return }
         if (take()) { if (moved) ticker?.invalidate() else { taken = true; invalidate() } } else schedule()
     }
     /** exact2 wants another turn: at the next vsync, ask it, and draw only if the stream changed. */
@@ -1026,8 +1028,14 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     private fun schedule() {
         // What this turn asked of the platform (a press's haptic, the keyboard for a field it focused).
         asking()
-        if (!running) return
         wakes?.sync()
+        if (!running) {
+            val due = Native.background(false)
+            asking()
+            removeCallbacks(timer)
+            if (due >= 0) postDelayed(timer, kotlin.math.ceil(due).toLong())
+            return
+        }
         if (!timerIdlePosted && Native.timerHeld() and 16 != 0) {
             timerIdlePosted = true
             android.os.Looper.myQueue().addIdleHandler {

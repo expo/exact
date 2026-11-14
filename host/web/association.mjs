@@ -1,8 +1,7 @@
-// The origin's `apple-app-site-association` (LLP 1030 D1, "The deep-link association files"; Apple, "Supporting
-// associated domains"): what the manifest's iOS host claims on this domain, as a file Apple's CDN fetches.
+// The origin's association files (LLP 1030 D1): the app identities allowed to use this domain.
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { appClip, associatedDomains } from '../../scripts/app.mjs';
+import { androidPackageId, appClip, associatedDomains } from '../../scripts/app.mjs';
 
 /** The file for `app`, or null when it claims nothing here. When the app's entitlements claim this origin's host as
  * `applinks:` (`associatedDomains`), it gets `applinks`, and its App Clip `appclips` (Apple, "Associating your App
@@ -30,3 +29,10 @@ export function writeAppleAssociation(root, app, options) {
   mkdirSync(resolve(root, '.well-known'), { recursive: true });
   writeFileSync(resolve(root, '.well-known/apple-app-site-association'), JSON.stringify(association) + '\n');
 }
+
+/** The domain's passkey statement for Android (LLP 1133.011 D6). */
+export const androidAssociation = manifest => ({
+  relation: ['delegate_permission/common.get_login_creds'],
+  target: { namespace: 'android_app', package_name: androidPackageId(manifest),
+    sha256_cert_fingerprints: manifest.host?.android?.certificates ?? [] },
+});

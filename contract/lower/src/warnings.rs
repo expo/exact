@@ -25,6 +25,7 @@ mod header_bar;
 mod launch;
 pub(crate) mod line_height;
 mod miswiring;
+mod navigation_back;
 mod nested_header;
 mod parts;
 mod roles;
@@ -63,6 +64,7 @@ pub(crate) fn with_text_styles(
     mut out: Vec<LowerError>,
 ) -> Vec<LowerError> {
     let root = &checked.expanded.root;
+    let controlled = roles::controlled(checked);
     routeless_header::check(checked, &mut out);
     // Track the navigation root (the outermost `navigationKey`) and its `navigationBack`.
     crate::menu_rows::notes(&root.view, &mut out);
@@ -89,6 +91,7 @@ pub(crate) fn with_text_styles(
                 out.extend(roles::button(tag, attrs, children, span).filter(|_| fresh));
                 out.extend(roles::dialog_role(tag, attrs, span).filter(|_| fresh));
                 out.extend(roles::level_without_heading(tag, attrs, span).filter(|_| fresh));
+                out.extend(roles::keys(attrs, children, span, &controlled).filter(|_| fresh));
                 if fresh {
                     line_height::multiplier(attrs, &mut out);
                 }
@@ -158,6 +161,7 @@ pub(crate) fn with_text_styles(
     performance_now(root, &checked.file.fns, &mut out);
     sounds::undeclared(checked, &mut out);
     geometry::unnamed(checked, &mut out);
+    navigation_back::unnamed(checked, &mut out);
     transform::owners(checked, &mut out);
     transform_drag::check(&root.view, &checked.file.styles, &mut out);
     // @ref LLP 1027.005 D6 — an identifying argument of the launch's own.

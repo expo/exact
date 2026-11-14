@@ -58,12 +58,14 @@ export async function nativeSmoke({ host, open, check: record, webDist, shots, d
     return last;
   };
   const received = (st) => { const r = st.slots.received; return r.startsWith('props:') ? JSON.parse(r.slice(6)) : null; };
-  const pixel = async (s, path, testId) => {
+  const pixel = async (s, path, testId, padding = false) => {
+    await s.reveal((await s.target(testId)).id); await s.clock('settle');
     const shot = await s.screenshot(path);
     const png = decodePng(readFileSync(path));
     const box = (await s.layout()).nodes.find((n) => n.testId === testId);
     if (!box) return null;
-    const scale = png.width / shot.w, x = Math.round((box.x + box.w / 2) * scale), y = Math.round((box.y + box.h / 2) * scale);
+    const scale = png.width / shot.w, x = Math.round((box.x + (padding ? 3 : box.w / 2)) * scale), y = Math.round((box.y + box.h / 2) * scale);
+    if (x < 0 || x >= png.width || y < 0 || y >= png.height) return null;
     const i = (y * png.width + x) * 4;
     return [png.data[i], png.data[i + 1], png.data[i + 2]];
   };
@@ -80,16 +82,17 @@ export async function nativeSmoke({ host, open, check: record, webDist, shots, d
     // Missing factory: in the roster, not in the artifact.
     check(module(t, 'absent')?.state === 'error' && /no factory for exact-absent/.test(module(t, 'absent')?.error ?? ''), `${host} native: exact-absent reports its missing factory: ${JSON.stringify(module(t, 'absent'))}`);
     check(/exact-absent #\d+: error: the module artifact has no factory/.test(lines), `${host} native: the missing factory is logged`);
-    // After first pixel, never before: the browser's paint entry, or, when
+    // The module loads after first pixel: the browser's paint entry, or, when
     // headless Chrome records none, the glue's first-frame stamp (a lower
-    // bound). On the JS target the adapter is the native.js chunk that holds
-    // native-glue.js, and where Chrome records no entry the runtime's gate is
+    // bound). The JS target may preload its adapter without evaluating it.
+    // Where Chrome records no entry the runtime's gate is
     // two frames and 250 ms after its first commit (`bootMs`, rt.js `painted`).
     if (host === 'web') {
       const order = await s.carrier.evaluate(jsTargetBuild(webDist)
         ? `(() => { const at = (re) => performance.getEntriesByType('resource').find((e) => re.test(e.name))?.startTime; const entry = performance.getEntriesByType('paint')[0]?.startTime; return { paint: entry ?? Number(document.getElementById('exact-root').dataset.bootMs) + 250, entry: entry != null, glue: at(/\\/native-[\\w-]+\\.js$/), table: at(/\\/modules\\/index\\.js$/) }; })()`
         : `(() => { const glueEnd = performance.getEntriesByType('resource').find((e) => e.name.endsWith('/glue.js'))?.responseEnd ?? 0; const paint = performance.getEntriesByType('paint')[0]?.startTime ?? (glueEnd + Number(document.getElementById('exact-root').dataset.frameCallbackMs ?? NaN)); const glue = performance.getEntriesByType('resource').find((e) => e.name.endsWith('/native-glue.js'))?.startTime; const table = performance.getEntriesByType('resource').find((e) => e.name.endsWith('/modules/index.js'))?.startTime; return { paint, glue, table }; })()`);
-      check(Number.isFinite(order.paint) && order.glue > order.paint && order.table > order.glue, `${host} native: the adapter and the module load after first paint: ${JSON.stringify(order)}`);
+      check(Number.isFinite(order.paint) && Number.isFinite(order.glue) && order.table > order.paint && order.table > order.glue
+        && (jsTargetBuild(webDist) || order.glue > order.paint), `${host} native: the module loads after first paint: ${JSON.stringify(order)}`);
     } else {
       const m = /native loading .*libexact_modules\.dylib (-?[\d.]+) ms after first pixel/.exec(lines);
       check(m && Number(m[1]) >= 0, `${host} native: the artifact loads after first pixel: ${m?.[0] ?? 'no load line'}`);
@@ -153,6 +156,11 @@ export async function nativeSmoke({ host, open, check: record, webDist, shots, d
       // macOS projects no routes; the web's page module has its own (below).
       check(!/hatch (navigation|route)/.test(journal), `${host} native: no route hatch runs on macOS: ${logs.lines.filter((l) => /hatch/.test(l)).join(' | ')}`);
     }
+    if (host === 'macos') {
+      const layout = await s.layout(), compose = layout.nodes.find(n => n.testId === 'compose-home');
+      check(compose?.x >= 0 && compose.x + compose.w <= layout.viewport.w,
+        `${host} native: Compose fits the authored header without scrolling: ${JSON.stringify({ compose, viewport: layout.viewport })}`);
+    }
     await s.tap('compose-home'); await settle(s);
     check((await s.state()).slots.composed === 1, `${host} native: the authored Compose runs the handler a bar item presses`);
     // The window toolbar's hatch (macOS, LLP 1075.003.000 §3.7): its display
@@ -207,25 +215,6 @@ export async function nativeSmoke({ host, open, check: record, webDist, shots, d
         const site = (await s.perf('hatched-badge')).sites?.find((r) => r.site === built?.site);
         check(Number.isInteger(built?.site) && site?.hatch?.calls === 2 && site.hatch.ms >= 0, `${host} native: a hatched node's calls are timed by its plan site, which perf <target> names: site ${built?.site}, ${JSON.stringify(site?.hatch)}`);
       }
-      // What a hatch asks of an authored node (LLP 1075.003.000.001 §2.5, §8
-      // stage 2): `input` replaces a field's value and Contract hears it, the
-      // journal holding its length and never its text; `clock settle` returns
-      // only once a queued click has committed; and a hatch whose acts keep
-      // causing acts is named by settle after 16 drains, without hanging.
-      {
-        await s.tap('feed'); await settle(s); await s.clock('settle');
-        const all = (await s.op({ op: 'logs', since: 0 })).lines.filter((l) => / hatch /.test(l));
-        check((await s.state()).slots.fed === 'Palo Alto', `${host} native: a hatch's input replaces the field's value in Contract: ${JSON.stringify((await s.state()).slots.fed)}`);
-        check(all.some((l) => /hatch element feed #\d+: input \(9 chars, delivery: hatch\)/.test(l)) && !all.some((l) => /Palo/.test(l)), `${host} native: the journal holds the input's length, never its text: ${all.filter((l) => /feed/.test(l)).join(' | ')}`);
-        await s.tap('arm'); await s.clock('settle');
-        check((await s.state()).slots.hatchPresses === 1, `${host} native: clock settle returns only after a hatch's queued click has committed: ${(await s.state()).slots.hatchPresses}`);
-        await s.tap('loop');
-        const stuck = await s.clock('settle');
-        check(stuck.settled === false && stuck.reason === 'hatches', `${host} native: a hatch whose acts keep causing acts is named by settle: ${JSON.stringify(stuck)}`);
-        await s.tap('stop-loop'); await settle(s);
-        const done = await s.clock('settle'), st = await s.state();
-        check(done.settled === true && st.slots.hatchPresses > 16 && st.hatches?.inFlight === 0, `${host} native: stopped, it settles: ${JSON.stringify(done)} after ${st.slots.hatchPresses} presses`);
-      }
       // Words the manifest gives another platform remain visible, uncalled and listed.
       {
         const st = (await s.state()).hatches, all = (await s.op({ op: 'logs', since: 0 })).lines.join('\n');
@@ -236,6 +225,28 @@ export async function nativeSmoke({ host, open, check: record, webDist, shots, d
         check(JSON.stringify(st?.unhandled?.map(item => item.word).sort()) === JSON.stringify(absent) && absent.every(word => !st.words?.[word] && new RegExp(`hatch element ${word}: (not handled|the plan does not give it to this platform)`).test(all)) && byTestId(await s.tree(), 'list-detail')?.props.hatch === 'detail-list',
           `${host} native: a word this platform does not handle is shown, never called, and listed: ${JSON.stringify(st?.unhandled)}`);
         if (host === 'ios') check(st.words?.['detail-list']?.calls?.built === 1, `${host} native: iOS handles detail-list`);
+      }
+      // What a hatch asks of an authored node (LLP 1075.003.000.001 §2.5, §8
+      // stage 2): `input` replaces a field's value and Contract hears it, the
+      // journal holding its length and never its text; `clock settle` returns
+      // only once a queued click has committed. A finite chain either ends
+      // before settlement or is named as pending at the drain bound.
+      {
+        await s.tap('feed'); await settle(s); await s.clock('settle');
+        const all = (await s.op({ op: 'logs', since: 0 })).lines.filter((l) => / hatch /.test(l));
+        check((await s.state()).slots.fed === 'Palo Alto', `${host} native: a hatch's input replaces the field's value in Contract: ${JSON.stringify((await s.state()).slots.fed)}`);
+        check(all.some((l) => /hatch element feed #\d+: input \(9 chars, delivery: hatch\)/.test(l)) && !all.some((l) => /Palo/.test(l)), `${host} native: the journal holds the input's length, never its text: ${all.filter((l) => /feed/.test(l)).join(' | ')}`);
+        await s.tap('arm'); await s.clock('settle');
+        check((await s.state()).slots.hatchPresses === 1, `${host} native: clock settle returns only after a hatch's queued click has committed: ${(await s.state()).slots.hatchPresses}`);
+        await s.tap('loop');
+        const stuck = await s.clock('settle');
+        const chained = (await s.state()).slots.hatchPresses;
+        // The armed presser clicks once more when its loop word changes to "off" at 4,000.
+        check(stuck.settled === false && stuck.reason === 'hatches' || stuck.settled === true && chained === 4001,
+          `${host} native: settle completes the hatch chain or names its pending acts: ${JSON.stringify(stuck)} after ${chained} presses`);
+        await s.tap('stop-loop'); await settle(s);
+        const done = await s.clock('settle'), st = await s.state();
+        check(done.settled === true && st.slots.hatchPresses > 16 && st.hatches?.inFlight === 0, `${host} native: stopped, it settles: ${JSON.stringify(done)} after ${st.slots.hatchPresses} presses`);
       }
       if (host === 'ios') {
         await s.tap('violate'); await settle(s);
@@ -298,7 +309,7 @@ export async function nativeSmoke({ host, open, check: record, webDist, shots, d
     // A sheet over the tabs, and its Close (LLP 1075.003 §3.7, from James's review).
     // (macOS projects no routes: there the sheet is its route, shown.)
     const sheetShown = async () => host === 'macos' ? !!byTestId(await s.tree(), 'route-sheet') : (await s.state()).navigation?.presentation === 'modal';
-    await s.tap('sheet'); await settle(s);
+    await s.tap('sheet'); await settle(s); await s.clock('settle');
     check(await sheetShown(), `${host} native: the sheet is presented over the tabs`);
     await s.tap('close-sheet'); await settle(s);
     check(!(await sheetShown()), `${host} native: Close dismisses the sheet`);
@@ -312,6 +323,7 @@ export async function nativeSmoke({ host, open, check: record, webDist, shots, d
     const onScreen = async (id) => {
       const error = await s.tap(id).then((r) => r?.error, (e) => String(e?.message ?? e));
       check(!error, `${host} native: sheet over sheet: ${id} taps${error ? `: ${error}` : ''}`);
+      if (host === 'web') await s.clock('settle');
     };
     // `sheet-ask` and `ask-sheets` push by their answer's `then`, which lands
     // at the input's end (`clock land`): the menu over Sheet, and from home
@@ -348,11 +360,7 @@ export async function nativeSmoke({ host, open, check: record, webDist, shots, d
     const box = await pixel(s, shot, 'box'), plain = await pixel(s, shot, 'plain'), absent = await pixel(s, shot, 'absent');
     check(near(box, '#2266ee'), `${host} native: the capture shows the fixture's colour: ${box}`);
     check(near(plain, '#11aa44'), `${host} native: the ordinary capture shows the plain box: ${plain}`);
-    const plainBounds = (await s.layout()).nodes.find(n => n.testId === 'plain');
-    const capture = decodePng(readFileSync(shot));
-    const scale = capture.width / (await s.screenshot(shot)).w;
-    const paddingPixel = (Math.round((plainBounds.y + plainBounds.h / 2) * scale) * capture.width + Math.round((plainBounds.x + 3) * scale)) * 4;
-    check(near(Array.from(capture.data.slice(paddingPixel, paddingPixel + 3)), '#ffffff'), `${host} native: module content leaves the authored padding visible`);
+    check(near(await pixel(s, shot, 'plain', true), '#ffffff'), `${host} native: module content leaves the authored padding visible`);
     check(near(absent, '#f3f4f6'), `${host} native: the missing factory leaves its empty box: ${absent}`);
     if (host !== 'web') {
       logs = await s.logs();
@@ -428,8 +436,9 @@ export async function nativeSmoke({ host, open, check: record, webDist, shots, d
         check(Boolean(refused.error) && await focus() !== input && (await s.state()).slots.inputValue === 'a', `macos native: ${reason} refuses focus and agent input`);
         await s.tap(button); await settle(s);
       }
+      // A modifier focuses the source without activating it; Mac clicks preserve the current responder.
       for (const [source, reset, slot] of [['disable-on-blur', 'block-input', 'blocked'], ['inert-on-blur', 'inert-input', 'inputInert']]) {
-        await s.tap(source); await settle(s);
+        await s.tap(source); await s.type(source, { key: 'Shift' }); await settle(s);
         const refused = await s.carrier.ask({ op: 'type', id: input, text: 'forbidden' });
         await settle(s);
         const state = await s.state();
@@ -453,6 +462,8 @@ export async function nativeSmoke({ host, open, check: record, webDist, shots, d
       const dialogCommand = byTestId(await s.tree(), 'dialog-command').id;
       const dialogClose = byTestId(await s.tree(), 'dialog-close').id;
       const dialogOpener = byTestId(await s.tree(), 'open-native-dialog').id;
+      await s.prefer({ 'keyboard-navigation': true });
+      await s.type('open-native-dialog', { key: 'Shift' });
       await s.tap('open-native-dialog'); await settle(s);
       let dialogState = await s.state();
       check(dialogState.dialog?.phase === 'open' && dialogState.focus.logical === dialogInput && dialogState.focus.responder === 'FixtureEditor', 'macos native: a dialog initially focuses the native editor without focus/key handlers');

@@ -103,7 +103,7 @@ function canonicalPath(path) {
 }
 /** A source snapshot omits build outputs and Exact's design corpus at explicit roots, not recursive basename patterns
  * (`assets/dist/a.png` and `fixtures/target/input.rs` remain inputs when the app carries them). */
-export function sourcePathspec(repo, app, exactRoot) {
+export function sourcePaths(repo, app, exactRoot) {
   const workspace = canonicalPath(app.workspace ?? app.dir);
   const dist = ['dist', ...BESIDE.map((name) => `dist.${name}`), `dist.${STAGE}*`]; // what `dist` keeps beside it: beside.mjs
   const outputs = [resolve(repo, 'target'), resolve(repo, 'node_modules'),
@@ -128,10 +128,15 @@ export function sourcePathspec(repo, app, exactRoot) {
   // Keep the lexical path as well as its canonical alias. In particular,
   // `target -> /shared/cache` is still the declared in-repo output root; if
   // we realpath it first, the symlink itself re-enters the source inventory.
-  const candidates = outputs.flatMap((path) => [resolve(path), canonicalPath(path)]);
-  const excluded = [...new Set(candidates.filter((path) => path !== repo && inside(repo, path))
+  const roots = (paths) => [...new Set(paths.flatMap((path) => [resolve(path), canonicalPath(path)])
+    .filter((path) => path !== repo && inside(repo, path))
     .map((path) => unixPath(relative(repo, path))))];
-  return ['.', ...excluded.flatMap((path) => [`:(exclude,top,literal)${path}`, `:(exclude,top,glob)${path}/**`])];
+  const pathspec = ['.', ...roots(outputs).flatMap((path) => [`:(exclude,top,literal)${path}`, `:(exclude,top,glob)${path}/**`])];
+  // Standalone tools build beside their manifests. Keep these roots in memory:
+  // passing every crate to Git exceeds Windows' command-line limit.
+  const manifests = gitText(repo, ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--',
+    'Cargo.toml', '**/Cargo.toml'], 'could not inventory Cargo output roots').split('\0').filter(Boolean);
+  return { pathspec, excluded: roots([...outputs, ...manifests.map((manifest) => resolve(repo, dirname(manifest), 'target'))]) };
 }
 const SOURCE_MAX_BUFFER = 512 * 1024 * 1024;
 function gitResult(repo, args, what, options = {}) {
@@ -236,16 +241,47 @@ export function assertCapturedContractSources(graph, sourceRoot) {
   }
 }
 
+function packageDependencies(root) {
+  const manifest = resolve(root, 'package.json');
+  if (!existsSync(manifest)) return [];
+  const pkg = JSON.parse(readFileSync(manifest, 'utf8'));
+  return Object.entries({ ...pkg.dependencies, ...pkg.devDependencies, ...pkg.optionalDependencies });
+}
+
+export function assertCapturedPackageDependencies(root, sourceRoot) {
+  const captured = realpathSync.native(sourceRoot), visited = new Set();
+  const checked = path => {
+    const file = realpathSync.native(path);
+    if (!inside(captured, file) || resolve(captured, relative(captured, file)) !== file)
+      refuse(`${path}: a local package dependency outside the captured snapshot`);
+    return file;
+  };
+  const walk = path => {
+    const file = checked(path);
+    if (visited.has(file)) return;
+    visited.add(file);
+    // Bun can link individual files while the package directory stays inside.
+    if (statSync(file).isDirectory()) for (const name of readdirSync(file)) walk(resolve(file, name));
+  };
+  for (const [name, spec] of packageDependencies(root)) {
+    if (typeof spec !== 'string' || !/^(file|link):/.test(spec)) continue;
+    for (let at = root; inside(captured, at); at = dirname(at)) {
+      const installed = resolve(at, 'node_modules', name);
+      if (!existsSync(installed)) continue;
+      if (spec.startsWith('file:')) checked(resolve(root, spec.slice(5)));
+      walk(installed);
+      break;
+    }
+  }
+}
+
 function contractPackageRoots(app, exactRoot, compiler) {
-  // A library installed by an absolute `file:` path or a `link:` would be
-  // reinstalled from the live tree after capture: only a relative `file:`
-  // path moves with the snapshot.
-  const manifest = resolve(app.workspace ?? app.dir, 'package.json');
-  if (existsSync(manifest)) {
-    const pkg = JSON.parse(readFileSync(manifest, 'utf8'));
-    for (const [name, spec] of Object.entries({ ...pkg.dependencies, ...pkg.devDependencies })) {
+  // Only relative file: paths move with the snapshot. Check every manifest
+  // whose lockfile materializeSnapshot can install before reading packages.
+  for (const root of new Set([exactRoot, app.workspace ?? app.dir, app.dir])) {
+    for (const [name, spec] of packageDependencies(root)) {
       if (unrelocatableContractDependency(spec))
-        refuse(`${manifest}: "${name}": "${spec}" would be read live after the snapshot; use a relative \`file:\` path`);
+        refuse(`${resolve(root, 'package.json')}: "${name}": "${spec}" would be read live after the snapshot; use a relative \`file:\` path`);
     }
   }
   const owned = new Set([repoTop(app.dir, 'app source'), repoTop(exactRoot, 'Exact source')]);
@@ -316,15 +352,14 @@ function captureRepository(source, sources, captureRoot, stagedRoot, common, app
   env.GIT_OBJECT_DIRECTORY = objects;
   env.GIT_ALTERNATE_OBJECT_DIRECTORIES = [originalObjects, process.env.GIT_ALTERNATE_OBJECT_DIRECTORIES].filter(Boolean).join(delimiter);
   try {
-    const pathspec = sourcePathspec(source.repo, app, exactRoot);
-    const excluded = pathspec.slice(1).filter((path) => path.startsWith(':(exclude,top,literal)'))
-      .map((path) => path.slice(':(exclude,top,literal)'.length));
+    const { pathspec, excluded } = sourcePaths(source.repo, app, exactRoot);
     const tracked = gitText(source.repo, ['ls-files', '-z', '--cached'], 'could not inventory tracked output conflicts').split('\0');
     const hidden = tracked.find(path => excluded.some(root => path === root || path.startsWith(`${root}/`)));
     if (hidden) refuse(`${source.repo}: tracked source ${hidden} lies beneath an inferred output root; move the source or declare a different output root`);
     gitResult(source.repo, ['read-tree', source.commit], 'could not start the captured Git tree', { env });
-    if (excluded.length) gitResult(source.repo, ['--literal-pathspecs', 'rm', '-r', '-f', '--cached', '--ignore-unmatch', '--', ...excluded],
-      'could not remove generated outputs from the captured tree', { env });
+    if (excluded.length) gitResult(source.repo, ['--literal-pathspecs', 'rm', '-r', '-f', '--cached', '--ignore-unmatch',
+      '--pathspec-from-file=-', '--pathspec-file-nul'], 'could not remove generated outputs from the captured tree',
+    { env, input: Buffer.from(`${excluded.join('\0')}\0`) });
     const allowed = (path) => !excluded.some((root) => path === root || path.startsWith(`${root}/`));
     const committed = gitText(source.repo, ['ls-tree', '-rz', '--name-only', source.commit],
       'could not inventory committed source').split('\0').filter((path) => path && allowed(path));
@@ -341,7 +376,7 @@ function captureRepository(source, sources, captureRoot, stagedRoot, common, app
     addCapturedPaths(source.repo, env, [...committed, ...present], true, 'could not capture tracked and untracked source');
     // Gitignore is not a source/output declaration: build.rs or another
     // committed tool can read beneath an ignored directory. Capture every
-    // ignored file except the precise roots in sourcePathspec.
+    // ignored file except the precise roots in sourcePaths.
     const ignored = gitText(source.repo, ['ls-files', '-z', '--others', '--ignored', '--exclude-standard', '--',
       ...pathspec], 'could not inventory ignored source inputs').split('\0').filter((path) => path && allowed(path));
     addCapturedPaths(source.repo, env, ignored, true, 'could not capture ignored source inputs');
@@ -375,7 +410,7 @@ function captureRepository(source, sources, captureRoot, stagedRoot, common, app
 
 /** The snapshot (LLP 1030.000 D3 item 1): capture every repository and every
  * dirty source byte the bake can read. Ignored files are source too, outside
- * the precise roots sourcePathspec excludes. */
+ * the precise roots sourcePaths excludes. */
 export function snapshotOf(app, opts, exactRoot = ROOT) {
   app.prepare?.(true);
   const compiler = opts.compiler ? resolve(opts.compiler) : contractCompiler(exactRoot);
@@ -575,12 +610,13 @@ export function materializeSnapshot(snapshot, run, app, cache = null) {
   // node_modules is an output, never captured: a TypeScript app's bake runs Rolldown from it, ships SQLite WASM out of it,
   // and a module package's crate is under it (LLP 1133.001 D9). Install exactly what the captured bun.lock pins, from
   // Bun's cache, into the captured tree, before the Cargo closure is asserted.
-  for (const root of new Set([exactRoot, workspace])) {
+  for (const root of new Set([exactRoot, workspace, dir])) {
     if (!existsSync(resolve(root, 'package.json')) || !existsSync(resolve(root, 'bun.lock'))) continue;
     const installed = spawnSync(process.execPath, ['install', '--frozen-lockfile', '--prefer-offline'], {
       cwd: root, env: sealedSourceEnv(sourceRoot), stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8' });
     if (installed.status !== 0) refuse(`${root}: bun install --frozen-lockfile failed in the captured source: ${(installed.stderr || installed.stdout || installed.error?.message || '').trim()}`);
   }
+  for (const root of new Set([exactRoot, workspace, dir])) assertCapturedPackageDependencies(root, sourceRoot);
   assertMaterializedCargoClosure([workspace, exactRoot], sourceRoot, target, {workspace, manifest});
   // Every Contract file the bake will read is in the captured tree: an
   // installed library that still leads outside it is live bytes (LLP 1091 D10).

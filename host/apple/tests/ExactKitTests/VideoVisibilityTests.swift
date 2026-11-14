@@ -100,7 +100,7 @@ final class VideoLoadingTests: XCTestCase {
 
 /// The response waits for the main-thread update and state reads to return.
 /// Its deadline only breaks the deadlock if a read waits on the response.
-private final class HeldMediaServer {
+final class HeldMediaServer {
     private let listener: NWListener
     private let queue = DispatchQueue(label: "exact.test.held-media")
     private let gate = NSCondition()

@@ -21,6 +21,7 @@ pub const SOURCE: &str = "exactPage";
 /// Fields an app may declare, filled by name.
 pub const FIELDS: &[&str] = &[
     "visibilityState",
+    "frozen",
     "onLine",
     "canShare",
     "canShareFiles",
@@ -83,10 +84,10 @@ pub struct Page {
     /// How the browser loaded the page, for its whole life, as an index
     /// into [`NAVIGATION_TYPES`] (0 where no browser loaded it).
     pub navigation: u8,
-    /// The host is about to suspend the app (iOS and tvOS in the
-    /// background, unless a `playback` session keeps it running): a
-    /// sequence stops (LLP 1125 D4). No `exactPage` field reads it.
-    pub suspended: bool,
+    /// The host has backgrounded the app and will stop its ordinary work,
+    /// until execution resumes. Gated resources and sequences stop in the
+    /// transition commit (LLP 1069.000 D2; LLP 1125 D4).
+    pub frozen: bool,
     /// The page is put away, kept whole, as the back/forward cache keeps
     /// one: from its `pagehide` with `persisted` true until its `pageshow`.
     /// A Mac window hidden by its close (LLP 1069.010 D8); a minimized or
@@ -115,7 +116,7 @@ impl Default for Page {
             iframe_partition: false,
             has_focus: true,
             navigation: 0,
-            suspended: false,
+            frozen: false,
             persisted: false,
             restores: 0,
             gpu_tier: 0,
@@ -126,7 +127,7 @@ impl Default for Page {
 impl Page {
     /// The hosts' wire form: bit 0 hidden, bit 1 offline, bit 2 can share,
     /// bit 3 can open files, bit 4 without focus, bits 5–6 the navigation
-    /// type, bit 7 about to be suspended, bit 8 shares files, bit 9 shares
+    /// type, bit 7 frozen, bit 8 shares files, bit 9 shares
     /// an element's picture, bit 10 put away (`persisted`), bits 11–12 the
     /// GPU tier (0 high, 1 mid, 2 low), bit 13 an `iframe`'s `partition`
     /// honoured, bit 14 the host tells `background` and bit 15 its value,
@@ -142,7 +143,7 @@ impl Page {
             can_open_files: bits & 8 != 0,
             has_focus: bits & 16 == 0,
             navigation: ((bits >> 5) & 3) as u8,
-            suspended: bits & 128 != 0,
+            frozen: bits & 128 != 0,
             can_share_files: bits & 256 != 0,
             can_share_pictures: bits & 512 != 0,
             persisted: bits & 1024 != 0,
@@ -160,7 +161,7 @@ impl Page {
             | (u32::from(self.can_open_files) << 3)
             | (u32::from(!self.has_focus) << 4)
             | (u32::from(self.navigation & 3) << 5)
-            | (u32::from(self.suspended) << 7)
+            | (u32::from(self.frozen) << 7)
             | (u32::from(self.can_share_files) << 8)
             | (u32::from(self.can_share_pictures) << 9)
             | (u32::from(self.persisted) << 10)
@@ -202,6 +203,7 @@ impl Page {
     pub fn field(self, name: &str) -> Option<Value> {
         match name {
             "visibilityState" => Some(Value::str(self.visibility_state())),
+            "frozen" => Some(Value::Bool(self.frozen)),
             "onLine" => Some(Value::Bool(self.on_line)),
             "canShare" => Some(Value::Bool(self.can_share)),
             "canShareFiles" => Some(Value::Bool(self.can_share_files)),
@@ -233,6 +235,14 @@ mod tests {
         assert!(Page::from_bits(1 << 14 | 1 << 15).in_background());
         assert!(!Page::from_bits(1 << 14 | 1 << 15).hidden);
         // Put away, then back once: bit 10 and the count above bit 16.
+        assert_eq!(
+            Page::default().field("frozen"),
+            Some(exact_plan::Value::Bool(false))
+        );
+        assert_eq!(
+            Page::from_bits(128).field("frozen"),
+            Some(exact_plan::Value::Bool(true))
+        );
         let away = Page::from_bits(1024);
         assert!(away.persisted && away.restores == 0);
         assert_eq!(

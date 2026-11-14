@@ -28,6 +28,10 @@ macro_rules! configured {
                 $crate::exact_runner::DataSource::set_document_owner(&mut self.0, owner)
             }
 
+            fn render_web(&mut self) {
+                $crate::exact_runner::DataSource::render_web(&mut self.0)
+            }
+
             fn app_id(&self) -> &str {
                 $crate::exact_runner::DataSource::app_id(&self.0)
             }

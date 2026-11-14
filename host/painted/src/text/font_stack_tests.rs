@@ -12,12 +12,11 @@ fn fixture() -> catalog::Catalog {
 
 fn spec(family: u16, text: &str) -> Spec {
     crate::paint::text_spec(
-        &StyleProps {
-            font_family: family,
-            font_size: 32.,
-            line_height: exact_kernel::LineHeight::Length(48.),
-            ..Default::default()
-        },
+        &StyleProps::default().with_rows(|rows| {
+            rows.font_family = family;
+            rows.font_size = 32.;
+            rows.line_height = exact_kernel::LineHeight::Length(48.);
+        }),
         text,
     )
 }

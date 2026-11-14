@@ -25,7 +25,7 @@
  *                                       and the web bytes of RealWorld, the video player and
  *                                       Caltrain: the app.js each ships (gated) and the wasm
  *                                       core's code by capability (LLP 1047 D9; reported);
- *                                       and the hello app's iOS binary, for speed and for size
+ *                                       and the hello app's iOS binary, for speed, size and balanced
  *                                       (LLP 1047.001 D8; reported)
  *   bun scripts/metrics.mjs --web-bytes  only the bytes each web app ships (LLP 1047.002 D5): the
  *                                       production app.js of the hello app, the `exact new` starter
@@ -910,8 +910,8 @@ if (long) {
     }
   });
   // The iOS binary (LLP 1047.001 D8): the hello app — one text node, the core
-  // and nothing a plan adds — built for production on the simulator for speed
-  // and for size (D9), its executable stripped, against an empty UIKit app's
+  // and nothing a plan adds — built for production on the simulator for speed,
+  // size and balanced (D9), its executable stripped, against an empty UIKit app's
   // (`host/apple/ios/floor.swift`). Gated by IOS_HELLO_BYTES below: on
   // 2026-10-06 the one-text probe had grown from 7.2 MB to 9.8 MB in a week and
   // nothing said so.
@@ -936,7 +936,7 @@ if (long) {
     const sdk = spawnSync('xcrun', ['--sdk', 'iphonesimulator', '--show-sdk-path'], { encoding: 'utf8' }).stdout.trim();
     const f = spawnSync('xcrun', ['--sdk', 'iphonesimulator', 'swiftc', '-Osize', '-target', triple, '-sdk', sdk, '-o', floor, resolve(ROOT, 'host/apple/ios/floor.swift')], { encoding: 'utf8' });
     out.ios_floor_bytes = f.status === 0 ? strippedSize(floor) : NaN;
-    for (const optimize of ['speed', 'size']) {
+    for (const optimize of ['speed', 'size', 'balanced']) {
       const r = spawnSync(process.execPath, [resolve(ROOT, 'host/apple/build.mjs'), hello.crate('apple'), '--ios', '--optimize', optimize], { cwd: ROOT, env, encoding: 'utf8' });
       const binary = appleArtifacts(hello, { destination: 'ios-simulator', trust: 'production', optimize }).binary;
       if (r.status !== 0 || !existsSync(binary)) {
@@ -1003,7 +1003,9 @@ const WEB_CORE_KIB = { realworld: 304, 'video-player': 249, caltrain: 310 };
 // passed one way (LLP 1047.001, "One layout pass in every app").
 // Lowered 2026-10-08 (LLP 1047.001: the motion engine settles unless
 // something moves): 8,495,088 B and 5,949,632 B at e6caf40bf, plus ~100 KB.
-const IOS_HELLO_BYTES = { speed: 8_600_000, size: 6_050_000 };
+// Balanced set 2026-11-14 (LLP 1047.001 D9, the iOS and tvOS default): 16,801,696 B
+// at 8f1fd7d64, plus ~100 KB.
+const IOS_HELLO_BYTES = { speed: 8_600_000, size: 6_050_000, balanced: 16_900_000 };
 
 // 8. Long: web bytes by capability (LLP 1047 D9), for the three apps the
 // size work tracks. Each app's app.wasm as shipped (raw, gzip, brotli-11),
@@ -1163,11 +1165,11 @@ if (long) {
     ['  optional: GPU module (dlopen)', mib(out.gpu_module_bytes), Number.isFinite(out.gpu_module_bytes) ? `${mib(out.gpu_module_gzip_bytes)} gzip; paid at the first canvas` : 'no GPU crate'],
     ['  optional: web arm (dlopen)', mib(out.web_module_bytes), Number.isFinite(out.web_module_bytes) ? `${mib(out.web_module_gzip_bytes)} gzip; paid at the first iframe` : 'n/a'],
   );
-  // LLP 1047.001 D8: the hello app's iOS binary over an empty UIKit app's, for speed and for size (gated: IOS_HELLO_BYTES).
-  for (const optimize of ['speed', 'size']) {
+  // LLP 1047.001 D8: the hello app's iOS binary over an empty UIKit app's, for speed, size and balanced (gated: IOS_HELLO_BYTES).
+  for (const optimize of ['speed', 'size', 'balanced']) {
     const bytes = out[`ios_${optimize}_bytes`], limit = IOS_HELLO_BYTES[optimize];
     const budget = Number.isFinite(bytes) ? `; budget ${limit.toLocaleString('en-US')} B, ${bytes.toLocaleString('en-US')} B ${bytes <= limit ? 'within' : 'VIOLATION'}` : '';
-    rows.push([`iOS: hello app, optimized for ${optimize}`, out[`ios_${optimize}_failed`] ? 'FAILED' : mib(bytes), out[`ios_${optimize}_failed`] ?? `production, simulator, stripped, over an empty UIKit app (${mib(out.ios_floor_bytes)}); one text node: the core and nothing a plan adds; ${optimize === 'size' ? 'the iOS app and embed default' : 'an explicit speed choice'}${budget}`]);
+    rows.push([`iOS: hello app, optimized for ${optimize}`, out[`ios_${optimize}_failed`] ? 'FAILED' : mib(bytes), out[`ios_${optimize}_failed`] ?? `production, simulator, stripped, over an empty UIKit app (${mib(out.ios_floor_bytes)}); one text node: the core and nothing a plan adds; ${{ size: 'the embed default', balanced: 'the iOS and tvOS app default', speed: 'the Mac default' }[optimize]}${budget}`]);
   }
   rows.push(['macOS: touch one line, rebuild', out.macos_touch_failed ? 'FAILED' : s(out.macos_touch_s), out.macos_touch_failed ?? `host/apple/src/host.rs; budget ${budget('Touch one line')}`]);
   // The JS target's bytes, gated (LLP 1047.002 D5), then LLP 1047 D9: each app's wasm, and its code by capability (KiB of code).

@@ -412,3 +412,25 @@ component App
     assert!(r.set_delivery(next.clone()).unwrap().is_some());
     assert!(r.set_delivery(next).unwrap().is_none());
 }
+
+#[test]
+fn freezing_without_a_reader_commits_nothing() {
+    let plan = contract::compile("shape Page\n  onLine: bool\ncomponent App\n  resource page = exactPage() as shape Page\n  view\n    text `${page.onLine}`\n").unwrap();
+    let mut r = Runner::boot(
+        plan,
+        Deferred::default(),
+        Kernel::with_monospace(),
+        Viewport::default(),
+        "/",
+    )
+    .unwrap();
+    assert!(!r.reads_page_field("frozen"));
+    assert!(r
+        .set_page(exact_runner::Page {
+            frozen: true,
+            ..r.page()
+        })
+        .unwrap()
+        .is_none());
+    assert!(r.page().frozen);
+}

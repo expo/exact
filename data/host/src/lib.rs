@@ -208,6 +208,10 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Storage<D> {
         self.source.set_document_owner(owner);
     }
 
+    fn render_web(&mut self) {
+        self.source.render_web();
+    }
+
     fn preload(&self) -> Result<bool, DataError> {
         self.source.preload()
     }

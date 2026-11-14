@@ -1,5 +1,95 @@
 import { test, expect } from 'bun:test';
 import { presenceLoader } from '../navigation/motion.js';
+import { readFileSync } from 'node:fs';
+import { glueDeclarations, wasmSource } from './glue-fixture.mjs';
+
+test('the wasm grouped-sound batch keeps a timed end after its play, including across held batches', () => {
+  const source = readFileSync(new URL('../wasm/commit.js', import.meta.url), 'utf8');
+  for (const held of [false, true]) for (const split of [false, true]) {
+    let holding = held;
+    const received = [], noop = () => {};
+    const host = { soundOut: { ops: ops => received.push(...ops) }, page: { hold: () => holding } };
+    const bindings = { host, presence: { hold: () => false }, navigation: { holdLink: () => null, project: noop },
+      letGo: noop, agentMode: false, apply: noop, refitTexts: noop, flowBatch: noop,
+      motion: { commit: noop }, arrange: { commit: noop }, clocks: { sync: noop }, globalThis: { exact: {} } };
+    const applyBatch = new Function(...Object.keys(bindings), `${glueDeclarations(source, ['heldLinks', 'heldOutputs', 'applyBatch'])}; return applyBatch;`)(...Object.values(bindings));
+    // playSounds with two overlapping hits in one choke group, as take_sounds emits it.
+    const ops = [{ op: 'play', id: 1, sound: 0, at: 0, gain: 1 }, { op: 'end', id: 1, at: 100 },
+      { op: 'play', id: 2, sound: 0, at: 100, gain: 1 }];
+    const batches = (split ? [[ops[0]], ops.slice(1)] : [ops]).map(ops => ({ ops: [{ op: 'sound', ops: [...ops] }] }));
+    for (const batch of batches) applyBatch(batch);
+    if (held) {
+      expect(received).toEqual([]);
+      holding = false;
+      for (const batch of batches) applyBatch(batch);
+    }
+    expect(received).toEqual(ops);
+  }
+});
+
+test('the wasm freeze cancels streams and output before presence or page holds, without replaying old output', async () => {
+  const source = readFileSync(new URL('../wasm/commit.js', import.meta.url), 'utf8');
+  for (const pageHold of [false, true]) {
+    for (const loaded of [false, true]) {
+      const active = new Set([7]), forgettable = new Map(), controller = new AbortController();
+      forgettable.set(controller, 7);
+      const holds = ticket => active.has(ticket);
+      const letGo = new Function('forgettable', 'holds', `${glueDeclarations(wasmSource, ['letGo'])}; return letGo;`)(forgettable, holds);
+      const sounds = new Set([1]), haptics = new Set([2]), midi = new Set([3]), sent = [];
+      const soundOut = { files: [], reset() { sounds.clear(); haptics.clear(); }, ops(list) {
+        for (const op of list) {
+          if (op.op === 'play') sounds.add(op.id);
+          if (op.op === 'end') sounds.delete(op.id);
+          if (op.op === 'haptic') haptics.add(op.id);
+          if (op.op === 'unhaptic') haptics.delete(op.id);
+        }
+      } };
+      const midiOut = { ops(list) {
+        for (const op of list) {
+          if (op.op === 'send') { midi.add(op.id); sent.push(op.data); }
+          if (op.op === 'retract') midi.delete(op.id);
+        }
+      } };
+      let ready, readySound, readyMidi, holding = true;
+      const host = { page: { hold: batch => { if (!pageHold || !holding) return false; held.push(batch); return true; } },
+        soundModule: new Promise(resolve => { readySound = resolve; }), midiModule: new Promise(resolve => { readyMidi = resolve; }),
+        soundOut: loaded ? soundOut : null, midiOut: loaded ? midiOut : null };
+      const held = [], presented = [];
+      const presence = presenceLoader(() => new Promise(resolve => { ready = resolve; }), {}, batch => applyBatch(batch));
+      const noop = () => {};
+      const bindings = { presence, host, navigation: { holdLink: () => null, project: noop }, letGo, agentMode: false,
+        apply: batch => { presented.push(batch); return batch.timers; }, refitTexts: noop, flowBatch: noop,
+        motion: { commit: noop }, arrange: { commit: noop }, clocks: { sync: noop }, globalThis: { exact: {} } };
+      const applyBatch = new Function(...Object.keys(bindings), `${glueDeclarations(source, ['heldLinks', 'heldOutputs', 'applyBatch'])}; return applyBatch;`)(...Object.values(bindings));
+      const scheduled = { ops: [{ op: 'exit', id: 1 },
+        { op: 'sound', ops: [{ op: 'play', id: 1, at: 100 }, { op: 'end', id: 1, at: 200 }, { op: 'haptic', id: 2 }] },
+        { op: 'midi', ops: [{ op: 'send', id: 3, data: [0x90, 60, 100] }] }], timers: false };
+      applyBatch(scheduled);
+      await Promise.resolve();
+      expect(controller.signal.aborted).toBe(false);
+      expect(sent).toEqual([]);
+      active.clear();
+      const freeze = { ops: [
+        { op: 'sound', ops: [{ op: 'end', id: 1, at: 50 }, { op: 'unhaptic', id: 2 }, { op: 'play', id: 8, at: 50 }, { op: 'haptic', id: 1 }] },
+        { op: 'midi', ops: [{ op: 'retract', id: 3 }, { op: 'send', id: 4, data: [0xfc] }, { op: 'send', id: 9, data: [0x90, 62, 100] }] }], timers: false };
+      expect(applyBatch(freeze).batch).toBe(freeze);
+      expect(controller.signal.aborted).toBe(true);
+      if (!loaded) { readySound(soundOut); readyMidi(midiOut); await Promise.resolve(); }
+      expect(forgettable.size).toBe(0);
+      expect([...sounds, ...haptics]).toEqual([]);
+      expect([...midi]).toEqual([4]);
+      expect(sent).toEqual([[0xfc]]);
+      expect(presented).toEqual([]);
+      if (pageHold) { holding = false; for (const batch of held.splice(0)) applyBatch(batch); }
+      ready(() => ({}));
+      await presence.pending();
+      expect(presented).toEqual([scheduled, freeze]);
+      expect([...sounds, ...haptics]).toEqual([8, 1]);
+      expect([...midi]).toEqual([4, 9]);
+      expect(sent).toEqual([[0xfc], [0x90, 62, 100]]);
+    }
+  }
+});
 
 test('a failed presence load releases held and later batches once, in order', async () => {
   let fail, calls = 0;

@@ -953,6 +953,33 @@ a second removal made `??a=1` the name `a` rather than `?a`. `url.rs`
 tests the parse; `js/tests/it/pure.rs` compares construction, a URL's
 view, lookup and mutation with Chrome. Replay on a refresh.
 
+## Local patch 42, an app folder read or copied as a file is `EISDIR`
+
+`stdlib/app_fs_unix.rs` refuses `readFile` of an `app:/` folder, and
+`copyFile` from one, with `EISDIR` (os error 21), as a write to one already
+is and as the web's store refuses all three, so the app's `code` is the same
+on Unix hosts as on the web. Windows still answers `failed` for these
+(`windows_directory.rs` refuses with no filesystem code), and the test
+asserts the folder codes only under `cfg(unix)`. `copy` checks its source before it opens the target, so a
+folder's copy no longer leaves an empty file behind. `js/tests/it/storage.rs`
+checks both codes and that no file is made. Replay on a refresh unless
+upstream refuses folders so.
+
+## Local patch 43, bundled SQLite on Apple
+
+`ibex2-sqlite` bundles SQLite 3.54.1 on Apple too: the minimum supported OS
+libraries are older than rusqlite's 3.45.3 floor (#565). Exact's Apple Cargo
+driver sets `SQLITE_ENABLE_LOCKING_STYLE=0` and renames `fstatfs` to
+`exact_sqlite_fstatfs` for iOS, tvOS and watchOS. `src/apple.c`, compiled by
+`build.rs` under the same SDK declaration, returns a zero-filled `statfs` and
+success. This removes the FAT/exFAT inode workaround and filesystem-specific
+locking, including proxy locks, for app-container storage. macOS app builds
+retain SQLite's defaults. The replacement is available to Mac build tools too,
+since `LIBSQLITE3_FLAGS` also reaches an iOS build's host dependencies.
+
+Recheck every filesystem probe when updating the amalgamation. Replay the
+bundled dependency, C replacement and build driver together on a refresh.
+
 ## Terminal heap exhaustion
 
 The borrowed adapter propagates native engine exceptions through installation,
@@ -963,3 +990,11 @@ collection. Exact's shim recognizes that exception only when the bundle receipt
 enables exception-on-OOM and RTTI. The pinned v6 release enables both.
 Exact's heap tests exercise retirement and replacement with the published bundle,
 including timers, stream mappers, worker placement and in-flight storage.
+
+## Socket close confirmation
+
+`MessageSender::wait_close` distinguishes submission from completion. URLSession
+confirms receipt of the peer's closing frame through its delegate; the portable
+pump confirms that the close frame reached TCP. The native executor waits across
+this boundary before a suspending host returns, with a bounded deadline. Ordinary
+resource releases wait on a worker. Replay on a refresh.

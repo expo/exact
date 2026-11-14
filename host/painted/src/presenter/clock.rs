@@ -41,20 +41,41 @@ impl<D: DataSource> Presenter<D> {
         }
     }
 
-    /// The Canvas reader's frame turn: timers fire only while the display owns time.
+    /// The Canvas reader's turn: background work advances tasks without a display frame.
     #[cfg(any(target_os = "android", test))]
     pub(crate) fn reader_clock(&mut self, now: f64, live: bool) -> Option<String> {
-        let error = if self.wants_frames() && live {
+        let date_error = if self.timers_hidden && live {
+            self.follow_local_offset()
+        } else {
+            None
+        };
+        let due = if self.timers_hidden {
+            self.background_due_ms()
+        } else {
+            self.wake_due_ms()
+        };
+        let error = if !self.timers_hidden && self.wants_frames() && live {
             self.animation_frame(now)
-        } else if live && self.wake_due_ms().is_some_and(|due| due <= now) {
+        } else if live && due.is_some_and(|due| due <= now) {
             self.advance(now)
         } else {
             None
         };
-        if self.needs_animation_frame() {
+        if !self.timers_hidden && self.needs_animation_frame() {
             self.tick(now);
         }
-        error
+        date_error.or(error)
+    }
+
+    /// No paint, motion sample or virtual display frame can wake a stopped reader.
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn background_due_ms(&self) -> Option<f64> {
+        self.host
+            .timer_due_ms()
+            .into_iter()
+            .chain(self.host.runner().waits().next_check())
+            .chain(self.idle_timer_retry.then_some(self.host.now()))
+            .reduce(f64::min)
     }
 
     /// The runner's clock (timers), from the presenter's loop.
@@ -250,16 +271,17 @@ impl<D: DataSource> Presenter<D> {
                     || self
                         .timer_observations
                         .is_some_and(|(_, sampling, _)| sampling)),
-            applying: self
-                .timer_observations
-                .is_some_and(|(_, _, applying)| applying),
+            applying: self.reader_requests_pending()
+                || self
+                    .timer_observations
+                    .is_some_and(|(_, _, applying)| applying),
             ordinary: waits.frame.held || waits.update.held || waits.scrollend.held,
             next_ms: self
                 .host
                 .runner()
                 .timer_due_ms()
                 .into_iter()
-                .chain(self.host.motion_due_ms())
+                .chain(self.host.motion_due_ms().filter(|_| !self.timers_hidden))
                 .chain(
                     self.host
                         .runner()

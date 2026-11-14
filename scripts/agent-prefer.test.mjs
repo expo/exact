@@ -13,6 +13,8 @@ test('a near spelling of a fact is that fact', () => {
   expect(preferGroups({ canShare: 'false', rootFontSize: '20' }).page).toEqual({ 'can-share': false, 'root-font-size': 20 });
   // As its help writes it, `<px>`: `53px` is 53 (LLP 1156.002 D5).
   expect(preferGroups({ 'root-font-size': '53px' }).page).toEqual({ 'root-font-size': 53 });
+  expect(preferGroups({ frozen: 'true' }).page).toEqual({ frozen: true });
+  expect(() => preferGroups({ frozen: 'maybe' })).toThrow(MalformedOperation);
   expect(preferGroups({ displayMode: 'fullscreen' }).media).toEqual({ 'display-mode': 'fullscreen' });
   expect(preferGroups({ segments: '2x1', gap: '40' }).fold).toEqual({ cols: 2, rows: 1, gap: 40 });
 });
@@ -134,4 +136,28 @@ test('a media prefer waits in the page for each query it flips before the next s
 test("an implementation's own source is preferred by its owner-qualified key", () => {
   const key = 'tracking-consent.trackingAuthorizationStatus#@exact/tracking-consent/apple';
   expect(preferGroups({ extension: `${key}={"status":"restricted"}` }).extension.extension).toEqual({ [key]: { status: 'restricted' } });
+});
+
+test('freeze and resume are document facts; prefer substitutes them under the agent', () => {
+  const document = new EventTarget(), platform = new EventTarget();
+  Object.assign(document, { visibilityState: 'visible', documentElement: {}, hasFocus: () => true });
+  Object.assign(platform, { document, navigator: {}, getComputedStyle: () => ({fontSize:'16px'}) });
+  const live = pageReporter(false, platform), agent = pageReporter(true, platform), told = [];
+  live.onChange(() => told.push(live.read().frozen));
+  agent.onChange(() => { throw Error('the live device reached the agent'); });
+  expect(live.read().frozen).toBe(false);
+  document.visibilityState = 'hidden'; document.dispatchEvent(new Event('visibilitychange'));
+  expect(live.read().frozen).toBe(false);
+  document.dispatchEvent(new Event('freeze'));
+  expect(live.read().frozen).toBe(true);
+  expect(live.bits() & 128).toBe(128);
+  expect(agent.read().frozen).toBe(false);
+  agent.prefer({ frozen: true }); expect(agent.bits() & 128).toBe(128);
+  expect(() => agent.prefer({ frozen: 'maybe' })).toThrow('not a page fact');
+  expect(agent.read().frozen).toBe(true);
+  document.dispatchEvent(new Event('resume'));
+  expect(live.read().frozen).toBe(false);
+  expect(agent.read().frozen).toBe(true);
+  agent.prefer({ frozen: false }); expect(agent.read().frozen).toBe(false);
+  expect(told).toEqual([false, true, false]);
 });

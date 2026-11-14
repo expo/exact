@@ -34,6 +34,12 @@ struct PickedSource {
     extensions: std::collections::BTreeMap<String, String>,
 }
 
+#[derive(serde::Deserialize)]
+struct AgentFile {
+    name: String,
+    bytes: String,
+}
+
 pub(super) type Inbox = std::sync::Arc<std::sync::Mutex<Vec<(u32, Result<Copies, String>)>>>;
 
 pub(super) struct Copies(Vec<exact_runner::Picked>);
@@ -132,11 +138,15 @@ impl<D: DataSource> Presenter<D> {
         let paths = support::answer_paths(value)
             .into_iter()
             .map(|path| {
-                let path = PathBuf::from(path);
+                let windows = path.starts_with(r"\\")
+                    || matches!(path.as_bytes(), [drive, b':', b'\\' | b'/', ..] if drive.is_ascii_alphabetic());
+                let separators: &[_] = if windows { &['/', '\\'] } else { &['/'] };
                 let name = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default();
+                    .rsplit(separators)
+                    .next()
+                    .unwrap_or_default()
+                    .to_owned();
+                let path = PathBuf::from(path);
                 PickedSource {
                     path,
                     name,
@@ -149,8 +159,45 @@ impl<D: DataSource> Presenter<D> {
             })
             .collect::<Vec<_>>();
         let host = if self.has_shell() { "Android" } else { "Linux" };
-        let result = self.copy_picked(view, &paths, host);
+        let result = match q.get("files") {
+            Some(files) => serde_json::from_value::<Vec<AgentFile>>(files.clone())
+                .map_err(|e| format!("invalid picker files: {e}"))
+                .and_then(|files| self.copy_agent_files(view, &paths, host, &files)),
+            None => self.copy_picked(view, &paths, host),
+        };
         self.finish_files(view, result);
+    }
+
+    fn copy_agent_files(
+        &mut self,
+        view: ViewId,
+        sources: &[PickedSource],
+        host: &str,
+        files: &[AgentFile],
+    ) -> Result<Copies, String> {
+        use base64::Engine;
+        if files.len() != sources.len()
+            || files
+                .iter()
+                .zip(sources)
+                .any(|(file, source)| file.name != source.name)
+        {
+            return Err("picker files do not match the answered paths".into());
+        }
+        let targets = self.picked_targets(view, sources, host)?;
+        let mut copies = Copies(Vec::new());
+        for (file, (path, mime)) in files.iter().zip(targets) {
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(&file.bytes)
+                .map_err(|e| format!("invalid picker bytes: {e}"))?;
+            copies.0.push(crate::picker::copy_in_with(
+                std::path::Path::new(&file.name),
+                &path,
+                &mime,
+                |_, to| std::fs::write(to, &bytes).map(|()| bytes.len() as u64),
+            )?);
+        }
+        Ok(copies)
     }
 
     /// Import work owns the staging paths, even if the input goes away before it completes.
@@ -706,6 +753,166 @@ mod delivery_tests {
     use super::*;
     use exact_kernel::{MonospaceMeasurer, TextMeasureRequest, TextMeasurer, TextMetrics};
 
+    #[test]
+    fn agent_files_cross_without_access_to_the_drivers_paths() {
+        use base64::Engine;
+        let plan = crate::test_plan(
+            r#"component App
+  state files: Picked[] = []
+  state cancels = 0
+  action picked(value: Picked[])
+    files = value
+  action cancelled
+    cancels = cancels + 1
+  view
+    column
+      input type="file" id="attach" multiple=true display="none" change=picked cancel=cancelled
+      input type="file" id="photo" accept="image/*" display="none" change=picked cancel=cancelled
+"#,
+        );
+        let (mut p, _) = Presenter::boot_with(
+            &plan,
+            (),
+            (400., 800.),
+            1.,
+            PathBuf::new(),
+            PainterChoice::Cpu,
+        )
+        .unwrap();
+        p.serve_requests();
+        p.agent = true;
+        let mut place = p.host.runner().place().clone();
+        place.seed = 546546.;
+        assert!(p.set_place(&place).is_none());
+        let png = include_bytes!("../../../../scripts/fixtures/picker/photo.png");
+        p.show_picker("attach");
+        let state: serde_json::Value =
+            serde_json::from_str(&crate::agent::handle(&mut p, r#"{"op":"state"}"#)).unwrap();
+        let ticket = &state["pending"][0]["ticket"];
+        assert!(ticket.is_number(), "{state}");
+        let mut request = serde_json::json!({"op": "type", "ticket": ticket,
+        "text": "/absent-on-device/notes with spaces.txt\nC:\\absent-on-device\\photo.png\n",
+        "files": [
+            {"name": "notes with spaces.txt", "bytes": "bm90ZXMK"},
+            {"name": "photo.png", "bytes": base64::engine::general_purpose::STANDARD.encode(png)},
+        ]});
+        let reply = crate::agent::handle(&mut p, &request.to_string());
+        assert!(!reply.contains("error"), "{reply}");
+        let state: serde_json::Value =
+            serde_json::from_str(&crate::agent::handle(&mut p, r#"{"op":"state"}"#)).unwrap();
+        let files = state["slots"]["files"].as_array().unwrap();
+        assert_eq!(files.len(), 2, "{reply}");
+        assert_eq!(files[1]["width"], 160.);
+        assert_eq!(files[1]["height"], 106.);
+        let copied_dir = crate::picker::resolve(files[0]["path"].as_str().unwrap())
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        for (file, name, bytes, mime) in [
+            (
+                &files[0],
+                "notes with spaces.txt",
+                b"notes\n".as_slice(),
+                "text/plain",
+            ),
+            (&files[1], "photo.png", png.as_slice(), "image/png"),
+        ] {
+            let path = file["path"].as_str().unwrap();
+            assert!(path.starts_with("app:/tmp/picked/"));
+            assert_eq!(file["name"], name);
+            assert_eq!(file["type"], mime);
+            assert_eq!(file["size"], bytes.len());
+            let path = crate::picker::resolve(path).unwrap();
+            assert_eq!(std::fs::read(&path).unwrap(), bytes);
+            std::fs::remove_file(path).unwrap();
+        }
+        let entries = || {
+            std::fs::read_dir(&copied_dir)
+                .unwrap()
+                .filter(|entry| {
+                    entry
+                        .as_ref()
+                        .unwrap()
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with("546546-")
+                })
+                .count()
+        };
+        let before = entries();
+        for failure in ["bytes", "name", "count"] {
+            p.show_picker("attach");
+            let state: serde_json::Value =
+                serde_json::from_str(&crate::agent::handle(&mut p, r#"{"op":"state"}"#)).unwrap();
+            let mut bad = request.clone();
+            bad["ticket"] = state["pending"][0]["ticket"].clone();
+            match failure {
+                "bytes" => bad["files"][1]["bytes"] = "!".into(),
+                "name" => bad["files"][1]["name"] = "other.png".into(),
+                _ => {
+                    bad["files"].as_array_mut().unwrap().pop();
+                }
+            }
+            crate::agent::handle(&mut p, &bad.to_string());
+            assert_eq!(entries(), before, "{failure} left a partial import");
+        }
+        let state: serde_json::Value =
+            serde_json::from_str(&crate::agent::handle(&mut p, r#"{"op":"state"}"#)).unwrap();
+        assert_eq!(
+            state["slots"]["files"],
+            serde_json::Value::Array(files.clone())
+        );
+        assert_eq!(state["slots"]["cancels"], 3);
+        request["files"] = serde_json::json!([request["files"][1]]);
+        for (path, name) in [
+            (r"C:\absent-on-device\photo.png", "photo.png"),
+            ("C:/absent-on-device/photo.png", "photo.png"),
+            (r"\\server\share\photo.png", "photo.png"),
+            (r"/absent-on-device/photo\2026.png", r"photo\2026.png"),
+        ] {
+            p.show_picker("photo");
+            let state: serde_json::Value =
+                serde_json::from_str(&crate::agent::handle(&mut p, r#"{"op":"state"}"#)).unwrap();
+            request["ticket"] = state["pending"][0]["ticket"].clone();
+            request["text"] = format!("{path}\n").into();
+            request["files"][0]["name"] = name.into();
+            crate::agent::handle(&mut p, &request.to_string());
+            let state: serde_json::Value =
+                serde_json::from_str(&crate::agent::handle(&mut p, r#"{"op":"state"}"#)).unwrap();
+            assert_eq!(state["slots"]["files"][0]["name"], name, "{path}");
+            let path = crate::picker::resolve(state["slots"]["files"][0]["path"].as_str().unwrap())
+                .unwrap();
+            assert_eq!(std::fs::read(&path).unwrap(), png);
+            std::fs::remove_file(path).unwrap();
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn agent_local_picker_keeps_backslashes_in_posix_names() {
+        let (mut p, view, source, path) = fixture("local");
+        let name = format!(
+            "{}-foo\\bar.txt",
+            path.file_name().unwrap().to_str().unwrap()
+        );
+        let local = path.with_file_name(&name);
+        std::fs::write(&local, b"local bytes").unwrap();
+        p.answer_picker(
+            &serde_json::json!({"text": local}).to_string(),
+            &serde_json::json!({"capability": "pick", "node": view, "answered": "files"})
+                .to_string(),
+        );
+        let state: serde_json::Value =
+            serde_json::from_str(&crate::agent::handle(&mut p, r#"{"op":"state"}"#)).unwrap();
+        let imported = crate::picker::resolve(state["slots"]["path"].as_str().unwrap()).unwrap();
+        assert_eq!(std::fs::read(&imported).unwrap(), b"local bytes");
+        assert_eq!(state["slots"]["name"], name);
+        std::fs::remove_file(imported).unwrap();
+        std::fs::remove_file(local).unwrap();
+        drop(source);
+    }
+
     struct BadMetrics;
     impl TextMeasurer for BadMetrics {
         fn measure(&mut self, request: &TextMeasureRequest<'_>) -> TextMetrics {
@@ -726,6 +933,7 @@ mod delivery_tests {
         let plan = crate::test_plan(&format!(
             r#"component App
   state path = ""
+  state name = ""
   state number = 0
   state ready = false
   action broken
@@ -734,6 +942,7 @@ mod delivery_tests {
     ready = true
 {task}  action picked(files: Picked[])
     path = files.map(f => f.path).join("")
+    name = files.map(f => f.name).join("")
     number = {}
   view
     column

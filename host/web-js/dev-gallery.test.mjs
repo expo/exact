@@ -10,7 +10,7 @@
 import { afterEach, expect, test } from 'bun:test';
 import { spawnOwned, stopAll } from '../../scripts/test-children.mjs';
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, request } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -90,6 +90,8 @@ test('the gallery: made only once a page asks through the gate, its own build, s
     const nonce = gallery.got[0].nonce;
     expect(typeof nonce).toBe('string');
     expect(existsSync(join(cache, 'live/app.contract'))).toBe(true);
+    expect(lstatSync(join(cache, 'live/assets')).isDirectory()).toBe(true);
+    expect(readFileSync(join(cache, 'live/assets/note.txt'), 'utf8')).toBe("the app's asset\n");
     // Its page: its files under its path, its own dev client.
     const page = await (await fetch(`${loop.base}/__dev/gallery/`)).text();
     expect(page).toContain('<base href="/__dev/gallery/">');

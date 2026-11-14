@@ -353,6 +353,9 @@ fn every_typescript_example_in_the_guides_checks_against_its_contracts_types() {
             }
         };
         fixture.write("app.contract.d.ts", &contract::typescript(&plan).unwrap());
+        for (name, body) in &block.files {
+            fixture.write(name, body);
+        }
         let output = fixture.check(&block.body);
         if !output.status.success() {
             failures.push(format!(

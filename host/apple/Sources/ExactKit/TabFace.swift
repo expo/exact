@@ -54,7 +54,7 @@ struct TabFace: Equatable {
     }
     /// `symbol` without a `.fill` ending (`base`); a path token as it is.
     static func base(_ symbol: String) -> String {
-        symbol.hasSuffix(".fill") && !FaceSymbol.isPath(symbol) ? String(symbol.dropLast(5)) : symbol
+        symbol.hasSuffix(".fill") && !FaceSymbol.isCustom(symbol) ? String(symbol.dropLast(5)) : symbol
     }
     /// A source the bar can read without fetching: the app's own file or a
     /// bundled asset, never a `symbol:`, `data:` or remote one.
@@ -66,7 +66,7 @@ struct TabFace: Equatable {
     /// A tab bar's selected glyph for `base`: its `.fill` variant, nil for a
     /// path or a symbol without one.
     static func filled(_ base: String) -> UIImage? {
-        FaceSymbol.isPath(base) ? nil : UIImage(systemName: base + ".fill")
+        FaceSymbol.isCustom(base) ? nil : UIImage(systemName: base + ".fill")
     }
     /// `image` as a tab bar item's glyph: fitted in `points` square at the
     /// screen's scale and template-rendered, so the bar tints it as it tints

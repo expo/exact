@@ -393,6 +393,7 @@ fn computed_rows_keep_authored_provenance_and_the_child_wins() {
         5,
         &[
             (StyleId::TintColor, "green"),
+            (StyleId::SymbolRendering, "multicolor"),
             (StyleId::FontSize, "32"),
             (StyleId::FontWeight, "700"),
         ],
@@ -407,6 +408,7 @@ fn computed_rows_keep_authored_provenance_and_the_child_wins() {
     assert_eq!(s.symbol.font_size, 32.0);
     assert_eq!(s.symbol.font_weight, 700);
     assert!(s.symbol.mask.has(StyleId::TintColor));
+    assert!(s.symbol.mask.has(StyleId::SymbolRendering));
     check_runs(&k);
     assert_eq!(s.image_gap, Some(4.0));
     assert_eq!(s.button.padding_top, Dimension::Points(20.0));
@@ -615,10 +617,10 @@ fn hosts_receive_resolved_padding_and_each_corner() {
     assert_eq!(s.padding_right, Dimension::Points(17.0));
     assert_eq!(
         [
-            s.border_radius_top_left,
-            s.border_radius_top_right,
-            s.border_radius_bottom_right,
-            s.border_radius_bottom_left
+            s.border_radius_top_left.clone(),
+            s.border_radius_top_right.clone(),
+            s.border_radius_bottom_right.clone(),
+            s.border_radius_bottom_left.clone()
         ],
         [
             Dimension::Points(5.0),

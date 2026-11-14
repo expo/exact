@@ -117,6 +117,15 @@ final class PopoverSheetIOSTests: XCTestCase {
         XCTAssertEqual(outside["hit"] as? String, "none")
         XCTAssertEqual(outside["hits"] as? String, "")
         XCTAssertTrue(content.isDescendant(of: sheet.scroller))
+        let container = try XCTUnwrap(sheet.presentationController?.containerView)
+        let dimmed = CGPoint(x: container.bounds.minX + 5, y: container.bounds.minY + 5)
+        let native = try XCTUnwrap(container.hitTest(dimmed, with: nil))
+        XCTAssertFalse(native.isDescendant(of: sheet.view), "UIKit delivers the point to the backdrop outside the sheet")
+        let at = p.viewportPoints(container.convert(CGRect(origin: dimmed, size: .zero), to: p.viewport)).origin
+        XCTAssertFalse(clip.contains(at))
+        let backdrop = try read(at)
+        XCTAssertEqual(backdrop["hit"] as? String, "form")
+        XCTAssertEqual(backdrop["hits"] as? String, "form")
     }
 
     /// A route presentation whose routes show no box yet (not in the window

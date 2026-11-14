@@ -88,11 +88,10 @@ fn directwrite_audit() {
                     "H i m 0 1 2 8"
                 };
                 let spec = crate::paint::text_spec(
-                    &exact_kernel::StyleProps {
-                        font_size: size,
-                        font_weight: weight,
-                        ..Default::default()
-                    },
+                    &exact_kernel::StyleProps::default().with_rows(|rows| {
+                        rows.font_size = size;
+                        rows.font_weight = weight;
+                    }),
                     text,
                 );
                 let paragraph = engine.paragraph(&spec, None);

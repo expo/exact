@@ -262,7 +262,7 @@ fn a_plan_graph_names_the_plans_own_format() {
         .unwrap()
         .encode();
     let inputs = json!({"formatVersion": 1, "formatDigest": "0000000000000001", "kernelSchema": "0000000000000002"});
-    let graph = plan_graph(&plan, &inputs, "aarch64-apple-darwin").unwrap();
+    let graph = plan_graph(&plan, &inputs, "aarch64-apple-darwin", Path::new("")).unwrap();
     let requires = &graph["artifacts"][0]["requires"];
     assert_eq!(requires["formatVersion"], json!(exact_plan::FORMAT_VERSION));
     assert_eq!(
@@ -290,7 +290,9 @@ fn a_source_signature_names_its_enum_members() {
         let result = builder.record("Result", &[("state", state), ("seen", list)]);
         builder.source("read", &[state], result);
         let plan = builder.finish().unwrap().encode();
-        plan_graph(&plan, &json!({}), "aarch64-apple-darwin").unwrap()["sources"]["read"].clone()
+        plan_graph(&plan, &json!({}), "aarch64-apple-darwin", Path::new("")).unwrap()["sources"]
+            ["read"]
+            .clone()
     };
     let old = sources(&["old", "common"], false);
     assert_eq!(
@@ -307,7 +309,7 @@ fn a_source_signature_names_its_enum_members() {
     let string = plain.primitive(exact_plan::TypeKind::String);
     plain.source("read", &[string], string);
     let plain = plain.finish().unwrap().encode();
-    let plain = plan_graph(&plain, &json!({}), "aarch64-apple-darwin").unwrap();
+    let plain = plan_graph(&plain, &json!({}), "aarch64-apple-darwin", Path::new("")).unwrap();
     assert_eq!(plain["sources"]["read"]["params"][0], json!("String"));
 }
 
@@ -365,7 +367,7 @@ fn loopback_callback_ports_retain_the_listener() {
         "http://[::1]:1455/auth/callback",
     ] {
         let inputs = json!({"grantCeiling": format!("auth.callback {callback}")});
-        let graph = plan_graph(&plan, &inputs, "aarch64-apple-darwin").unwrap();
+        let graph = plan_graph(&plan, &inputs, "aarch64-apple-darwin", Path::new("")).unwrap();
         assert!(
             graph["loads"]
                 .as_array()
@@ -1237,4 +1239,75 @@ fn a_canvas_argument_the_gpu_product_does_not_declare_refuses_the_bake() {
     gpu_product(&product, &mut none).unwrap();
     assert_eq!(surface_arguments(b.plan(), &none), Ok(()));
     std::fs::remove_dir_all(dir).unwrap();
+}
+#[test]
+fn apple_raster_icons_exclude_template_paths_and_sf_sources() {
+    let mut b = exact_plan::builder::PlanBuilder::new(0, 0);
+    b.icon("icon.two", "", "10 20 40 20", "", "two.svg");
+    b.icon("icon.sf", "heart", "0 0 24 24", "", "two.svg");
+    b.icon("icon.path", "", "0 0 24 24", "M0 0h24v24Z", "one.svg");
+    let plan = b.finish().unwrap();
+    assert_eq!(
+        super::apple_icons(&plan).unwrap(),
+        vec![serde_json::json!({"svg":"two.svg","viewBox":"10 20 40 20"})]
+    );
+}
+
+#[test]
+fn an_apple_raster_icon_requires_its_catalog_rendition() {
+    let mut b = exact_plan::builder::PlanBuilder::new(0, 0);
+    b.icon("icon.two", "", "10 20 40 20", "", "two.svg");
+    let plan = b.finish().unwrap();
+    let inputs = json!({"platform":"ios", "appleRasterIcons":{"two.svg":{"sha256":"red-blue","viewBox":"10 20 40 20"}}});
+    let graph = super::artifact_graph(&plan, &inputs, &[], false, "aarch64-apple-ios").unwrap();
+    assert_eq!(
+        graph["appleIcons"],
+        json!([{"svg":"two.svg","viewBox":"10 20 40 20"}])
+    );
+    assert_eq!(
+        graph["artifacts"][0]["requires"]["appleRasterIcons"],
+        inputs["appleRasterIcons"]
+    );
+}
+
+#[test]
+fn apple_raster_icons_include_literal_sources_and_nested_baked_values() {
+    use exact_runner::{DataError, DataSource, Value};
+    struct Glyph;
+    impl DataSource for Glyph {
+        fn query(&mut self, _: &str, _: &[Value]) -> Result<Value, DataError> {
+            Ok(Value::record(vec![Value::list(vec![Value::str(
+                "symbol:icon||0 0 24 24||baked.svg",
+            )])]))
+        }
+    }
+    let plan = contract::compile("shape Glyph\n  srcs: string[]\ncomponent App\n  resource glyph = glyph() as shape Glyph\n  view\n    column\n      image \"symbol:icon||0 0 24 24||literal.svg\"\n").unwrap();
+    assert!(plan.icons.is_empty());
+    let mut baked = contract::bake(plan, Glyph).unwrap();
+    let icons = super::apple_icons(&baked).unwrap();
+    assert_eq!(
+        icons,
+        vec![
+            json!({"svg":"baked.svg","viewBox":"0 0 24 24"}),
+            json!({"svg":"literal.svg","viewBox":"0 0 24 24"})
+        ]
+    );
+    let inputs = json!({"platform":"ios", "appleRasterIcons":{
+        "literal.svg":{"sha256":"literal"},"baked.svg":{"sha256":"baked"}
+    }});
+    let graph = super::artifact_graph(&baked, &inputs, &[], false, "aarch64-apple-ios").unwrap();
+    assert_eq!(graph["appleIcons"], json!(icons));
+    assert_eq!(
+        graph["artifacts"][0]["requires"]["appleRasterIcons"],
+        inputs["appleRasterIcons"]
+    );
+    let placeholder = Value::some(Value::str("symbol:icon||0 0 24 24||baked.svg")).to_bytes();
+    let offset = baked.data.len() as u32;
+    baked.data.to_mut().extend_from_slice(&placeholder);
+    baked.resources[0].placeholder_value = exact_plan::Bytes {
+        offset,
+        len: placeholder.len() as u32,
+    };
+    baked.resources[0].initial = exact_plan::Bytes { offset: 0, len: 0 };
+    assert_eq!(super::apple_icons(&baked).unwrap(), icons);
 }

@@ -168,11 +168,11 @@ final class NativeContextsIOSTests: XCTestCase {
         XCTAssertEqual(pressed, [5])
     }
 
-    private func tablist(_ faces: [UInt32: ButtonFace], labels: [Int: String] = [:], role: String = "tablist") -> Presenter {
-        var ops = view(1, ["accessibilityRole": role])
+    private func tablist(_ faces: [UInt32: ButtonFace], labels: [Int: String] = [:]) -> Presenter {
+        var ops = view(1, ["accessibilityRole": "tablist"])
         for (i, id) in [2, 3, 4].enumerated() {
-            var props = ["accessibilityRole": role == "radiogroup" ? "radio" : "tab"]
-            if i == 0 { props[role == "radiogroup" ? "accessibilityChecked" : "accessibilitySelected"] = "true" }
+            var props = ["accessibilityRole": "tab"]
+            if i == 0 { props["accessibilitySelected"] = "true" }
             if let label = labels[id] { props["accessibilityLabel"] = label }
             ops += native(id, props, x: Double(i) * 100, w: 100)
         }
@@ -182,43 +182,69 @@ final class NativeContextsIOSTests: XCTestCase {
     /// A written `appearance="none"` keeps a radio group's authored keys, as it
     /// keeps a tablist's: the author's design, not `UISegmentedControl`, with
     /// WAI-ARIA's radio group keys: one Tab stop (the checked radio), and the
-    /// arrows focus and press the next or previous radio, wrapping.
+    /// arrows focus and press the next or previous radio, wrapping. The
+    /// kernel decides them (LLP 1166.000), so the group is booted from
+    /// tests/fixtures/painted-groups.contract, whose own buttons change what
+    /// the group shows.
     func testAWrittenAppearanceNoneKeepsAnAuthoredRadioGroup() throws {
-        let p = tablist([2: face("Day"), 3: face("Week"), 4: face("Month")], role: "radiogroup")
-        XCTAssertNotNil(p.segments.control(of: 1), "a radio group is a segmented control")
-        p.apply(wireBatch([["op": "style", "id": 1, "style": ["appearance": "none", "written": ["appearance"]]]]))
-        XCTAssertNil(p.segments.control(of: 1))
-        XCTAssertFalse(try XCTUnwrap(p.views[2]).isHidden, "its authored radios show")
+        let path = try XCTUnwrap(ProcessInfo.processInfo.environment["EXACT_PAINTED_GROUPS_PLAN"])
+        let session = ExactApp.shared.makeSession(label: "painted-groups")
+        defer { session.destroy() }
+        let controller = UIViewController()
+        let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        window = scene.map { UIWindow(windowScene: $0) } ?? UIWindow(frame: .zero)
+        window.frame = CGRect(x: 0, y: 0, width: 400, height: 850)
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        session.presenter.viewport.frame = window.bounds
+        controller.view.addSubview(session.presenter.viewport)
+        XCTAssertNil(session.boot(plan: try Data(contentsOf: URL(fileURLWithPath: path)), size: window.bounds.size).error)
+        window.layoutIfNeeded()
+        let p = session.presenter
+        let node = { (id: String) in try XCTUnwrap(p.views.values.first { $0.props["testId"] == id }, id) }
+        let act = { (id: String) in session.apply(session.runtime.press(try node(id).id, now: session.now())) }
+        let group = try node("period").id
+        XCTAssertNotNil(p.segments.control(of: group), "a radio group is a segmented control")
+        try act("paint")
+        XCTAssertNil(p.segments.control(of: group))
+        let (day, week, month) = (try node("period-Day"), try node("period-Week"), try node("period-Month"))
+        XCTAssertFalse(day.isHidden, "its authored radios show")
         var pressed: [UInt32] = []
-        p.onPress = { pressed.append($0) }
-        p.press(3)
-        XCTAssertEqual(pressed, [3])
-        let (day, week, month) = (try XCTUnwrap(p.views[2]), try XCTUnwrap(p.views[3]), try XCTUnwrap(p.views[4]))
+        let press = p.onPress
+        p.onPress = { pressed.append($0); press?($0) }
+        p.press(week.id)
+        XCTAssertEqual(pressed, [week.id])
         XCTAssertEqual([day, week, month].map(\.ariaRadioTabStop), [true, false, false], "the checked radio is the one stop")
         pressed = []
-        XCTAssertTrue(p.controls.radioKey(day, "ArrowRight", held: ""))
-        XCTAssertTrue(p.controls.radioKey(day, "ArrowLeft", held: ""))
-        XCTAssertFalse(p.controls.radioKey(day, "a", held: ""))
-        XCTAssertEqual(pressed, [3, 4], "the next radio, then the previous one wrapping")
-        p.apply(wireBatch([["op": "props", "id": 2, "set": ["accessibilityChecked": "false"]], ["op": "props", "id": 3, "set": ["accessibilityChecked": "true"]]]))
+        XCTAssertTrue(p.controls.roleKey(day, "ArrowRight", held: ""))
+        XCTAssertTrue(p.controls.roleKey(day, "ArrowLeft", held: ""))
+        XCTAssertFalse(p.controls.roleKey(day, "a", held: ""))
+        XCTAssertEqual(pressed, [week.id, month.id], "the next radio, then the previous one wrapping")
+        try act("choose-Week")
+        // While a member has the focus it is the stop whatever is checked
+        // (LLP 1166.000 D1); with the focus out of the group, the checked radio.
+        XCTAssertEqual([day, week, month].map(\.ariaRadioTabStop), [false, false, true], "the focused radio is the stop")
+        XCTAssertTrue(month.resignFirstResponder())
         XCTAssertEqual([day, week, month].map(\.ariaRadioTabStop), [false, true, false])
         // Right-to-left swaps Left and Right; a hidden radio is no target and no stop.
-        p.apply(wireBatch([["op": "style", "id": 1, "style": ["appearance": "none", "written": ["appearance"], "direction": "rtl"]]]))
+        try act("flip")
         pressed = []
-        XCTAssertTrue(p.controls.radioKey(week, "ArrowRight", held: ""))
-        XCTAssertTrue(p.controls.radioKey(week, "ArrowLeft", held: ""))
-        XCTAssertTrue(p.controls.radioKey(week, "ArrowDown", held: ""))
-        XCTAssertEqual(pressed, [2, 4, 4])
-        p.apply(wireBatch([["op": "style", "id": 1, "style": ["appearance": "none", "written": ["appearance"]]],
-                           ["op": "style", "id": 4, "style": ["visibility": "hidden"]]]))
+        XCTAssertTrue(p.controls.roleKey(week, "ArrowRight", held: ""))
+        XCTAssertTrue(p.controls.roleKey(week, "ArrowLeft", held: ""))
+        XCTAssertTrue(p.controls.roleKey(week, "ArrowDown", held: ""))
+        XCTAssertEqual(pressed, [day.id, month.id, month.id])
+        try act("flip")
+        try act("hide")
         pressed = []
-        XCTAssertTrue(p.controls.radioKey(week, "ArrowDown", held: ""))
-        XCTAssertEqual(pressed, [2], "the hidden radio is passed over")
-        p.apply(wireBatch([["op": "props", "id": 3, "set": ["accessibilityChecked": "false"]], ["op": "props", "id": 4, "set": ["accessibilityChecked": "true"]]]))
+        XCTAssertTrue(p.controls.roleKey(week, "ArrowDown", held: ""))
+        XCTAssertEqual(pressed, [day.id], "the hidden radio is passed over")
+        try act("choose-Month")
+        XCTAssertTrue(day.resignFirstResponder())
         XCTAssertEqual([day, week, month].map(\.ariaRadioTabStop), [true, false, false], "a hidden checked radio is not the stop")
-        p.apply(wireBatch([["op": "style", "id": 1, "style": ["appearance": "auto", "written": ["appearance"]]]]))
+        try act("paint")
         XCTAssertNil(day.ariaRadioGroup, "a projected group's keys are the segmented control's")
-        XCTAssertNotNil(p.segments.control(of: 1))
+        XCTAssertNotNil(p.segments.control(of: group))
     }
 
     /// Opacity only paints (CSS); `visibility: hidden` and `inert` take input away.

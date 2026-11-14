@@ -4,7 +4,7 @@
 // pinned and inspected them all).
 import { afterEach, expect, test } from 'bun:test';
 import { spawnOwned, stopAll } from '../../scripts/test-children.mjs';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, request } from 'node:http';
 import { connect, createServer as createSocketServer } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -114,15 +114,11 @@ test('a page whose app replaces fetch still registers and inspects: the dev clie
   writeFileSync(join(dir, 'app.json'), JSON.stringify({ name: 'Fetched', app: { id: 'com.exact.fetched', name: 'Fetched' } }));
   writeFileSync(join(dir, 'app.contract'), 'component App\n  view\n    column gap=8\n      text "above"\n      text "fetched"\n');
   writeFileSync(join(dir, 'app.tamber'), 'tamber fetched\n\ntheme\n  ink = #000000\n');
-  // As a fixture build does (the clone's copy, data/fixture.ts): every fetch after the app loads is the app's, which
-  // takes no relative URL.
-  writeFileSync(join(dir, 'app.ts'), [
-    "import type { Answer, Sources } from './app.contract.d.ts';",
-    "(globalThis as { fetch: unknown }).fetch = (u: unknown) => { if (!/^[a-z][a-z0-9+.-]*:/i.test(String(u))) throw new TypeError(\"Failed to construct 'URL': Invalid URL\"); return Promise.reject(new Error('the app answers no fetch')); };",
-    "export const appId = 'com.exact.fetched';",
-    "export const grants = '';",
-    "const sources: Sources = {};",
-    "export const answer: Answer = (source, args, store, storage, native) => sources[source](args, store, storage, native);",
+  // Data modules have their own globals. A web hatch runs in the page and can replace its fetch.
+  mkdirSync(join(dir, 'modules/web'), { recursive: true });
+  writeFileSync(join(dir, 'modules/web/index.js'), [
+    "globalThis.fetch = function appFetch(u) { if (!/^[a-z][a-z0-9+.-]*:/i.test(String(u))) throw new TypeError(\"Failed to construct 'URL': Invalid URL\"); return Promise.reject(new Error('the app answers no fetch')); };",
+    'export function app() {}',
     '',
   ].join('\n'));
   const listener = createServer();
@@ -144,6 +140,11 @@ test('a page whose app replaces fetch still registers and inspects: the dev clie
     (async () => { const reader = sub.body.getReader(); for (;;) { const { value, done } = await reader.read(); if (done) return; events += new TextDecoder().decode(value); } })().catch(() => {});
     browser = await suiteBrowser('chromium');
     const page = await (await browser.newContext()).newPage();
+    // Register only after the hatch replaces fetch, so registration exercises the client's captured function too.
+    await page.route('**/__dev/page', async route => {
+      await page.waitForFunction(() => globalThis.fetch.name === 'appFetch');
+      await route.continue();
+    });
     const said = [];
     page.on('console', m => said.push(m.text()));
     await page.goto(`${base}/`);

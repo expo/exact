@@ -11,7 +11,8 @@
 //! runner's `format::locale` and the JS target's `format-locale.js` read it. In a
 //! template, `{#}` is a number's digits, `{¤}` its currency symbol, `{D}`
 //! and `{T}` a date and a time; `{y}` the year, `{yy}` its last two digits,
-//! `{M}` `{MM}` the month, `{N}` its name, `{d}` `{dd}` the day, `{h}` `{hh}`
+//! `{M}` `{MM}` the month, `{N}` its name, `{d}` `{dd}` the day, `{E}` the
+//! weekday's name, `{h}` `{hh}`
 //! (1–12), `{H}` `{HH}` (0–23), `{K}` `{KK}` (0–11), `{k}` `{kk}` (1–24) the
 //! hour, `{m}` `{mm}` the minute and `{a}` the day period. Other text is
 //! literal.
@@ -32,12 +33,14 @@
 //! | `time`, `time12`, `time23` | a time template, then its day periods: their first minute and their name |
 //! | `dateTime` | the medium date with the short time |
 //! | `days` | today, yesterday and tomorrow, in a label's case |
+//! | `weekdayDate`, `weekdayYear` | `formatDay`'s `"section"` dates (CLDR's `MMMEd` and `yMMMEd`, LLP 1168.000 D5): a template, then its twelve month names and its seven weekday names, Sunday's first; the template's first text, or the names that begin it, with a capital |
+//! | `weekdayLabels` | `"section"`'s weekdays, Sunday's first, with a capital |
 
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
 /// The record's fields, in order.
-pub const FIELDS: [&str; 25] = [
+pub const FIELDS: [&str; 30] = [
     "digits",
     "decimal",
     "group",
@@ -63,6 +66,11 @@ pub const FIELDS: [&str; 25] = [
     "time23Periods",
     "dateTime",
     "days",
+    "weekdayDate",
+    "weekdayDateNames",
+    "weekdayYear",
+    "weekdayYearNames",
+    "weekdayLabels",
 ];
 
 type Locales = BTreeMap<String, serde_json::Map<String, serde_json::Value>>;

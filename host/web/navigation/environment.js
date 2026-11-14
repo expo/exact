@@ -266,6 +266,7 @@ export const onPreferences = (changed) => {
 export function pageReporter(agent, platform = globalThis) {
   const facts = {
     "visibility-state": "visible",
+    frozen: false,
     online: true,
     "can-share": true,
     "can-share-files": true,
@@ -280,6 +281,7 @@ export function pageReporter(agent, platform = globalThis) {
     restores: 0
   };
   // cache: the drive's page is never put away
+  let frozen = false;
   let sharesFiles;
   const canShareFiles = () => sharesFiles ??= (() => {
     try {
@@ -302,6 +304,7 @@ export function pageReporter(agent, platform = globalThis) {
     ...cache
   } : {
     ...cache,
+    frozen,
     "visibility-state": platform.document.visibilityState === "hidden" ? "hidden" : "visible",
     online: platform.navigator.onLine !== false,
     "can-share": typeof platform.navigator.share === "function",
@@ -316,7 +319,7 @@ export function pageReporter(agent, platform = globalThis) {
   // iframe-partition: a browser never honours an iframe's `partition` (LLP 1020.002 Q4)
   const bits = () => {
     const f = read();
-    return ((f["visibility-state"] === "hidden" ? 1 : 0) | (f.online ? 0 : 2) | (f["can-share"] ? 4 : 0) | (f["can-open-files"] ? 8 : 0) | (f["has-focus"] ? 0 : 16) | (f["can-share-files"] ? 256 : 0) | (f["can-share-pictures"] ? 512 : 0) | [
+    return ((f["visibility-state"] === "hidden" ? 1 : 0) | (f.frozen ? 128 : 0) | (f.online ? 0 : 2) | (f["can-share"] ? 4 : 0) | (f["can-open-files"] ? 8 : 0) | (f["has-focus"] ? 0 : 16) | (f["can-share-files"] ? 256 : 0) | (f["can-share-pictures"] ? 512 : 0) | [
       "navigate",
       "reload",
       "back_forward"
@@ -336,7 +339,7 @@ export function pageReporter(agent, platform = globalThis) {
         "high"
       ].includes(value)) {
         next[name] = value;
-      } else if ((name === "online" || name === "can-share" || name === "can-share-files" || name === "can-share-pictures" || name === "can-open-files" || name === "has-focus" || name === "iframe-partition") && (value === "true" || value === "false")) {
+      } else if ((name === "frozen" || name === "online" || name === "can-share" || name === "can-share-files" || name === "can-share-pictures" || name === "can-open-files" || name === "has-focus" || name === "iframe-partition") && (value === "true" || value === "false")) {
         next[name] = value === "true";
       } else if (name === "root-font-size" && Number(value) > 0 && Number.isFinite(Number(value))) {
         next[name] = Number(value);
@@ -361,6 +364,12 @@ export function pageReporter(agent, platform = globalThis) {
       return;
     }
     platform.document.addEventListener("visibilitychange", changed);
+    for (const name of ["freeze", "resume"]) {
+      platform.document.addEventListener(name, () => {
+        frozen = name === "freeze";
+        changed();
+      });
+    }
     for (const name of [
       "online",
       "offline",

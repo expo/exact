@@ -47,6 +47,9 @@ say why each line is so: keep its shape, replace its content. Read
 
 Keep scratch files in `.exact/` and helper scripts in `tools/`: neither makes the build stale.
 
+On a new machine, `bun <exact2>/scripts/exact.mjs setup --platform web` installs the
+web prerequisites. See [web CI preparation](reference.md#web-ci-preparation) for a Linux test runner.
+
 ## The language
 
 ```contract

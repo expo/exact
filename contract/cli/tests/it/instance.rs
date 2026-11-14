@@ -197,8 +197,35 @@ fn a_child_may_not_own_a_resource() {
     let src = "shape S\n  id: string\ncomponent A\n  view\n    Row()\ncomponent Row\n  resource s = s() as shape S\n  view\n    text s.id\n";
     let e = contract::compile(src).unwrap_err();
     assert_eq!(e.id, "type-child-resource");
-    // It states the rule and names the root (chess #3).
-    assert_eq!(e.message, "only the root, the root file's first component (`A`), may declare a `resource`, `mutation`, or `task`; `Row` is a child, which may own state, derives, and actions. Move this declaration into `A` and pass what `Row` needs as props; or, if `Row` is the app, move it above `A`");
+    // It states the rule and names the root (chess #3), then the repairs a
+    // feature needs: prefixed names in the root, and a gate on what shows it.
+    assert_eq!(e.message, "only the root, the root file's first component (`A`), may declare a `resource`, `mutation`, or `task`; `Row` is a child, which may own state, derives, and actions. Declare `Row`'s resources, mutations and tasks in `A`, named with the feature's prefix (`rowS`); a `members A` block in a file of their own, which `A` lists with `members \"./row.contract\"`, keeps them together. Pass `Row` their values and the actions that send them as props (docs/contract-for-agents.md, \"A feature's requests\"). Gate a resource that only one tab or screen reads on that tab or screen showing, and it asks nothing while hidden: `resource rowS = s(…) when nav.tab == \"…\"`. Or, if `Row` is the app, move it above `A`");
+    // The repair it names compiles.
+    let fixed = "routes nav\n  tab home \"/\"\n  tab rows \"/rows\"\nshape S\n  id: string\ncomponent A\n  resource rowS = s() when nav.tab == \"rows\" as shape S else empty(id=\"\")\n  view\n    Row(s=rowS)\ncomponent Row\n  props\n    s: S\n  view\n    text s.id\n";
+    contract::compile(fixed).unwrap_or_else(|e| panic!("{e}"));
+}
+
+#[test]
+fn a_childs_mutation_is_named_with_its_prefix_and_not_gated() {
+    let src = "component A\n  view\n    Composer()\ncomponent Composer\n  mutation sent as shape string\n  view\n    text \"x\"\n";
+    let e = contract::compile(src).unwrap_err();
+    assert_eq!(e.id, "type-child-resource");
+    assert!(e.message.contains("(`composerSent`)"), "{}", e.message);
+    assert!(!e.message.contains("when nav.tab"), "{}", e.message);
+}
+
+#[test]
+fn a_child_reading_device_facts_with_a_task_is_told_about_the_task() {
+    let src = "shape Viewport\n  pointer: string\ncomponent A\n  view\n    Pad()\ncomponent Pad\n  resource vp = exactViewport() as shape Viewport\n  task tick mount\n    every(16, step)\n  state n = 0\n  action step\n    n = n + 1\n  view\n    text vp.pointer\n";
+    let e = contract::compile(src).unwrap_err();
+    assert_eq!(e.id, "type-child-resource");
+    assert!(
+        e.message.starts_with(
+            "only the root, the root file's first component (`A`), may declare a `task`"
+        ),
+        "{}",
+        e.message
+    );
 }
 
 #[test]

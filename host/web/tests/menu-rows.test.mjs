@@ -90,7 +90,7 @@ async function inChrome(test) {
       for (let i = 0; i < 100; i++) { if (JSON.stringify(await evaluate(expression)) === JSON.stringify(want)) return; await evaluate('new Promise(requestAnimationFrame)'); }
       expect(await evaluate(expression)).toEqual(want);
     };
-    await test(evaluate, press, until, enter);
+    await test(evaluate, press, until, enter, call);
   } finally {
     await suite.close();
     server.close();
@@ -288,6 +288,34 @@ check('a submenu\'s row opens its popover from the outermost menu\'s invoker, an
   await press('deeper');
   await until('open()', ['picker']);
   expect(await evaluate('sources.picker')).toBe('opener');
+}), 60000);
+
+check('a menu\'s button and link rows are menu items, and a role the author writes is theirs', () => inChrome(async (evaluate, press, until, enter, call) => {
+  // Chrome's accessibility tree, as a screen reader meets each node.
+  const roles = async ids => {
+    const { root } = await call('DOM.getDocument', { depth: 0 }), out = [];
+    for (const id of ids) {
+      const { nodeId } = await call('DOM.querySelector', { nodeId: root.nodeId, selector: '#' + id });
+      out.push((await call('Accessibility.getPartialAXTree', { nodeId, fetchRelatives: false })).nodes[0]?.role?.value);
+    }
+    return out;
+  };
+  const attrs = ids => evaluate(`${JSON.stringify(ids)}.map(id => { const el = document.getElementById(id); return [el.getAttribute('role'), el.hasAttribute('data-exact-menuitem')]; })`);
+  await evaluate(`document.getElementById('menu').insertAdjacentHTML('beforeend', '<a id="site" href="#site">Site</a><button id="pinned" role="menuitemcheckbox" aria-checked="true">Pinned</button><div id="inside" popover><button id="inner">Inner</button></div>')`);
+  await press('opener');
+  await until('open()', ['menu']);
+  expect(await roles(['react', 'site', 'pinned', 'opener', 'menu'])).toEqual(['menuitem', 'menuitem', 'menuitemcheckbox', 'button', 'menu']);
+  // A popover the menu holds that is no menu holds no items; nor does a popover outside it.
+  expect(await attrs(['inner', 'emoji'])).toEqual([[null, false], [null, false]]);
+  // A role the author writes replaces the host's; taken away, the host's comes back.
+  await evaluate(`document.getElementById('react').setAttribute('role', 'menuitemradio')`);
+  expect(await attrs(['react'])).toEqual([['menuitemradio', false]]);
+  await evaluate(`document.getElementById('react').removeAttribute('role')`);
+  expect(await attrs(['react'])).toEqual([['menuitem', true]]);
+  // A link without its `href`, and a row that leaves the menu, are no items; a row added to the open menu is one.
+  await evaluate(`document.getElementById('site').removeAttribute('href'); document.body.append(document.getElementById('more')); document.getElementById('menu').append(Object.assign(document.createElement('button'), { id: 'added', textContent: 'Added' }))`);
+  expect(await attrs(['site', 'more', 'added'])).toEqual([[null, false], [null, false], ['menuitem', true]]);
+  expect(await roles(['added'])).toEqual(['menuitem']);
 }), 60000);
 
 check('a row that invokes no popover, a dialog\'s command, keeps HTML\'s own activation', () => inChrome(async (evaluate, press, until) => {

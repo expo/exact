@@ -131,7 +131,7 @@ pub use request::{
 pub use runner::{
     canvas_engine, launch_matches, press_writes_router, routing, virtual_frame, Advanced, Announce,
     AuthLinks, BackgroundState, BlockPlacement, CallOrigin, CanvasEngine, CanvasLink, CanvasList,
-    Carried, Checkpoint, Command, ControlValue, DataError, DataSource, DataSourceWrapper,
+    Carried, Checkpoint, Command, Console, ControlValue, DataError, DataSource, DataSourceWrapper,
     DeviceLinks, DrawReply, DrawRequest, Drawn, DropEvent, Event, FieldSelection, FormatLink,
     Geometry, GeometryLink, Hold, HoldAnswer, InFlight, InputDetails, Interrupt, Intersection,
     KeyModifiers, KeyboardEvent, Limits, ListTextPolicy, ListTextPosition, MouseEvent, Native,

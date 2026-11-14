@@ -336,12 +336,9 @@ export function binaryenArchive(version, os = process.platform, cpu = process.ar
 /** Install the versions declared by the SDK, once per machine. */
 export async function setup({check = false, platform = null, device = false} = {}) {
   // Steps only a game needs (its SDK lock, the engine's rustdoc for `game vocab`): a failure is named, not fatal.
-  const gameFailures = [];
-  if (!check) { const room = freeSpace(homedir()); if (room && room.gb < ROOM_GB) console.warn(`exact setup: ${room.text}`); }
+  const gameFailures = [], web = platform === 'web';
+  if (!check && !web) { const room = freeSpace(homedir()); if (room && room.gb < ROOM_GB) console.warn(`exact setup: ${room.text}`); }
   const pin = Bun.TOML.parse(readFileSync(resolve(ROOT, 'rust-toolchain.toml'), 'utf8')).toolchain;
-  const bindgen = Bun.TOML.parse(readFileSync(resolve(ROOT, 'game/Cargo.toml'), 'utf8')).workspace.dependencies['wasm-bindgen'].replace(/^=/, '');
-  const version = BINARYEN.replace(' ', '_');
-  const binaryen = resolve(homedir(), '.cache/exact/binaryen', version);
   const run = (cmd, args) => {
     console.log([cmd, ...args].join(' '));
     const result = spawnSync(cmd, args, {cwd: ROOT, stdio: 'inherit', env: cargoEnvironment()});
@@ -357,6 +354,9 @@ export async function setup({check = false, platform = null, device = false} = {
       ...pin.components.flatMap(c => ['--component', c]), ...pin.targets.flatMap(t => ['--target', t])]);
     const proxy = cargoProxyFault(pin.channel);
     if (proxy) throw new Error(`${proxy}, then rerun exact setup`);
+    const bindgen = Bun.TOML.parse(readFileSync(resolve(ROOT, 'game/Cargo.toml'), 'utf8')).workspace.dependencies['wasm-bindgen'].replace(/^=/, '');
+    const version = BINARYEN.replace(' ', '_');
+    const binaryen = resolve(homedir(), '.cache/exact/binaryen', version);
     // The nightly builds the web's wasm: with -Zbuild-std from rust-src for size, and without it (a --wasm dev build) from its own wasm32 std.
     // A game's web bake lints its logic on the same nightly, so it takes clippy too.
     run('rustup', ['toolchain', 'install', WEB_TOOLCHAIN, '--profile', 'minimal', '--component', 'rust-src', '--component', 'llvm-tools', '--component', 'clippy', '--target', 'wasm32-unknown-unknown']);
@@ -379,26 +379,28 @@ export async function setup({check = false, platform = null, device = false} = {
       } finally { rmSync(stage, {recursive: true, force: true}); }
     }
     run(process.execPath, ['install', '--frozen-lockfile']);
-    if (!hermesTarget()) throw new Error(`the pinned Hermes release has no host bundle for ${process.platform}/${process.arch}`);
-    run('cargo', hermesInstallerArguments(false));
-    // Simulator bundles separately: a failed cross download must not undo the
-    // host install every build needs; `setup --check` reports it on its own row.
-    // Each its own run: the installer stops at its first failed target, so a
-    // device download that fails must not take the simulators' with it.
-    const apple = appleSetupTargets();
-    for (const target of apple) {
-      if (spawnSync('cargo', hermesInstallerArguments(false, [target]), {cwd: ROOT, stdio: 'inherit', env: cargoEnvironment(process.env)}).status !== 0) {
-        console.error(`exact setup: the ${target} Hermes bundle did not install; Apple TypeScript builds for it will name the command`);
+    if (!web) {
+      if (!hermesTarget()) throw new Error(`the pinned Hermes release has no host bundle for ${process.platform}/${process.arch}`);
+      run('cargo', hermesInstallerArguments(false));
+      // Simulator bundles separately: a failed cross download must not undo the
+      // host install every build needs; `setup --check` reports it on its own row.
+      // Each its own run: the installer stops at its first failed target, so a
+      // device download that fails must not take the simulators' with it.
+      const apple = appleSetupTargets();
+      for (const target of apple) {
+        if (spawnSync('cargo', hermesInstallerArguments(false, [target]), {cwd: ROOT, stdio: 'inherit', env: cargoEnvironment(process.env)}).status !== 0) {
+          console.error(`exact setup: the ${target} Hermes bundle did not install; Apple TypeScript builds for it will name the command`);
+        }
       }
-    }
-    // The same Apple targets' Rust std: rust-toolchain.toml adds only the web's.
-    if (apple.length) run('rustup', ['target', 'add', ...apple, '--toolchain', pin.channel]);
-    // Android, where its SDK is (LLP 1107): the Rust target the APK's library builds for, and the Hermes bundle a
-    // TypeScript app's library links, which, like the simulators', may fail without failing setup.
-    if (existsSync(androidSdk())) {
-      run('rustup', ['target', 'add', 'aarch64-linux-android', '--toolchain', pin.channel]);
-      if (spawnSync('cargo', hermesInstallerArguments(false, ['aarch64-linux-android']), {cwd: ROOT, stdio: 'inherit', env: cargoEnvironment(process.env)}).status !== 0)
-        console.error('exact setup: the aarch64-linux-android Hermes bundle did not install; an Android TypeScript build will name the command');
+      // The same Apple targets' Rust std: rust-toolchain.toml adds only the web's.
+      if (apple.length) run('rustup', ['target', 'add', ...apple, '--toolchain', pin.channel]);
+      // Android, where its SDK is (LLP 1107): the Rust target the APK's library builds for, and the Hermes bundle a
+      // TypeScript app's library links, which, like the simulators', may fail without failing setup.
+      if (existsSync(androidSdk())) {
+        run('rustup', ['target', 'add', 'aarch64-linux-android', '--toolchain', pin.channel]);
+        if (spawnSync('cargo', hermesInstallerArguments(false, ['aarch64-linux-android']), {cwd: ROOT, stdio: 'inherit', env: cargoEnvironment(process.env)}).status !== 0)
+          console.error('exact setup: the aarch64-linux-android Hermes bundle did not install; an Android TypeScript build will name the command');
+      }
     }
     // The Chromium builds `chromium()` launches unless CHROME names another: the revision the pinned Playwright drives.
     // A no-op when both are here; a failed download leaves the Chrome row to fail the run.
@@ -409,14 +411,16 @@ export async function setup({check = false, platform = null, device = false} = {
     }
     // Every bake resolves offline and locked: the checkout's crates, and the game SDK's for a game's shell.
     run('cargo', [`+${pin.channel}`, 'fetch', '--locked', '--manifest-path', resolve(ROOT, 'Cargo.toml')]);
-    console.log('cargo fetch (the game SDK lock, game/app/shells.lock)');
-    const fetched = sdkFetch();
-    if (!fetched.ok) gameFailures.push(`cargo fetch of the game SDK lock (game/app/shells.lock) failed${fetched.message ? `: ${fetched.message}` : ''}`);
-    // `game vocab` reads the engine's rustdoc; built here, a first lookup skips the cold build.
-    else {
-      console.log('cargo rustdoc -p exact-game (for exact game vocab)');
-      try { gameVocabulary(); }
-      catch (error) { gameFailures.push(`the engine rustdoc for game vocab did not build:\n${error.message.trim().split('\n').slice(-3).join('\n')}`); }
+    if (!web) {
+      console.log('cargo fetch (the game SDK lock, game/app/shells.lock)');
+      const fetched = sdkFetch();
+      if (!fetched.ok) gameFailures.push(`cargo fetch of the game SDK lock (game/app/shells.lock) failed${fetched.message ? `: ${fetched.message}` : ''}`);
+      // `game vocab` reads the engine's rustdoc; built here, a first lookup skips the cold build.
+      else {
+        console.log('cargo rustdoc -p exact-game (for exact game vocab)');
+        try { gameVocabulary(); }
+        catch (error) { gameFailures.push(`the engine rustdoc for game vocab did not build:\n${error.message.trim().split('\n').slice(-3).join('\n')}`); }
+      }
     }
   }
   const rows = sdkReport(process.env, { only: platform, device });
@@ -444,13 +448,12 @@ export function cratesRow(env = process.env, manifest = resolve(ROOT, 'Cargo.tom
 /** Every prerequisite at once (LLP 1086 D6): what is installed, what the SDK
  * pins, and, for what only some apps need, which ones. A row is `required`
  * when no app here builds without it. */
-/** The report's rows a platform's build reads (LLP 1153 D1.2, D1.6): the web's are the toolchain exact2's own tools
- * build with, Bun, node_modules and Chrome; a native platform's add Xcode and the Hermes bundle its TypeScript runs on, and
- * iOS its target's Rust std. */
+/** The report's rows a platform's build reads (LLP 1153 D1.2, D1.6): the web's include the stable toolchain,
+ * its wasm tools, Bun, node_modules and Chrome; native platforms add their SDKs, Hermes and Rust targets. */
 export function platformRowNames(platform, { os = process.platform, cpu = process.arch, device = false } = {}) {
   const host = `Hermes bundle (${hermesTarget(os, cpu)})`, ios = device ? 'aarch64-apple-ios' : appleCrossTargets(os, cpu)[0]?.target;
   const rows = platform === 'android' ? [...androidSdkPackages().map(p => p.name), 'Android NDK', 'Android JDK'] : ({
-    web: ['Bun', 'node_modules', 'Chrome'],
+    web: ['web nightly', 'web nightly wasm32', 'wasm-bindgen', 'wasm-opt', 'Chrome'],
     ios: [...(os === 'linux' ? CROSS_IOS_ROWS : ['Xcode', 'iOS SDK']), `Hermes bundle (${ios})`, `Rust ${ios}`],
     macos: ['Xcode', host],
     linux: [host],
@@ -683,6 +686,15 @@ export function contract(args, env = process.env) {
 }
 /** A path as a shell reads it back: bare when it is plain, else single-quoted (a space in a folder's name). */
 export const shellPath = (path) => (/^[\w./@:+-]+$/.test(path) ? path : `'${path.replaceAll("'", "'\\''")}'`);
+/** An Apple build's refusal when `bundle` (`hermesBundle`) is not installed (LLP 1168.000 D4.5). One that setup installs
+ *  (`appleSetupTargets`, matched by bundle: both simulator triples are one) names this checkout's setup first, which a
+ *  copied checkout or a fresh HOME needs too, then the installer's line for it alone; another (the tvOS device's) that line. */
+export function hermesRefusal(bundle, env = process.env) {
+  const setup = appleSetupTargets().some((target) => hermesBundle(target, env).digest === bundle.digest); // HERMES_LEAN_SYS_DIR is one root for all
+  return setup
+    ? `the pinned Hermes bundle for ${bundle.target} is not installed: \`bun ${shellPath(resolve(ROOT, 'scripts/exact.mjs'))} setup\` installs it and the rest a native build needs (a copied checkout or a fresh HOME needs it too); this bundle alone:\n  ${bundle.fix}`
+    : `the pinned Hermes bundle for ${bundle.target} is not installed, and exact setup does not install this one: install it once with:\n  ${bundle.fix}`;
+}
 
 /** Whether this checkout's node_modules is missing (Bun on Windows writes `rolldown.exe` and `rolldown.bunx`):
  * every build's type check imports rolldown from it, and without it Bun's auto-install spins at full CPU with no
@@ -824,6 +836,9 @@ const USAGE = `exact — run an Exact app from the command line (macOS)
                                this machine's host/iOS/tvOS Hermes bundles;
                                fetch the crates every bake reads offline;
                                build the engine rustdoc that game vocab reads
+  exact setup --platform web   install pinned stable/nightly Rust, wasm-bindgen,
+                               Binaryen, node_modules, Chromium and the locked
+                               crates for web builds and test web
   exact add <module> [<app>]   a standard module (geolocation): its dependency, installed
   exact hatch <word> [<app>]   an access hatch: a stub for each target the app builds (Kotlin for android/)
                                (--app, --window for those scopes), and app.json's entry
@@ -1368,8 +1383,8 @@ async function main(argv) {
     const flags = argv.slice(1);
     const at = flags.indexOf('--platform'), platform = at < 0 ? null : flags[at + 1];
     const rest = flags.filter((_, i) => i !== at && i !== at + 1 || at < 0);
-    if (rest.some(flag => !['--check', '--device'].includes(flag)) || at >= 0 && (!flags.includes('--check') || !['ios', 'macos', 'android', 'web', 'linux', 'windows'].includes(platform)) || flags.includes('--device') && platform !== 'ios')
-      throw new Error('Usage: exact setup [--check [--platform ios|macos|android|web|linux|windows [--device]]]');
+    if (rest.some(flag => !['--check', '--device'].includes(flag)) || at >= 0 && (!flags.includes('--check') && platform !== 'web' || !['ios', 'macos', 'android', 'web', 'linux', 'windows'].includes(platform)) || flags.includes('--device') && platform !== 'ios')
+      throw new Error('Usage: exact setup [--check [--platform ios|macos|android|web|linux|windows [--device]]], or exact setup --platform web');
     // iOS also builds on Linux with the cross SDK, whose rows the check reports (app-shells.mjs bringPlatform agrees).
     if (platform === 'macos' && process.platform !== 'darwin' || platform === 'ios' && !['darwin', 'linux'].includes(process.platform)) throw new Error(`${platform} needs a Mac with Xcode${platform === 'ios' ? ', or Linux with the Apple cross SDK' : ''}`);
     return setup({check:flags.includes('--check'), platform, device:flags.includes('--device')});

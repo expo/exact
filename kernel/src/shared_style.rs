@@ -15,16 +15,20 @@
 //! kept: it was a few hundred bytes a style. Two engine styles are equal as
 //! the layout already compares them.
 //!
-//! Styles that differ elsewhere often hold equal rare or cold rows (a row of
-//! lights, each with its own `animation` delay and the same
-//! `animation-timeline`), so those groups are shared too ([`Groups`]).
+//! Animation declarations stay outside the ordinary row block. Lights with
+//! different delays share that block, including their shadows and timeline.
+//! Styles that differ in ordinary rows can still share equal animation, rare
+//! or cold groups ([`Groups`]).
 
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
 use std::rc::Rc;
 use std::sync::{Arc, Weak};
 
-use crate::generated::{Cold, ColdRows, Rare, RareRows, StyleMask, StyleProps};
+use crate::generated::{
+    AnimationDeclaration, Cold, ColdRows, Ordinary, OrdinaryRows, Rare, RareRows, StyleMask,
+    StyleProps,
+};
 use crate::id::IdHasher;
 use crate::wire::codec::Writer;
 
@@ -269,15 +273,17 @@ impl SharedStyles {
     }
 }
 
-/// The rare and cold rows of held styles, each distinct group once, by a
+/// The ordinary, animation, rare and cold rows, each distinct group once, by a
 /// hash of every row in it encoded (so `-0` and `0` stay apart, as styles
 /// do). One under a hash another live group already has stays the style's
 /// own. Held weakly: a group no style holds is in no wide-colour mark (LLP
 /// 1121 stage 4), so its colours' ids may be reclaimed and must not be read.
 #[derive(Debug, Clone, Default)]
 struct Groups {
+    ordinary: HashMap<u64, Weak<OrdinaryRows>, BuildHasherDefault<IdHasher>>,
     rare: HashMap<u64, Weak<RareRows>, BuildHasherDefault<IdHasher>>,
     cold: HashMap<u64, Weak<ColdRows>, BuildHasherDefault<IdHasher>>,
+    animation: HashMap<u64, Weak<exact_motion::Animations>, BuildHasherDefault<IdHasher>>,
     /// Groups after the last sweep; the next comes at twice this.
     swept: usize,
 }
@@ -285,6 +291,68 @@ struct Groups {
 impl Groups {
     /// Replace `style`'s groups with equal ones already held.
     fn share(&mut self, style: &mut StyleProps, ours: &mut Writer, theirs: &mut Writer) {
+        self.share_animation(style, ours, theirs);
+        self.share_ordinary(style, ours, theirs);
+        if self.ordinary.len() + self.rare.len() + self.cold.len() + self.animation.len()
+            > 2 * self.swept + 64
+        {
+            self.sweep();
+        }
+    }
+
+    fn share_animation(&mut self, style: &mut StyleProps, ours: &mut Writer, theirs: &mut Writer) {
+        let Some(own) = style.animation.rows() else {
+            return;
+        };
+        let mut rows = StyleMask::EMPTY;
+        rows.set(crate::StyleId::Animation);
+        ours.clear();
+        style.encode_overlaid(rows, StyleMask::EMPTY, style, ours);
+        let hash = hash_bytes(ours.as_slice());
+        match self.animation.get(&hash).and_then(Weak::upgrade) {
+            Some(held) if Arc::ptr_eq(&held, own) => {}
+            Some(held) => {
+                let probe = StyleProps {
+                    animation: AnimationDeclaration::share(held),
+                    ..StyleProps::default()
+                };
+                theirs.clear();
+                probe.encode_overlaid(rows, StyleMask::EMPTY, &probe, theirs);
+                if theirs.as_slice() == ours.as_slice() {
+                    style.animation = probe.animation;
+                }
+            }
+            None => {
+                self.animation.insert(hash, Arc::downgrade(own));
+            }
+        }
+    }
+
+    fn share_ordinary(&mut self, style: &mut StyleProps, ours: &mut Writer, theirs: &mut Writer) {
+        let ordinary = if let Some(own) = style.ordinary.rows() {
+            let rows = StyleMask::ordinary();
+            ours.clear();
+            style.encode_overlaid(rows, StyleMask::EMPTY, style, ours);
+            let hash = hash_bytes(ours.as_slice());
+            if let Some(held) = self.ordinary.get(&hash).and_then(Weak::upgrade) {
+                if Arc::ptr_eq(&held, own) {
+                    return;
+                }
+                let probe = StyleProps {
+                    ordinary: Ordinary::share(held),
+                    ..StyleProps::default()
+                };
+                theirs.clear();
+                probe.encode_overlaid(rows, StyleMask::EMPTY, &probe, theirs);
+                if theirs.as_slice() == ours.as_slice() {
+                    style.ordinary = probe.ordinary;
+                    return;
+                }
+            }
+            Some(hash)
+        } else {
+            None
+        };
         if let Some(own) = style.rare.rows() {
             let rows = StyleMask::rare();
             ours.clear();
@@ -293,14 +361,13 @@ impl Groups {
             match self.rare.get(&hash).and_then(Weak::upgrade) {
                 Some(held) if Arc::ptr_eq(&held, own) => {}
                 Some(held) => {
-                    let probe = StyleProps {
-                        rare: Rare::share(held),
-                        ..StyleProps::default()
-                    };
+                    let probe = StyleProps::default().with_rows(|rows| {
+                        rows.rare = Rare::share(held);
+                    });
                     theirs.clear();
                     probe.encode_overlaid(rows, StyleMask::EMPTY, &probe, theirs);
                     if theirs.as_slice() == ours.as_slice() {
-                        style.rare = probe.rare;
+                        style.rare = probe.rare.clone();
                     }
                 }
                 None => {
@@ -316,14 +383,13 @@ impl Groups {
             match self.cold.get(&hash).and_then(Weak::upgrade) {
                 Some(held) if Arc::ptr_eq(&held, own) => {}
                 Some(held) => {
-                    let probe = StyleProps {
-                        cold: Cold::share(held),
-                        ..StyleProps::default()
-                    };
+                    let probe = StyleProps::default().with_rows(|rows| {
+                        rows.cold = Cold::share(held);
+                    });
                     theirs.clear();
                     probe.encode_overlaid(rows, StyleMask::EMPTY, &probe, theirs);
                     if theirs.as_slice() == ours.as_slice() {
-                        style.cold = probe.cold;
+                        style.cold = probe.cold.clone();
                     }
                 }
                 None => {
@@ -331,16 +397,25 @@ impl Groups {
                 }
             }
         }
-        if self.rare.len() + self.cold.len() > 2 * self.swept + 64 {
-            self.sweep();
+        if let Some(hash) = ordinary {
+            if self
+                .ordinary
+                .get(&hash)
+                .is_none_or(|rows| rows.strong_count() == 0)
+            {
+                self.ordinary
+                    .insert(hash, Arc::downgrade(style.ordinary.rows().unwrap()));
+            }
         }
     }
 
     /// Forget the groups no style holds.
     fn sweep(&mut self) {
+        self.ordinary.retain(|_, rows| rows.strong_count() > 0);
         self.rare.retain(|_, rows| rows.strong_count() > 0);
         self.cold.retain(|_, rows| rows.strong_count() > 0);
-        self.swept = self.rare.len() + self.cold.len();
+        self.animation.retain(|_, rows| rows.strong_count() > 0);
+        self.swept = self.ordinary.len() + self.rare.len() + self.cold.len() + self.animation.len();
     }
 }
 
@@ -768,6 +843,39 @@ mod tests {
     }
 
     #[test]
+    fn delayed_lights_share_their_ordinary_rows() {
+        let mut shared = SharedStyles::default();
+        let lights: Vec<_> = (0..141)
+            .map(|i| {
+                let mut style = StyleProps::default();
+                style
+                    .set_dynamic(
+                        StyleId::BoxShadow,
+                        &StyleValue::Text("0 0 8px #ff8800".into()),
+                    )
+                    .unwrap();
+                style
+                    .set_dynamic(
+                        StyleId::Animation,
+                        &StyleValue::Text(format!("pulse 1s linear {}ms infinite", i * 7).into()),
+                    )
+                    .unwrap();
+                shared.intern(style)
+            })
+            .collect();
+        for light in &lights[1..] {
+            assert!(Arc::ptr_eq(
+                lights[0].ordinary.rows().unwrap(),
+                light.ordinary.rows().unwrap(),
+            ));
+            assert!(Arc::ptr_eq(
+                lights[0].cold.rows().unwrap(),
+                light.cold.rows().unwrap(),
+            ));
+        }
+    }
+
+    #[test]
     fn styles_that_differ_share_their_equal_rare_and_cold_rows() {
         let style = |width: f64, z: f64| {
             let mut s = StyleProps::default();
@@ -795,6 +903,52 @@ mod tests {
         drop((a, b, c));
         shared.trim();
         assert!(shared.groups.rare.is_empty() && shared.groups.cold.is_empty());
+    }
+
+    #[test]
+    fn animation_declarations_share_across_ordinary_styles() {
+        let style = |opacity: f64, delay: i32| {
+            let mut s = StyleProps::default();
+            s.set_dynamic(StyleId::Opacity, &StyleValue::Number(opacity))
+                .unwrap();
+            s.set_dynamic(
+                StyleId::BoxShadow,
+                &StyleValue::Text("0 0 8px #ff8800".into()),
+            )
+            .unwrap();
+            s.set_dynamic(
+                StyleId::Animation,
+                &StyleValue::Text(format!("pulse 1s linear {delay}ms infinite").into()),
+            )
+            .unwrap();
+            s
+        };
+        let mut shared = SharedStyles::default();
+        let a = shared.intern(style(0.5, 0));
+        let b = shared.intern(style(0.75, 0));
+        let delayed = shared.intern(style(0.5, 7));
+        let c = shared.intern(style(0.75, 7));
+        assert_eq!(a.animation.0.as_ptr(), b.animation.0.as_ptr());
+        assert_eq!(delayed.animation.0.as_ptr(), c.animation.0.as_ptr());
+        assert_ne!(a.animation.0.as_ptr(), delayed.animation.0.as_ptr());
+        let mut written = style(0.5, 0);
+        written.written.set(StyleId::Animation);
+        let written = shared.intern(written);
+        assert!(!Rc::ptr_eq(&a, &written));
+        assert_eq!(a.animation.0.as_ptr(), written.animation.0.as_ptr());
+        assert!(!a.written.has(StyleId::Animation));
+        assert!(written.written.has(StyleId::Animation));
+        let mut negative_zero = style(0.5, 0);
+        negative_zero.animation.0[0].delay = -0.0;
+        let negative_zero = shared.intern(negative_zero);
+        assert_ne!(a.animation.0.as_ptr(), negative_zero.animation.0.as_ptr());
+        let mut edited = (*a).clone();
+        edited.animation.0[0].delay = 0.125;
+        assert_eq!(a.animation.0[0].delay, 0.0);
+        assert_eq!(b.animation.0[0].delay, 0.0);
+        drop((a, b, delayed, c, written, negative_zero, edited));
+        shared.trim();
+        assert!(shared.groups.animation.is_empty());
     }
 
     #[test]

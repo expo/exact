@@ -314,10 +314,9 @@ fn symbols_clear_rasters_without_loading_and_follow_font_size() {
         &[Op::SetStyle {
             id: 1,
             patch: Box::new({
-                let mut style = exact_kernel::StyleProps {
-                    font_size: 28.,
-                    ..Default::default()
-                };
+                let mut style = exact_kernel::StyleProps::default().with_rows(|rows| {
+                    rows.font_size = 28.;
+                });
                 style.mask.set(exact_kernel::StyleId::FontSize);
                 style
             }),
@@ -468,15 +467,14 @@ fn full_undrained_session_does_not_block_another_sessions_native_workers() {
 fn raster_demand_follows_the_content_box_fit_and_device_scale() {
     use exact_kernel::{AxisOffer, BoxSizing, Dimension, ObjectFit, Offer, StyleId, StyleProps};
     let mut k = kernel(1);
-    let mut style = StyleProps {
-        width: Dimension::Points(420.),
-        height: Dimension::Points(140.),
-        padding_left: Dimension::Points(16.),
-        padding_right: Dimension::Points(16.),
-        padding_top: Dimension::Points(16.),
-        padding_bottom: Dimension::Points(16.),
-        ..Default::default()
-    };
+    let mut style = StyleProps::default().with_rows(|rows| {
+        rows.width = Dimension::Points(420.);
+        rows.height = Dimension::Points(140.);
+        rows.padding_left = Dimension::Points(16.);
+        rows.padding_right = Dimension::Points(16.);
+        rows.padding_top = Dimension::Points(16.);
+        rows.padding_bottom = Dimension::Points(16.);
+    });
     style.box_sizing = BoxSizing::BorderBox;
     style.border_width_top = 4.;
     style.border_width_right = 4.;
@@ -840,11 +838,10 @@ fn photo_assets() -> Assets {
 /// Image `id` in a `width`×`height` box, laid out.
 fn boxed(k: &mut Kernel, id: u32, width: f32, height: f32, fit: exact_kernel::ObjectFit) {
     use exact_kernel::{AxisOffer, Dimension, Offer, StyleId, StyleProps};
-    let mut style = StyleProps {
-        width: Dimension::Points(width),
-        height: Dimension::Points(height),
-        ..Default::default()
-    };
+    let mut style = StyleProps::default().with_rows(|rows| {
+        rows.width = Dimension::Points(width);
+        rows.height = Dimension::Points(height);
+    });
     // This row is behind DerefMut; it cannot be a StyleProps initializer.
     style.object_fit = fit;
     for row in [StyleId::Width, StyleId::Height, StyleId::ObjectFit] {
@@ -1022,10 +1019,9 @@ fn crisp_edges_replaces_a_smoothed_thumbnail_with_source_pixels() {
     images.sync_visible(&k, &k.roots(), 1., |_| true);
     images.wait(SETTLED);
     assert_eq!(images.bitmaps[&1].width(), 128);
-    let mut style = StyleProps {
-        image_rendering: ImageRendering::CrispEdges,
-        ..Default::default()
-    };
+    let mut style = StyleProps::default().with_rows(|rows| {
+        rows.image_rendering = ImageRendering::CrispEdges;
+    });
     style.mask.set(StyleId::ImageRendering);
     k.apply(
         0,
@@ -1062,10 +1058,9 @@ fn pixelated_enlargement_decodes_and_repeats_original_samples() {
     images.wait(SETTLED);
     assert_eq!(images.bitmaps[&1].width(), 2048, "auto uses a thumbnail");
     for mode in [ImageRendering::Pixelated, ImageRendering::CrispEdges] {
-        let mut style = StyleProps {
-            image_rendering: mode,
-            ..Default::default()
-        };
+        let mut style = StyleProps::default().with_rows(|rows| {
+            rows.image_rendering = mode;
+        });
         style.mask.set(StyleId::ImageRendering);
         k.apply(
             0,
@@ -1110,10 +1105,9 @@ fn a_budget_thumbnail_follows_an_enlarged_box() {
     use exact_kernel::{ImageRendering, ObjectFit, StyleId, StyleProps};
     let mut k = kernel(1);
     boxed(&mut k, 1, 32., 32., ObjectFit::Fill);
-    let mut style = StyleProps {
-        image_rendering: ImageRendering::Pixelated,
-        ..Default::default()
-    };
+    let mut style = StyleProps::default().with_rows(|rows| {
+        rows.image_rendering = ImageRendering::Pixelated;
+    });
     style.mask.set(StyleId::ImageRendering);
     k.apply(
         0,

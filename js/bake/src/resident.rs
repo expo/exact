@@ -183,6 +183,10 @@ pub(super) const ENV: &str = include_str!("__exact_env.mjs");
 /// The check of what package code may use, which `CONFIG` imports from beside it.
 pub(super) const PORTABLE: &str = include_str!("__exact_portable.mjs");
 
+/// A setting a launch may give: its grant lines and launch module (LLP
+/// 1153.002), which `CONFIG` imports from beside it.
+pub(super) const LAUNCH: &str = include_str!("__exact_launch_setting.mjs");
+
 /// The target a module binding answers `supports` for (LLP 1133.006 D7), as
 /// an implementation's `targets` names it: Cargo's `CARGO_CFG_TARGET_OS` in
 /// an app's build script, else the OS of `TARGET`'s triple, which is all a
@@ -214,6 +218,7 @@ pub(super) fn write_config(stage: &Path) -> Result<(), String> {
     super::write_changed(&stage.join("__exact_config.mjs"), CONFIG.as_bytes())?;
     super::write_changed(&stage.join("__exact_binding.mjs"), BINDING.as_bytes())?;
     super::write_changed(&stage.join("__exact_env.mjs"), ENV.as_bytes())?;
+    super::write_changed(&stage.join("__exact_launch_setting.mjs"), LAUNCH.as_bytes())?;
     super::write_changed(&stage.join("__exact_portable.mjs"), PORTABLE.as_bytes())
 }
 
@@ -233,6 +238,7 @@ mod tests {
         write("__exact_config.mjs", CONFIG);
         write("__exact_binding.mjs", BINDING);
         write("__exact_env.mjs", ENV);
+        write("__exact_launch_setting.mjs", LAUNCH);
         write("__exact_portable.mjs", PORTABLE);
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let mut compiler = Compiler::new(&root, &stage.0).unwrap();

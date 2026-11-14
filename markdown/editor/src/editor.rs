@@ -204,6 +204,8 @@ pub struct Editor {
     sticky: Option<u32>,
     /// Formats toggled on or off at a caret, for the next insertion.
     pending: [Option<bool>; 4],
+    /// Emphasis closers before whitespace typed at their inner edge.
+    continuation: Option<(u32, u32)>,
     undo: Vec<Snapshot>,
     undo_units: usize,
     redo: Vec<Snapshot>,
@@ -234,6 +236,7 @@ impl Editor {
             sel: (0, 0),
             sticky: None,
             pending: [None; 4],
+            continuation: None,
             undo: Vec::new(),
             undo_units: 0,
             redo: Vec::new(),
@@ -414,6 +417,7 @@ impl Editor {
         self.undo_units = 0;
         self.redo.clear();
         self.pending = [None; 4];
+        self.continuation = None;
         self.sticky = None;
         self.last = None;
     }
@@ -490,6 +494,7 @@ impl Editor {
     pub fn set_selection(&mut self, from: u32, to: u32) -> Change {
         let (from, to) = self.clamp((from, to));
         self.pending = [None; 4];
+        self.continuation = None;
         self.sticky = None;
         self.sel = if from == to {
             (self.snap(from), self.snap(from))
@@ -536,6 +541,7 @@ impl Editor {
         let (result, _) = splice(&self.source, &[(from, to, text)]);
         let change = self.commit(result, sel, false, Kind::Edit);
         self.pending = [None; 4];
+        self.continuation = None;
         let (s, e) = self.sel;
         if s == e {
             self.sel = (self.snap(s), self.snap(s));
@@ -580,6 +586,7 @@ impl Editor {
     pub fn select_all(&mut self) -> Change {
         self.sel = (0, self.len());
         self.pending = [None; 4];
+        self.continuation = None;
         self.sticky = None;
         Change {
             source: false,
@@ -606,6 +613,7 @@ impl Editor {
             || self.sel.1 != self.sel.0;
         if moved {
             self.pending = [None; 4];
+            self.continuation = None;
             self.sticky = None;
         }
         if from == to {
@@ -682,7 +690,8 @@ impl Editor {
                 let p = self.sticky.unwrap_or(from);
                 let c = self.proj.cluster(p);
                 // Beside an atom the editor types, so no text lands in it.
-                let quiet = self.pending().next().is_none()
+                let quiet = self.continuation.is_none()
+                    && self.pending().next().is_none()
                     && from == to
                     && c.0 == c.1
                     && !data.contains(&10)
@@ -748,6 +757,23 @@ impl Editor {
             }
             return Change::default();
         }
+        // Composition leaves marked text native. Once committed, an insertion
+        // at the waiting caret uses the same continuation as keyed text.
+        let p = self.sel.0;
+        if self.continuation.is_some() && self.sel.1 == p && from <= p && p <= to {
+            let offset = (p - from) as usize;
+            let old = &self.source[from as usize..to as usize];
+            if text.len() > old.len() {
+                let added = text.len() - old.len();
+                if text[..offset] == old[..offset]
+                    && text[offset + added..] == old[offset..]
+                    && sel == Some((p + added as u32, p + added as u32))
+                {
+                    return self.insert(&text[offset..offset + added], p, p);
+                }
+            }
+        }
+        self.continuation = None;
         self.push_undo(Kind::Typing);
         let before = std::mem::take(&mut self.proj);
         self.source.splice(from as usize..to as usize, text);
@@ -782,6 +808,18 @@ impl Editor {
             _ => {}
         }
         if let Some(format) = Format::named(name).filter(|_| from == to) {
+            if self.continuation.is_some() {
+                let active = self.facts().formats;
+                self.continuation = None;
+                let actual = md::selection(&self.utf8, Range::new(from, to)).formats;
+                for f in FORMATS {
+                    let wanted =
+                        active.split_whitespace().any(|name| name == f.name()) ^ (f == format);
+                    let inherited = actual.split_whitespace().any(|name| name == f.name());
+                    self.pending[f as usize] = (wanted != inherited).then_some(wanted);
+                }
+                return Change::default();
+            }
             let slot = format as usize;
             self.pending[slot] = match self.pending[slot] {
                 Some(_) => None,
@@ -845,7 +883,8 @@ impl Editor {
 
     /// The selection's formats for a toolbar, pending formats applied.
     pub fn facts(&self) -> Facts {
-        let s = md::selection(&self.utf8, Range::new(self.sel.0, self.sel.1));
+        let sel = self.continuation.map_or(self.sel, |(a, _)| (a, a));
+        let s = md::selection(&self.utf8, Range::new(sel.0, sel.1));
         let mut formats: Vec<&str> = s.formats.split_whitespace().collect();
         for (format, on) in self.pending() {
             formats.retain(|f| *f != format.name());
@@ -918,6 +957,7 @@ impl Editor {
         self.words = to.words;
         self.words_back = true;
         self.pending = [None; 4];
+        self.continuation = None;
         self.restyle();
         self.sel = self.clamp(to.sel);
         // Undo keeps the edit's chosen side of hidden markers.
@@ -963,6 +1003,7 @@ impl Editor {
             self.restyle();
         }
         self.sel = self.clamp(sel);
+        self.continuation = None;
         self.sticky = sticky.then_some(self.sel.0);
         Change {
             source: changed,
@@ -1102,7 +1143,12 @@ impl Editor {
         if self.pending().next().is_some() {
             return self.insert_pending(text, from);
         }
-        let c = self.proj.cluster(from);
+        if let Some(change) = self.insert_continued(text, from) {
+            return change;
+        }
+        let c = self
+            .emphasis_closers(from)
+            .unwrap_or(self.proj.cluster(from));
         // (replacements, caret, sticky), best first.
         let mut candidates: Vec<(Vec<Rep>, u32, bool)> =
             vec![(vec![(from, from, text.to_vec())], from, false)];
@@ -1124,7 +1170,14 @@ impl Editor {
             let sim = self.simulate(reps, true);
             if sim.orphans == 0 {
                 let caret = sim.caret(*caret);
-                return self.commit(sim.result, (caret, caret), *sticky, Kind::Typing);
+                let continued =
+                    (*sticky && core < text.len() && self.emphasis_closers(c.0) == Some(c))
+                        .then(|| (sim.caret(c.0), c.1 - c.0));
+                let change = self.commit(sim.result, (caret, caret), *sticky, Kind::Typing);
+                if let Some((a, len)) = continued {
+                    self.continuation = Some((a, a + len));
+                }
+                return change;
             }
         }
         // No clean placement: as typed, its syntax showing until it completes.
@@ -1133,10 +1186,96 @@ impl Editor {
         self.commit(sim.result, (caret, caret), false, Kind::Typing)
     }
 
+    fn emphasis_closers(&self, a: u32) -> Option<(u32, u32)> {
+        let mut b = a;
+        while let Some((_, close)) = self.styled.delimiters.iter().find(|(_, close)| {
+            close.start == b
+                && self.source[close.start as usize..close.end as usize]
+                    .iter()
+                    .all(|c| matches!(c, 42 | 95 | 126))
+        }) {
+            b = close.end;
+        }
+        (b > a).then_some((a, b))
+    }
+
+    fn insert_continued(&mut self, text: &[u16], p: u32) -> Option<Change> {
+        let (a, b) = self.continuation.take()?;
+        let line = text.iter().position(|&c| c == 10).unwrap_or(text.len());
+        let core = trimmed(&text[..line]);
+        if core == 0 {
+            let sim = self.simulate(&[(p, p, text.to_vec())], true);
+            let caret = sim.caret(p);
+            let change = self.commit(sim.result, (caret, caret), true, Kind::Typing);
+            self.continuation = (line == text.len()).then_some((a, b));
+            return Some(change);
+        }
+        // Move only the emphasis closers, keeping their original openers and
+        // all existing hidden syntax. A pasted opener must not steal a closer.
+        let inserted = [
+            &text[..core],
+            &self.source[a as usize..b as usize],
+            &text[core..],
+        ]
+        .concat();
+        let sim = self.simulate(&[(a, b, Vec::new()), (p, p, inserted)], false);
+        let end = p - (b - a) + core as u32;
+        let styled = md::style_with(&utf8(&sim.result), None, &self.atoms);
+        let proj = Projection::new(&sim.result, &styled);
+        let moved = |i| {
+            if (a..b).contains(&i) {
+                end + i - a
+            } else {
+                sim.maps[0].char(i).unwrap()
+            }
+        };
+        let range = |r: Range| Range::new(moved(r.start), moved(r.end - 1) + 1);
+        let paired = self
+            .styled
+            .delimiters
+            .iter()
+            .filter(|(_, close)| a <= close.start && close.end <= b)
+            .all(|(open, close)| styled.delimiters.contains(&(range(*open), range(*close))));
+        if !paired || !self.proj.hidden_indices().all(|i| proj.is_hidden(moved(i))) {
+            return None;
+        }
+        let trailing = core < text.len();
+        let caret = if trailing { sim.caret(p) } else { end };
+        let change = self.commit(sim.result, (caret, caret), trailing, Kind::Typing);
+        if trailing && line == text.len() {
+            self.continuation = Some((end, end + b - a));
+        }
+        Some(change)
+    }
+
     fn insert_pending(&mut self, text: &[u16], p: u32) -> Change {
         let (mut open, mut close, mut place, mut stick) = (Vec::new(), Vec::new(), p, false);
+        let (mut before, mut after) = (Vec::new(), Vec::new());
         let pending: Vec<_> = self.pending().collect();
+        let emphasis = pending.iter().any(|(f, on)| *on && *f != Format::Code);
+        let core = if emphasis { trimmed(text) } else { text.len() };
+        if emphasis && core == 0 {
+            let closer = self
+                .styled
+                .delimiters
+                .iter()
+                .any(|(_, close)| close.start == p);
+            let at = if closer { self.proj.cluster(p).1 } else { p };
+            let sim = self.simulate(&[(at, at, text.to_vec())], !closer);
+            let caret = sim.caret(at);
+            return self.commit(sim.result, (caret, caret), true, Kind::Typing);
+        }
+        let leading = if emphasis {
+            utf8(&text[..core])
+                .chars()
+                .take_while(|c| c.is_whitespace() || *c == '\u{FEFF}')
+                .map(char::len_utf16)
+                .sum()
+        } else {
+            0
+        };
         self.pending = [None; 4];
+        self.continuation = None;
         for (format, on) in pending {
             let m = format.marker();
             if on {
@@ -1149,20 +1288,63 @@ impl Editor {
             if c.1 > c.0 && c.0 == p && self.source[c.0 as usize..c.1 as usize].starts_with(m) {
                 place = c.1;
                 stick = true;
-            } else {
-                open.splice(0..0, m.iter().copied());
-                close.extend_from_slice(m);
+            } else if let Some(edit) = self.edit(format.name(), "", (p, p)) {
+                if let [(oa, ob, _), (ca, cb, _)] = edit.reps.as_slice() {
+                    // Close before whitespace and reopen after it: a marker
+                    // beside the gap cannot close or open CommonMark emphasis.
+                    let left = if format == Format::Code {
+                        p
+                    } else {
+                        (trimmed(&self.source[..p as usize]) as u32).max(*ob)
+                    };
+                    let tail = &self.source[p as usize..*ca as usize];
+                    let right = if format == Format::Code {
+                        p
+                    } else {
+                        p + (tail.len() - utf16(utf8(tail).trim_start()).len()) as u32
+                    };
+                    let closer = &self.source[*ca as usize..*cb as usize];
+                    let opener = &self.source[*oa as usize..*ob as usize];
+                    if left == p {
+                        open.splice(0..0, closer.iter().copied());
+                    } else {
+                        before.push((left, left, closer.to_vec()));
+                    }
+                    if right == p {
+                        close.extend_from_slice(opener);
+                    } else {
+                        after.push((right, right, opener.to_vec()));
+                    }
+                }
             }
         }
-        let inserted = [open.as_slice(), text, close.as_slice()].concat();
-        let sim = self.simulate(&[(place, place, inserted)], true);
-        let caret = sim.caret(place).saturating_sub(close.len() as u32);
-        self.commit(
+        let inserted = [
+            &text[..leading],
+            open.as_slice(),
+            &text[leading..core],
+            close.as_slice(),
+            &text[core..],
+        ]
+        .concat();
+        before.push((place, place, inserted));
+        before.extend(after);
+        let sim = self.simulate(&before, true);
+        let trailing = core < text.len();
+        let end = sim
+            .caret(place)
+            .saturating_sub((text.len() - core + close.len()) as u32);
+        let caret = if trailing { sim.caret(place) } else { end };
+        let change = self.commit(
             sim.result,
             (caret, caret),
-            stick && open.is_empty(),
+            trailing || stick && open.is_empty(),
             Kind::Typing,
-        )
+        );
+        let range = (end, end + close.len() as u32);
+        if trailing && self.emphasis_closers(range.0) == Some(range) {
+            self.continuation = Some(range);
+        }
+        change
     }
 
     fn replace_visible(&mut self, from: u32, to: u32, text: &[u16]) -> Change {

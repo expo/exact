@@ -1,23 +1,23 @@
 //! One acknowledged interaction picture and one submitted picture. Headless
 //! and agent frames remain immediate; no glyph/command graph is copied.
 use super::*;
-#[cfg(any(target_os = "linux", target_os = "android", test))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "android", test))]
 use crate::paint::Presentation;
 use crate::paint::ScrollBounds;
 use exact_kernel::id::IdMap;
 use exact_kernel::{Kernel, NodeKey};
-#[cfg(any(target_os = "linux", target_os = "android", test))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "android", test))]
 use std::cell::RefCell;
 use std::rc::Rc;
-#[cfg(any(target_os = "linux", target_os = "android", test))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "android", test))]
 use std::sync::Arc;
 
 struct Identity {
-    #[cfg(any(target_os = "linux", target_os = "android", test))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android", test))]
     origin: Rc<()>,
-    #[cfg(any(target_os = "linux", target_os = "android", test))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android", test))]
     succeeded: bool,
-    #[cfg(any(target_os = "linux", target_os = "android", test))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android", test))]
     activatable: bool,
 }
 struct Witness {
@@ -27,9 +27,9 @@ struct Witness {
     nodes: IdMap<ViewId, Seen>,
     document: (f32, f32),
     viewport: (f32, f32),
-    #[cfg(any(target_os = "linux", target_os = "android", test))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android", test))]
     scale: u32,
-    #[cfg(any(target_os = "linux", target_os = "android", test))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android", test))]
     model_scroll: BTreeMap<ViewId, collection::ModelScroll>,
 }
 /// What a picture showed of one node.
@@ -39,7 +39,7 @@ struct Seen {
     scroll_parent: Option<ViewId>,
     scroll: Option<ScrollBounds>,
 }
-#[cfg(any(target_os = "linux", target_os = "android", test))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "android", test))]
 struct Picture {
     paint: Presentation,
     boxes: Vec<PaintedBox>,
@@ -51,20 +51,20 @@ struct Picture {
 
 /// The pending pixel owner. ACK consumes its metadata even if a caller retains
 /// the pixel Arc for VNC, so acknowledged paragraph history cannot accumulate.
-#[cfg(any(target_os = "linux", target_os = "android", test))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "android", test))]
 pub struct SubmittedFrame {
     pub(crate) pixels: Arc<Pixmap>,
     identity: Rc<Identity>,
     picture: RefCell<Option<Picture>>,
 }
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl SubmittedFrame {
     /// The frame's pixels, which a VNC client may keep after the display has acknowledged it.
     pub fn pixels(&self) -> &Arc<Pixmap> {
         &self.pixels
     }
 }
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl AsRef<Pixmap> for SubmittedFrame {
     fn as_ref(&self) -> &Pixmap {
         &self.pixels
@@ -197,7 +197,7 @@ impl<D: DataSource> Presenter<D> {
 
     /// The frame to submit to the display, painted if it is dirty; `None`
     /// while an earlier one is still pending.
-    #[cfg(any(target_os = "linux", target_os = "android", test))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android", test))]
     pub fn display_frame(&mut self) -> Option<SubmittedFrame> {
         if self.display.blocked() {
             return None;
@@ -294,7 +294,7 @@ impl<D: DataSource> Presenter<D> {
     }
 
     /// The display has shown `frame`: whether it was the one pending.
-    #[cfg(any(target_os = "linux", target_os = "android", test))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android", test))]
     pub fn display_complete(&mut self, frame: &SubmittedFrame) -> bool {
         if !self
             .display
@@ -397,7 +397,7 @@ mod tests;
 /// Witness an `svg`'s element subtree, so a hit on one of its elements finds
 /// its handler through the painted `svg` (an attached display allows only
 /// what the picture showed).
-#[cfg(any(target_os = "linux", target_os = "android", test))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "android", test))]
 fn witness_svg(kernel: &Kernel, node: &exact_kernel::NodeRef<'_>, witness: &mut Witness) {
     for id in node.children() {
         if let Some(child) = kernel.node(id) {

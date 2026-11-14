@@ -904,6 +904,7 @@ impl<'a> Replay<'a> {
                                         (g.content.0, g.content.1),
                                         parent,
                                         None,
+                                        None,
                                     ),
                                     TextCommand::End(alpha) => {
                                         if *alpha < 1. {

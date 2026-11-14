@@ -487,11 +487,17 @@ final class MenuHost: NSObject {
         // the hidden popover leaves; VoiceOver is sent to it after
         // (`tellLanding`, Accessibility.swift).
         if hadFocus, let window {
-            if restoreFocus, let previous = entry.previous, previous.window === window,
+            let invoker = pop.isMenu ? entry.source.flatMap { source -> NSView? in
+                guard live(source), !source.disabled, !source.inert,
+                      let target = presenter?.keyView(of: source), target.acceptsFirstResponder,
+                      !target.isHiddenOrHasHiddenAncestor, presenter?.dialogs.blocks(target) != true else { return nil }
+                return target
+            } : nil
+            if restoreFocus, let previous = invoker ?? entry.previous, previous.window === window,
                !previous.isHiddenOrHasHiddenAncestor, presenter?.dialogs.blocks(previous) != true,
                !((previous as? NodeView)?.inert ?? false) {
                 window.makeFirstResponder(previous)
-                if let range = entry.selection, let editor = window.firstResponder as? NSTextView { editor.setSelectedRange(range) }
+                if previous === entry.previous, let range = entry.selection, let editor = window.firstResponder as? NSTextView { editor.setSelectedRange(range) }
             } else { window.makeFirstResponder(presenter?.viewport) }
         }
         if let native = entry.native {

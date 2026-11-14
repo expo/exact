@@ -6,12 +6,13 @@
 // what opened it: the button, or the node a context menu opened on, as the
 // menu's `beforetoggle` said (navigation.js `popoverSource`). A popover
 // written inside the menu stays nested by where it is (HTML), whatever its
-// source. It also closes a popover whose control left the screen, and marks
-// the button that opened a popover while the popover is open (below). Loaded
-// after the first paint (glue.js); the JS target's page imports it at boot
-// when its plan has a dialog, a menu or a popover (host/web-js/build.mjs
-// `dialogs.flag`). A page rendered ahead loads either when it activates, so
-// a menu may already be open.
+// source. It also closes a popover whose control left the screen, marks
+// the button that opened a popover while the popover is open, and gives a
+// menu's rows the `menuitem` role (below). Loaded after the first paint
+// (glue.js); the JS target's page imports it at boot when its plan has a
+// dialog, a menu or a popover (host/web-js/build.mjs `dialogs.flag`). A page
+// rendered ahead loads either when it activates, so a menu may already be
+// open.
 import { inertAncestor, popoverSource } from "./navigation.js";
 
 /** HTML's popover commands, and what each does. */
@@ -60,10 +61,40 @@ function act(row, menu, clicked) {
   } catch {}
 }
 
+// WAI-ARIA's `menu` requires its items to have a menu item role, as NSMenu's and UIMenu's rows are menu items, but
+// HTML keeps a `button` a button and an `a[href]` a link. So a row the arrows move among (input-glue.js `roversOf`)
+// with no role of its own takes `menuitem` while a menu is the nearest layer or row around it. The mark says the role
+// is the host's: a role the author writes replaces it, and the agent's tree leaves it out (agent.js).
+const ITEM = "button, a[href]", MARK = "data-exact-menuitem";
+const AROUND = '[role="menu"], [popover], dialog, [role^="menuitem"], button, a[href]';
+function menuItem(el) {
+  if (el.hasAttribute(MARK) && el.getAttribute("role") !== "menuitem") el.removeAttribute(MARK);
+  const ours = el.hasAttribute(MARK);
+  if (!ours && el.hasAttribute("role")) return;
+  const item = el.matches(ITEM) && !!el.parentElement?.closest(AROUND)?.matches('[role="menu"]');
+  if (item && !ours) { el.setAttribute("role", "menuitem"); el.setAttribute(MARK, ""); }
+  else if (!item && ours) { el.removeAttribute("role"); el.removeAttribute(MARK); }
+}
+/** Gives each row in `scope` (itself included) its role, as `menuItem` decides. */
+function menuItems(scope) {
+  if (scope.matches(`${ITEM}, [${MARK}]`)) menuItem(scope);
+  for (const el of scope.querySelectorAll(`${ITEM}, [${MARK}]`)) menuItem(el);
+}
+
 /** Installs the rule on the document, once. */
 function menuRows() {
   if (globalThis.exactMenuRows) return;
   globalThis.exactMenuRows = true;
+  menuItems(document.documentElement);
+  // What a commit adds or re-roles, as it lands: a row added to a menu, a box that becomes a menu, a link losing its `href`.
+  const items = new MutationObserver(records => {
+    for (const r of records) {
+      if (r.type === "attributes") menuItems(r.target);
+      else for (const n of r.addedNodes) if (n.nodeType === Node.ELEMENT_NODE && n.isConnected) menuItems(n);
+    }
+    items.takeRecords();
+  });
+  items.observe(document.documentElement, { subtree: true, childList: true, attributeFilter: ["role", "href", "popover"] });
   addEventListener("click", e => {
     if (globalThis.exact?.strayClick?.(e)) return; // the input glue swallows it: a lift off the target the touch began on
     const row = e.target.closest?.("button[popovertarget], button[commandfor]");

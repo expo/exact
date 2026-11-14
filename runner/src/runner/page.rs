@@ -31,9 +31,9 @@ impl<D: DataSource> Runner<D> {
                         (r.plan.str(row.source) == crate::viewport::SOURCE).then_some(i)
                     }));
                 }
-                // About to be suspended: a sequence stops in this commit, once it
+                // About to be frozen: a sequence stops in this commit, once it
                 // stands, and the commit carries its ends to the output (LLP 1125 D4).
-                let result = if page.suspended && !previous.suspended && r.transport.playing() {
+                let result = if page.frozen && !previous.frozen && !r.plan.sequences.is_empty() {
                     r.transport.suspend = true;
                     r.commit_again(readers, "page").map(Some)
                 } else {

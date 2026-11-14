@@ -136,6 +136,7 @@ final class AudioSessionIOSTests: XCTestCase {
     /// Podcasts. A mixing app is prepared in its own configuration, so the
     /// request changes nothing and only activates.
     func testPlaybackMixPreparesItsOwnConfigurationAndTheRequestOnlyActivates() throws {
+        let canvas = NSObject()
         XCTAssertFalse(ExactEnv.agentFreezes, "this test needs a live surface clock")
         AudioSession.configuration = .init("playback-mix")
         try session.setActive(false)
@@ -148,7 +149,7 @@ final class AudioSessionIOSTests: XCTestCase {
             AudioSession.prepareForSurface()
             XCTAssertEqual(categorySets, 1, "the configuration is already in force")
             XCTAssertEqual(activations, [], "the inactive session is never activated")
-            try AudioSession.activate()
+            try AudioSession.hold(ObjectIdentifier(canvas))
             XCTAssertEqual(categorySets, 1, "the request finds nothing to change")
             XCTAssertEqual(activations, [true])
         }
@@ -532,7 +533,7 @@ final class AudioSessionIOSTests: XCTestCase {
         struct Busy: Error {}
         AudioSession.nextHoldFailure = Busy()
         XCTAssertEqual(AudioSession.claimCapture(mode: .default, options: [], background: true) { _ in }, 0)
-        XCTAssertFalse(AudioSession.playsInBackground, "no claim is held")
+        XCTAssertFalse(AudioSession.backgroundExecutionEligible(), "no claim is held")
         XCTAssertEqual(AVAudioSession.sharedInstance().category, .ambient)
     }
 
@@ -554,6 +555,7 @@ final class AudioSessionIOSTests: XCTestCase {
         var heard: [String] = []
         AudioSession.listen(ObjectIdentifier(holder)) { event in
             switch event {
+            case .background: break
             case .interruption(let began, _): heard.append(began ? "began" : "ended")
             case .appActive: heard.append("active")
             case .reset: heard.append("reset")

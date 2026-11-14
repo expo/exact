@@ -1067,6 +1067,7 @@ measured layout as well as the compiler's structural checks.
 
 Use `aria-label`, roles, and other admitted ARIA attributes where content alone
 does not name a control. Keep accessible labels separate from driver `testId`s.
+A literal `role` must name a concrete ARIA role, or it is refused.
 They mean on every host what they mean in a browser: `aria-hidden` takes a
 subtree off the tree and out of its ancestors' names; `role="checkbox"`,
 `"radio"` or `"switch"` with `aria-checked` is that control, `role="img"` with a
@@ -1078,7 +1079,11 @@ this one) and `aria-description` are its description. `aria-invalid`,
 `"page"`, a wizard's `"step"`) take their ARIA words or a bool; UIKit has no
 property for those four, so iOS exposes the first three not at all and a
 pressable's (a button's, a link's) `aria-current` other than `false` as its
-selected trait, as `aria-selected` is. A data table is HTML's `table`: an
+selected trait, as `aria-selected` is.
+`aria-activedescendant` names the active option while a field keeps focus
+([combobox recipe](recipes/combobox.md)); the web exposes it, and other hosts carry it
+without using it.
+A data table is HTML's `table`: an
 optional `caption`, then `thead`, `tbody` and `tfoot` row groups of `tr`s (or
 `tr`s alone, which are a `tbody` of their own, as HTML's parser makes them),
 each `tr` holding `th` header cells (`scope="col"` or `"row"`) and `td`

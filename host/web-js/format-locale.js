@@ -1,14 +1,15 @@
 // The formatters in a locale other than en-US on the JS target (LLP 1054.000.003 D6): runner/src/format/locale.rs's
 // rules over the same record (contract/lower/src/formats.rs has its fields), byte for byte. Imported only by a plan
 // whose tables carry format data (emit.rs), which hands it the records with `formats`.
-import { localized, wall, dateWall, civil, rounded, shortest, x_formatDate, CODES } from "./format.js";
+import { localized, wall, dateWall, civil, rounded, shortest, x_formatDate, CODES, sameYear } from "./format.js";
 import { memo } from "./rt.js";
 import { reportPlace } from "./navigation.js";
 
 const RS = "\u001e", US = "\u001f", GS = "\u001d";
 const F = { digits: 0, decimal: 1, group: 2, grouping: 3, decimalStyle: 4, percent: 5, currencyTemplates: 6, currencies: 7, compact: 8,
   plurals: 9, medium: 10, mediumNames: 11, monthYear: 12, monthYearNames: 13, short: 14, shortNames: 15, weekdays: 16, time: 17,
-  timePeriods: 18, time12: 19, time12Periods: 20, time23: 21, time23Periods: 22, dateTime: 23, days: 24 };
+  timePeriods: 18, time12: 19, time12Periods: 20, time23: 21, time23Periods: 22, dateTime: 23, days: 24, weekdayDate: 25,
+  weekdayDateNames: 26, weekdayYear: 27, weekdayYearNames: 28, weekdayLabels: 29 };
 let Records = new Map();
 
 /** The plan's tables' records, [name, record], and the hook format.js calls with a format locale other than "". */
@@ -125,6 +126,8 @@ function fill(r, template, w, names, periods) {
       case "k": case "kk": return num(((hour + 23) % 24) + 1, f.length);
       case "m": case "mm": return num(minute, f.length);
       case "N": return names.split(US)[month - 1] ?? "";
+      // After the twelve months, the seven weekdays, Sunday's first.
+      case "E": return names.split(US)[12 + ((((Math.floor(w / 864e5) + 4) % 7) + 7) % 7)] ?? "";
       case "a": {
         let name = "";
         for (const p of periods.split(US)) { const [from, n] = p.split(GS); if (n !== undefined && +from <= minutes) name = n; else break; }
@@ -143,6 +146,12 @@ function day(r, then, now, off, mode, c) {
   const w = wall(then, off), t = wall(now, off);
   if (w === null || t === null) return "";
   const days = Math.floor(w / 864e5), apart = days - Math.floor(t / 864e5);
+  if (mode === "section") {
+    // Its capitals are the data's (formats.rs): no host maps case.
+    if (apart >= -1 && apart <= 1) return item(r, F.days, apart === 0 ? 0 : apart === -1 ? 1 : 2);
+    return apart >= -6 && apart <= 6 ? item(r, F.weekdayLabels, (((days + 4) % 7) + 7) % 7)
+      : sameYear(w, t) ? date(r, w, F.weekdayDate, F.weekdayDateNames) : date(r, w, F.weekdayYear, F.weekdayYearNames);
+  }
   if (mode === "list") {
     if (apart === 0) return time(r, w, c);
     if (apart === -1) return item(r, F.days, 1);

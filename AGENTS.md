@@ -196,6 +196,12 @@ section binds (`rules/RULES.md`, "Agents").
   them): `cargo test -p exact-painted --lib --tests --no-fail-fast`, or `--bins` for a
   bin-only crate such as `exact-web-js`. Advice, not a check.
 - Verify by running, never by grepping. Fix loops get three rounds, then stop and say so.
+- Land it (LLP 1172; Charlie, 2026-11-14: "just land stuff, we can fix it later if it breaks
+  something"). When your change passes the six checks on your own tree, merge it yourself, at
+  once, as a squash, and fix forward what it breaks. Do not hold it for a main that moved
+  during the checks, for a failure main already has (say so where its owner will see it), or
+  for a second pass after a rebase with no conflict. A pull request that `rules/RULES.md` says
+  needs a human's approval still does. Give each change in flight its own warm worktree.
 - To see a change work, drive the app: `bun scripts/agent.mjs <web|macos|ios|linux> tree
   "tap change-station" "type station-search Palo" "clock +60000" state logs "screenshot
   out.png"` — the ten operations of LLP 1012 and LLP 1079 (`perf`: a subtree's work by

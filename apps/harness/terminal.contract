@@ -318,9 +318,9 @@ component Harness
             for l, i in frame.lines key=i
               FrameRuns(runs=l.runs)
         if matches.length > 0
-          column margin-top="1lh" testId="completions"
+          column id="completions" role="listbox" aria-label="Completions" margin-top="1lh" testId="completions"
             for c, i in matches key=c.name
-              button press=sendText(c.name) display="flex" text-align="start" background-color=(i == sel ? "#303050" : "transparent") padding="0 1ch" testId=`complete-${c.name}`
+              button id=`complete-${c.name}` role="option" aria-selected=(i == sel) tabindex=-1 retainFocus=true press=sendText(c.name) display="flex" text-align="start" background-color=(i == sel ? "#303050" : "transparent") padding="0 1ch" testId=`complete-${c.name}`
                 text c.name width="12ch" flex-shrink=0 color=(i == sel ? "#afafff" : "#87afff") font-weight=(i == sel ? 700 : 400)
                 text c.help color="#8a8a8a" white-space="nowrap" text-overflow="ellipsis" flex-shrink=1 min-width=0
         if session.queued.length > 0 and not unattended
@@ -334,7 +334,8 @@ component Harness
         if not unattended
           row margin-top="1lh" border="thin solid #585858" border-radius="1ch" padding="0 1ch"
             text "› " white-space="pre" color="#87afff" font-weight=700 flex-shrink=0
-            textarea value=draft appearance="none" input=write key=onKey disabled=(session.approval.id != "") autofocus=true placeholder=(session.busy ? "Type ahead — it runs when this turn ends" : "Ask anything, or / for commands") flex-grow=1 rows=min(8, draft.split("\n").length) testId="prompt"
+            textarea role="combobox" aria-label="Prompt" aria-expanded=(matches.length > 0) aria-controls="completions"
+              aria-activedescendant=(match matches.at(sel) { case some(c) => `complete-${c.name}`, case none => "" }) value=draft appearance="none" input=write key=onKey disabled=(session.approval.id != "") autofocus=true placeholder=(session.busy ? "Type ahead — it runs when this turn ends" : "Ask anything, or / for commands") flex-grow=1 rows=min(8, draft.split("\n").length) testId="prompt"
           row padding="0 1ch" color="#6c6c6c" gap="2ch"
             button appearance="none" commandfor="models" command="show-modal" aria-keyshortcuts="Control+o" testId="model-button" white-space="nowrap" flex-shrink=0
               text `${session.model} (${session.provider})` color="#87afff"

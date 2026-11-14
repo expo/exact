@@ -161,7 +161,10 @@ function portableSigning(args, env) {
 }
 
 /** Return an executable and argv, never a shell command. Native hosts retain their toolchain unchanged. */
-export function appleCommand(command, args, options = {}, platform = process.platform) {
+export function appleCommand(command, args, { macDevelopmentSign, ...options } = {}, platform = process.platform) {
+  if (platform === 'darwin' && command === 'codesign' && args.includes('--sign') && args.includes('--timestamp=none') && valueAfter(args, '--sign') !== '-') {
+    options = { timeout: 30_000, ...options, killSignal: 'SIGKILL' };
+  }
   if (platform !== 'linux') return [command, args, options];
   const env = options.env ?? process.env;
   if (command === 'cargo') return [command, args, cargoEnvironment(args, options, env)];
@@ -225,7 +228,15 @@ export function appleCommand(command, args, options = {}, platform = process.pla
   return [command, args, options];
 }
 
-export const spawnSync = (command, args, options) => systemSpawnSync(...appleCommand(command, args, options));
+export const spawnSync = (command, args, options) => {
+  const invocation = appleCommand(command, args, options);
+  const signing = process.platform === 'darwin' && command === 'codesign' && args.includes('--sign') && args.includes('--timestamp=none') && valueAfter(args, '--sign') !== '-';
+  const identity = signing ? valueAfter(args, '--sign') : null;
+  if (signing) console.error(`host/apple: signing ${args.at(-1)} with ${identity} (keychain access; ${invocation[2].timeout / 1000}s limit)`);
+  const result = systemSpawnSync(...invocation);
+  if (signing && result.status !== 0) console.error(`host/apple: codesign with ${identity} ${result.error?.code === 'ETIMEDOUT' ? 'timed out' : 'failed'}. Check that the signing keychain is unlocked and codesign can use its private key.${options?.macDevelopmentSign ? ' For a local macOS build without certificate signing, retry with EXACT_IDENTITY=- (ad hoc; drops extensions and makes stored login-keychain items prompt after rebuilds).' : ''}`);
+  return result;
+};
 export const spawn = (command, args, options) => systemSpawn(...appleCommand(command, args, options));
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

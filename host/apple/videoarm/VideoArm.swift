@@ -286,7 +286,7 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
     var snapshot: [String: Any] {
         let duration = player.currentItem?.duration.seconds ?? .nan
         return ["currentTime": seconds, "duration": duration.isFinite ? duration as Any : NSNull(),
-                "paused": player.rate == 0, "muted": player.isMuted, "volume": player.volume,
+                "playing": player.timeControlStatus == .playing, "paused": player.rate == 0, "muted": player.isMuted, "volume": player.volume,
                 "playbackRate": player.rate, "readyState": player.currentItem?.status == .readyToPlay ? 4 : 0,
                 "videoWidth": naturalSize.width, "videoHeight": naturalSize.height,
                 "error": (lastError ?? player.currentItem?.error?.localizedDescription).map { $0 as Any } ?? NSNull(),

@@ -10,6 +10,7 @@
 import CExact
 import Foundation
 import QuartzCore
+import os
 
 /// One batch from the library: the ops, and whether the presenter should keep
 /// the clock (timers) or the display link (motion) running.
@@ -119,6 +120,9 @@ package struct RuntimeHooks {
 /// A top-layer view, its viewport frame and optional viewport clip (LLP 1123 D2).
 /// Clipping bounds reads without changing the box's mapping.
 package typealias TopLayerFrame = (UInt32, CGRect, CGRect?)
+/// A modal backdrop's view, viewport bounds and optional excluded rectangle.
+package typealias TopLayerBackdrop = (UInt32, CGRect, CGRect?)
+package typealias TopLayerGeometry = (frames: [TopLayerFrame], modal: Int?, backdrop: TopLayerBackdrop?)
 
 /// A runtime handle and its calls. `destroy` is idempotent at this layer and
 /// one-shot at the C boundary; a call after it is refused by the library by
@@ -126,7 +130,7 @@ package typealias TopLayerFrame = (UInt32, CGRect, CGRect?)
 package final class Runtime {
     package let rt: ExactRuntime
     private(set) package var destroyed = false
-    package var topLayer: (() -> (frames: [TopLayerFrame], modal: Int?))?
+    package var topLayer: (() -> TopLayerGeometry)?
     package var inlineFrame: ((UInt32) -> CGRect?)?
     package var rangeFrame: ((UInt32, UInt32, UInt32) -> CGRect?)?
     #if DEBUG
@@ -138,7 +142,28 @@ package final class Runtime {
     private let hooks: RuntimeHooks
     package init(hooks: RuntimeHooks = .headless) {
         self.hooks = hooks
-        rt = Owner.shared.sync { exact_create() }
+        rt = Owner.shared.sync {
+            let rt = exact_create()
+            exact_set_console(rt, Runtime.console)
+            return rt
+        }
+    }
+
+    /// The app's `console` lines (LLP 1027.009 D1), in every build, on the owner thread as the
+    /// runner journals each: the unified log, subsystem the app's bundle identifier, category
+    /// `console`, `console.debug` at debug level, `console.error` at error, the rest at the
+    /// default level. Public, as `print` and `NSLog` are: an author keeps tokens and personal
+    /// data out of them (`docs/start-here.md`).
+    private static let consoleLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? ProcessInfo.processInfo.processName, category: "console")
+    private static let console: ExactConsoleFn = { method, bytes, count in
+        // The log reads its argument as a C string: a NUL would end the line there.
+        let line = String(decoding: UnsafeBufferPointer(start: bytes, count: count), as: UTF8.self)
+            .replacingOccurrences(of: "\0", with: "\u{2400}")
+        switch method {
+        case 4: consoleLog.debug("\(line, privacy: .public)")
+        case 3: consoleLog.error("\(line, privacy: .public)")
+        default: consoleLog.log("\(line, privacy: .public)")
+        }
     }
 
     deinit { destroy() }
@@ -176,23 +201,32 @@ package final class Runtime {
     package func on(_ body: () -> Batch, caller: String = #function) -> Batch {
         if holds(caller) { return Runtime.heldBatch }
         if Thread.isMainThread { entered &+= 1 } // (`later` calls on the owner: the spy counts main's)
-        let (open, modal) = topLayer?() ?? ([], nil)
+        let (open, modal, backdrop) = topLayer?() ?? ([], nil, nil)
         return Owner.shared.sync({
-            installTopLayer(open, modal: modal)
+            installTopLayer(open, modal: modal, backdrop: backdrop)
             return body()
         }, busy: Runtime.busy)
     }
-    private func installTopLayer(_ open: [TopLayerFrame], modal: Int?) {
+    private func installTopLayer(_ open: [TopLayerFrame], modal: Int?, backdrop: TopLayerBackdrop?) {
         let ids = open.map(\.0)
         let rects = open.flatMap { [Double($0.1.minX), Double($0.1.minY), Double($0.1.width), Double($0.1.height)] }
         let clips = open.flatMap { entry -> [Double] in
             guard let clip = entry.2 else { return [.nan, 0, 0, 0] }
             return [Double(clip.minX), Double(clip.minY), Double(clip.width), Double(clip.height)]
         }
+        let backdropRect = backdrop.map { entry -> [Double] in
+            let bounds = entry.1, excluded = entry.2
+            return [Double(bounds.minX), Double(bounds.minY), Double(bounds.width), Double(bounds.height),
+                    excluded.map { Double($0.minX) } ?? .nan, excluded.map { Double($0.minY) } ?? 0,
+                    excluded.map { Double($0.width) } ?? 0, excluded.map { Double($0.height) } ?? 0]
+        } ?? []
         ids.withUnsafeBufferPointer { ids in
             rects.withUnsafeBufferPointer { rects in
                 clips.withUnsafeBufferPointer { clips in
-                    exact_top_layer(rt, ids.baseAddress, rects.baseAddress, clips.baseAddress, UInt32(open.count), modal.map(UInt32.init) ?? .max)
+                    backdropRect.withUnsafeBufferPointer { region in
+                        exact_top_layer(rt, ids.baseAddress, rects.baseAddress, clips.baseAddress, UInt32(open.count), modal.map(UInt32.init) ?? .max,
+                                        backdrop?.0 ?? 0, region.isEmpty ? nil : region.baseAddress)
+                    }
                 }
             }
         }
@@ -286,13 +320,20 @@ package final class Runtime {
     /// The Canvas 2D text measurer (LLP 1056 D8), with the measurer's context.
     package func setCanvasText(_ measure: ExactCanvasTextFn?) { on { exact_set_canvas_text(rt, measure) } }
     package func boot(width: CGFloat, height: CGFloat) -> Batch { islands(on { read(exact_boot(rt, Float(width), Float(height))) }) }
+    /// Whether the data source's activation evaluates a TypeScript module on
+    /// the owner, which the presenter then posts from the first draw's own
+    /// callback (`exact_evaluates_from_draw`, LLP 1027.008 D1). Read after
+    /// each boot and commit, so the draw makes no call to learn it.
+    package var evaluatesFromDraw = false
     /// A plan that can show an SVG island opens the island module off the
     /// main thread now, before its first mask or filter needs it (LLP
     /// 1055.000 §8 ruling 4); a plan without one never loads it. One that
     /// can show a filter makes the GPU filter pipelines now too: a first
-    /// picture is drawn in the commit that shows it.
+    /// picture is drawn in the commit that shows it. The same owner job reads
+    /// `evaluatesFromDraw`.
     private func islands(_ batch: Batch) -> Batch {
-        let svg = on(busy: UInt8(0)) { exact_svg_islands(rt) }
+        let (svg, early) = on(busy: (UInt8(0), false)) { (exact_svg_islands(rt), exact_evaluates_from_draw(rt) != 0) }
+        evaluatesFromDraw = early
         hooks.prewarmIslands?(svg)
         return batch
     }
@@ -376,10 +417,10 @@ package final class Runtime {
     /// Capture native presentation on the caller before parsing replies on the owner.
     package func pumpAsync(now: Double, done: @escaping (Batch?) -> Void) {
         if holds() { Owner.shared.post { done(nil) }; return } // (held: answered on the owner as a cancelled reply, `held`)
-        let (open, modal) = topLayer?() ?? ([], nil)
+        let (open, modal, backdrop) = topLayer?() ?? ([], nil, nil)
         Owner.shared.post { [self] in
             guard !destroyed else { done(nil); return }
-            installTopLayer(open, modal: modal)
+            installTopLayer(open, modal: modal, backdrop: backdrop)
             done(read(exact_pump(rt, now)))
         }
     }
@@ -919,7 +960,8 @@ package final class Runtime {
     /// insets, the layout regions (`.some(nil)` when every region is the
     /// safe area), the viewport, the segments' rects on the grid the
     /// kernel has (a keyboard's) and the software keyboard's overlap
-    /// (`exactViewport().keyboardHeight`), in one batch under one layout.
+    /// (`exactViewport().keyboardHeight`), with native blocks and placements,
+    /// in one batch under one layout.
     package struct ViewChange {
         package var screen: CGSize?? = nil
         package var insets: (top: CGFloat, right: CGFloat, bottom: CGFloat, left: CGFloat)? = nil
@@ -927,7 +969,9 @@ package final class Runtime {
         package var size: CGSize? = nil
         package var segments: [CGRect]? = nil
         package var keyboard: CGFloat? = nil
-        package var isEmpty: Bool { screen == nil && insets == nil && regions == nil && size == nil && segments == nil && keyboard == nil }
+        /// Native block and placement records, as `exact_host_covers` takes them.
+        package var blocks = Data()
+        package var isEmpty: Bool { screen == nil && insets == nil && regions == nil && size == nil && segments == nil && keyboard == nil && blocks.isEmpty }
         package init(screen: CGSize?? = nil, insets: (top: CGFloat, right: CGFloat, bottom: CGFloat, left: CGFloat)? = nil,
                      regions: [CGFloat]?? = nil, size: CGSize? = nil) {
             self.screen = screen; self.insets = insets; self.regions = regions; self.size = size
@@ -942,6 +986,7 @@ package final class Runtime {
         if change.size != nil { mask |= 8 }
         if change.segments != nil { mask |= 16 }
         if change.keyboard != nil { mask |= 32 }
+        if !change.blocks.isEmpty { mask |= 64 }
         let screen = (change.screen ?? nil) ?? .zero, insets = change.insets ?? (0, 0, 0, 0), size = change.size ?? .zero
         let floats = [screen.width, screen.height, insets.top, insets.right, insets.bottom, insets.left, size.width, size.height]
         let rects = change.segments.map { rects in [UInt32(rects.count)] + rects.flatMap { [$0.minX, $0.minY, $0.width, $0.height].map { Float($0).bitPattern } } } ?? []
@@ -950,6 +995,7 @@ package final class Runtime {
         for word in [mask] + floats.map({ Float($0).bitPattern }) + [UInt32(regions.count)] + regions.map({ Float($0).bitPattern }) + rects + keyboard {
             withUnsafeBytes(of: word.littleEndian) { bytes.append(contentsOf: $0) }
         }
+        bytes.append(change.blocks)
         return on { read(exact_view(rt, write(bytes))) }
     }
 

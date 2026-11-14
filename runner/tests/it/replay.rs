@@ -429,6 +429,7 @@ fn a_block_given_and_taken_back_leaves_caltrain_s_layout_as_it_was() {
         .max_by_key(|id| k.arena().subtree(k.arena().slot_of(*id).unwrap()).len())
         .unwrap();
     let block = HostBlock {
+        tactic: Default::default(),
         width: BlockAxis::Is(320.0),
         height: BlockAxis::AtMost(500.0),
     };

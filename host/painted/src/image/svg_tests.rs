@@ -112,11 +112,10 @@ fn assets() -> Assets {
 /// One image node `1` of `source` in a `width`×`height` box at `fit`, laid out.
 fn kernel(source: &str, width: f32, height: f32, fit: ObjectFit) -> Kernel {
     let mut k = Kernel::with_monospace();
-    let mut style = StyleProps {
-        width: Dimension::Points(width),
-        height: Dimension::Points(height),
-        ..Default::default()
-    };
+    let mut style = StyleProps::default().with_rows(|rows| {
+        rows.width = Dimension::Points(width);
+        rows.height = Dimension::Points(height);
+    });
     style.object_fit = fit;
     for row in [StyleId::Width, StyleId::Height, StyleId::ObjectFit] {
         style.mask.set(row);

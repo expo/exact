@@ -46,6 +46,45 @@ impl PositionTryFallbacks {
     }
 }
 
+/// A try tactic's permutation of physical sides, top/right/bottom/left.
+/// It also exchanges the sizing axes when a vertical side becomes horizontal
+/// (CSS Anchor Positioning §6.1). The host composes the ordered flips.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BlockTactic([u8; 4]);
+
+impl Default for BlockTactic {
+    fn default() -> Self {
+        Self([0, 1, 2, 3])
+    }
+}
+
+impl BlockTactic {
+    /// A reflection or rotation of the four sides; other permutations are refused.
+    pub fn from_sides(sides: [u8; 4]) -> Option<Self> {
+        (sides.iter().all(|side| *side < 4)
+            && sides[2] == (sides[0] + 2) % 4
+            && sides[3] == (sides[1] + 2) % 4
+            && sides[0] % 2 != sides[1] % 2)
+            .then_some(Self(sides))
+    }
+
+    pub(crate) fn apply(self, style: &mut taffy::style::Style) {
+        let m = style.margin;
+        let margins = [m.top, m.right, m.bottom, m.left];
+        [
+            style.margin.top,
+            style.margin.right,
+            style.margin.bottom,
+            style.margin.left,
+        ] = self.0.map(|side| margins[usize::from(side)]);
+        if self.0[0] % 2 == 1 {
+            std::mem::swap(&mut style.size.width, &mut style.size.height);
+            std::mem::swap(&mut style.min_size.width, &mut style.min_size.height);
+            std::mem::swap(&mut style.max_size.width, &mut style.max_size.height);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

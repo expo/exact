@@ -50,7 +50,14 @@ final class PopoverSurfaceIOSTests: XCTestCase {
     }
 
     func shot(_ window: UIWindow) -> UIImage {
-        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        let displayed = expectation(description: "the window's display transaction completed")
+        CATransaction.begin()
+        CATransaction.setCompletionBlock { displayed.fulfill() }
+        window.layoutIfNeeded()
+        window.layer.displayIfNeeded()
+        CATransaction.commit()
+        CATransaction.flush()
+        wait(for: [displayed], timeout: 5)
         let format = UIGraphicsImageRendererFormat()
         format.scale = 3
         return UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { _ in
@@ -100,15 +107,11 @@ final class PopoverSurfaceIOSTests: XCTestCase {
         let done = expectation(description: "presented")
         root.present(content, animated: false) { done.fulfill() }
         wait(for: [done], timeout: 5)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.8))
         let frame = content.view.convert(content.view.bounds, to: window)
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = 3
-        let image = UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { _ in
-            window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
-        }
-        root.dismiss(animated: false)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        let image = shot(window)
+        let dismissed = expectation(description: "dismissed")
+        root.dismiss(animated: false) { dismissed.fulfill() }
+        wait(for: [dismissed], timeout: 5)
         window.isHidden = true
         return (frame, image)
     }
@@ -165,7 +168,7 @@ final class PopoverSurfaceIOSTests: XCTestCase {
         XCTAssertFalse(node.boxShadows.isEmpty)
         window?.overrideUserInterfaceStyle = .dark
         p.apply(wireBatch([["op": "props", "id": 2, "set": ["testId": "dark"]]]))
-        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        waitFor("the popover's dark appearance") { node.drawsDark }
         XCTAssertTrue(node.boxShadows.isEmpty, "none in dark")
     }
 
@@ -207,6 +210,128 @@ final class PopoverSurfaceIOSTests: XCTestCase {
         // An authored circle on a scrolling popover: its scroll view takes that corner.
         let (_, roundScroll, _) = try paint(["defaultSurface": "true", "defaultSurfaceRadius": "30"], dark: false, style: ["border_radius": 12.0, "overflow_y": "scroll"], filled: true)
         XCTAssertEqual(roundScroll.scroll?.layer.cornerRadius, 12, "the author's corner on its scroll view")
+    }
+
+    private let surface = ["defaultSurface": "true", "defaultSurfaceRadius": "30", "defaultSurfaceShadow": "8 24 0.015"]
+
+    private func assertSurface(_ node: NodeView, _ expected: Bool, authoredMaterial: String? = nil, authoredCorner: CGFloat? = nil,
+                               file: StaticString = #filePath, line: UInt = #line) throws {
+        node.isHidden = false
+        node.layoutIfNeeded()
+        node.layer.displayIfNeeded()
+        let material = authoredMaterial ?? (expected && authoredCorner == nil ? "glass" : nil)
+        XCTAssertEqual(node.materialKind, material, "background", file: file, line: line)
+        XCTAssertEqual(node.materialView != nil, material != nil, "background view", file: file, line: line)
+        XCTAssertEqual(node.effectiveCornerSizes(in: node.bounds).first?.width, authoredCorner ?? (expected ? 30 : 0), "corners", file: file, line: line)
+        XCTAssertEqual(node.shadowCaster != nil, expected, "painted shadow", file: file, line: line)
+        if let scroll = node.scroll {
+            XCTAssertEqual(scroll.layer.cornerRadius, expected && authoredCorner == nil ? 30 : 0, "scroll clip", file: file, line: line)
+            let image = shot(try XCTUnwrap(window))
+            if authoredCorner == nil {
+                XCTAssertEqual(pixel(image, CGPoint(x: 41, y: 201))[1], expected ? 0 : 255, "painted corner", file: file, line: line)
+            }
+            XCTAssertEqual(pixel(image, CGPoint(x: 192, y: 240))[1], 255, "child stays mounted", file: file, line: line)
+        }
+    }
+
+    func testLateContextMenuReferencesRefreshThePaintedSurface() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "glass draws in a scene's window") }
+        for variant in ["glass", "backdrop", "uneven"] {
+            var style: [String: Any] = ["overflow_y": "scroll"]
+            if variant == "backdrop" { style["backdrop_filter"] = [["blur": 4.0]] }
+            if variant == "uneven" { style["border_radius_top_left"] = 20.0 }
+            let (p, node, _) = try paint(surface, dark: false, style: style, filled: true)
+            let material = variant == "backdrop" ? "backdrop" : nil
+            let corner: CGFloat? = variant == "uneven" ? 20 : nil
+            func check(_ expected: Bool) throws {
+                try assertSurface(node, expected, authoredMaterial: material, authoredCorner: corner)
+            }
+            try check(true)
+            p.apply(wireBatch([["op": "create", "id": 4, "kind": "view", "props": ["contextPopover": "p"]]]))
+            try check(false)
+            p.apply(wireBatch([["op": "props", "id": 4, "set": ["contextPopover": "elsewhere"]]]))
+            try check(true)
+            p.apply(wireBatch([["op": "props", "id": 4, "set": ["contextPopover": "p"]]]))
+            try check(false)
+            p.apply(wireBatch([["op": "props", "id": 4, "set": [String: String](), "clear": ["contextPopover"]]]))
+            try check(true)
+            p.apply(wireBatch([["op": "props", "id": 4, "set": ["contextPopover": "p"]]]))
+            try check(false)
+            p.apply(wireBatch([["op": "destroy", "id": 4]]))
+            try check(true)
+        }
+    }
+
+    func testABoundSurfaceRefreshesBackgroundCornersAndShadowTogether() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "glass draws in a scene's window") }
+        let (p, node, _) = try paint(surface, dark: false, style: ["overflow_y": "scroll"], filled: true)
+        for enabled in [false, true, false, true] {
+            let props: [String: Any] = ["op": "props", "id": 2, "set": ["defaultSurface": enabled ? "true" : "false"]]
+            var look: [String: Any] = ["overflow_y": "scroll"]
+            if !enabled { look["background_color"] = [255, 255, 255, 255] }
+            let style: [String: Any] = ["op": "style", "id": 2, "style": look]
+            p.apply(wireBatch(enabled ? [style, props] : [props, style]))
+            try assertSurface(node, enabled)
+        }
+    }
+
+    private func paragraph(_ name: String?) -> [String: Any] {
+        var props = ["text": "Menu"]
+        props["contextPopover"] = name
+        return ["op": "paragraph", "id": 5, "runs": [
+            ["id": 6, "parent": 5, "paint": true, "props": props, "style": ["font_size": 16.0]]
+        ]]
+    }
+
+    func testAnExitingContextMenuSourceRestoresTheRetainedPopoversSurface() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "glass draws in a scene's window") }
+        for source in ["self", "descendant", "inline"] {
+            let (p, node, _) = try paint(surface, dark: false, style: ["overflow_y": "scroll"], filled: true)
+            var ops: [[String: Any]] = [
+                ["op": "create", "id": 4, "kind": "view", "props": source == "self" ? ["contextPopover": "p"] : [:]],
+                ["op": "children", "id": 1, "ids": [2, 4]],
+                ["op": "frame", "id": 4, "x": 0.0, "y": 20.0, "w": 100.0, "h": 40.0]
+            ]
+            if source != "self" {
+                ops += [
+                    ["op": "create", "id": 5, "kind": source == "inline" ? "text" : "view",
+                     "props": source == "descendant" ? ["contextPopover": "p"] : [:]],
+                    ["op": "children", "id": 4, "ids": [5]],
+                    ["op": "frame", "id": 5, "x": 0.0, "y": 0.0, "w": 100.0, "h": 40.0]
+                ]
+                if source == "inline" { ops.append(paragraph("p")) }
+            }
+            p.apply(wireBatch(ops))
+            try assertSurface(node, false)
+            let ghost = try XCTUnwrap(p.views[4])
+            p.apply(wireBatch([["op": "exit", "id": 4], ["op": "children", "id": 1, "ids": [2]]]))
+            XCTAssertNil(p.views[4])
+            XCTAssertNotNil(ghost.superview, "the exit still paints")
+            try assertSurface(node, true)
+            p.apply(wireBatch([["op": "present", "id": 4, "property": "opacity", "x": 0.25, "y": 0.0]]))
+            XCTAssertEqual(ghost.alpha, 0.25, accuracy: 1e-6)
+            try assertSurface(node, true)
+            p.apply(wireBatch([["op": "destroy", "id": 4]]))
+            XCTAssertNil(ghost.superview)
+            try assertSurface(node, true)
+        }
+    }
+
+    func testInlineContextMenuReferencesRefreshThePaintedSurface() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "glass draws in a scene's window") }
+        let (p, node, _) = try paint(surface, dark: false, style: ["overflow_y": "scroll"], filled: true)
+        p.apply(wireBatch([["op": "create", "id": 5, "kind": "text"], paragraph("p")]))
+        try assertSurface(node, false)
+        for name in ["elsewhere", "p", nil, "p"] as [String?] {
+            p.apply(wireBatch([paragraph(name)]))
+            try assertSurface(node, name != "p")
+        }
+        p.apply(wireBatch([["op": "paragraph", "id": 5, "runs": []]]))
+        try assertSurface(node, true)
+        p.apply(wireBatch([paragraph("p")]))
+        try assertSurface(node, false)
+        p.apply(wireBatch([["op": "destroy", "id": 5]]))
+        try assertSurface(node, true)
     }
 }
 #endif

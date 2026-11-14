@@ -25,7 +25,7 @@ import {appleAssetCatalogInventory, launchImageInventory, nativeResourceInventor
 // needs `runtime` (its receipt's). Bun's native subprocess import bypasses
 // module mocks; explicit bindings also isolate deployment tests.
 // `entries`: the named entries (name to text) the Rust or TypeScript bake makes beside the plan.
-function harness(classify=()=>({bundle:true}), runtime=4, {bake, graphTool, cohortRuntime=4, grants='', watch=fs.watch, targets, entries={}, planRequires={}, moduleGrants='', rustModule=true, produced, reuseSignature}={}) {
+function harness(classify=()=>({bundle:true}), runtime=4, {bake, graphTool, cohortRuntime=4, grants='', watch=fs.watch, targets, entries={}, planRequires={}, moduleGrants='', rustModule=true, produced, reuseSignature, graphs}={}) {
   const root=fs.mkdtempSync(resolve(tmpdir(),'exact-push-profile-'));
   const app={id:'fixture',name:'fixture',displayName:'Fixture',dir:root,target:root,manifest:{app:{origin:root},deploy:{signing:{keys:{test:'public'}}}}};
   const compat={id:'a'.repeat(32),target:'fixture',inputs:{app:'fixture',platform:'linux',store:{L:'A'},rustMode:'native',grantCeiling:grants,keys:{test:'public'},typescriptRuntime:cohortRuntime}};
@@ -70,6 +70,7 @@ function harness(classify=()=>({bundle:true}), runtime=4, {bake, graphTool, coho
       sealed(name,opts.env);
       // `bake` runs the real one (its receipt's runtime is the bake's own).
       if(['graph','compat'].includes(name)&&graphTool)return realSpawnSync(graphTool,args,{...opts,env:{...process.env,...opts.env}});
+      if(name==='graph'&&graphs)return {status:0,stdout:JSON.stringify({...graph,...graphs[fs.readFileSync(args[1],'utf8')]})};
       if(name==='compat')return {status:0,stdout:JSON.stringify(compat)};
       if(name==='typescript'&&bake)return realSpawnSync(bake,args,{...opts,env:{...process.env,...opts.env}});
       if(name==='typescript'){
@@ -331,7 +332,7 @@ test.each([false, true])('bundle candidates publish to signed iOS cohorts and le
       const result = realSpawnSync(bake, [root, '--out', baked], { env: production, encoding: 'utf8' });
       expect(result.status, result.stderr).toBe(0);
       const compatFile = resolve(root, 'compat.json'); fs.writeFileSync(compatFile, JSON.stringify(cohort.compat));
-      const graph = realSpawnSync(graphTool, ['graph', resolve(baked, 'app.plan'), compatFile, cohort.compat.target], { env: production, encoding: 'utf8' });
+      const graph = realSpawnSync(graphTool, ['graph', resolve(baked, 'app.plan'), compatFile, cohort.compat.target, root], { env: production, encoding: 'utf8' });
       expect(graph.status, graph.stderr).toBe(0);
       const requires = JSON.parse(graph.stdout).artifacts[0].requires;
       for (const key of ['formatVersion', 'formatDigest', 'kernelSchema']) cohort.compat.inputs[key] = requires[key];
@@ -776,4 +777,52 @@ test('signed binary source evidence holds the consumed SwiftPM targets\' members
       fs.rmSync(resolve(packageRoot, added));
     }
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('a text update retains the main and widget raster catalog inventory', async () => {
+  const main = { svg: 'two.svg', viewBox: '10 20 40 20' };
+  const widget = { svg: 'widget.svg', viewBox: '0 0 20 40' };
+  const rendition = { sha256: 'installed', viewBox: main.viewBox };
+  const graphs = Object.fromEntries([['plan', main], ['widget', widget]].map(([name, icon]) => [name,
+    { appleIcons: [icon], artifacts: [{ name: 'app.plan', requires: { appleRasterIcons: { [icon.svg]: rendition } } }] }]));
+  const { root, app, cohort, streamCandidates } = harness(classifyArtifacts, 4, { graphs, entries: { 'plans/widget.plan': 'widget' } });
+  try {
+    cohort.compat.inputs.platform = 'ios';
+    cohort.compat.inputs.appleRasterIcons = { [main.svg]: rendition, [widget.svg]: rendition };
+    cohort.compat.target = 'aarch64-apple-ios';
+    fs.mkdirSync(resolve(root, 'assets'));
+    for (const icon of [main, widget]) fs.writeFileSync(resolve(root, 'assets', icon.svg), '<svg/>');
+    const metadata = { appleAssetCatalogs: appleAssetCatalogInventory({ ...app, appleIcons: [main, widget] }, 'ios'),
+      ...nativeManifestMetadata(app.manifest, 'ios'), store: cohort.compat.inputs.store, keys: cohort.compat.inputs.keys };
+    const evidence = Buffer.from(JSON.stringify({ version: 1, metadata, files: [], directories: [], absent: [], links: [] }));
+    cohort.binaryInputs = { sha256: sha256(evidence), bytes: evidence.length };
+    const snapshot = { compat: cohort.compat, bundle: { plan: { bytes: Buffer.from('plan') }, assets: [] }, graph: { artifacts: [] } };
+    const stream = { channel: 'prod', compatibilityId: cohort.compat.id };
+    const [candidate] = await streamCandidates(app, { get: async () => evidence }, [{ stream, head: { assets: [] }, cohort, platform: 'ios' }],
+      { EXACT_UPDATE_TRUST: 'production', EXACT_GAME_PROOF_PROFILE: 'release' }, { snapshot });
+    expect(candidate.build.pendingInputs).toEqual([]);
+    expect(candidate.build.graph.appleIcons).toEqual([main, widget]);
+    expect(candidate.build.graph.artifacts.find(card => card.name === 'plans/widget.plan').requires).toEqual(graphs.widget.artifacts[0].requires);
+    const key = { id: 'test', public: 'public' };
+    expect(classifyArtifacts(candidate.build, cohort, key).bundle).toBe(true);
+    graphs.widget.artifacts[0].requires.appleRasterIcons[widget.svg] = { ...rendition, sha256: 'changed' };
+    const [changed] = await streamCandidates(app, { get: async () => evidence }, [{ stream, head: { assets: [] }, cohort, platform: 'ios' }],
+      { EXACT_UPDATE_TRUST: 'production', EXACT_GAME_PROOF_PROFILE: 'release' }, { snapshot });
+    expect(classifyArtifacts(changed.build, cohort, key).missing).toContain('plans/widget.plan: appleRasterIcons.widget.svg (requires the installed SVG rendition)');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('updates require the raster renditions installed by their Apple cohort', () => {
+  const red = { sha256: 'red-blue', viewBox: '10 20 40 20' };
+  const green = { ...red, sha256: 'green-blue' };
+  const cohort = { sources: {}, binary: 'same', compat: { inputs: { store: { L: 'A' }, appleRasterIcons: { 'two.svg': red, 'spare.svg': red } } } };
+  const candidate = raster => ({ binary: { sha256: 'same' }, graph: { sources: {}, artifacts: [{ name: 'app.plan', requires: { appleRasterIcons: raster } }] } });
+  expect(classifyArtifacts(candidate({ 'two.svg': red }), cohort).bundle).toBe(true);
+  expect(classifyArtifacts(candidate({}), cohort).bundle).toBe(true);
+  for (const roster of [{ 'two.svg': green }, { 'new.svg': red }]) {
+    const result = classifyArtifacts(candidate(roster), cohort);
+    expect(result.bundle).toBe(false);
+    expect(result.missing[0]).toContain('appleRasterIcons');
+  }
+  expect(classifyArtifacts(candidate({ 'two.svg': red }), { ...cohort, compat: { inputs: { store: { L: 'A' } } } }).bundle).toBe(false);
 });

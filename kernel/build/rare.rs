@@ -14,13 +14,13 @@ fn at(row: &StyleRow) -> String {
     }
 }
 
-/// `RareRows`, its initial values, and `Rare`, the pointer StyleProps holds.
+/// `RareRows`, its initial values, and the pointer ordinary rows hold.
 fn emit_rare(w: &mut String, schema: &Schema) {
     let rare: Vec<&StyleRow> = schema.styles.iter().filter(|r| r.rare).collect();
     for row in &rare {
         assert!(!row.inherited, "schema.json: rare row {} is inherited", row.field);
     }
-    writeln!(w, "/// The rows few nodes set ([`StyleProps::rare`]).").unwrap();
+    writeln!(w, "/// The rows few nodes set ([`OrdinaryRows::rare`]).").unwrap();
     writeln!(w, "#[derive(Debug, Clone, PartialEq)]").unwrap();
     writeln!(w, "pub struct RareRows {{").unwrap();
     for row in &rare {

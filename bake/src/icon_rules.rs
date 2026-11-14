@@ -97,31 +97,63 @@ pub(crate) fn apply(
     Ok(())
 }
 
-/// Whether `plan` draws an icon even-odd: a row of its `icons` table (what a
-/// computed source names), a literal source among its strings (`symbol:`
-/// and a form the build or an author wrote, which makes no row; C2 round 1,
-/// Astra 2), or a source inside a baked value, a resource's initial or
-/// placeholder value, whose strings are in the data pool, not interned
-/// (round 2, Astra 2); each read through `exact_kernel::Icon`, the one reader.
-/// A baked value that is there (not zero-length, which is none) and doesn't
-/// decode fails, naming its resource and field (round 3): an unread value
-/// could hold the rule.
-pub(crate) fn even_odd(plan: &exact_plan::Plan) -> Result<bool, String> {
-    let source = |text: &str| {
-        text.strip_prefix("symbol:")
-            .and_then(exact_kernel::Icon::parse)
-            .is_some_and(|icon| icon.even_odd)
-    };
-    fn within(v: &exact_plan::Value, source: &dyn Fn(&str) -> bool) -> bool {
-        match v {
-            exact_plan::Value::List(items) | exact_plan::Value::Record(items) => {
-                items.iter().any(|v| within(v, source))
-            }
-            exact_plan::Value::Option(Some(v)) => within(v, source),
-            v => v.as_str().is_some_and(source),
+/// Raster renditions cannot be replaced by a plan update: their SVG bytes
+/// and viewport belong to the installed asset catalog (LLP 1030 D3a).
+pub(crate) fn raster_inputs<'a>(
+    app: &Path,
+    inputs: &mut serde_json::Value,
+    plans: impl IntoIterator<Item = &'a exact_plan::Plan>,
+) -> Result<(), String> {
+    use sha2::{Digest, Sha256};
+    if !matches!(inputs["platform"].as_str(), Some("ios" | "macos")) {
+        return Ok(());
+    }
+    let mut roster = serde_json::Map::new();
+    for plan in plans {
+        for icon in crate::receipt::apple_icons(plan)? {
+            let svg = icon["svg"].as_str().expect("icon source");
+            let path = app.join("assets").join(svg);
+            let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+            roster.insert(svg.into(), serde_json::json!({"sha256":format!("{:x}", Sha256::digest(bytes)), "viewBox":icon["viewBox"]}));
         }
     }
-    let mut baked = false;
+    if !roster.is_empty() {
+        inputs["appleRasterIcons"] = serde_json::json!(roster);
+    } else if let Some(inputs) = inputs.as_object_mut() {
+        inputs.remove("appleRasterIcons");
+    }
+    Ok(())
+}
+
+/// Visit icon rows, literal sources and strings nested in baked resource
+/// values. Malformed baked values fail rather than hiding a requirement.
+pub(crate) fn visit(
+    plan: &exact_plan::Plan,
+    mut icon: impl FnMut(exact_kernel::Icon<'_>),
+) -> Result<(), String> {
+    let mut source = |text: &str| {
+        if let Some(value) = text
+            .strip_prefix("symbol:")
+            .and_then(exact_kernel::Icon::parse)
+        {
+            icon(value);
+        }
+    };
+    fn within(v: &exact_plan::Value, source: &mut dyn FnMut(&str)) {
+        match v {
+            exact_plan::Value::List(items) | exact_plan::Value::Record(items) => {
+                for value in items.iter() {
+                    within(value, source);
+                }
+            }
+            exact_plan::Value::Option(Some(v)) => within(v, source),
+            v => {
+                if let Some(text) = v.as_str() {
+                    source(text);
+                }
+            }
+        }
+    }
     for r in plan.resources.iter() {
         for (field, bytes) in [
             ("initial", r.initial),
@@ -136,19 +168,73 @@ pub(crate) fn even_odd(plan: &exact_plan::Plan) -> Result<bool, String> {
                     plan.str(r.name)
                 )
             })?;
-            baked |= within(&value, &source);
+            within(&value, &mut source);
         }
     }
-    let row = plan
-        .icons
-        .iter()
-        .any(|i| exact_runner::icon_of(plan, i).is_some_and(|icon| icon.even_odd));
-    Ok(row || baked || plan.strings.iter().any(source))
+    for text in plan.strings.iter() {
+        source(text);
+    }
+    for row in &plan.icons {
+        if let Some(value) = exact_runner::icon_of(plan, row) {
+            icon(value);
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn even_odd(plan: &exact_plan::Plan) -> Result<bool, String> {
+    let mut any = false;
+    visit(plan, |icon| any |= icon.even_odd)?;
+    Ok(any)
 }
 
 #[cfg(test)]
 mod tests {
     use super::even_odd;
+
+    #[test]
+    fn raster_catalog_bytes_change_compatibility_but_text_does_not() {
+        let dir = app("raster", "nonzero");
+        let file = dir.join("assets/icons/ring.svg");
+        let svg = r#"<svg viewBox="10 20 40 20"><path fill="red" d="M10 20h20v20H10Z"/><path fill="blue" d="M30 20h20v20H30Z"/></svg>"#;
+        std::fs::write(&file, svg).unwrap();
+        let installed = compat(&dir, false);
+        let rendition = installed.inputs["appleRasterIcons"]["icons/ring.svg"].clone();
+        assert!(rendition["sha256"].as_str().is_some());
+        assert_eq!(rendition["viewBox"], "10 20 40 20");
+        std::fs::write(dir.join("app.contract"), "component App\n  view\n    column\n      image \"symbol:icon.ring\"\n      text \"Changed\"\n").unwrap();
+        assert_eq!(compat(&dir, false).id, installed.id);
+        std::fs::write(
+            dir.join("app.contract"),
+            "component App\n  view\n    image \"symbol:icon||10 20 40 20||icons/ring.svg\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            compat(&dir, false).id,
+            installed.id,
+            "a literal source needs the same catalog"
+        );
+        std::fs::write(&file, svg.replace("red", "green")).unwrap();
+        let changed = compat(&dir, false);
+        assert_ne!(changed.id, installed.id);
+        let plan = contract::compile_path(&dir.join("app.contract")).unwrap();
+        let graph = crate::receipt::plan_graph(
+            &plan.encode(),
+            &installed.inputs,
+            "aarch64-apple-darwin",
+            &dir,
+        )
+        .unwrap();
+        assert_eq!(
+            graph["artifacts"][0]["requires"]["appleRasterIcons"],
+            changed.inputs["appleRasterIcons"]
+        );
+        assert_ne!(
+            graph["artifacts"][0]["requires"]["appleRasterIcons"]["icons/ring.svg"],
+            rendition
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     /// [`super::needed`] of the plan that ships, found as compat.rs finds it.
     fn needed(

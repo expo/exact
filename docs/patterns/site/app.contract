@@ -76,7 +76,7 @@ component App
     refresh details
 
   view
-    view navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow testId="app" width="100%" height="100%"
+    view navigationKey=`${top(nav).id}` navigate=follow testId="app" width="100%" height="100%"
       // What a link preview and a search engine read; a route's own `head` wins.
       head description="The planets of the Solar System, and what each is like."
       for e in stack(nav) key=e.id

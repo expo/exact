@@ -810,6 +810,9 @@ impl<D: DataSource> Presenter<D> {
             return;
         };
         let role = node.props.str(PropId::AccessibilityRole);
+        // An `href` with no role is a link: a run in a line of text lowers
+        // with none.
+        let link = role == Some("link") || role.is_none() && node.props.link().is_some();
         // A native button presses under any role, a tab's or a menu item's
         // (LLP 1069.011.000 D1); any other pressable as a button does, unless
         // it is a link (chat F14).
@@ -821,12 +824,26 @@ impl<D: DataSource> Presenter<D> {
                 .runner()
                 .handlers_of(id)
                 .contains(&EventKind::Press);
-        if (role == Some("button") || native || pressable && role != Some("link"))
-            && matches!(name, " " | "Enter")
-            || role == Some("link") && name == "Enter"
+        // Read before the press, whose handler may remove it.
+        let href = node
+            .props
+            .link()
+            .filter(|_| name == "Enter")
+            .map(str::to_string);
+        if (role == Some("button") || native || pressable && !link) && matches!(name, " " | "Enter")
+            || link && name == "Enter"
         {
             self.note_press(id);
-            self.activate_with(id, now_ms, false);
+            // A link with no `press` has only its default action, as a
+            // pointer's press on it has.
+            if pressable || href.is_none() {
+                self.activate_with(id, now_ms, false);
+            }
+            // Enter on an `a[href]` follows it after its press, as a click's
+            // default action follows its listeners (LLP 1038 §7).
+            if let Some(href) = href {
+                self.follow(id, &href, now_ms);
+            }
             return;
         }
         // A radio's arrows and Space (x2apps survey #2).

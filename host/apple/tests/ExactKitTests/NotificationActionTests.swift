@@ -382,6 +382,16 @@ final class NotificationActionTests: XCTestCase {
     }
 
     func testRegistrationPrecedesDataActivationAndWaitingResponses() throws {
+        try registrationPrecedesActivation(evaluatedFromDraw: false)
+    }
+
+    /// LLP 1027.008 D2: a module evaluated from the draw is evaluated before
+    /// registration, and its answers still wait for it.
+    func testRegistrationPrecedesTheAnswersOfAModuleEvaluatedFromTheDraw() throws {
+        try registrationPrecedesActivation(evaluatedFromDraw: true)
+    }
+
+    private func registrationPrecedesActivation(evaluatedFromDraw: Bool) throws {
         let (session, _) = self.session()
         let presenter = NotificationPresenter.shared
         presenter.currentCategories = [:]
@@ -389,10 +399,12 @@ final class NotificationActionTests: XCTestCase {
         presenter.categories.read = { read = $0 }
         let completed = choose(response(entry(session), category: "approve,note", action: "note"))
         XCTAssertFalse(completed())
-        try boot(session)
+        XCTAssertNil(session.boot(plan: try fixturePlan("NOTIFICATION_ACTIONS"), size: CGSize(width: 390, height: 844)).error)
+        session.runtime.evaluatesFromDraw = evaluatedFromDraw // the tests link a Rust source
+        session.drawReceipt().drawn()
         waitFor("the category read") { read != nil }
-        XCTAssertNil(session.preparedGeneration, "initial data code cannot post before registration")
-        XCTAssertFalse(session.dataActivated)
+        XCTAssertEqual(session.preparedGeneration, evaluatedFromDraw ? session.generation : nil, "only a module the draw posted is evaluated before registration")
+        XCTAssertFalse(session.dataActivated, "no answer before registration")
         XCTAssertFalse(completed(), "an action that can post also waits for registration")
         let finish = try XCTUnwrap(read)
         presenter.categories.read = { [unowned self] in $0(registered) }

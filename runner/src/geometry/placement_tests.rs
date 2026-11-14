@@ -36,6 +36,7 @@ fn scene(panel: &str, route: &str, before: &str, after: &str) -> (Runner<()>, Sc
             .set_host_block(
                 view,
                 Some(HostBlock {
+                    tactic: Default::default(),
                     width: BlockAxis::Is(200.0),
                     height: BlockAxis::Is(height),
                 }),

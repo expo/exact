@@ -143,7 +143,9 @@ impl Lowerer<'_> {
                 && !contract_types::records::is_record_call("startsWith", &self.types.shapes),
         );
         crate::popover_surface::check_authored(expanded)?;
-        let surfaced = crate::popover_surface::implied(expanded, *span);
+        let surfaced = crate::popover_surface::implied(attrs, *span, &|name| {
+            self.styles.get(name).map(Vec::as_slice)
+        });
         let added: Vec<Attr> = inked
             .into_iter()
             .chain(painted_group)

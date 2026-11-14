@@ -5,8 +5,9 @@
 // `exactTransport` (host/web-js/src/timers.rs). The voices and haptics go
 // into sounds.js's table (`Sounds.seq`).
 // - The gate step (`Sounds.gate`, inside the commit's rollback) reads each
-//   sequence's gate, key and six `play` arguments; once the commit stands
-//   (`Sounds.stood`) the transport arms, restarts, edits or stops.
+//   sequence's gate, key and six `play` arguments into that commit's snapshot.
+//   `Sounds.committed` stops on freeze before a deferred tree update; otherwise
+//   `Sounds.stood` arms, restarts, edits or stops after the tree.
 // - Its own wake (a fill, the count-in's end) is a `hatch` in `clock.timers`:
 //   no commit, after everything due at its time. Its end is a timer after
 //   every task (`i: Infinity`), a hatch too when there is no `ended=`.
@@ -18,6 +19,7 @@
 //   (clockin.js's follower); midi.js hands its clock messages to
 //   `Sounds.clockIn` before it dispatches a delivery.
 import { journal, clock, Sounds, Mutations, Resources, R, data, drive, untracked, Refusal } from './rt.js';
+import { watchPage } from './facts.js';
 import { plain } from './format.js';
 import { Midi } from './midi.js';
 import { follower, feed, tempo, position, LOOKAHEAD as CLOCK_AHEAD, DRIFT, TICKS_PER_SECOND } from './clockin.js';
@@ -38,7 +40,7 @@ const Seqs = []; // each declared sequence, in plan order: its code, `ended`, na
 let Readers = {}, Owner = null, Last = null, Raw = [], Play = null, Segments = [], Recorded = 0, State = 'stopped', Reason = '';
 // Issued: where the last fill stopped, by beat (a tempo edit moves its time): the hits before it, and the first [1] at it,
 // were issued.
-let IssuedTo = 0, Skip = 0, Issued = [-Infinity, 0], RefillDue = Infinity, PhaseDue = Infinity, EndedDue = Infinity, Pending = null, UnsentTold = false;
+let IssuedTo = 0, Skip = 0, Issued = [-Infinity, 0], RefillDue = Infinity, PhaseDue = Infinity, EndedDue = Infinity, UnsentTold = false;
 let Cut = null; // a tempo edit's time and the segment before it, for the fill that follows
 const order = (a, b) => a.at - b.at || a.track - b.track || a.step - b.step;
 // Clock in (D9): the follower while the owner follows an input; the last arming followed one, so `exactTransport` answers
@@ -387,8 +389,23 @@ const look = q => {
   return { on, key, args: on ? q.args() : [] };
 };
 Sounds.transportAnswer = Answer;
-Sounds.gate = () => { Pending = null; if (Seqs.length) Pending = untracked(() => Seqs.map(look)); };
-Sounds.stood = () => { const seen = Pending; Pending = null; if (seen) stood(seen); else T()?.flush(); };
+let Frozen = false, Snapshot = 0, Applied = 0;
+Sounds.gate = () => ({ seen: Seqs.length ? untracked(() => Seqs.map(look)) : null, frozen: Sounds.frozen === true, id: ++Snapshot });
+Sounds.stood = pending => {
+  if (!pending) return T()?.flush();
+  // A freeze has already applied its settled sequence state; older tree updates cannot restore it.
+  if (pending.id <= Applied) return;
+  Applied = pending.id;
+  if (pending.seen) stood(pending.seen); else T()?.flush();
+};
+Sounds.committed = pending => {
+  if (!pending) return;
+  const freeze = pending.frozen && !Frozen;
+  Frozen = pending.frozen;
+  if (!freeze) return;
+  Sounds.stood(pending);
+  if (Owner != null) { const before = answerKey(); stop(clock.now, 'background'); after(before); }
+};
 // The beat at `t` while a sequence plays, by the segment that holds it; −1 while stopped or waiting (a MIDI input's `beat`).
 // Following a clock, by the one segment hits are issued under: its segments do not join (D9).
 Sounds.beatAt = t => Owner == null || State === 'waiting' || !Segments.length ? -1 : beatAt(Follow ? seg() : Segments.findLast(g => g.at <= t) ?? Segments[0], t);
@@ -399,6 +416,7 @@ Sounds.clockIn = msgs => { const before = answerKey(); follow(msgs, clock.now); 
 /** Every `sequence name when gate key=key` (LLP 1125 D2), `[gate, key, args, ended, name]` each, `args` making `play`'s six
  * arguments: all read first, then armed at mount where a gate holds, as the runner's boot does, so a refusal arms none. */
 export function sequence(list) {
+  watchPage(true);
   for (const [gate, key, args, ended, name] of list) Seqs.push({ gate, key: key || null, args, ended, name, on: false, kt: undefined });
   stood(untracked(() => Seqs.map(look)));
 }

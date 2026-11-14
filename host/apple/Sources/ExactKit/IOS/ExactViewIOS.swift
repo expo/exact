@@ -421,6 +421,8 @@ public final class ExactView: UIView {
             insets.bottom = 0
         }
         guard frame.width > 0, frame.height > 0 else { return }
+        presenter.owners.beginViewChange()
+        defer { presenter.owners.endViewChange() }
         // A page with no container keeps its area (`frame`) and is drawn in a
         // viewport that takes the whole view, past the status bar and the
         // home indicator, which its content scrolls under (LLP 1130 D1); not
@@ -472,9 +474,11 @@ public final class ExactView: UIView {
             regions = LayoutRegionsIOS.insets(of: self, viewport: cover ? frame : frame.intersection(bounds.inset(by: safe)))
         }
         presenter.placeDocumentMount()
-        // Applying the resize first drains older published batches. They may
-        // lay out navigation too, before the runtime's new frames reach it.
-        if presenter.navigation.primaryOwner != nil { presenter.navigation.fitOwner() }
+        // Establish UIKit's containing bounds before sampling route blocks.
+        if let owner = presenter.navigation.primaryOwner {
+            presenter.navigation.fitOwner()
+            owner.view.layoutIfNeeded()
+        }
         guard size.width > 0, size.height > 0 else { return }
         // The fold (LLP 1078 D5): the container's active division regions,
         // converted into the viewport's space, split it into segments; the
@@ -551,23 +555,15 @@ public final class ExactView: UIView {
         if segments != lastFold, (segments.posture, segments.cols, segments.rows) == (lastFold.posture, lastFold.cols, lastFold.rows) {
             keyed = segments; lastFold = segments
         }
+        change.blocks = presenter.owners.takeChanges()
         session.view(change, fold: keyed)
         // Scale reports also lay out the native container, so size goes first.
         fitDisplay()
         if change.insets != nil || resized { session.natives.scopesChanged() }
-        if resized {
-            // The keys came or went: the tab bar stays under them, and the
-            // field being edited is shown in what they leave (LLP 1116.003
-            // D2.1). Usually already done in the keyboard's animation; this
-            // catches a guide that moved after its notification.
-            presenter.navigation.fitOwner()
-        }
         if segments != lastFold {
             lastFold = segments
             session.segments(segments)
         }
-        // Ownership can change without changing the document or sheet size
-        presenter.owners.publish()
         if keyboard.changed || resized {
             presenter.menus.rehostPopovers()
             presenter.revealEditorAsTheKeysMove()

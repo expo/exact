@@ -132,6 +132,30 @@ if (cmd[0] === 'shell' && cmd[1] === '-T') {
     dispose() { server.stop(true); rmSync(dir, { recursive: true, force: true }); rmSync(reverseRoot(serial), { recursive: true, force: true }); },
   };
 }
+test('the Android reader uses its declared package and suffix for lookup, launch and drive storage', async () => {
+  const { androidDeploy } = await import('./agent-android.mjs');
+  const fixture = androidDriveFixture(true);
+  fixture.app.manifest = { app: { id: fixture.app.id }, host: { android: { id: 'com.example.android_app' } } };
+  fixture.env.ORG_GRADLE_PROJECT_idSuffix = '.dev';
+  const id = 'com.example.android_app.dev';
+  let child;
+  try {
+    const deployed = androidDeploy(fixture.app, fixture.bin, fixture.env);
+    expect(deployed.dir).toBe(`/data/local/tmp/exact/${id}`);
+    child = deployed.spawn();
+    const closed = once(child, 'close');
+    child.stdout.once('data', () => child.stdin.end('{"op":"quit"}\n'));
+    expect(await closed).toEqual([0, null]);
+    const commands = fixture.commands().map(args => args.slice(2));
+    expect(commands.some(args => args[0] === 'shell' && args[1].includes(`pm path '${id}'`))).toBe(true);
+    expect(commands.some(args => args[0] === 'shell' && args[1].includes(`${id}/dev.exact.app.MainActivity`))).toBe(true);
+    expect(commands.some(args => args.join(' ').includes(fixture.app.id))).toBe(false);
+  } finally {
+    if (child?.exitCode === null) { const closed = once(child, 'close'); child.kill(); await closed; }
+    fixture.dispose();
+  }
+});
+
 test('Android screen dumps recognize both delegate headings and stop at the next section', () => {
   for (const [name, wakefulness, showing, secure] of [
     ['awake-unlocked', 'Awake', false, false], ['asleep-no-lock', 'Asleep', false, false],
@@ -770,11 +794,14 @@ test.skipIf(process.platform === 'win32')('Android tries PATH after an unusable 
 
 const releaseJavaEnv = androidJavaEnv(process.env);
 const releaseSdk = androidSdk(process.env);
-test.skipIf(process.platform !== 'darwin' || !releaseJavaEnv ||
-  !androidSdkPackages().every(pkg => existsSync(resolve(releaseSdk, pkg.path))))('Android release metadata and signing reach Gradle without patching its source', async () => {
+for (const id of [undefined, 'com.example.android_app']) test.skipIf(process.platform !== 'darwin' || !releaseJavaEnv ||
+  !androidSdkPackages().every(pkg => existsSync(resolve(releaseSdk, pkg.path))))(`Android release metadata and signing reach Gradle with ${id ?? 'the default package'}`, async () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-android-release-'));
+  const packageId = id ?? 'dev.exact.ci';
   try {
-    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ app: { id: 'dev.exact.ci', name: 'CI' } }));
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ app: { id: 'dev.exact.ci', name: 'CI' },
+      host: { android: { id } },
+      shortcuts: [{ name: 'Open', url: '/open' }] }));
     writeFileSync(resolve(dir, 'upload.jks'), 'configuration fixture');
     const init = resolve(dir, 'inspect.gradle');
     writeFileSync(init, `allprojects { repositories { maven { url = uri('https://127.0.0.1:9/unused-ci-mirror') } } }
@@ -785,6 +812,7 @@ test.skipIf(process.platform !== 'darwin' || !releaseJavaEnv ||
           def android = app.extensions.getByName('android')
           def signing = android.buildTypes.release.signingConfig
           println('EXACT_RELEASE=' + groovy.json.JsonOutput.toJson([
+            id: android.defaultConfig.applicationId, suffix: android.defaultConfig.applicationIdSuffix,
             code: android.defaultConfig.versionCode, version: android.defaultConfig.versionName,
             signing: signing.name, store: signing.storeFile.name,
             passwords: signing.storePassword == 'store-secret' && signing.keyPassword == 'key-secret',
@@ -793,14 +821,23 @@ test.skipIf(process.platform !== 'darwin' || !releaseJavaEnv ||
       }
     }`);
     const result = spawnSync(resolve(import.meta.dir, '../host/android/gradlew'), ['--no-daemon', '--console=plain', '-I', init,
-      ':app:inspectRelease', '-Papp=ci', `-PappDir=${dir}`, `-PappBuildDir=${dir}/app`, `-PcanvasBuildDir=${dir}/canvas`, '--project-cache-dir', `${dir}/cache`],
+      ':app:processReleaseMainManifest', ':app:inspectRelease', '-PidSuffix=.dev', '-Papp=ci', `-PappDir=${dir}`, `-PappBuildDir=${dir}/app`, `-PcanvasBuildDir=${dir}/canvas`, '--project-cache-dir', `${dir}/cache`],
     { cwd: resolve(import.meta.dir, '../host/android'), encoding: 'utf8', timeout: 180000,
       env: { ...releaseJavaEnv, ANDROID_HOME: releaseSdk,
         EXACT_BUILD_NUMBER: '42', EXACT_VERSION: '2.3.4', EXACT_KEYSTORE: resolve(dir, 'upload.jks'),
         EXACT_KEYSTORE_PASSWORD: 'store-secret', EXACT_KEY_ALIAS: 'upload', EXACT_KEY_PASSWORD: 'key-secret' } });
     expect(result.status, result.stdout + result.stderr).toBe(0);
     const line = result.stdout.split('\n').find(line => line.startsWith('EXACT_RELEASE='));
-    expect(JSON.parse(line.slice('EXACT_RELEASE='.length))).toEqual({ code: 42, version: '2.3.4', signing: 'upload', store: 'upload.jks', passwords: true, alias: 'upload' });
+    expect(JSON.parse(line.slice('EXACT_RELEASE='.length))).toEqual({ id: packageId, suffix: '.dev', code: 42, version: '2.3.4', signing: 'upload', store: 'upload.jks', passwords: true, alias: 'upload' });
+    const { readdirSync } = await import('node:fs');
+    const manifests = readdirSync(resolve(dir, 'app/intermediates'), { recursive: true })
+      .filter(path => /merged_manifest.*AndroidManifest.xml$/.test(path));
+    expect(manifests.length).toBeGreaterThan(0);
+    const merged = readFileSync(resolve(dir, 'app/intermediates', manifests[0]), 'utf8');
+    expect(merged).toContain(`package="${packageId}.dev"`);
+    expect(merged).toContain(`android:authorities="${packageId}.dev.exact.files"`);
+    const shortcuts = readFileSync(resolve(dir, 'app/shortcuts/res/xml/exact_shortcuts.xml'), 'utf8');
+    expect(shortcuts).toContain(`android:targetPackage="${packageId}.dev"`);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }, 200000);
 
@@ -966,5 +1003,28 @@ test('a locked Gradle failure keeps its output and names lock repair only for de
       expect(result.stderr).toContain(message);
       expect(result.stderr.includes(advice)).toBe(expected);
     }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('an Android picker answer carries local file bytes and names to either carrier', async () => {
+  const { sessionInput } = await import('./agent-input.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-agent-pick-'));
+  try {
+    const names = ['notes with spaces.txt', 'photo.png', ...(process.platform === 'win32' ? [] : ['foo\\bar.txt'])];
+    const paths = names.map(name => resolve(dir, name));
+    const bytes = [Buffer.from('notes\n'), readFileSync(resolve(import.meta.dir, 'fixtures/picker/photo.png')), Buffer.from('backslash\n')];
+    paths.forEach((path, i) => writeFileSync(path, bytes[i]));
+    const calls = [], s = {
+      op: async req => {
+        if (req.op === 'state') return { pending: [{ ticket: 7, device: { capability: 'pick' } }] };
+        calls.push(req); return {};
+      },
+      landed: async r => r,
+    };
+    Object.assign(s, sessionInput(s, { carrier: {}, host: 'android' }));
+    await s.answer('type', '@7', paths.join('\n'));
+    expect(calls).toEqual([{ op: 'type', ticket: 7, text: paths.join('\n') + '\n',
+      files: names.map((name, i) => ({ name, bytes: bytes[i].toString('base64') })),
+    }]);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

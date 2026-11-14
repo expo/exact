@@ -322,10 +322,7 @@ impl<D: DataSource> Runner<D> {
             self.store.take_sockets();
         }
         self.stage_answer(p.target);
-        self.hear_aborted();
-        for line in self.data.take_logs() {
-            self.log(line);
-        }
+        self.take_data_logs();
         // What this reply's turn watched joins the resource's topics whatever
         // the reply says: a turn that yields another request (a long native
         // call) watched them as much as the one that answers.

@@ -1,7 +1,68 @@
 use super::*;
 
 #[test]
-fn new_opens_a_centered_dialog_that_switches_kinds_and_saves_on_enter() {
+fn calendar_artwork_and_controls_clear_the_screen_insets_once() {
+    let root = Root::new();
+    let mut app = App::open(&root);
+    app.runner
+        .kernel_mut()
+        .set_env(Env::new(62.0, 0.0, 34.0, 0.0))
+        .unwrap();
+    app.resize(402.0, 874.0);
+    let route = app
+        .runner
+        .kernel()
+        .node_by_key(app.key("calendar-main"))
+        .unwrap()
+        .parent
+        .unwrap();
+    app.runner
+        .kernel_mut()
+        .set_host_cover(
+            route,
+            Some(exact_kernel::HostCover::Edges([62.0, 0.0, 34.0, 0.0])),
+        )
+        .unwrap();
+    app.layout();
+    assert_eq!(app.frame("calendar-header").y, 62.0);
+    let add = app.frame("new-item");
+    assert_eq!(add.y + add.height, 874.0 - 34.0 - 24.0);
+    app.press("theme-button");
+    app.press("theme-1");
+    app.finish_motion();
+    assert_eq!(app.frame("theme-wallpaper").y, 0.0);
+    app.resize(1180.0, 800.0);
+    assert_eq!(app.frame("calendar-header").y, 62.0);
+    assert_eq!(app.frame("inspector").y, 0.0);
+}
+
+#[test]
+fn editor_kind_choices_stay_in_the_body_below_the_native_bar() {
+    let root = Root::new();
+    let mut app = App::open(&root);
+    app.press("new-item");
+    let kernel = app.runner.kernel();
+    let route = kernel.node_by_key(app.key("schedule-editor")).unwrap().id;
+    let bar = kernel
+        .header_shape(route, Some("cancel-editor"), false, &|id| {
+            ["kind-event", "kind-plan", "kind-todo"]
+                .iter()
+                .any(|name| kernel.node_by_key(app.key(name)).unwrap().id == id)
+        })
+        .unwrap();
+    assert!(
+        bar.items.is_empty(),
+        "kind choices must not become bar buttons: {bar:?}"
+    );
+    assert_eq!(
+        bar.heading,
+        Some(kernel.node_by_key(app.key("editor-title")).unwrap().id)
+    );
+    assert!(app.frame("kind-tabs").y >= app.frame("editor-fields").y);
+}
+
+#[test]
+fn new_opens_a_modal_route_that_switches_kinds_and_saves_on_enter() {
     let root = Root::new();
     let mut app = App::open(&root);
     app.press("date-2026-09-2026-09-25");
@@ -9,13 +70,25 @@ fn new_opens_a_centered_dialog_that_switches_kinds_and_saves_on_enter() {
     assert_eq!(app.state("editorOpen"), &Value::Bool(true));
     assert_eq!(app.text("editor-title"), "New Event");
     assert_eq!(app.derived("startDate").as_str(), Some("2026-09-25"));
-    let dialog = app.frame("schedule-editor");
-    assert_eq!(dialog.width, 480.0);
-    assert!(
-        (dialog.x + dialog.width / 2.0 - WIDTH / 2.0).abs() < 0.5,
-        "the dialog is centered in the window"
+    assert_eq!(
+        app.runner
+            .kernel()
+            .node_by_key(app.key("schedule-editor"))
+            .unwrap()
+            .props
+            .str(PropId::NavigationPresentation),
+        Some("modal"),
+        "the editor is presented by the host"
     );
-    assert!(dialog.y > 0.0 && dialog.y + dialog.height < HEIGHT);
+    assert_eq!(
+        app.runner
+            .kernel()
+            .node_by_key(app.key("schedule-editor"))
+            .unwrap()
+            .props
+            .str(PropId::NavigationKey),
+        Some("editor")
+    );
 
     app.press("kind-todo");
     assert!(app.mounted("todo-editor"));
@@ -42,7 +115,7 @@ fn new_opens_a_centered_dialog_that_switches_kinds_and_saves_on_enter() {
 }
 
 #[test]
-fn escape_and_cancel_close_without_writing_and_the_backdrop_keeps_the_dialog() {
+fn escape_and_cancel_close_the_editor_without_writing() {
     let root = Root::new();
     let mut app = App::open(&root);
     let revision = app.derived("revision").clone();
@@ -52,16 +125,14 @@ fn escape_and_cancel_close_without_writing_and_the_backdrop_keeps_the_dialog() {
     assert_eq!(app.derived("startDate").as_str(), Some("2026-09-21"));
     assert_eq!(app.derived("day"), &day(20));
     app.input("schedule-title", "Unsaved");
-    app.press("editor-backdrop");
-    app.press("schedule-editor");
     assert_eq!(app.state("editorOpen"), &Value::Bool(true));
     assert_eq!(app.derived("title").as_str(), Some("Unsaved"));
     app.key_press("schedule-title", "Enter");
     app.key_press("schedule-title", "Escape");
-    assert_eq!(app.state("editorClosing"), &Value::Bool(true));
+    assert_eq!(app.state("editorOpen"), &Value::Bool(false));
     app.finish_motion();
     assert_eq!(app.state("editorOpen"), &Value::Bool(false));
-    assert!(!app.mounted("editor-backdrop"));
+    assert!(!app.mounted("schedule-editor"));
 
     app.event("date-2026-09-2026-09-21", Event::Dblclick);
     app.press("cancel-editor");
@@ -126,7 +197,10 @@ fn check_context_menu(compact: bool) {
     assert_eq!(app.state("editorOpen"), &Value::Bool(true));
     assert_eq!(app.state("confirmDelete"), &Value::Bool(true));
     assert!(app.mounted("confirm-delete"));
-    assert!(!app.mounted("cancel-editor"), "one Escape button at a time");
+    assert!(
+        app.mounted("cancel-editor"),
+        "the sheet can still be dismissed"
+    );
     app.press("keep-schedule");
     assert_eq!(app.state("confirmDelete"), &Value::Bool(false));
     assert!(app.mounted("cancel-editor"));
@@ -169,32 +243,34 @@ fn a_failed_save_keeps_the_draft_and_its_retry_writes_once() {
 }
 
 #[test]
-fn the_theme_panel_hangs_under_its_button_and_the_choice_survives_restart() {
+fn the_theme_popover_keeps_its_choice_across_restart() {
     let root = Root::new();
     let mut app = App::open(&root);
     app.press("theme-button");
     assert_eq!(app.state("themeOpen"), &Value::Bool(true));
-    let panel = app.frame("theme-popup");
-    let button = app.frame("theme-button");
-    assert!(
-        (panel.x + panel.width - (button.x + button.width)).abs() < 0.5,
-        "the panel's right edge meets its button's"
+    assert_eq!(
+        app.runner
+            .kernel()
+            .node_by_key(app.key("theme-popup"))
+            .unwrap()
+            .props
+            .str(PropId::Popover),
+        Some("auto")
     );
-    assert!(panel.y > button.y + button.height);
     app.press("theme-popup");
     assert_eq!(
         app.state("themeOpen"),
         &Value::Bool(true),
         "its own surface keeps it"
     );
-    app.press("theme-backdrop");
+    app.press("close-themes");
     app.finish_motion();
-    assert!(!app.mounted("theme-popup"));
+    assert_eq!(app.state("themeOpen"), &Value::Bool(false));
 
     app.press("theme-button");
     app.press("theme-3");
     app.finish_motion();
-    assert!(!app.mounted("theme-popup"));
+    assert_eq!(app.state("themeOpen"), &Value::Bool(false));
     assert_eq!(app.runner.resource("theme").unwrap(), &Value::Number(3.0));
     assert!(app.mounted("theme-wallpaper"));
     drop(app);
@@ -204,7 +280,7 @@ fn the_theme_panel_hangs_under_its_button_and_the_choice_survives_restart() {
     app.press("theme-button");
     app.press("close-themes");
     app.finish_motion();
-    assert!(!app.mounted("theme-popup"));
+    assert_eq!(app.state("themeOpen"), &Value::Bool(false));
 }
 
 #[test]
@@ -215,7 +291,7 @@ fn the_san_francisco_theme_is_offered_and_survives_restart() {
     assert!(app.mounted("theme-6"));
     app.press("theme-6");
     app.finish_motion();
-    assert!(!app.mounted("theme-popup"));
+    assert_eq!(app.state("themeOpen"), &Value::Bool(false));
     assert_eq!(app.runner.resource("theme").unwrap(), &Value::Number(6.0));
     assert!(app.mounted("theme-wallpaper"));
     drop(app);
@@ -278,7 +354,15 @@ fn compact_picker_and_editor_preserve_a_draft_across_the_breakpoint() {
     assert_eq!(app.derived("compact"), &Value::Bool(true));
     assert!(!app.mounted("inspector"));
     app.press("new-item");
-    assert!(app.mounted("type-picker"));
+    assert_eq!(
+        app.runner
+            .kernel()
+            .node_by_key(app.key("type-picker"))
+            .unwrap()
+            .props
+            .str(PropId::Popover),
+        Some("auto")
+    );
     app.press("add-plan");
     app.input("schedule-title", "Shared draft");
     app.input("end-date", "2026-09-04");

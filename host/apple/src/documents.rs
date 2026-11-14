@@ -30,7 +30,7 @@ const OPS: [&str; 8] = [
 
 /// Whether an app keeps the documents a person chooses (D7): on a Mac; iOS
 /// keeps nothing until an iOS document app asks (the LLP's Rulings).
-fn keeps(grants: &str) -> bool {
+pub(crate) fn keeps(grants: &str) -> bool {
     cfg!(target_os = "macos") && grants.lines().any(|line| line.trim() == "doc.keep")
 }
 

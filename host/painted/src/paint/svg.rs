@@ -238,15 +238,14 @@ impl Painter {
                 .runs
                 .iter()
                 .map(|r| {
-                    let s = exact_kernel::StyleProps {
-                        font_size: r.style.font_size,
-                        font_weight: r.style.font_weight,
-                        font_style: r.style.font_style,
-                        font_family: r.style.font_family,
-                        letter_spacing: r.style.letter_spacing,
-                        white_space: WhiteSpace::PreWrap,
-                        ..Default::default()
-                    };
+                    let s = exact_kernel::StyleProps::default().with_rows(|rows| {
+                        rows.font_size = r.style.font_size;
+                        rows.font_weight = r.style.font_weight;
+                        rows.font_style = r.style.font_style;
+                        rows.font_family = r.style.font_family;
+                        rows.letter_spacing = r.style.letter_spacing;
+                        rows.white_space = WhiteSpace::PreWrap;
+                    });
                     let spec = super::text_spec(&s, &r.text);
                     (self.text.borrow_mut().paragraph(&spec, None), r)
                 })

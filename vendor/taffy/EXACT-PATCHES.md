@@ -3,7 +3,7 @@
 - **Upstream:** `taffy` 0.14.0, crates.io package supplied offline at
   `~/Library/Caches/exact2-textflow/taffy-0.14.0/` (M8, 2026-09-18).
   The archive's `.cargo_vcs_info.json` pins commit `77f385683c1d698c91a23a259f87fdddf26925fb`.
-- **Why vendored:** patches 3, 4, 5, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74 and 75 below remain. `[patch.crates-io]`
+- **Why vendored:** patches 3, 4, 5, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75 and 76 below remain. `[patch.crates-io]`
   selects this copy; the kernel declares `taffy = "0.14"`.
 - **Owner:** Charlie Cheever (kernel/layout).
 - **Features:** std, taffy_tree, flexbox, grid, block_layout, content_size, calc.
@@ -2390,3 +2390,15 @@ Host blocks lay out separately and do not inherit an ancestor's clearance.
 `kernel/src/kernel/owner_tests.rs`, including literal Chrome inner-box geometry,
 the Duo's 951-point allocation and 49-point bottom cover, changing covers,
 static descendants, nested positioned boxes and independent host blocks.
+
+## Patch 76: fractional flex factors share the space beside the gaps — to upstream
+
+When a line's unfrozen flex factors sum below one, `resolve_flexible_lengths`
+distributes that fraction of the initial free space (CSS Flexbox §9.7 step 4b).
+The initial free space already excludes the line's gaps; 0.14.0 subtracted them
+again, growing and shrinking alike. Taffy 0.15.1 has the same line.
+
+**Held by** `kernel/tests/it/browser_flex.rs::fractional_flex_factors_share_the_space_beside_the_gap`:
+two items with `flex-grow: 0.25` and 100-point content, 40 points apart in a
+300-point row, are 115 wide in Chrome; before the repair their targets fell to
+95 and the automatic minimum held them at 100.

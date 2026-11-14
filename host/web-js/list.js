@@ -277,7 +277,7 @@ class Collection {
     this.port = sizes.length ? Math.min(...sizes) : null;
     this.bootstrap = o.init ?? Math.max(1, Math.min(BOOTSTRAP_ROWS, Math.min(Math.ceil(BOOTSTRAP_ROWS * ESTIMATED / this.est), o.inRow && this.port ? Math.ceil(this.port / this.est) + 1 : Infinity)));
     Object.assign(this, { items: [], idents: [], dups: new Map(), positionDependentKeys: new Set(), bodyDirty: false, mounted: [], spacers: [], children: [], revision: 0, nextEpoch: 0,
-      zeros: new Set(), geometry: null, correction: null, endSent: NaN, followEnd: false, edgeArmed: [true, true], edgeFired: [null, null], pending: false, parent: null,
+      zeros: new Set(), geometry: null, correction: null, endSent: NaN, followEnd: false, edgeArmed: [true, true], edgeFired: [null, null], startOwed: false, pending: false, parent: null,
       kept: new Map(), manual: !!o.manual, restored: false, restoredAt: null, startOffset: 0, inner: [], target: null, scrolling: false, animating: false, portUnknown: false, request: 0, status: null, preview: null, atEnd: !!o.atEnd, endTravel: 0, keepKeys: [] });
     this.edges = [o.start, o.end]; this.reach = reachMargin(o.reach);
   }
@@ -310,7 +310,7 @@ class Collection {
     if (this.o.keep) this.keepKeys = keepIdents(this.o.keep());
     Remount.delete(this);
     let anchor = this.anchor();
-    const dropAnchor = this.dropAnchor?.(), last = this.index.order.at(-1), count = this.index.len;
+    const dropAnchor = this.dropAnchor?.(), old = this.index.order, last = this.index.order.at(-1), count = this.index.len;
     const rekeyed = resetMeasurements || idents.length !== this.idents.length || idents.some((k, i) => k !== this.idents[i]);
     const positions = resetMeasurements ? [] : this.changedPositions(items, idents);
     if (rekeyed) { this.index.replace(idents); this.idents = idents; this.dups = dups; }
@@ -331,7 +331,7 @@ class Collection {
     }
     const previous = !rekeyed && JSON.stringify(this.snapshot());
     if (resetMeasurements) { this.invalidateEstimates(); } else { this.invalidateRows(positions); }
-    if (!this.index.len) this.edgeArmed = [true, true];
+    if (!this.index.len) { this.edgeArmed = [true, true]; this.startOwed = false; }
     // Rows that arrived are a new end: the old last row is still here with
     // rows after it, or the list grew and kept it (a page inserted before a
     // trailing row that stays last), so it re-arms (LLP 1010, the 2026-09-29
@@ -339,6 +339,8 @@ class Collection {
     // that slid past it re-arm nothing.
     const kept = last === undefined ? undefined : this.index.pos.get(last);
     if (kept !== undefined && (kept < this.index.len - 1 || this.index.len > count)) this.edgeArmed[1] = true;
+    // A page before the first row re-arms the start once the window is measured (reach.rs `page_before_start`).
+    if (this.edges[0] && this.pageBeforeStart(old)) this.startOwed = true;
     // The request's row left the items: it ends now, where the reader is (into_view.rs `cancel_if_row_left`).
     if (this.target && !this.index.pos.has(this.target.key)) this.end("cancelled");
     if (this.portUnknown) this.correction = null; else this.restore(anchor);
@@ -969,7 +971,19 @@ class Collection {
     const start = Math.min(p, this.index.rowAt(Math.max(0, at)) ?? p), measured = q => this.index.measured(this.index.order[q]);
     return measured(p) && this.mounted.some(m => m.position === p) && !this.mounted.some(m => m.position >= start && m.position < p && !measured(m.position));
   }
-  disarm(i) { this.edgeArmed[i] = false; this.edgeFired[i] = this.index.order[i ? this.index.len - 1 : 0] ?? null; }
+  // reach.rs `page_at_start` (LLP 1168.000 D1.1): new rows before the kept first row, new rows between a leading row
+  // that stays first and the kept old second row, or rows given to a leading row that was alone.
+  pageBeforeStart(old) {
+    const pos = this.index.pos, order = this.index.order, first = old.length ? pos.get(old[0]) : undefined;
+    if (first === undefined) return false;
+    // The set holds only the range; each old key is looked up in it once.
+    const fresh = (from, to) => { const keys = new Set(order.slice(from, to)); return !old.some(k => keys.has(k)); };
+    if (first > 0) return fresh(0, first);
+    if (old.length === 1) return this.index.len > 1;
+    const second = pos.get(old[1]);
+    return second !== undefined && second > 1 && fresh(1, second);
+  }
+  disarm(i) { if (i === 0) this.startOwed = false; this.edgeArmed[i] = false; this.edgeFired[i] = this.index.order[i ? this.index.len - 1 : 0] ?? null; }
   edge(velocity) {
     const reached = [false, false], g = this.geometry;
     if (g && this.index.len) {
@@ -978,7 +992,9 @@ class Collection {
       const w = this.index.window(g.offset, g.port_main), n = this.index.len - 1;
       const within = band => { const s = this.index.window(g.offset, g.port_main, band).segments; return [0, n].map(e => s.some(r => e >= r[0] && e < r[1])); };
       [reached[0], reached[1]] = within(reachBand(this.reach, g.port_main, velocity));
-      if (!(this.edgeArmed[0] && this.edgeArmed[1]) && this.index.rangeMeasured(...w.overscan)) {
+      const measured = this.index.rangeMeasured(...w.overscan);
+      if (this.startOwed && measured) { this.edgeArmed[0] = true; this.startOwed = false; }
+      if (!(this.edgeArmed[0] && this.edgeArmed[1]) && measured) {
         const rest = within(reachBand(this.reach, g.port_main, 0));
         for (const i of [0, 1]) this.edgeArmed[i] ||= !reached[i] || (this.edgeFired[i] !== this.index.order[i ? n : 0] && !rest[i]);
       }

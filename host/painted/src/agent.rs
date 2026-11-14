@@ -743,6 +743,7 @@ fn prefer<D: DataSource>(p: &mut Presenter<D>, line: &str) -> String {
             ("can-open-files", v @ ("true" | "false")) => page.can_open_files = v == "true",
             // @ref LLP 1020.002 D1 — false here, where no iframe loads.
             ("iframe-partition", v @ ("true" | "false")) => page.iframe_partition = v == "true",
+            ("frozen", v @ ("true" | "false")) => page.frozen = v == "true",
             ("has-focus", v @ ("true" | "false")) => page.has_focus = v == "true",
             // @ref LLP 1139.003 D2 — the fact, and the modules' tier: their
             // renderers are made again at the new rung.
@@ -824,6 +825,7 @@ fn prefer<D: DataSource>(p: &mut Presenter<D>, line: &str) -> String {
         "can-open-files": page.can_open_files,
         "iframe-partition": page.iframe_partition,
         "has-focus": page.has_focus,
+        "frozen": page.frozen,
         "root-font-size": p.host().runner().root_font_size(),
         "display-scale": p.host().runner().display_scale(),
         "gpu-tier": page.gpu_tier(),

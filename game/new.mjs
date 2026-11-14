@@ -6,7 +6,7 @@ import { basename, dirname, relative, resolve } from 'node:path';
 import { capturedLockDrift, gameDefaults, gameShells, prepareGame, sdkFetch } from './app/shells.mjs';
 import { cargoEnvironment, lockedMetadata, pathFrom, patchLines } from '../scripts/app.mjs';
 import { PLATFORMS, SDK_CRATES, appCrateName, authoredCrate, copiedBuildScripts, namePlatform, withoutPlatformKeys } from '../scripts/app-shells.mjs';
-import { updateManifests } from './update-manifests.mjs';
+import { updateManifests, updateScaffold } from './update-manifests.mjs';
 import { RUST_PLATFORMS, rustListing, writeRustApp } from '../scripts/app-rust.mjs';
 export { exact2Placeholders } from './update-manifests.mjs';
 import { APP_CRATES, NO_WORKSPACE } from '../scripts/cargo-check.mjs';
@@ -1145,6 +1145,16 @@ process.exit(await run({ dir: import.meta.dir, name: ${JSON.stringify(name)},${g
 `;
 }
 
+function writeCommands(dir, name, options) {
+  const file = resolve(dir, 'exact.mjs'), next = commandsFor(dir, name, options);
+  const previous = existsSync(file) ? readFileSync(file, 'utf8') : '';
+  const checkout = text => /const (?:path = |EXACT2 = resolve\(import\.meta\.dir, )process\.env\.(?:EXACT|EXACT2)[^\n]*\?\? ("(?:\\.|[^"\\])*")\)?;/.exec(text)?.[1];
+  const before = checkout(previous), after = checkout(next);
+  writeFileSync(file, next);
+  chmodSync(file, 0o755);
+  return before && before !== after ? [`exact.mjs now names the Exact checkout ${JSON.parse(after)} (it named ${JSON.parse(before)}; update names the checkout it runs from)`] : [];
+}
+
 /** Cargo re-resolves the copied lock for this workspace, offline and minimally.
  * A new app whose crates this machine's Cargo cache lacks keeps exact2's lock
  * as copied (`deferrable`); `resolveApp` resolves a lock still identical to
@@ -1337,9 +1347,7 @@ function updateApp(dir, name, { without = null, with: platforms = [] } = {}) {
   // A game has no workspace of its own (the bake generates .shells/): its runner and notes are all there is to rewrite.
   if (existsSync(resolve(dir, 'app.contract')) && !existsSync(resolve(dir, 'Cargo.toml')) && gameDefaults(dir)) {
     if (without || platforms.length) throw new Error('update --with and --without: a game\'s hosts are its bake\'s (game/README.md), not platforms of its own');
-    writeFileSync(resolve(dir, 'exact.mjs'), commandsFor(dir, name, {game:true}));
-    chmodSync(resolve(dir, 'exact.mjs'), 0o755);
-    const notes = updateNotes(dir, name, {game:true});
+    const notes = [...writeCommands(dir, name, {game:true}), ...updateScaffold(dir), ...updateNotes(dir, name, {game:true})];
     if (editorTasks(dir, {game:true})) notes.push('.vscode/tasks.json');
     let drift = null;
     try {
@@ -1353,10 +1361,8 @@ function updateApp(dir, name, { without = null, with: platforms = [] } = {}) {
   // An app that authored no workspace (LLP 1153 D1): no Cargo file to rewrite; the platforms it ships are app.json's keys,
   // and the verb that builds one regenerates its workspace from them.
   if (!authoredApp(dir)) {
-    writeFileSync(resolve(dir, 'exact.mjs'), commandsFor(dir, name));
-    chmodSync(resolve(dir, 'exact.mjs'), 0o755);
     const edits = platformEdits(dir, platforms, without);
-    const notes = updateNotes(dir, name);
+    const notes = [...writeCommands(dir, name), ...updateScaffold(dir), ...updateNotes(dir, name)];
     if (editorTasks(dir)) notes.push('.vscode/tasks.json');
     const unmounted = refreshManifestPaths(dir);
     defaultTest(dir);
@@ -1374,8 +1380,7 @@ function updateApp(dir, name, { without = null, with: platforms = [] } = {}) {
   writeFileSync(resolve(dir, 'rust-toolchain.toml'), readFileSync(resolve(ROOT, 'rust-toolchain.toml')));
   mkdirSync(resolve(dir, '.cargo'), { recursive: true });
   writeFileSync(resolve(dir, '.cargo/config.toml'), readFileSync(resolve(ROOT, '.cargo/config.toml')));
-  writeFileSync(resolve(dir, 'exact.mjs'), commandsFor(dir, name));
-  chmodSync(resolve(dir, 'exact.mjs'), 0o755);
+  const commands = writeCommands(dir, name);
   // `android/` is Android's alone and goes with it. The `linux/` crate serves Linux and Android's headless drive: it goes
   // with Linux unless Android is named; otherwise a platform's keys go and the crate it shares (`apple/`) stays.
   const named = (p) => { try { return p in (JSON.parse(readFileSync(resolve(dir, 'app.json'), 'utf8')).host ?? {}); } catch { return false; } };
@@ -1418,7 +1423,7 @@ function updateApp(dir, name, { without = null, with: platforms = [] } = {}) {
     rootText = rootText.replace(/^members\s*=\s*\[([^\]]*)\]/m, (line, list) =>
       /"android"/.test(list) ? line : `members = [${[...list.split(',').map(m => m.trim()).filter(Boolean), '"android"'].sort().join(', ')}]`);
   }
-  const notes = updateNotes(dir, name);
+  const notes = [...commands, ...updateScaffold(dir), ...updateNotes(dir, name)];
   if (editorTasks(dir)) notes.push('.vscode/tasks.json');
   const unmounted = refreshManifestPaths(dir);
   defaultTest(dir);

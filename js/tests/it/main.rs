@@ -22,6 +22,7 @@ mod interrupt;
 mod kept_json;
 mod listen;
 mod mapper;
+mod native_init;
 mod native_later;
 mod native_storage;
 mod network;

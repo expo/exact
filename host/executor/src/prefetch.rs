@@ -61,12 +61,15 @@ impl Core {
             return;
         }
         if owned.is_none() {
-            let set = Preloads::start_clock(
+            let mut set = Preloads::start_clock(
                 Vec::new(),
                 &self.grants,
                 self.stream_host.clone(),
                 cache.clock.clone(),
             );
+            Arc::get_mut(&mut set.destination)
+                .expect("unstarted preload set")
+                .journal_pending = cache.journal_pending.clone();
             *set.destination.state.lock().unwrap() = Destination::Adopted(
                 Arc::downgrade(&self.shared),
                 self.machine.as_ref().map(|m| Arc::downgrade(&m.timer)),

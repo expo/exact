@@ -109,6 +109,30 @@ final class NavigationCollapseIOSTests: XCTestCase {
         return session
     }
 
+    @MainActor
+    func testAViewportResizeAndItsRouteBlocksUseOneBatch() throws {
+        guard hostedWindowScene() != nil else { throw missing("scene", "route resizing needs UIKit containment") }
+        let session = try booted("EXACT_FIXTURE_PLAN", label: "owner-resize")
+        let view = try XCTUnwrap(session.view), p = session.presenter
+        for width: CGFloat in [380, 402, 360, 402] {
+            waitFor("the previous layout is idle") { !session.ownerInFlight && !Agent(session: session).nativeInFlight() }
+            waitForMainQueue("the previous reports")
+            let batches = session.appliedBatches, syncs = p.navigation.syncCalls
+            let start = CACurrentMediaTime()
+            view.frame.size.width = width
+            view.setNeedsLayout()
+            view.layoutIfNeeded()
+            let milliseconds = (CACurrentMediaTime() - start) * 1000
+            waitForMainQueue("the resize reports")
+            let route = try XCTUnwrap(p.navigation.activeRoute)
+            XCTAssertEqual(p.owners.told[route.node.id]?.block, .size(route.view.bounds.size))
+            XCTAssertEqual(route.node.bounds.size, route.view.bounds.size)
+            XCTAssertEqual(session.appliedBatches - batches, 1, "the viewport and route bounds share a layout")
+            XCTAssertEqual(p.navigation.syncCalls - syncs, 1, "navigation synchronizes once")
+            print("ROUTE-RESIZE width=\(width) ms=\(milliseconds) batches=\(session.appliedBatches - batches) syncs=\(p.navigation.syncCalls - syncs)")
+        }
+    }
+
     func testTopScrollerFollowsOnlyLaidOutNeutralWrappers() throws {
         let p = Presenter()
         let wrapper = NodeView(id: 1, kind: "view", presenter: p)

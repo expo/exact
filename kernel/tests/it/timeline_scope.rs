@@ -406,7 +406,8 @@ fn the_engine_follows_the_node_a_commit_resolves() {
     let fade = || {
         let mut s = StyleProps::default();
         s.animation =
-            crate::keyframed("fade 1s linear both @keyframes fade{from{opacity:1}to{opacity:0}}");
+            crate::keyframed("fade 1s linear both @keyframes fade{from{opacity:1}to{opacity:0}}")
+                .into();
         s.mask.set(StyleId::Animation);
         Box::new(s)
     };

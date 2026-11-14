@@ -883,13 +883,14 @@ fn a_refusal_after_boot_is_journaled_and_a_rolled_back_one_is_not() {
     // A refusal the trap undoes is not said; the seed stands.
     assert!(r.act("refuse", vec![Value::str("B")]).is_err());
     assert!(refused(&r).is_empty());
-    // An identity change that stands is, with the arguments it asks for.
+    // An identity change that stands is, with the argument that differs
+    // and the state it reads.
     r.act("car", vec![Value::str("C")]).unwrap();
     let lines = refused(&r);
     assert_eq!(lines.len(), 1, "{lines:?}");
     assert!(
         lines[0].ends_with(
-            "answer did not use its kept answer: kept for [\"A\"], this launch asks for [\"C\"]"
+            "answer did not use its kept answer: kept for [\"A\"], this launch asks for [\"C\"]: identifying argument 1 is \"C\", reading state car = \"C\""
         ),
         "{lines:?}"
     );

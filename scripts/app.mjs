@@ -535,7 +535,7 @@ export function resolveApp(nameOrCrate) {
     },
     /** The manifest, validated; the derived defaults when the app has none. */
     manifest,
-    /** The app identity, reverse-DNS: the bundle id on every platform (`build.mjs:48–49` derived it from the crate name before the manifest). */
+    /** The shared app identity and Apple bundle id; Android may declare its own package. */
     id: manifest.app.id,
     /** The name people see. */
     displayName: manifest.app.name,
@@ -545,6 +545,9 @@ export function resolveApp(nameOrCrate) {
     declared: existsSync(resolve(dir, 'app.json')),
   };
 }
+
+/** Android's store identity (LLP 1030 D2); the shared id remains the default. */
+export const androidPackageId = manifest => (manifest.host?.android?.id ?? manifest.app.id).replaceAll('-', '_');
 
 /** An app's authored tests (LLP 1017 P7), the files that exist: `app.test.contract`, then every other `*.test.contract`
  * beside it in name order (an app's tests split by area under the line cap). `test`, `verify` and the smoke run these. */
@@ -1128,7 +1131,7 @@ function completeBuild(app, platform, target, graph, messages, roots, env, prepa
     }
   }
   const nativeResources = ['macos', 'ios'].includes(platform) ? nativeResourceInventory(app, null, platform) : []; // `host.<platform>.resources` (iOS's serve tvOS): an edit is a new binary
-  const assetCatalogApp = ['macos', 'ios'].includes(platform) ? { dir: app.dir, platform: target.includes('-tvos') ? 'tvos' : platform, manifest: { host: app.manifest.host } } : null;
+  const assetCatalogApp = ['macos', 'ios'].includes(platform) ? { dir: app.dir, platform: target.includes('-tvos') ? 'tvos' : platform, appleIcons: bundleGraph.appleIcons ?? [], manifest: { host: app.manifest.host } } : null;
   const appleAssetCatalogs = assetCatalogApp ? appleAssetCatalogInventory(assetCatalogApp, assetCatalogApp.platform) : [];
   if (assetCatalogApp) for (const path of [resolve(app.dir, platform, 'modules'), resolve(app.dir, 'modules/apple')]) {
     if (existsSync(path)) directories.set(nameOf(path), {path, names: directoryInputNames(path, watchOutput(watchOutputs))});
@@ -1361,6 +1364,8 @@ export function classifyArtifacts(candidate, cohort, signingKey = null) {
       for(const [name,arities] of Object.entries(need)) for(const arity of arities) if(!cohort.surfaceCalls?.[name]?.includes(arity)) fail(`.${name}/${arity} (not demanded by the installed plan)`);
     } else if(key==='gpuSurfaces') {
       for(const surface of need) if(!have.gpuSurfaces?.some(s=>canonicalBuild(s)===canonicalBuild(surface))) fail(`.${surface.name} (interface ${surface.interface})`);
+    } else if(key==='appleRasterIcons') {
+      for(const [svg, rendition] of Object.entries(need)) if(canonicalBuild(have[key]?.[svg]??null)!==canonicalBuild(rendition)) fail(`.${svg} (requires the installed SVG rendition)`);
     } else if(key==='executors'||key==='hatches') { for(const item of need) if(!have[key]?.includes(item)) fail(key==='hatches'?`.${item} (handled by this platform's module, not by the installed one)`:`.${item}`); // hatches: LLP 1075.003.000.001 §4.3, a cohort from before the capability handles none
     } else if(key==='typescriptRuntime') { if(!((have[key]??0)>=need)) fail(` (requires a prelude of runtime ${need} or later; this cohort's is ${have[key]??0})`); /* LLP 1108 D6 R2: an older prelude ignores exactBodyFrom */ } else if(key==='grantCeiling') {
       const grants=new Set((have.grantCeiling??'').split('\n').filter(Boolean));
@@ -1390,7 +1395,7 @@ export function developmentCandidate(build, plan, assets, surfaces) {
 /** Source staleness is provisional until the next actual bake. These paths
  * came from the previous compiler receipt, including absent watched inputs.
  * `includeSources` also checks replaceable artifacts for a packaged Windows drive. */
-export function pendingBuildInputs(build, { includeSources = false } = {}) {
+export function pendingBuildInputs(build, { includeSources = false, launch } = {}) {
   const changed=[];
   try {if(build.binary.assetCatalogApp && canonicalBuild(appleAssetCatalogInventory(build.binary.assetCatalogApp, build.binary.assetCatalogApp.platform)) !== canonicalBuild(build.binary.metadata.appleAssetCatalogs ?? [])) changed.push('Apple asset catalogs');} catch {changed.push('Apple asset catalogs');}
   const resources=build.binary.nativeResourceApp, resourceKey=`host.${resources?.platform ?? 'macos'}.resources`; try {if(resources && canonicalBuild(nativeResourceInventory(resources, null, resources.platform)) !== canonicalBuild(build.binary.metadata.nativeResources)) changed.push(resourceKey);} catch {changed.push(resourceKey);}
@@ -1399,7 +1404,7 @@ export function pendingBuildInputs(build, { includeSources = false } = {}) {
     catch {changed.push(file.name);}
   }
   for(const path of [...build.binary.missing, ...(build.optionalInputs ?? [])])if(existsSync(path))changed.push(path);
-  for(const {name} of build.settings?settingChanges(build.settings.env,process.env,build.settings.dir):[])changed.push(`import.meta.env.${name}`); // a setting the module inlined, as its sources give it now (LLP 1153 D4)
+  for(const {name} of build.settings?settingChanges(build.settings.env,process.env,build.settings.dir,{launch:launch??(['macos','windows'].includes(build.compat?.inputs?.platform)?process.env:null),windows:build.compat?.inputs?.platform==='windows'}):[])changed.push(`import.meta.env.${name}`); // a setting the module inlined, as its sources give it now (LLP 1153 D4); a marked name `launch`, the environment a drive starts the app with, sets is the launch's (LLP 1153.002 D2): unsaid, this one on a Mac or Windows, which a desktop process inherits
   const output = watchOutput(build.binary.watchOutputs, build.binary.directories.map(({path}) => path));
   for(const {path,names} of build.binary.directories) {
     try {if(!statSync(path).isDirectory()||canonicalBuild(directoryInputNames(path,output))!==canonicalBuild(names))changed.push(path);}

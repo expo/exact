@@ -3,10 +3,97 @@ import { chmodSync, copyFileSync, existsSync, mkdtempSync, mkdirSync, readFileSy
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { appleCommand, crossSdk } from './toolchain.mjs';
+import { appleCommand, crossSdk, spawnSync as appleSpawnSync } from './toolchain.mjs';
 import { decodeProfile } from './devices.mjs';
 import { appleCrossReport, CROSS_IOS_ROWS, distributionToolchain, ensureWatchSimulatorSDK, installWatchSimulatorSDK } from './sdk.mjs';
 import { iosTestRuns } from './xctest.mjs';
+
+test.skipIf(process.platform !== 'darwin')('certificate signing names its identity, bounds keychain waits and explains failures', () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-signing-'));
+  const said = spyOn(console, 'error').mockImplementation(() => {});
+  try {
+    const tool = resolve(dir, 'codesign');
+    writeFileSync(tool, '#!/bin/sh\necho errSecInternalComponent >&2\nexit 1\n');
+    chmodSync(tool, 0o755);
+    const options = { env: { ...process.env, PATH: `${dir}:${process.env.PATH}` }, encoding: 'utf8', macDevelopmentSign: true };
+    const args = ['--force', '--sign', 'SELECTED_IDENTITY', '--timestamp=none', '/fixture/libexact_web.dylib'];
+    const [, , settings] = appleCommand('codesign', args, options, 'darwin');
+    expect(settings.timeout).toBe(30_000);
+    expect(settings.killSignal).toBe('SIGKILL');
+    expect(appleSpawnSync('codesign', args, options).status).toBe(1);
+    const output = () => said.mock.calls.flat().join('\n');
+    expect(output()).toContain('SELECTED_IDENTITY');
+    expect(output()).toContain('/fixture/libexact_web.dylib');
+    expect(output()).toContain('EXACT_IDENTITY=-');
+    said.mockClear();
+    expect(appleSpawnSync('codesign', args, { ...options, macDevelopmentSign: false }).status).toBe(1);
+    expect(output()).toContain('SELECTED_IDENTITY');
+    expect(output()).not.toContain('EXACT_IDENTITY=-');
+    said.mockClear();
+    writeFileSync(tool, '#!/bin/sh\nexec /bin/sleep 600\n');
+    const timed = appleSpawnSync('codesign', args, { ...options, timeout: 20 });
+    expect(timed.error?.code).toBe('ETIMEDOUT');
+    expect(timed.signal).toBe('SIGKILL');
+    expect(output()).toContain('EXACT_IDENTITY=-');
+    said.mockClear();
+    writeFileSync(tool, '#!/bin/sh\nexit 0\n');
+    expect(appleSpawnSync('codesign', args, options).status).toBe(0);
+    expect(output()).not.toContain('EXACT_IDENTITY=-');
+    const { macDevelopmentSign, ...nativeOptions } = options;
+    expect(appleCommand('codesign', ['--sign', '-', '/fixture'], options, 'darwin')[2]).toEqual(nativeOptions);
+    expect(appleCommand('codesign', ['--verify', '/fixture'], options, 'darwin')[2]).toEqual(nativeOptions);
+  } finally { said.mockRestore(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+for (const kind of ['GPU preparation', 'widget frameworks']) test.skipIf(process.platform !== 'darwin')(`${kind} gives the ad hoc hint only for Mac development`, async () => {
+  const { prepareGpuProduct, publishMacFramework } = await import('./build.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-signing-callers-')), savedPath = process.env.PATH;
+  const said = spyOn(console, 'error').mockImplementation(() => {});
+  try {
+    writeFileSync(resolve(dir, 'codesign'), '#!/bin/sh\necho errSecInternalComponent >&2\nexit 1\n');
+    chmodSync(resolve(dir, 'codesign'), 0o755);
+    process.env.PATH = `${dir}:${savedPath}`;
+    if (kind === 'GPU preparation') {
+      const product = resolve(dir, 'libgpu.dylib'); writeFileSync(product, 'fixture GPU');
+      for (const [ios, distribution] of [[false, false], [true, false], [false, true], [true, true]]) {
+        said.mockClear();
+        expect(() => prepareGpuProduct(product, { gpuArtifacts: [{ built: 'libgpu.dylib' }], sha1: 'SELECTED_IDENTITY',
+          app: {}, ios, distribution, preparedGpu: new Map() })).toThrow(/codesign failed/);
+        const output = said.mock.calls.flat().join('\n');
+        if (!distribution) expect(output).toContain('SELECTED_IDENTITY');
+        expect(output.includes('EXACT_IDENTITY=-')).toBe(!ios && !distribution);
+      }
+    } else {
+      const framework = resolve(dir, 'ExactCore.framework'); mkdirSync(framework);
+      copyFileSync('/usr/bin/true', resolve(framework, 'ExactCore'));
+      for (const distribution of [true, false]) {
+        said.mockClear();
+        expect(() => publishMacFramework(framework, resolve(dir, 'published'), 'SELECTED_IDENTITY', false, [], !distribution)).toThrow(/codesign failed/);
+        const output = said.mock.calls.flat().join('\n');
+        expect(output).toContain('SELECTED_IDENTITY');
+        expect(output.includes('EXACT_IDENTITY=-')).toBe(!distribution);
+      }
+    }
+  } finally {
+    process.env.PATH = savedPath; said.mockRestore(); rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test.skipIf(process.platform !== 'darwin')('timestamped release signing has no development timeout or ad hoc hint', () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-release-signing-'));
+  const said = spyOn(console, 'error').mockImplementation(() => {});
+  try {
+    const tool = resolve(dir, 'codesign');
+    writeFileSync(tool, '#!/bin/sh\necho timestamp-server-failure >&2\nexit 1\n');
+    chmodSync(tool, 0o755);
+    const options = { env: { ...process.env, PATH: `${dir}:${process.env.PATH}` }, encoding: 'utf8' };
+    const args = ['--force', '--sign', 'DEVELOPER_ID', '--timestamp', '/fixture/Release.app'];
+    expect(appleCommand('codesign', args, options, 'darwin')[2]).toEqual(options);
+    expect(appleSpawnSync('codesign', args, options).status).toBe(1);
+    expect(said.mock.calls.flat().join('\n')).not.toContain('EXACT_IDENTITY=-');
+    expect(said.mock.calls.flat().join('\n')).not.toContain('keychain access;');
+  } finally { said.mockRestore(); rmSync(dir, { recursive: true, force: true }); }
+});
 
 test('Windows Metal preserves deployment targets and path operands through Wine, while native hosts keep xcrun', () => {
   const root = mkdtempSync(resolve(tmpdir(), "exact Metal's "));

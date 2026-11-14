@@ -18,7 +18,7 @@ component App
   action save(name: string)
     send outcome = command("profile", name)
   view
-    main navigationKey=`${top(nav).id}` navigationBack="back"
+    main navigationKey=`${top(nav).id}`
       for e in stack(nav) key=e.id
         column navigationKey=`${e.id}`
           Screen(entry=e, data=data, save=save)

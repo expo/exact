@@ -2,14 +2,14 @@
 //! — the compatibility id (LLP 1030 D3a) the bake writes beside the plan,
 //! and with `--json` the inputs it digests, for reading why two differ.
 //! `--grants` and `--rust-grants` supply a fresh bake's source declarations.
-//! `exact-bake graph <app.plan> <compat.json> <target>` — the plan's
+//! `exact-bake graph <app.plan> <compat.json> <target> <app-dir>` — the plan's
 //! requirement graph against those compatibility inputs (`scripts/push.mjs`).
 
 use std::process::ExitCode;
 
 const USAGE: &str = "usage:
   exact-bake compat <app-dir> --platform <ios|macos|linux|web> [--target <triple>] [--grants <text>] [--rust-grants <text>] [--json]
-  exact-bake graph <app.plan> <compat.json> <target>";
+  exact-bake graph <app.plan> <compat.json> <target> <app-dir>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -19,7 +19,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Some("compat") => compat(&args[1..]),
-        Some("graph") if args.len() == 4 => graph(&args[1], &args[2], &args[3]),
+        Some("graph") if args.len() == 5 => graph(&args[1], &args[2], &args[3], &args[4]),
         _ => {
             eprintln!("{USAGE}");
             ExitCode::from(2)
@@ -130,8 +130,8 @@ fn compat(args: &[String]) -> ExitCode {
     }
 }
 
-/// `exact-bake graph <app.plan> <compat.json> <target>`: the graph as JSON.
-fn graph(plan: &str, compat: &str, target: &str) -> ExitCode {
+/// `exact-bake graph <app.plan> <compat.json> <target> <app-dir>`: the graph as JSON.
+fn graph(plan: &str, compat: &str, target: &str, app: &str) -> ExitCode {
     let result = std::fs::read(plan)
         .map_err(|e| format!("{plan}: {e}"))
         .and_then(|plan| {
@@ -139,7 +139,7 @@ fn graph(plan: &str, compat: &str, target: &str) -> ExitCode {
                 &std::fs::read(compat).map_err(|e| format!("{compat}: {e}"))?,
             )
             .map_err(|e| format!("{compat}: {e}"))?;
-            exact_bake::plan_graph(&plan, &compat["inputs"], target)
+            exact_bake::plan_graph(&plan, &compat["inputs"], target, std::path::Path::new(app))
         });
     match result {
         Ok(graph) => {

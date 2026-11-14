@@ -59,6 +59,51 @@ fn a_module_store_obeys_the_hosts_scope_in_answers_and_parses() {
     }
 }
 
+/// A draw of randomness is no read of what the store holds (LLP 1069.005
+/// D2): across the seam, an answer that only drew reads as one in process
+/// does, so a store write asks it nothing again.
+#[test]
+fn a_draw_crosses_the_seam_as_a_draw_not_a_read_of_the_store() {
+    struct Reads;
+    impl DataSource for Reads {
+        fn grants(&self) -> &str {
+            "secret.keep token"
+        }
+        fn query(&mut self, _: &str, _: &[Value]) -> Result<Value, DataError> {
+            unreachable!()
+        }
+        fn answer(
+            &mut self,
+            store: &mut Store,
+            source: &str,
+            _: &[Value],
+        ) -> Result<Answer, DataError> {
+            match source {
+                "draw" => store.observe_entropy(),
+                "readAndDraw" => {
+                    let _ = store.get("token");
+                    store.observe_entropy();
+                }
+                _ => store.observe_topic("contacts"),
+            }
+            Ok(Answer::Now(Value::Unit))
+        }
+    }
+    // Whether it read beyond its draws (what a store write asks again), and its draws
+    let read = |store: &Store| (store.reads() > store.entropy_draws(), store.entropy_draws());
+    let store = || Store::new("secret.keep token", [("token".into(), b"t".to_vec())]);
+    for source in ["draw", "readAndDraw", "watch"] {
+        let mut embedded = store();
+        Reads.answer(&mut embedded, source, &[]).unwrap();
+        let (mut module, mut host) = (Session::new(Reads), store());
+        module
+            .dispatch(&call_request(None, &host, source, &[], None).unwrap())
+            .unwrap();
+        call_reply(module.output(), &mut host).unwrap();
+        assert_eq!((source, read(&host)), (source, read(&embedded)));
+    }
+}
+
 /// What an answer watched, drew and persisted under a lease crosses the
 /// seam to the host's store, as an embedded source's store records it: its
 /// topics, its draws of randomness, and each write's `durable`.

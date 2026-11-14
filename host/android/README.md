@@ -83,8 +83,9 @@ builds of two apps at once do not wait on each other or mix outputs. The library
 with (`-PndkPath`). Beside the APK, `exact-build.json` records when the build began, the library and the Kotlin it
 compiled: a drive refuses an APK older than its sources by it. `--install` then installs the APK on the device a drive
 would use (`--run`: and launches it). The package id and the label are the app's
-`app.json` (`app.id`, with `-` as `_`, which a package name cannot hold; `app.name`). `ORG_GRADLE_PROJECT_idSuffix=.dev` in the environment builds a side-by-side package
-(`<app id>.dev`). `./gradlew :canvas:assembleRelease` builds the reader alone.
+`app.json` (`host.android.id`, defaulting to `app.id` with `-` as `_`; `app.name`).
+`ORG_GRADLE_PROJECT_idSuffix=.dev` in the environment builds a side-by-side package
+(`<Android package>.dev`). `./gradlew :canvas:assembleRelease` builds the reader alone.
 
 A component fixture may compile the real app's Kotlin with
 `ORG_GRADLE_PROJECT_modulesDir=<absolute path to the app's modules/android>`. The default
@@ -181,7 +182,8 @@ above were read (`adb logcat -v time`, from ActivityManager's "Start proc" line)
 development build reads it.
 
 A development build always writes the data module's `console` lines to logcat under the tag `exact-app` (`adb logcat
--s exact-app`); a release build does not.
+-s exact-app`), each at its method's priority (`console.debug` at debug, `console.log` and `console.info` at info,
+`console.warn` at warn, `console.error` at error); a release build does not.
 
 The published v5 Hermes bundle has ICU Unicode support but no `Intl` (LLP 1107 §4.1).
 An Intl-enabled bundle with receipt-bound English ICU data enables Ibex's

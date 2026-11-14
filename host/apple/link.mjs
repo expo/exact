@@ -34,10 +34,10 @@ export function appleProduction(app, platform, args = []) {
   const at = args.indexOf('--optimize');
   const optimize = at >= 0 ? args[at + 1]
     : app.manifest.host?.[platform === 'macos' ? 'macos' : 'ios']?.optimize
-      ?? (game ? 'speed' : args.includes('--embed') || platform !== 'macos' ? 'size' : 'speed');
-  if (!['speed', 'size'].includes(optimize)) throw new Error(`host/apple: --optimize is speed or size, not ${optimize}`);
-  if (game && optimize === 'size') throw new Error('host/apple: games cannot optimize for size because their generated Cargo workspace has no size profile; use speed');
-  return { optimize, profile: optimize === 'size' ? 'size' : 'release' };
+      ?? (game ? 'speed' : args.includes('--embed') ? 'size' : platform !== 'macos' ? 'balanced' : 'speed');
+  if (!['speed', 'size', 'balanced'].includes(optimize)) throw new Error(`host/apple: --optimize is speed, size or balanced, not ${optimize}`);
+  if (game && optimize !== 'speed') throw new Error(`host/apple: games cannot optimize for ${optimize} because their generated Cargo workspace has no ${optimize} profile; use speed`);
+  return { optimize, profile: optimize === 'speed' ? 'release' : optimize };
 }
 
 /** A Linux builder can target an ARM simulator on another machine, independently of its host CPU. */
@@ -86,7 +86,7 @@ export const compiledTargets = (app, trust = process.env.EXACT_UPDATE_TRUST ?? '
 
 /** The capabilities with a Swift half, by name, and the product of
  * `Package.swift` (its `capabilities` table) each is. */
-const SWIFT_CAPABILITIES = [['grouped_lists', 'ExactGroupedLists'], ['markdown', 'ExactMarkdown'], ['surfaces', 'ExactSurfaces'], ['drag', 'ExactDrag'], ['media_picker', 'ExactMediaPicker'], ['auth_session', 'ExactAuthSession'], ['numerals', 'ExactNumerals'], ['tips', 'ExactTips']];
+const SWIFT_CAPABILITIES = [['grouped_lists', 'ExactGroupedLists'], ['markdown', 'ExactMarkdown'], ['surfaces', 'ExactSurfaces'], ['drag', 'ExactDrag'], ['media_picker', 'ExactMediaPicker'], ['auth_session', 'ExactAuthSession'], ['numerals', 'ExactNumerals'], ['tips', 'ExactTips'], ['presence', 'ExactPresence']];
 
 /** The capabilities a development build links only as production would
  * (LLP 1047.001.000 F): each links a framework that costs every iOS launch
@@ -95,20 +95,20 @@ const SWIFT_CAPABILITIES = [['grouped_lists', 'ExactGroupedLists'], ['markdown',
 const BY_USE_IN_DEVELOPMENT = ['media_picker', 'auth_session', 'numerals', 'tips'];
 
 /** What the archive links (LLP 1047.001 D2, D4, D6; LLP 1047 D8): for a
- * production build, the plan's use-set, as the bake's graph names it, the
- * manifest's `link` (capabilities linked ahead of use) and, for an app
- * whose grants name `auth.session` (`granted`), the sign-in sheet; every
+ * production build, the bake's `inputs.linked`, which the Rust entry also
+ * reads, including every capability when the grants are unknown; every
  * capability for every other build, but those of `BY_USE_IN_DEVELOPMENT`,
- * which it links as production would. `link` is `EXACT_APPLE_LINK` for
- * SwiftPM (the names, `none`, or `all`); `products` the Swift capability
- * products the composition links and installs, and an embedder links beside
- * ExactKit. Cargo is told `plan` or `all` before the bake, and the entry
- * derives the same set from the same plan, grants and manifest
- * (`exact_bake::apple_link`). */
-export function appleComposition(graph, production, ahead = [], granted = false) {
+ * which follow the graph's use-set, the manifest's `link` and auth grants.
+ * `link` is `EXACT_APPLE_LINK` for SwiftPM (the names, `none`, or `all`);
+ * `products` the Swift capability products the composition links and
+ * installs, and an embedder links beside
+ * ExactKit. Cargo is told `plan` or `all` before the bake; the Rust entry
+ * reads that bake's linked set through `exact_bake::apple_link`. */
+export function appleComposition(graph, production, ahead = [], compat = null) {
   const uses = graph?.uses;
-  const byUse = Array.isArray(uses) ? [...uses, ...ahead, ...(granted ? ['auth_session'] : [])] : null;
-  const link = !byUse ? 'all'
+  const byUse = production ? compat?.inputs?.linked
+    : Array.isArray(uses) ? [...uses, ...ahead, ...(compat?.reach?.auth?.sessions === true ? ['auth_session'] : [])] : null;
+  const link = !Array.isArray(byUse) ? 'all'
     : production ? [...new Set(byUse)].join(',') || 'none'
     : SWIFT_CAPABILITIES.map(([name]) => name).filter((name) => !BY_USE_IN_DEVELOPMENT.includes(name) || byUse.includes(name)).join(',');
   const products = SWIFT_CAPABILITIES.filter(([name]) => link === 'all' || link.split(',').includes(name)).map(([, product]) => product);

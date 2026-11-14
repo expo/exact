@@ -1,4 +1,6 @@
-import { expect, test } from 'bun:test';
+import { expect, test, spyOn } from 'bun:test';
+import * as childProcess from 'node:child_process';
+import * as fs from 'node:fs';
 import { hostOf, shippedHost } from './app-cli.mjs';
 import { main } from './agent.mjs';
 
@@ -301,6 +303,87 @@ test('a CI setup check names only the requested build toolchain and fails when i
   assert.match(result.stdout, /Android JDK: missing/);
   assert.match(result.stdout, /Android NDK: missing/);
   assert.doesNotMatch(result.stdout, /Chrome|web nightly|wasm-bindgen|Xcode/);
+});
+
+test('web setup accepts an install scope and refuses native install scopes before provisioning', () => {
+  for (const platform of ['web', 'ios', 'macos', 'android', 'linux', 'windows']) {
+    const result = spawnSync(process.execPath, [resolve(import.meta.dir, 'exact.mjs'), 'setup', '--platform', platform], {
+      encoding: 'utf8', env: { ...process.env, PATH: '', CARGO_HOME: '/absent-exact-ci-cargo' },
+    });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, platform === 'web' ? /rustup is not on PATH/ : /Usage: exact setup/);
+  }
+});
+
+test('web setup installs its wasm tools without native or game provisioning and check installs nothing', async () => {
+  const { setup, sdkReport, binaryenArchive } = await import('./exact.mjs');
+  const { WEB_TOOLCHAIN } = await import('./cargo-check.mjs');
+  const { BINARYEN } = await import('../host/web/stages.mjs');
+  const { createHash } = await import('node:crypto');
+  const root = resolve(import.meta.dir, '..'), pin = Bun.TOML.parse(readFileSync(resolve(root, 'rust-toolchain.toml'), 'utf8')).toolchain;
+  const bindgen = Bun.TOML.parse(readFileSync(resolve(root, 'game/Cargo.toml'), 'utf8')).workspace.dependencies['wasm-bindgen'].replace(/^=/, '');
+  const scratch = mkdtempSync(resolve(tmpdir(), 'exact-web-setup-')), library = resolve(scratch, 'lib/rustlib/src/rust/library');
+  mkdirSync(library, { recursive: true });
+  for (const file of ['Cargo.toml', 'Cargo.lock']) writeFileSync(resolve(library, file), '');
+  mkdirSync(resolve(scratch, 'lib/rustlib/wasm32-unknown-unknown'), { recursive: true });
+  const saved = { CHROME: process.env.CHROME, CARGO_HOME: process.env.CARGO_HOME, PATH: process.env.PATH }, calls = [];
+  process.env.CHROME = process.execPath;
+  process.env.CARGO_HOME = scratch;
+  let bound = false, optimized = false;
+  const log = spyOn(console, 'log').mockImplementation(() => {});
+  const warn = spyOn(console, 'error').mockImplementation(() => {});
+  const disk = spyOn(fs, 'statfsSync').mockImplementation(() => { throw new Error('web setup must not probe native build space'); });
+  const commands = spyOn(childProcess, 'spawnSync').mockImplementation((command, args) => {
+    calls.push([command, ...args]);
+    if (command === 'rustup' && args[0] === '--version') return { status: 0, stdout: 'rustup 1.28.0' };
+    if (command === 'rustc') return { status: 0, stdout: args.includes('sysroot') ? scratch : `rustc ${pin.channel}` };
+    if (command === 'wasm-bindgen') return { status: 0, stdout: bound ? `wasm-bindgen ${bindgen}` : '' };
+    if (command === 'wasm-opt') return { status: 0, stdout: optimized ? `wasm-opt ${BINARYEN}` : '' };
+    if (command === 'curl') {
+      const path = args[args.indexOf('-o') + 1];
+      writeFileSync(path, path.endsWith('.sha256') ? createHash('sha256').update('archive').digest('hex') : 'archive');
+    } else if (command === 'tar') optimized = true;
+    else if (command === 'cargo') {
+      if (args.includes('wasm-bindgen-cli')) bound = true;
+      if (args[0] === 'metadata') return { status: 1, stdout: '' };
+    } else if (command !== 'rustup' && command !== process.execPath) throw new Error(`unexpected setup command: ${command} ${args.join(' ')}`);
+    return { status: 0, stdout: '' };
+  });
+  try {
+    for (const check of [false, true]) {
+      calls.length = 0;
+      await setup({ platform: 'web', check });
+      const rows = sdkReport(process.env, { only: 'web' });
+      assert.deepEqual(rows.map(row => row.name), ['rustup', 'Rust', 'web nightly', 'web nightly wasm32', 'Bun', 'wasm-bindgen', 'wasm-opt', 'node_modules', 'Chrome']);
+      assert.ok(rows.every(row => row.ok));
+      const probes = calls.filter(([, ...args]) => args.at(-1) === '--version' || args.includes('--offline') || args.includes('--print'));
+      const installs = calls.filter(call => !probes.includes(call));
+      if (check) assert.deepEqual(installs, []);
+      else {
+        assert.deepEqual(installs.slice(0, 3), [
+          ['rustup', 'toolchain', 'install', pin.channel, '--profile', pin.profile,
+            ...pin.components.flatMap(c => ['--component', c]), ...pin.targets.flatMap(t => ['--target', t])],
+          ['rustup', 'toolchain', 'install', WEB_TOOLCHAIN, '--profile', 'minimal', '--component', 'rust-src', '--component', 'llvm-tools', '--component', 'clippy', '--target', 'wasm32-unknown-unknown'],
+          ['cargo', 'fetch', '--locked', '--manifest-path', resolve(library, 'Cargo.toml')],
+        ]);
+        assert.deepEqual(installs[3], ['cargo', `+${pin.channel}`, 'install', 'wasm-bindgen-cli', '--version', bindgen, '--locked', '--force']);
+        const archive = binaryenArchive(BINARYEN.replace(' ', '_'));
+        assert.ok(installs[4].at(-1).endsWith('/' + archive));
+        assert.ok(installs[5].at(-1).endsWith('/' + archive + '.sha256'));
+        assert.equal(installs[6][0], 'tar');
+        assert.deepEqual(installs.slice(7), [
+          [process.execPath, 'install', '--frozen-lockfile'],
+          ['cargo', `+${pin.channel}`, 'fetch', '--locked', '--manifest-path', resolve(root, 'Cargo.toml')],
+        ]);
+      }
+      assert.ok(probes.some(call => call.includes('--offline')), 'the final report checks the locked crates');
+      assert.equal(disk.mock.calls.length, 0);
+    }
+  } finally {
+    commands.mockRestore(); disk.mockRestore(); log.mockRestore(); warn.mockRestore();
+    for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+    rmSync(scratch, { recursive: true, force: true });
+  }
 });
 
 // Homebrew's `rust` puts a cargo that refuses `+<pin>` ahead of rustup's; a platform named before, no setup row reads it.

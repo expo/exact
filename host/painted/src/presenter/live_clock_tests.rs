@@ -722,3 +722,216 @@ component App
     assert!(p.follow_local_offset().is_none());
     assert_eq!(p.host().runner().wall_time().epoch_at_zero, drive);
 }
+
+#[test]
+fn a_background_reader_runs_change_and_elapsed_tasks_without_frame_tasks() {
+    let plan = crate::test_plan(
+        r#"component App
+  state seed = 0
+  resource news = observe(seed) as shape number else empty()
+  state seen = 0
+  state ticks = 0
+  state frames = 0
+  action receive
+    seed = seed + 1
+  action alert
+    seen = news
+  action tick
+    ticks = ticks + 1
+  action frame
+    frames = frames + 1
+  task alert when news > 0 key=news
+    change(alert)
+  task tick mount
+    every(30000, tick)
+  task animation mount
+    every(frame, frame)
+  view
+    text `${seen}:${ticks}:${frames}`
+"#,
+    );
+    let (mut p, error) = Presenter::boot_with(
+        &plan,
+        NoData,
+        (80., 40.),
+        1.,
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none());
+    let now = Rc::new(Cell::new(0.));
+    let sample = now.clone();
+    p.set_live_clock(Some(Rc::new(move || sample.get())));
+    p.frame();
+    p.first_pixel();
+    p.timer_visibility(true);
+    for (i, at) in [30000., 60000., 90000.].into_iter().enumerate() {
+        now.set(at);
+        p.host_mut().runner_mut().act("receive", vec![]).unwrap();
+        assert!(p.after_commit().is_none());
+        for _ in 0..8 {
+            assert!(p.reader_clock(at, true).is_none());
+        }
+        assert_eq!(p.background_due_ms(), Some(at + 30000.));
+        assert_eq!(
+            p.host().runner().slot("seen"),
+            Some(&Value::Number((i + 1) as f64))
+        );
+        assert_eq!(ticks(&p), (i + 1) as f64);
+        assert_eq!(p.host().runner().slot("frames"), Some(&Value::Number(0.)));
+        assert!(p.dirty(), "the foreground still owes a paint");
+    }
+    p.timer_visibility(false);
+    assert!(p.reader_clock(90000., true).is_none());
+    assert_eq!(p.host().runner().slot("frames"), Some(&Value::Number(1.)));
+}
+
+#[test]
+fn a_background_readers_waits_ignore_paint_but_respect_main_work_and_clock_takeover() {
+    for kind in ["frame", "update", "scrollend", "idle"] {
+        let source = TICKER.replace(
+            "every(1000, tick)",
+            &format!("after(1000, tick, wait={kind})"),
+        );
+        let (mut p, error) = Presenter::boot_with(
+            &crate::test_plan(&source),
+            NoData,
+            (80., 40.),
+            1.,
+            PathBuf::new(),
+            PainterChoice::Cpu,
+        )
+        .unwrap();
+        assert!(error.is_none());
+        let now = Rc::new(Cell::new(0.));
+        let sample = now.clone();
+        p.set_live_clock(Some(Rc::new(move || sample.get())));
+        p.timer_visibility(true);
+        p.timer_observation(true, true, true);
+        now.set(1000.);
+        assert!(p.reader_clock(1000., false).is_none());
+        assert_eq!(ticks(&p), 0., "a frozen clock stays frozen");
+        assert!(p.reader_clock(1000., true).is_none());
+        if kind == "idle" {
+            assert!(p.admit_idle_timer(1000.).is_none());
+            assert_eq!(ticks(&p), 0., "main-thread work has not completed");
+            p.timer_observation(true, true, false);
+            p.serve_requests();
+            p.request(super::super::Request::Copy("pending".into()));
+            assert!(p.admit_idle_timer(1000.).is_none());
+            assert_eq!(ticks(&p), 0., "a reader command has not been delivered");
+            assert!(p.take_requests().is_some());
+            assert!(p.admit_idle_timer(1000.).is_none());
+        }
+        assert_eq!(ticks(&p), 1., "{kind}");
+        assert_eq!(p.background_due_ms(), None, "no frame wake while hidden");
+    }
+}
+
+#[test]
+fn a_background_timer_reads_the_date_after_sleep_and_keeps_a_frozen_date() {
+    let plan = crate::test_plan(
+        r#"shape Time
+  epochAtZero: number
+component App
+  resource time = exactTime() as shape Time
+  state observed = 0
+  action record
+    observed = time.epochAtZero + performanceNow()
+  task record mount
+    after(1000, record)
+  view
+    text `${observed}`
+"#,
+    );
+    let unix_ms = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64()
+            * 1000.
+    };
+    for live in [false, true] {
+        let (mut p, error) = Presenter::boot_with(
+            &plan,
+            NoData,
+            (80., 40.),
+            1.,
+            PathBuf::new(),
+            PainterChoice::Cpu,
+        )
+        .unwrap();
+        assert!(error.is_none());
+        let stale = unix_ms() - 1000. - 3_600_000.;
+        assert!(p
+            .set_time(stale, crate::zone::local_offset_minutes())
+            .is_none());
+        p.set_live_clock(Some(Rc::new(|| 1000.)));
+        p.timer_visibility(true);
+        let before = unix_ms();
+        assert!(p.reader_clock(1000., live).is_none());
+        let after = unix_ms();
+        let observed = p
+            .host()
+            .runner()
+            .slot("observed")
+            .and_then(Value::as_number)
+            .unwrap();
+        if live {
+            assert!(
+                (before..=after).contains(&observed),
+                "observed {observed}, expected {before}..={after}"
+            );
+        } else {
+            assert_eq!(observed, 0.);
+            assert_eq!(p.host().runner().wall_time().epoch_at_zero, stale);
+        }
+    }
+}
+
+#[test]
+fn background_admission_releases_already_held_waits_before_their_caps() {
+    for kind in ["frame", "update", "scrollend", "idle"] {
+        let source = TICKER.replace(
+            "every(1000, tick)",
+            &format!("after(1000, tick, wait={kind})"),
+        );
+        let (mut p, error) = Presenter::boot_with(
+            &crate::test_plan(&source),
+            NoData,
+            (80., 40.),
+            1.,
+            PathBuf::new(),
+            PainterChoice::Cpu,
+        )
+        .unwrap();
+        assert!(error.is_none());
+        let now = Rc::new(Cell::new(0.));
+        let sample = now.clone();
+        p.set_live_clock(Some(Rc::new(move || sample.get())));
+        p.timer_observation(true, true, true);
+        now.set(1000.);
+        assert!(p.advance(1000.).is_none());
+        assert_eq!(ticks(&p), 0., "{kind} is held before hiding");
+        assert_eq!(p.host().runner().waits().next_check(), None);
+        // A resource wake can pump the runner past the nominal deadline
+        // before the stopped reader schedules its next timer.
+        now.set(1001.);
+        assert!(p.pump(1001.).is_none());
+        p.timer_visibility(true);
+        p.timer_observation(false, false, true);
+        assert!(p.reader_clock(1001., true).is_none());
+        p.run_commands(NoData::default);
+        assert!(p.admit_idle_timer(1001.).is_none());
+        p.run_commands(NoData::default);
+        if kind == "idle" {
+            assert_eq!(ticks(&p), 0., "idle still waits for application");
+            assert_eq!(p.background_due_ms(), Some(2000.));
+            p.timer_observation(false, false, false);
+            assert!(p.admit_idle_timer(1001.).is_none());
+        }
+        assert_eq!(ticks(&p), 1., "{kind} runs before its cap without a frame");
+        assert_eq!(p.background_due_ms(), None);
+    }
+}

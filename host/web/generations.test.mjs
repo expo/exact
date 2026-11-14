@@ -474,6 +474,132 @@ test('a build reaped while a page asks: told gone (410) once the swap is done, n
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test('a read that fails while its generation stays the same is made again within the second, then is busy', async () => {
+  const { root, dist, stage } = workspace();
+  const read = fs.readFileSync;
+  let failing = 0, failed = 0, now = Date.now(), clock, spy;
+  try {
+    replaceBuild(stage(1), dist);
+    const id = generationOf(dist);
+    clock = spyOn(Date, 'now').mockImplementation(() => now);
+    // A read of the module fails, as when a byte-identical rebuild is renamed in between the lookup and the read
+    spy = spyOn(fs, 'readFileSync').mockImplementation((path, ...rest) => {
+      if (!String(path).endsWith('app.js') || failing === 0) return read(path, ...rest);
+      failing--, failed++, now += 600;
+      throw Object.assign(new Error('moved'), { code: 'ENOENT' });
+    });
+    failing = 1;
+    const found = await generationFile(dist, id, '/app.js');
+    expect(found?.body && Buffer.from(found.body).toString()).toBe('build 1');
+    // A read that goes on failing is busy once the second is past, never absent
+    failing = Infinity, failed = 0;
+    expect(await generationFile(dist, id, '/app.js')).toBe('busy');
+    expect(failed).toBe(2);
+  } finally { spy?.mockRestore(); clock?.mockRestore(); rmSync(root, { recursive: true, force: true }); }
+});
+
+// A swap finishes just after the look for the kept tree finds none: it keeps the generation, or puts a byte-identical
+// rebuild of it back in place and keeps no tree, and lets go of its lock.
+test.each([['keeps it', 2], ['puts it back', 1]])('a file asked for as a swap %s and lets go of the lock is found', async (_, k) => {
+  const { root, dist, stage } = workspace();
+  let release = () => {}, look, clock, now = Date.now();
+  try {
+    clock = spyOn(Date, 'now').mockImplementation(() => now);
+    replaceBuild(stage(1), dist);
+    const id = generationOf(dist), kept = join(dist + '.gen', id), lstat = fs.lstatSync;
+    release = takeLock(dist + '.lock');
+    renameSync(dist, dist + '.previous');
+    const next = stage(k), finish = () => {
+      if (k === 2) return finishSwap(dist, id, next, release);
+      renameSync(next, dist);
+      rmSync(dist + '.previous', { recursive: true });
+      release();
+    };
+    let landed = false;
+    look = spyOn(fs, 'lstatSync').mockImplementation((path, ...rest) => {
+      try { return lstat(path, ...rest); } finally {
+        // (and the second is past: the file is found all the same)
+        if (path === kept && !landed) { landed = true; finish(); now += 2000; }
+      }
+    });
+    const found = await generationFile(dist, id, '/app.js');
+    expect(landed).toBe(true);
+    expect(found?.body && Buffer.from(found.body).toString()).toBe('build 1');
+  } finally { look?.mockRestore(); clock?.mockRestore(); release(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test('a kept file reaped as its generation comes back in place is read from the current build', async () => {
+  const { root, dist, stage } = workspace();
+  const read = fs.readFileSync;
+  let reaped = false, spy;
+  try {
+    replaceBuild(stage(1), dist);
+    const id = generationOf(dist);
+    replaceBuild(stage(2), dist);
+    const back = stage(1), kept = join(id, 'app.js');
+    // Between the lookup in the kept tree and its read, a byte-identical rebuild of the generation is put in place
+    // and the kept copy is reaped
+    spy = spyOn(fs, 'readFileSync').mockImplementation((path, ...rest) => {
+      if (!String(path).endsWith(kept) || reaped) return read(path, ...rest);
+      reaped = true;
+      renameSync(dist, join(root, 'replaced'));
+      renameSync(back, dist);
+      rmSync(join(dist + '.gen', id), { recursive: true });
+      writeFileSync(`${dist}.gen.reaped`, id + '\n');
+      throw Object.assign(new Error('reaped'), { code: 'ENOENT' });
+    });
+    const found = await generationFile(dist, id, '/app.js');
+    expect(reaped).toBe(true);
+    expect(found?.body && Buffer.from(found.body).toString()).toBe('build 1');
+  } finally { spy?.mockRestore(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test('a file reaped from the kept tree as its generation comes back in place is found in the current build', async () => {
+  const { root, dist, stage } = workspace();
+  let look;
+  try {
+    replaceBuild(stage(1), dist);
+    const id = generationOf(dist);
+    replaceBuild(stage(2), dist);
+    const back = stage(1), kept = join(dist + '.gen', id), lstat = fs.lstatSync;
+    let landed = false;
+    // As the look finds the kept tree, a byte-identical rebuild of the generation is put in place and the kept
+    // copy's files are reaped first
+    look = spyOn(fs, 'lstatSync').mockImplementation((path, ...rest) => {
+      try { return lstat(path, ...rest); } finally {
+        if (path === kept && !landed) {
+          landed = true;
+          rmSync(join(kept, 'app.js'));
+          renameSync(dist, join(root, 'replaced'));
+          renameSync(back, dist);
+        }
+      }
+    });
+    const found = await generationFile(dist, id, '/app.js');
+    expect(landed).toBe(true);
+    expect(found?.body && Buffer.from(found.body).toString()).toBe('build 1');
+  } finally { look?.mockRestore(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test('a kept file that cannot be read is answered absent at once', async () => {
+  const { root, dist, stage } = workspace();
+  const read = fs.readFileSync;
+  let reads = 0, spy;
+  try {
+    replaceBuild(stage(1), dist);
+    const id = generationOf(dist);
+    replaceBuild(stage(2), dist);
+    const kept = join(id, 'app.js');
+    spy = spyOn(fs, 'readFileSync').mockImplementation((path, ...rest) => {
+      if (!String(path).endsWith(kept)) return read(path, ...rest);
+      reads++;
+      throw Object.assign(new Error('unreadable'), { code: 'EACCES' });
+    });
+    expect(await generationFile(dist, id, '/app.js')).toBe(null);
+    expect(reads).toBe(1);
+  } finally { spy?.mockRestore(); rmSync(root, { recursive: true, force: true }); }
+});
+
 test('with two renames for a swap (no one-step exchange), a page\'s files are still one build\'s and no page goes unpinned', () => {
   // A process of its own: the exchange is chosen once a process.
   const r = spawnSync(process.execPath, ['-e', `

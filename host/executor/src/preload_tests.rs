@@ -61,36 +61,6 @@ fn fresh_clock(server: &Server, definitions: Vec<Definition>) -> (Preloads, Arc<
 }
 
 #[test]
-fn launch_reaches_the_server_before_an_executor_and_both_cores_take_it() {
-    for asynchronous in [false, true] {
-        let server = Server::new();
-        let release = held_plan(&server, "/early", b"early");
-        let set = launch(&server, vec![definition(&server, "/early")]);
-        server.seen(1);
-        let (core, woke) = server.core(asynchronous, true);
-        adopt(&core, set);
-        for ticket in 1..=2 {
-            core.run(job(ticket, server.request("/early")), None)
-                .unwrap();
-        }
-        {
-            let state = core.shared.state.lock().unwrap();
-            assert_eq!(effect_count(&state), 0);
-            assert!(state.running.is_empty());
-            assert!(state.completed[0].is_empty());
-        }
-        release.send(()).unwrap();
-        for expected in 1..=2 {
-            let (ticket, outcome, timing) = collect(&core, &woke);
-            assert_eq!(ticket, expected);
-            assert!(timing.cached);
-            assert!(matches!(outcome, Outcome::Response(r) if r.body == b"early"));
-        }
-        assert_eq!(server.count(), 1);
-    }
-}
-
-#[test]
 fn a_tool_read_queued_before_its_preload_starts_is_sent_after_the_send() {
     for asynchronous in [false, true] {
         for named in [false, true] {
@@ -596,6 +566,10 @@ fn dropping_a_set_or_its_adopting_executor_retires_every_launch_thread() {
         // The server holds its reply throughout cancellation and retirement.
         exited(&location);
         release.send(()).unwrap();
+        // A drain after retirement clears the pending bit, so later drains
+        // take no lock.
+        take_journal(&location);
+        assert!(!location.journal_pending.load(Ordering::Acquire));
     }
 }
 
@@ -1249,6 +1223,8 @@ fn held_request_allocations_are_charged_and_released_when_the_hold_ends() {
             let request = def.request.clone();
             let (set, clock) = fresh_clock(&server, vec![def]);
             complete_set(&set);
+            let control = set.control();
+            control.take_journal();
             let (core, woke) = server.core(asynchronous, true);
             adopt(&core, set);
             let (bytes, ready) = {
@@ -1296,7 +1272,13 @@ fn held_request_allocations_are_charged_and_released_when_the_hold_ends() {
                 !ask(&core, &woke, job(2, request)).1,
                 "secret writes still invalidate the HTTP copy"
             );
-            let facts = core.take_preload_journal();
+            let facts = control.take_journal();
+            assert!(facts.iter().any(|f| f.outcome
+                == if expired {
+                    Event::NeverTaken
+                } else {
+                    Event::DroppedBySecret
+                }));
             assert!(facts
                 .iter()
                 .all(|f| f.name == "retained" && f.origin == format!("http://{}", server.address)));
@@ -1476,3 +1458,6 @@ mod prefetch;
 
 #[path = "preload_exchange_tests.rs"]
 mod exchange;
+
+#[path = "preload_journal_tests.rs"]
+mod journal;

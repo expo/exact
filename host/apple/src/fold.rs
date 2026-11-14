@@ -151,6 +151,7 @@ impl<D: DataSource> Host<D> {
             return self.commit_into(&[Timed { at_ms, receipt }], error, batch);
         }
         let laid_out = self.layout(&mut batch).err();
+        self.canvas_turn(&mut batch);
         self.finish(batch, error.or(laid_out))
     }
 
@@ -189,12 +190,14 @@ impl<D: DataSource> Host<D> {
     /// What changed of the view at once, each part only when given: the
     /// window's size (`None` in it clears it), the safe-area insets, the
     /// layout regions, the viewport, the segments' rects on the grid the
-    /// kernel has and the software keyboard's overlap, in one batch under
-    /// one layout and one commit, as the calls one by one would leave them.
+    /// kernel has, the software keyboard's overlap and native containing
+    /// blocks and placements, in one batch under one layout and one commit,
+    /// as the calls one by one would leave them.
     /// An iOS boot's view takes the whole window as its tab bar comes (LLP
     /// 1123 D1), which changes the first four (`ExactView.fit`); a keyboard
     /// changes the viewport, the segments' extents and its overlap together
     /// (LLP 1078, the keyboard; LLP 1039 D9).
+    #[allow(clippy::too_many_arguments)]
     pub fn set_view(
         &mut self,
         screen: Option<Option<(f32, f32)>>,
@@ -203,8 +206,32 @@ impl<D: DataSource> Host<D> {
         size: Option<(f32, f32)>,
         segments: Option<Vec<exact_kernel::Rect>>,
         keyboard: Option<f32>,
+        blocks: &[(exact_kernel::ViewId, Option<exact_kernel::HostBlock>)],
+        placements: &[(exact_kernel::ViewId, Option<exact_runner::BlockPlacement>)],
+    ) -> String {
+        self.set_view_at(
+            screen, insets, regions, size, segments, keyboard, blocks, placements, None,
+        )
+    }
+
+    /// A combined view change at the presenter's sampled time. Due timers
+    /// see the previous viewport, as they do through `resize_at`.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn set_view_at(
+        &mut self,
+        screen: Option<Option<(f32, f32)>>,
+        insets: Option<[f32; 4]>,
+        regions: Option<Option<[[f32; 4]; 5]>>,
+        size: Option<(f32, f32)>,
+        segments: Option<Vec<exact_kernel::Rect>>,
+        keyboard: Option<f32>,
+        blocks: &[(exact_kernel::ViewId, Option<exact_kernel::HostBlock>)],
+        placements: &[(exact_kernel::ViewId, Option<exact_runner::BlockPlacement>)],
+        now_ms: Option<f64>,
     ) -> String {
         let keyboard = keyboard.map(f64::from);
+        self.route_overflow.dirty |=
+            keyboard.is_some_and(|height| height != self.runner.viewport().keyboard_height);
         let previous = self.runner.kernel().env();
         let mut env = previous.clone();
         if let Some(screen) = screen {
@@ -240,14 +267,22 @@ impl<D: DataSource> Host<D> {
                 return self.finish(Batch::new(), Some("view: segments off the grid".into()));
             }
         }
-        let mut batch = Batch::new();
+        let (mut batch, error) = if size.is_some() {
+            if let Some(now) = now_ms {
+                self.now_ms = now.max(self.now_ms);
+            }
+            self.settle_resize_clock(Batch::new(), None)
+        } else {
+            (Batch::new(), None)
+        };
+        let error = error.or(self.blocks_into(blocks, placements));
         let changed = self.environment_into(env, segments, &mut batch);
         if let Err(error) = changed {
             return self.geometry_refused(error, Some(previous));
         }
         match size {
             Some((width, height)) => {
-                self.resize_inner(width, height, keyboard, batch, None, Some(previous))
+                self.resize_inner(width, height, keyboard, batch, error, Some(previous))
             }
             None => {
                 match self.runner.set_view(None, keyboard) {
@@ -257,7 +292,7 @@ impl<D: DataSource> Host<D> {
                                 at_ms: self.now_ms,
                                 receipt,
                             }],
-                            None,
+                            error,
                             batch,
                         )
                     }
@@ -267,11 +302,12 @@ impl<D: DataSource> Host<D> {
                     }
                     Ok(None) => {}
                 }
-                if changed != Ok(true) {
-                    return self.finish(batch, None);
+                if changed != Ok(true) && blocks.is_empty() {
+                    return self.finish(batch, error);
                 }
                 let laid_out = self.layout(&mut batch).err();
-                self.finish(batch, laid_out)
+                self.canvas_turn(&mut batch);
+                self.finish(batch, error.or(laid_out))
             }
         }
     }

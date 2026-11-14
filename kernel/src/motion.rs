@@ -893,7 +893,7 @@ impl Kernel {
     /// The node's `animation` row as its executors hear it: every entry
     /// paused while the node waits for its list row to show (LLP 1055 D13).
     pub fn animation_row(&self, node: &crate::kernel::NodeRef<'_>) -> Animations {
-        let mut row = node.style.animation.clone();
+        let mut row = (*node.style.animation).clone();
         if !row.0.is_empty() && self.awaits_view(node) {
             for a in &mut row.0 {
                 a.paused = true;

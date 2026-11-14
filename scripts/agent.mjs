@@ -183,13 +183,14 @@ export async function main(argv, injected = {}) {
         if (at && Date.now() - at.since >= every) console.error(heartbeat(at, Date.now()));
       }, every);
     beat.unref?.();
-    return (await import('./verify.mjs')).withAppServer(
+    return (await import('./app-server.mjs')).withAppServer(
       resolveApp(flags.app).dir,
-      async () => {
+      async (running) => {
         const r = await (injected.runTests ?? runTests)({
           atLine,
           atResult: (t) => { at = null; report(t); },
           host,
+          running,
           browser,
           file: flags.test,
           plan: flags.plan,

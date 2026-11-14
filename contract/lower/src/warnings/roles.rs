@@ -5,7 +5,196 @@
 
 use super::{computed, has, literal, BOXES};
 use crate::LowerError;
-use contract_syntax::{Attr, Expr, Node, Span};
+use contract_syntax::{Attr, Expr, Node, Span, VisitSpans};
+use std::collections::BTreeSet;
+
+fn elements<'a>(nodes: &'a [Node], visit: &mut impl FnMut(&'a [Attr], Span)) {
+    for node in nodes {
+        match node {
+            Node::Element {
+                attrs,
+                children,
+                span,
+                ..
+            } => {
+                visit(attrs, *span);
+                elements(children, visit);
+            }
+            Node::When {
+                then, otherwise, ..
+            } => {
+                elements(then, visit);
+                elements(otherwise, visit);
+            }
+            Node::Each { body, .. } => elements(body, visit),
+            Node::Match { some, none, .. } => {
+                elements(&some.1, visit);
+                elements(none, visit);
+            }
+            Node::Use { .. } | Node::Children { .. } => {}
+        }
+    }
+}
+
+/// The `aria-controls` the program writes (LLP 1166.000 D5), over the
+/// expanded root, so a field in one file names a group in a component of
+/// another and a literal a use passes through a prop is read: each id it can
+/// evaluate to, with the element that writes it, and each one not a string
+/// literal, without its source positions.
+pub(super) struct Controlled<'a> {
+    ids: BTreeSet<(Span, &'a str)>,
+    exprs: Vec<(Span, Expr)>,
+}
+
+pub(super) fn controlled<'a>(checked: &'a contract_types::Checked<'_>) -> Controlled<'a> {
+    let mut out = Controlled {
+        ids: BTreeSet::new(),
+        exprs: Vec::new(),
+    };
+    elements(&checked.expanded.root.view, &mut |attrs, span| {
+        let Some(value) = attrs.iter().rev().find(|a| a.name == "aria-controls") else {
+            return;
+        };
+        let mut ids = Vec::new();
+        results(&value.value, &mut ids);
+        out.ids.extend(ids.into_iter().map(|id| (span, id)));
+        if !matches!(value.value, Expr::Str(..)) {
+            out.exprs.push((span, unplaced(&value.value)));
+        }
+    });
+    out
+}
+
+/// The ids a written `aria-controls` can name: the string literals it can
+/// evaluate to, through `?:`, `match` and `let` (as `crate::roles` reads a
+/// computed role), each an ARIA id list.
+fn results<'a>(value: &'a Expr, out: &mut Vec<&'a str>) {
+    match value {
+        Expr::Ternary(_, yes, no, _)
+        | Expr::Match {
+            some: yes,
+            none: no,
+            ..
+        } => {
+            results(yes, out);
+            results(no, out);
+        }
+        Expr::Let { body, .. } => results(body, out),
+        Expr::Str(text, _) => out.extend(text.split_ascii_whitespace()),
+        _ => {}
+    }
+}
+
+/// An expression without its source positions, to compare with another.
+fn unplaced(value: &Expr) -> Expr {
+    let mut value = value.clone();
+    value.visit_spans(&mut |span| *span = Span::default());
+    value
+}
+
+/// The role that applies to a written `role` (WAI-ARIA 1.3 §5.4: the first
+/// token that names a role, matched ASCII case-insensitively, as the web
+/// host's `role_is` reads one), in ARIA's own spelling.
+fn applied(written: &str) -> Option<&'static str> {
+    written.split_ascii_whitespace().find_map(|token| {
+        exact_kernel::ARIA_ROLES
+            .iter()
+            .find(|role| role.eq_ignore_ascii_case(token))
+            .copied()
+    })
+}
+
+/// Whether `nodes` hold a `key` or `keycapture` handler, through `if`, `for`
+/// and `match`. The check runs on the expanded root, where a use and a slot's
+/// fill are already inlined; one met unexpanded is given the benefit of the
+/// doubt, as what it holds may handle the keys.
+fn keyed(nodes: &[Node]) -> bool {
+    nodes.iter().any(|node| match node {
+        Node::Element {
+            attrs, children, ..
+        } => has(attrs, "key") || has(attrs, "keycapture") || keyed(children),
+        Node::When {
+            then, otherwise, ..
+        } => keyed(then) || keyed(otherwise),
+        Node::Each { body, .. } => keyed(body),
+        Node::Match { some, none, .. } => keyed(&some.1) || keyed(none),
+        Node::Use { .. } | Node::Children { .. } => true,
+    })
+}
+
+/// Composite widget roles whose keyboard behavior an author must supply
+/// (LLP 1166.000 D5). The generated table removes roles with built-in keys:
+/// the kernel matches its rows to the written role exactly, as the web host's
+/// `[role="tablist"]` selectors do, so `role="Tablist"` or a fallback list
+/// gets no keys and is warned of. A group another element names is a field's
+/// popup, whose keys the field handles: its literal `id` is among the ids an
+/// `aria-controls` can evaluate to, or its computed `id` is written as some
+/// `aria-controls` is.
+pub(super) fn keys(
+    attrs: &[Attr],
+    children: &[Node],
+    span: Span,
+    controlled: &Controlled<'_>,
+) -> Option<LowerError> {
+    const COMPOSITES: &[&str] = &[
+        "radiogroup",
+        "tablist",
+        "menu",
+        "listbox",
+        "tree",
+        "treegrid",
+        "grid",
+        "toolbar",
+        "menubar",
+    ];
+    let written = literal(attrs, "role")?;
+    let role = applied(written)?;
+    let named = |id: &str| {
+        controlled
+            .ids
+            .iter()
+            .any(|(site, target)| *site != span && *target == id)
+    };
+    let same = |id: &Attr| {
+        let id = unplaced(&id.value);
+        controlled
+            .exprs
+            .iter()
+            .any(|(site, written)| *site != span && *written == id)
+    };
+    let supplied = exact_kernel::ROLE_KEYS
+        .iter()
+        .any(|row| row.role == written);
+    if !COMPOSITES.contains(&role)
+        || supplied
+        || role == "toolbar" && has(attrs, "toolbarPlacement")
+        || literal(attrs, "id").is_some_and(named)
+        || attrs
+            .iter()
+            .rev()
+            .find(|a| a.name == "id")
+            .is_some_and(|id| !matches!(id.value, Expr::Str(..)) && same(id))
+        || has(attrs, "key")
+        || has(attrs, "keycapture")
+        || keyed(children)
+    {
+        return None;
+    }
+    let exactly = if exact_kernel::ROLE_KEYS.iter().any(|row| row.role == role) {
+        format!(
+            "; or write `role=\"{role}\"`, in lower case and alone, for the keys Exact supplies"
+        )
+    } else {
+        String::new()
+    };
+    Some(LowerError {
+        id: "lower-role-keys",
+        message: format!(
+            "Exact supplies no keys for `role=\"{written}\"`: each member is its own Tab stop and the arrows do nothing. Write the keys in a `key` action on the group or its members{exactly}"
+        ),
+        span,
+    })
+}
 
 /// Whether an element names itself: a written `aria-label` or
 /// `aria-labelledby` that is not the empty string.
@@ -114,8 +303,12 @@ fn unlabelled_button(attrs: &[Attr], children: &[Node], span: Span) -> Option<Lo
     }
     let message = match says(children, false) {
         Says::Words => return None,
-        Says::Unnamed => "this `button` shows only an image with no name: a screen reader on the web reads it as just \"button\", and VoiceOver on iOS by the symbol's generic name (\"add\", \"love\"). Name it: `aria-label=\"Add\"` on the button, beside its `image \"symbol:…\"` (docs/recipes/symbols.md)",
-        Says::Nothing => "this `button` holds no text and no `aria-label`, so it is blank: an empty button to a person, just \"button\" to VoiceOver. Put its words in it (a `text \"Add 500 ml\"` child), or name a symbol-only button with `aria-label` beside its `image \"symbol:…\"` (docs/recipes/symbols.md)",
+        Says::Unnamed => {
+            "this `button` shows only an image with no name: a screen reader on the web reads it as just \"button\", and VoiceOver on iOS by the symbol's generic name (\"add\", \"love\"). Name it: `aria-label=\"Add\"` on the button, beside its `image \"symbol:…\"` (docs/recipes/symbols.md)"
+        }
+        Says::Nothing => {
+            "this `button` holds no text and no `aria-label`, so it is blank: an empty button to a person, just \"button\" to VoiceOver. Put its words in it (a `text \"Add 500 ml\"` child), or name a symbol-only button with `aria-label` beside its `image \"symbol:…\"` (docs/recipes/symbols.md)"
+        }
     };
     Some(LowerError {
         id: "lower-button-unlabelled",

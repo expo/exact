@@ -670,18 +670,23 @@ impl Batch {
     /// table's `play` (with `playbackRate` and `pan` when not 1 and 0, LLP
     /// 1125 D10) and `end` ops in runner milliseconds, and at a boot
     /// the files to decode, in declaration order (a new boot silences the
-    /// last one's voices). Nothing is sent when there is nothing to say.
+    /// last one's voices). A sequence's `playing` state accompanies even
+    /// an empty op list, so the output stays eligible between hits.
     pub fn sound(
         &mut self,
         ops: Vec<exact_runner::sound::SoundOp>,
         plan: Option<&exact_plan::Plan>,
+        playing: Option<bool>,
     ) {
         use exact_runner::sound::SoundOp;
         let files = plan.filter(|p| !p.sounds.is_empty());
-        if ops.is_empty() && files.is_none() {
+        if ops.is_empty() && files.is_none() && playing.is_none() {
             return;
         }
         let mut s = String::from("{\"op\":\"sound\"");
+        if let Some(playing) = playing {
+            let _ = write!(s, ",\"playing\":{playing}");
+        }
         if let Some(plan) = files {
             s.push_str(",\"files\":[");
             for (i, row) in plan.sounds.iter().enumerate() {
@@ -784,7 +789,9 @@ impl Batch {
             self.ops
                 .push("{\"op\":\"activity\",\"demand\":true}".into());
         }
-        self.sound(runner.take_sounds(), boot.then(|| runner.plan()));
+        let playing =
+            (boot || !runner.plan().sequences.is_empty()).then(|| runner.transport().playing());
+        self.sound(runner.take_sounds(), boot.then(|| runner.plan()), playing);
         let uses = boot && exact_runner::uses::uses_midi(runner.plan());
         if let Some(op) = exact_runner::midi::batch_op(&runner.take_midi(), uses) {
             self.ops.push(op);

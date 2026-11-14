@@ -627,12 +627,13 @@ test('JavaScript-rendered pages exclude the other retained tabs’ heads', async
 
 // LLP 1115.000 D4.15: the page marks a route's bar (`data-exact-bar`) as the glue will, so its item's symbol is the
 // bar's size, 22/17 of the 16 px body in its 1.2em box, over the 13 px written on it, before the page adopts and after:
-// no jump. A header whose heading sits in a menu's button (`popovertarget`) is no bar, before or after, and its symbol
-// keeps the 13 px in a native face's 1.5em box.
+// no jump. A menu opener's heading belongs to its item, so its header is a bar without a title (LLP 1075.003 §9.10).
+// Without a title, plain text outside the items keeps the header in the page, its symbol at 13 px in a native face's 1.5em box.
 test('JavaScript-rendered pages mark the bar, whose symbols are the bar\'s size before the page adopts and after', async () => {
   await renderedPages(`routes nav
   home "/" render=build
     menu "/menu" render=build
+    content "/content" render=build
 
 component Bars
   state added = 0
@@ -647,8 +648,10 @@ component Bars
               text "Inbox" role="heading" aria-level=1
               button press=add testId="add" aria-label="Add"
                 image "symbol:add" font-size=13
-          if e.name == "menu"
+          if e.name != "home"
             header display="flex" align-items="center"
+              if e.name == "content"
+                text "Extra"
               button popovertarget="menu-items"
                 text "Menu" role="heading" aria-level=1
               button press=add testId="menu-add" aria-label="Add"
@@ -663,13 +666,12 @@ component Bars
     let suite, browser;
     try {
       // The shown header's mark, and its Add symbol's width to within 0.06 px of the bar's size or of the written one:
-      // a header titled by a heading is the bar; one titled by a button is not.
       const measure = `[...document.querySelectorAll('[navigationkey] > header')].filter(h => h.checkVisibility({ visibilityProperty: true })).map(h => {
         const width = h.querySelector('[data-testid$="add"] img').getBoundingClientRect().width;
         return [h.hasAttribute('data-exact-bar'), Math.abs(width - 16 * 22 / 17 * 1.2) <= 0.06 ? 'bar' : Math.abs(width - 13 * 1.5) <= 0.06 ? 'written' : width];
       })`;
       suite = await suiteBrowser('chromium', { timeout: 10000 });
-      for (const [path, expected] of [['', [[true, 'bar']]], ['menu', [[false, 'written']]]]) {
+      for (const [path, expected] of [['', [[true, 'bar']]], ['menu', [[true, 'bar']]], ['content', [[false, 'written']]]]) {
         const page = await suite.newPage({ javaScriptEnabled: false });
         await page.goto(server.url.href + path);
         expect(await page.evaluate(measure), path + ' before adoption').toEqual(expected);

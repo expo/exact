@@ -116,11 +116,13 @@ test('copying delivers the onboarding prompt and the current article after navig
   expect(prompt).toContain('https://github.com/expo/exact/blob/main/docs/start-here.md');
   expect(prompt).not.toContain('docs.exact.example');
 
+  await page.getByTestId('actions').click();
   await page.getByTestId('copy-markdown').click();
   await page.waitForFunction(() => window.clipboardWrites.length === 2);
   expect(await page.evaluate(() => window.clipboardWrites[1])).toStartWith('# Start here: building an app with Exact');
   await page.getByTestId('nav-recipeWebsite').click();
   await page.getByTestId('h-a-deep-link').waitFor();
+  await page.getByTestId('actions').click();
   await page.getByTestId('copy-markdown').click();
   await page.waitForFunction(() => window.clipboardWrites.length === 3);
   const markdown = await page.evaluate(() => window.clipboardWrites[2]);
@@ -220,8 +222,8 @@ test('a known moved page keeps its redirect banner', () => withPage({}, async pa
 
 test('Open in AI uses the public page or its repository source', () => withPage({}, async page => {
   await visit(page, '/recipes/website');
-  await page.getByTestId('ai-openai').click();
-  const href = await page.getByTestId('ai-openai-choices').getByRole('link').getAttribute('href');
+  await page.getByTestId('actions').click();
+  const href = await page.getByTestId('open-chatgpt').getAttribute('href');
   const prompt = new URL(href).searchParams.get('q');
   if (site.origin) expect(prompt).toContain(site.origin + '/recipes/website.md');
   else {
@@ -286,5 +288,27 @@ for (const [from, label, path, title] of [
     await page.getByRole('link', { name: label, exact: true }).click();
     await page.getByRole('heading', { name: title, level: 1, exact: true }).waitFor();
     expect(new URL(page.url()).pathname).toBe(path);
+  }));
+}
+
+for (const path of ['/', '/recipes/website', '/learn/website-recipe', '/_components']) {
+  test(`no link on ${path} takes the accent colour or an underline on hover`, () => withPage({}, async page => {
+    await visit(page, path);
+    const devtools = await page.context().newCDPSession(page);
+    const { root } = await devtools.send('DOM.getDocument');
+    await devtools.send('CSS.enable');
+    const { nodeIds } = await devtools.send('DOM.querySelectorAll', { nodeId: root.nodeId, selector: '#exact-root a[data-view][href]' });
+    expect(nodeIds.length).toBeGreaterThan(0);
+    for (const nodeId of nodeIds) await devtools.send('CSS.forcePseudoState', { nodeId, forcedPseudoClasses: ['hover', 'focus-visible'] });
+    const textLinks = await page.evaluate(() => {
+      const accent = document.createElement('span');
+      accent.style.color = 'var(--exact-accent, AccentColor)';
+      document.getElementById('exact-root').append(accent);
+      const drawnAsTextLink = a => getComputedStyle(a).color === getComputedStyle(accent).color || getComputedStyle(a).textDecorationLine.includes('underline');
+      const links = [...document.querySelectorAll('#exact-root a[data-view][href]')].filter(a => !a.closest('[data-exact-text]') && drawnAsTextLink(a));
+      accent.remove();
+      return links.map(a => a.getAttribute('href'));
+    });
+    expect(textLinks).toEqual([]);
   }));
 }

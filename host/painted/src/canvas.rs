@@ -199,7 +199,7 @@ pub use device::{configure, window, Told};
 #[cfg(target_os = "android")]
 #[path = "canvas/jni.rs"]
 pub mod jni;
-#[cfg(any(target_os = "android", test))]
+#[cfg(target_os = "android")]
 #[path = "canvas/journal.rs"]
 mod journal;
 #[cfg(any(target_os = "android", test))]
@@ -882,12 +882,16 @@ impl Backend for Recorder {
         }
         self.group = Some(id);
         self.ops.extend([GROUP_BEGIN, id]);
+        // The group records on a fresh Canvas, independently of the outer matrix.
+        self.matrix = None;
         GROUPS.with(|g| g.borrow_mut().push((id, scroll)));
     }
 
     fn group_end(&mut self) {
         self.group = None;
         self.ops.push(GROUP_END);
+        // The reader returns to the outer Canvas, whose matrix may differ.
+        self.matrix = None;
     }
 
     fn row_draw(&mut self, id: u32, origin: (f32, f32), bounds: Rect4) {
@@ -1158,6 +1162,7 @@ impl<D: DataSource + Default> CanvasHost<D> {
     /// One turn: the presenter's work, then a recording when anything
     /// changed. `Some` is the new op stream (valid until the next call).
     pub fn frame(&mut self) -> Option<Vec<u32>> {
+        self.p.timer_visibility(false);
         // After the first frame: the windows' lead, realized off the frame.
         if self.painted_once && !self.lead && !self.responding {
             self.lead = true;

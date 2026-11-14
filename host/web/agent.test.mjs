@@ -605,8 +605,8 @@ test('programmatic web opens stay on Chrome and Firefox drives a small Exact pla
 }, 120_000);
 
 test('page facts: the platform off the agent, the drive\'s values under it (LLP 1069.000 D2, D6)', () => {
-  const listened = [];
-  const platform = { document: { visibilityState: 'hidden', addEventListener: name => listened.push(name) }, navigator: { onLine: false, share() {} }, addEventListener: name => listened.push(name) };
+  const listened = [], on = {};
+  const platform = { document: { visibilityState: 'hidden', addEventListener: (name, f) => { listened.push(name); on[name] = f; } }, navigator: { onLine: false, share() {} }, addEventListener: name => listened.push(name) };
   const real = pageReporter(false, platform);
   expect(real.bits()).toBe(1 | 2 | 4 | 32); // no navigation entry is a page the browser navigated to (bits 5–6: 1)
   platform.document.visibilityState = 'visible'; platform.navigator = { onLine: true };
@@ -615,7 +615,9 @@ test('page facts: the platform off the agent, the drive\'s values under it (LLP 
   // The document pickers (studio diary R31): bit 3 where the browser has them.
   platform.showOpenFilePicker = () => {}; expect(real.bits()).toBe(32 | 8);
   delete platform.showOpenFilePicker; let focused = false; platform.document.hasFocus = () => focused; expect(real.bits()).toBe(32 | 16); focused = true; expect(real.bits()).toBe(32); // #114: bit 4 while `document.hasFocus()` is false
-  const on = {}; platform.addEventListener = (name, f) => { listened.push(name); on[name] = f; }; let told = 0; real.onChange(() => { told++; }); expect(listened).toEqual(['visibilitychange', 'online', 'offline', 'focus', 'blur', 'pagehide', 'pageshow']);
+  platform.addEventListener = (name, f) => { listened.push(name); on[name] = f; }; let told = 0; real.onChange(() => { told++; }); expect(listened).toEqual(['visibilitychange', 'freeze', 'resume', 'online', 'offline', 'focus', 'blur', 'pagehide', 'pageshow']);
+  on.freeze(); expect([real.bits(), told]).toEqual([32 | 128, 1]);
+  on.resume(); expect([real.bits(), told]).toEqual([32, 2]); told = 0;
   on.pageshow({ persisted: false }); on.pagehide({ persisted: false }); expect([real.bits(), told]).toEqual([32, 0]); on.pagehide({ persisted: true }); expect([real.bits(), told]).toEqual([32 | 1024, 1]); on.pageshow({ persisted: true }); expect([real.bits(), told]).toEqual([32 | 1 << 16, 2]); // the back/forward cache (LLP 1069.000 D2): bit 10 while put away, the returns above bit 16; a load's and an unload's events are neither
   const agent = pageReporter(true, new Proxy({}, {get(_, name) { if (name === 'devicePixelRatio') return 2; throw new Error('agent read the platform'); }})); // the display's scale alone is the page's own under the agent too: no drive value stands in for it (LLP 1115.000 D10.3)
   expect(agent.bits()).toBe(4 | 8 | 32 | 256); // the drive navigated to the page: `navigate` (bits 5–6: 1); files in a share, never a picture (LLP 1125 D12)

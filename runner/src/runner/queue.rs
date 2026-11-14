@@ -467,10 +467,7 @@ impl<D: DataSource> Runner<D> {
         let staged = self.store.take_sockets();
         // A mutation's console lines, including a refusal, reach the agent's
         // logs whether the answer comes now or the send waited its turn.
-        self.hear_aborted();
-        for line in self.data.take_logs() {
-            self.log(line);
-        }
+        self.take_data_logs();
         if let Err(DataError::Failed(code, why, reason)) = &answer {
             if self.conclude_send(target) {
                 self.failed_mut[m] = Some(crate::failure::Failure {

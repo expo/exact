@@ -34,7 +34,7 @@ component Chat
             for m in thread key=m.id
               column padding="3px 12px"
                 if m.newDay
-                  text formatDay(m.at, time.epochAtZero, time.utcOffset, "day") align-self="center"
+                  text formatDay(m.at, time.epochAtZero, time.utcOffset, "section") align-self="center"
                     padding="2px 10px" border-radius=10 background-color="-exact-fill" font="-exact-caption1"
                     testId=`day-${m.id}`
                 text m.body white-space="pre-wrap" testId=`message-${m.id}`
@@ -62,12 +62,12 @@ test "the header names the chat; each day opens with its pill"
   expect text "day-2" == "Today"
 ```
 
-- `navigationBar="none"` on the route's element draws no bar, so the row is the header. A
-  pushed route then has no Back: put a `button press=back` first.
+- `navigationBar="none"` on the route's element draws no bar: the row is the header, and
+  a pushed route needs a `button press=back` first.
 - A photo: `image "assets/ada.jpg"`, fixed `width` and `height`, `border-radius` half of it.
-- The pill is the row root's first child, never its sibling ([long lists](long-lists.md)).
-  `formatDay` names the day in the person's locale; tick `now` as the
-  [dates recipe](dates-and-days.md) does to pass midnight.
+- The pill is the row root's first child, not its sibling ([long lists](long-lists.md)).
+  Tick `now` as the [dates recipe](dates-and-days.md) does to pass midnight.
 - A time on a bubble's last line: in a `box position="relative"`, end the text with a
   hidden run, `` text `  ${m.time}` opacity=0 aria-hidden="true" ``, and draw the time
-  `position="absolute" right=8 bottom=4`. A full last line pushes it down.
+  `position="absolute" right=8 bottom=4`; in a `direction="rtl"` box `left=8`, the run
+  led by U+200F. A full last line pushes it down.

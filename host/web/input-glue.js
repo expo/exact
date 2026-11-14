@@ -36,7 +36,9 @@ function pointerLine(el, e, lifted = false) {
  * focus; and the arrows move the choice, to the next or previous radio, wrapping and past
  * disabled ones (Left and Right mirrored right to left), focused and pressed. */
 const radiosOf = group => viewChildren(group).filter(el => el.getAttribute?.("role") === "radio");
-const radioUsable = el => !el.disabled && el.getAttribute("aria-disabled") !== "true" && el.getClientRects().length > 0;
+// Eligible as LLP 1166.000 D1 has it; the box test stands where a browser has no `checkVisibility`.
+const radioUsable = el => !el.disabled && el.getAttribute("aria-disabled") !== "true" && !el.closest("[inert]")
+  && el.checkVisibility?.({ visibilityProperty: true }) !== false && el.getClientRects().length > 0;
 // Both renderers keep authored updates here, even when the DOM already has roving's -1.
 const roveAllowed = el => {
   if (el.exactAuthoredTabIndex === undefined) el.exactAuthoredTabIndex = el.getAttribute("tabindex");
@@ -91,11 +93,12 @@ function roveArrow(root, event) {
   const open = top && !top.contains(el) && (within ? within.matches(MENUS) : /^Arrow/.test(key)) ? top : null; // from a menu beneath it, or by an arrow from outside
   const group = open ?? within;
   if (!group || !root.contains(group)) return false;
-  const menu = group.matches(MENUS), all = roversOf(group), live = all.filter(item => item === el || radioUsable(item));
+  // An arrow steps from the focused member whatever its state; Home and End go to the first and last usable one.
+  const menu = group.matches(MENUS), all = roversOf(group), usable = all.filter(radioUsable), live = all.filter(item => item === el || usable.includes(item));
   if (!open && !all.includes(el)) return false;
   const vertical = menu || group.getAttribute("aria-orientation") === "vertical" || viewParent(group)?.hasAttribute("data-exact-sidebar"), rtl = getComputedStyle(group).direction === "rtl";
   const step = (vertical ? { ArrowDown: 1, ArrowUp: -1 } : { ArrowRight: rtl ? -1 : 1, ArrowLeft: rtl ? 1 : -1 })[key];
-  const next = open ? live.at(key === "ArrowDown" || key === "Home" ? 0 : -1) : step ? live[(live.indexOf(el) + step + live.length) % live.length] : key === "Home" ? live[0] : key === "End" ? live.at(-1) : null;
+  const next = open ? live.at(key === "ArrowDown" || key === "Home" ? 0 : -1) : step ? live[(live.indexOf(el) + step + live.length) % live.length] : key === "Home" ? usable[0] ?? el : key === "End" ? usable.at(-1) ?? el : null;
   if (!next) return false;
   event.preventDefault();
   if (next !== el) { if (!menu) rove(all, next); next.focus(); }

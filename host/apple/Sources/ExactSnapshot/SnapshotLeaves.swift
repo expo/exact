@@ -345,6 +345,24 @@ struct SnapshotImageView: View {
             }
             .font(.system(size: points, weight: Font.Weight(css: Int(weight))))
             .foregroundStyle(ink)
+        } else if let svg = node.props["symbolAsset"],
+                  let asset = IconAsset.image(named: IconAsset.name(svg),
+                    bundles: environment.imageRoots.compactMap { Bundle(url: $0) }.flatMap { IconAsset.bundles(for: $0) } + SnapshotBundles.all,
+                    scale: displayScale) {
+            let style = SnapshotStyle(node)
+            let natural = IconAsset.size(asset.size, points: style.number("font_size") ?? 17)
+            let ink = SnapshotColor.style(style.color("tint_color") ?? style.color("text_color"), dark: scheme == .dark, context: .ink) ?? AnyShapeStyle(.tint)
+            #if canImport(UIKit)
+            let image = Image(uiImage: asset)
+            #else
+            let image = Image(nsImage: asset)
+            #endif
+            let box = node.contentBox.size
+            // Symbol fill keeps the file's aspect, matching the page hosts.
+            let fit = fit == "fill" ? "contain" : fit
+            SnapshotRaster(image: image.renderingMode(style.string("symbol_rendering") == "multicolor" ? .original : .template),
+                           natural: natural, fit: fit, box: box, fullColor: true)
+                .foregroundStyle(ink)
         } else if let commands = node.props["symbolPath"] {
             // An icon with no SF Symbol draws its own path (LLP 1121 D10, stage 9 A), as the page hosts do: its
             // em square placed by `object-fit` in the box, the viewBox met in that square, each path filled

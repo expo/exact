@@ -363,3 +363,18 @@ fn event_only_extensions_have_web_loaders() {
     assert!(imports.contains("./modules.js"));
     assert!(body.contains("./ext-bell.js"), "{body}");
 }
+
+#[test]
+fn frozen_is_a_valid_page_field_and_unknown_names_refuse() {
+    let source = "shape Page\n  frozen: bool\ncomponent App\n  resource page = exactPage() as shape Page\n  view\n    text `${page.frozen}`\n";
+    let plan = contract::compile(source).unwrap();
+    let mut body = String::new();
+    assert!(reserved(&plan, &mut body)
+        .unwrap()
+        .contains("page as $page"));
+    assert!(body.contains("frozen"));
+    let plan = contract::compile(&source.replace("frozen", "freezing")).unwrap();
+    assert!(reserved(&plan, &mut String::new())
+        .unwrap_err()
+        .contains("has no `freezing`"));
+}

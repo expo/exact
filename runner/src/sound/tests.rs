@@ -284,6 +284,26 @@ fn a_group_cuts_by_start_time_whatever_the_order_of_calls() {
     let ops = r.take_sounds();
     assert!(ops.contains(&SoundOp::End { id: 1, at: 100.0 }));
     assert!(ops.contains(&SoundOp::End { id: 3, at: 120.0 }));
+
+    let source = SOURCE.replace(
+        "  action three\n",
+        "  action grouped\n    playSound(\"assets/kick.wav\", group=\"hat\")\n    playSound(\"assets/kick.wav\", at=performanceNow() + 100, group=\"hat\")\n  action three\n",
+    );
+    let mut r = boot_with(&source, 0.0);
+    r.act("grouped", vec![]).unwrap();
+    // The wasm host must keep this timed end behind its play in the same batch.
+    assert!(matches!(
+        r.take_sounds().as_slice(),
+        [
+            SoundOp::Play { id: 1, at: 0.0, .. },
+            SoundOp::End { id: 1, at: 100.0 },
+            SoundOp::Play {
+                id: 2,
+                at: 100.0,
+                ..
+            }
+        ]
+    ));
 }
 
 #[test]

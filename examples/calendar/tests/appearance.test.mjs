@@ -132,3 +132,112 @@ test('every calendar accent and destructive fill has readable ink on native host
   }
   expect(failures).toEqual([]);
 });
+
+for (const width of [420, 1180]) {
+  test(`calendar popovers and modal editor at ${width}px`, async () => {
+    const session = await open({ host: 'web', app: './examples/calendar', size: [width, 900],
+      storage: `calendar-presentation-${process.pid}-${width}`, epoch: '2026-09-16T12:00:00Z',
+      env: { EXACT_AGENT_EPHEMERAL_PORT: '1' } });
+    try {
+      await session.clock('settle');
+      await session.tap('theme-button');
+      await session.clock('settle');
+      expect(await session.carrier.evaluate(`document.querySelector('#theme-popup').matches(':popover-open')`)).toBe(true);
+      await session.type('close-themes', { key: 'Escape' });
+      await session.clock('+200');
+      await session.clock('settle');
+      expect((await session.state()).slots.themeOpen).toBe(false);
+      await session.tap('theme-button');
+      await session.clock('settle');
+      await session.tap('month-label');
+      await session.clock('settle');
+      expect(await session.carrier.evaluate(`document.querySelector('#theme-popup').matches(':popover-open')`)).toBe(false);
+      await session.tap('new-item');
+      if (width < 860) {
+        expect(await session.carrier.evaluate(`document.querySelector('#type-picker').matches(':popover-open')`)).toBe(true);
+        await session.type('add-event', { key: 'Escape' });
+        await session.clock('settle');
+        expect(await session.carrier.evaluate(`document.querySelector('#type-picker').matches(':popover-open')`)).toBe(false);
+        await session.tap('new-item');
+        await session.tap('add-event');
+      }
+      await session.clock('settle');
+      const { ax } = await session.tree(null, { ax: true });
+      expect(ax.elements.some(element => element.role === 'dialog' && element.name === 'New Event')).toBe(true);
+      expect(ax.modal.present).toBe(true);
+      expect(ax.elements.some(element => element.testId === 'theme-button')).toBe(false);
+      expect(await session.carrier.evaluate(`document.querySelector('#schedule-editor').contains(document.activeElement)`)).toBe(true);
+      await session.type('schedule-title', 'Unsaved draft');
+      await session.type('schedule-notes', { key: 'Escape' });
+      await session.clock('settle');
+      expect((await session.state()).slots.editorOpen).toBe(false);
+      expect(await session.carrier.evaluate(`document.activeElement.dataset.testid`)).toBe('new-item');
+      await session.tap('new-item');
+      if (width < 860) await session.tap('add-todo');
+      await session.clock('settle');
+      await session.tap('cancel-editor');
+      await session.clock('settle');
+      expect((await session.state()).slots.editorOpen).toBe(false);
+    } finally {
+      await session.close();
+    }
+  }, 30000);
+}
+
+test('compact date creation returns focus to the selected date', async () => {
+  const session = await open({ host: 'web', app: './examples/calendar', size: [420, 900],
+    storage: `calendar-date-focus-${process.pid}`, epoch: '2026-09-16T12:00:00Z',
+    env: { EXACT_AGENT_EPHEMERAL_PORT: '1' } });
+  try {
+    await session.clock('settle');
+    const date = 'date-2026-09-2026-09-03';
+    for (const dismissal of ['cancel', 'escape', 'save']) {
+      if ((await session.state()).slots.popupOpen) await session.tap('close-date');
+      await session.tap(date, { at: [10, 10] });
+      await session.carrier.evaluate(`document.querySelector('[data-testid="${date}"]')
+        .dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+      await session.clock('settle');
+      expect((await session.state()).slots.editorOpen).toBe(true);
+      await session.type('schedule-title', 'From a date');
+      if (dismissal === 'escape') await session.type('schedule-notes', { key: 'Escape' });
+      else await session.tap(dismissal === 'save' ? 'save-schedule' : 'cancel-editor');
+      await session.clock('settle');
+      expect((await session.state()).slots.editorOpen).toBe(false);
+      expect(await session.carrier.evaluate(`document.activeElement.id`)).toBe('day-24320-20699');
+    }
+  } finally {
+    await session.close();
+  }
+}, 30000);
+
+for (const width of [420, 1180]) {
+  test(`delete confirmation allows Escape and Cancel at ${width}px`, async () => {
+    const session = await open({ host: 'web', app: './examples/calendar', size: [width, 900],
+      storage: `calendar-delete-dismiss-${process.pid}-${width}`, epoch: '2026-09-16T12:00:00Z',
+      env: { EXACT_AGENT_EPHEMERAL_PORT: '1' } });
+    try {
+      await session.clock('settle');
+      await session.tap('date-2026-09-2026-09-01', { at: [10, 10] });
+      const item = await session.carrier.evaluate(`document.querySelector('[data-testid^="agenda-item-"]').dataset.testid`);
+      await session.tap(item);
+      await session.clock('settle');
+      await session.tap('delete-schedule');
+      await session.tap('keep-schedule');
+      expect((await session.state()).slots.editorOpen).toBe(true);
+      expect((await session.state()).slots.confirmDelete).toBe(false);
+      await session.tap('delete-schedule');
+      await session.type('schedule-notes', { key: 'Escape' });
+      await session.clock('settle');
+      expect((await session.state()).slots.editorOpen).toBe(false);
+      expect(await session.carrier.evaluate(`document.querySelector('[data-testid="${item}"]') !== null`)).toBe(true);
+      await session.tap(item);
+      await session.clock('settle');
+      await session.tap('delete-schedule');
+      await session.tap('cancel-editor');
+      await session.clock('settle');
+      expect((await session.state()).slots.editorOpen).toBe(false);
+    } finally {
+      await session.close();
+    }
+  }, 30000);
+}

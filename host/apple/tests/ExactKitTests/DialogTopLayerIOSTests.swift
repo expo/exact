@@ -172,6 +172,49 @@ final class DialogTopLayerIOSTests: XCTestCase {
         return session
     }
 
+    func testPointReadsFollowTheNativeBackdropBelowAPopover() throws {
+        guard let scene else { throw missing("scene", "a modal backdrop needs a scene's window") }
+        let session = try boot(scene), p = session.presenter
+        p.dialogCommand("showModal", "responsive")
+        spin { !p.menus.inTransition }
+        p.dialogCommand("showModal", "painted-point")
+        spin { !p.menus.inTransition }
+        let sheet = try XCTUnwrap(window?.rootViewController?.presentedViewController?.presentedViewController as? DialogSheetController)
+        let dialog = try XCTUnwrap(p.views.values.first { $0.props["id"] == "painted-point" })
+        let outside = CGPoint(x: 5, y: 5)
+        func read(_ point: CGPoint, hit: String, hits: String, file: StaticString = #filePath, line: UInt = #line) {
+            let at = p.viewportPoints(sheet.view.convert(CGRect(origin: point, size: .zero), to: p.viewport)).origin
+            let sample = PointerSample(x: 0, y: 0, buttons: 0, pressure: 0, type: "mouse", id: 1, clientX: at.x, clientY: at.y)
+            session.apply(session.runtime.pointer(dialog.id, .move, sample, now: session.now()))
+            let state = session.runtime.agent("{\"op\":\"state\"}")
+            let slots = ((try? JSONSerialization.jsonObject(with: Data(state.utf8))) as? [String: Any])?["slots"] as? [String: Any]
+            XCTAssertEqual(slots?["hit"] as? String, hit, file: file, line: line)
+            XCTAssertEqual(slots?["hits"] as? String, hits, file: file, line: line)
+        }
+        XCTAssertTrue(sheet.view.hitTest(outside, with: nil) === sheet.scroller)
+        read(outside, hit: "painted-point", hits: "painted-point")
+        // The dialog refuses its own hit, but its native backdrop still accepts it.
+        let center = sheet.scroller.convert(CGPoint(x: dialog.bounds.midX, y: dialog.bounds.midY), from: dialog)
+        XCTAssertTrue(sheet.scroller.hitTest(center, with: nil) === sheet.scroller)
+        read(sheet.view.convert(center, from: sheet.scroller), hit: "painted-point", hits: "painted-point")
+        p.menus.action("showPopover", ["point-pop"])
+        let pop = try XCTUnwrap(p.views.values.first { $0.props["id"] == "point-pop" })
+        let popAt = pop.convert(CGPoint(x: pop.bounds.midX, y: pop.bounds.midY), to: sheet.view)
+        XCTAssertFalse(dialog.convert(dialog.bounds, to: sheet.view).contains(popAt), "the popover must be over the backdrop")
+        let delivered = window?.hitTest(sheet.view.convert(popAt, to: window), with: nil)
+        XCTAssertTrue(delivered === pop || delivered?.isDescendant(of: pop) == true, "\(String(describing: delivered))")
+        read(popAt, hit: "point-pop", hits: "point-pop,painted-point")
+        p.menus.drop("point-pop")
+        spin { !p.menus.inTransition }
+        sheet.view.isUserInteractionEnabled = false
+        XCTAssertNil(sheet.view.hitTest(outside, with: nil))
+        read(outside, hit: "none", hits: "")
+        sheet.view.isUserInteractionEnabled = true
+        let beyond = CGPoint(x: sheet.view.bounds.maxX + 1, y: 5)
+        XCTAssertNil(sheet.view.hitTest(beyond, with: nil))
+        read(beyond, hit: "none", hits: "")
+    }
+
     /// A painted dialog taller than the window stops at the window (the
     /// modal dialog's `max-height`) and scrolls to what overflows it, a flat
     /// child and the Close button below it, as the sheet does.

@@ -20,6 +20,11 @@
 // the mode.
 (function (global) {
   "use strict";
+  // What the runtime itself says (js/src/console.js). This file is the
+  // prelude's last, so console.js's hand-offs go here, before the app loads.
+  var runtimeLine = global.__exact_runtime_line;
+  delete global.__exact_runtime_line;
+  delete global.reportError;
   // The cache key of an Intl formatter's arguments when they read the same
   // whenever they are read: locales as a string or strings, and options as a
   // plain object of finite primitives in own enumerable data properties;
@@ -258,9 +263,9 @@
     if (roundsEven) stateOf(this.native).mode = this.mode;
     var resolved = this.native.resolvedOptions();
     this.cells = options.compactDisplay === "long" || resolved.style !== "decimal" ? null : table(resolved.locale);
-    if (!this.cells && !said[resolved.locale] && global.console) {
+    if (!this.cells && !said[resolved.locale]) {
       said[resolved.locale] = true;
-      global.console.error("Intl.NumberFormat: notation \"compact\" (" + (options.compactDisplay || "short") + ", " + resolved.style + ") in " +
+      runtimeLine("Intl.NumberFormat: notation \"compact\" (" + (options.compactDisplay || "short") + ", " + resolved.style + ") in " +
         resolved.locale + " is not available on this host; numbers are formatted in full");
     }
   }

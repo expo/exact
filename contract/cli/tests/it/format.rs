@@ -128,7 +128,7 @@ fn a_style_is_a_listed_literal() {
     assert_eq!(e.id, "type-format-style", "{e}");
     assert!(
         e.message
-            .contains(r#"one of `"day"`, `"day-time"`, `"list"`"#),
+            .contains(r#"one of `"day"`, `"day-time"`, `"list"`, `"section"`"#),
         "{e}"
     );
     // A wrapper can't forward a style: its parameter is an expression.

@@ -6,7 +6,7 @@ what to write for a name Contract lacks. The web's methods are called on their v
 
 - **Text:** `s.trim()` · `s.toLowerCase()` · `s.toUpperCase()` ·
   `s.includes(t)` · `s.startsWith(t)` · `s.endsWith(t)` · `s.indexOf(t)` ·
-  `s.slice(start, end?)` · `s.split(sep) -> string[]` · `s.replaceAll(find, with)` ·
+  `s.slice(start, end?)` · `s.split(sep)` · `s.replaceAll(find, with)` ·
   `x.toString()` · `parseNumber(s) -> option<number>` · `encodeURIComponent(s)`.
 - **Lists:** `x.length` and `x.isEmpty()` (text too) · `xs.map((x, i) => y)` ·
   `xs.filter(x => bool)` · `first(xs) -> option<T>` · `xs.at(i) -> option<T>` ·
@@ -16,9 +16,9 @@ what to write for a name Contract lacks. The web's methods are called on their v
 - **Numbers:** `floor(n)` · `ceil(n)` · `round(n)` · `min(a, b)` · `max(a, b)` ·
   `sin(rad)` · `cos(rad)` · `+ - * / %`.
 - **Formatting:** `formatNumber(n, "decimal" | "percent" | "compact")` ·
-  `formatNumber(n, "currency", "USD")` · `n.toFixed(digits)` · `formatDecimal(cents, 2)` ·
+  `formatNumber(n, "currency", "USD")` · `n.toFixed(d)` · `formatDecimal(cents, 2)` ·
   `formatDate(msOrDayKey, offset, "medium" | "month-year" | "iso")` · `formatTime(ms, offset, "short")` ·
-  `formatDay(then, now, offset, "day" | "list")` ·
+  `formatDay(then, now, offset, "day"|"day-time"|"list"|"section")` ·
   `calendarDiff(from, to, "years" | "months")` · `t("key", name=value)`.
 - **Time:** `performanceNow()`, ms since launch; the date is
   `time.epochAtZero + performanceNow()` ([dates and days](dates-and-days.md)).
@@ -29,7 +29,7 @@ what to write for a name Contract lacks. The web's methods are called on their v
 - **Requests:** `pending(x)` · `failed(resource)` ·
   `failure(resource) -> option<Failure>`.
 - **Values:** `some(x)`, `none` · `Shape(field=value, …)` · `Shape(base, field=value)` ·
-  `empty(field=value)` (a resource's placeholder).
+  `empty(field=value)` (a resource placeholder).
 
 Host commands are statements: `focus(id)`, `blur()`, `showModal(id)`,
 `close(id)`, `copyText(s)`, `openURL(url)`, `share(…)`, `haptic(…)`, `scrollIntoView(id)`

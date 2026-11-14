@@ -38,7 +38,7 @@ import { createConnection } from 'node:net';
 import { homedir, tmpdir, userInfo } from 'node:os';
 import { basename, dirname, resolve } from 'node:path';
 import { within } from './paths.mjs';
-import { HOST_DEV, PINNED_RUST, bakeWatchEnv, buildBake, claimLive, hermesBundle, cargoEnvironment, copyShaders, gpuModules, injectedProfiles, linuxBuild, mavenProblems, resolveApp, wholeProgram } from './app.mjs';
+import { HOST_DEV, PINNED_RUST, androidPackageId, bakeWatchEnv, buildBake, claimLive, hermesBundle, cargoEnvironment, copyShaders, gpuModules, injectedProfiles, linuxBuild, mavenProblems, resolveApp, wholeProgram } from './app.mjs';
 import { ANDROID_MIN_API, hermesAndroidBundle } from './hermes-android.mjs';
 import { ANDROID_PAGE_SIZE, androidCargo } from './cargo-check.mjs';
 import { guardFlags, reportBuilt } from './help.mjs';
@@ -285,8 +285,8 @@ const RELAY_CLEANED_ERROR = 70;
 
 /** The reader carrier (LLP 1107 D1): install the APK and return what `androidDeploy` returns, with a process that
  * launches the app under a driver and relays the agent protocol's lines between its stdio and the app (`relay`).
- * The package is the app's id with the suffix the APK was built with (ORG_GRADLE_PROJECT_idSuffix, as the build
- * reads it). The app boots its own baked plan with its own assets, at the phone's size, in the phone's fonts, or a
+ * The package is host.android.id (default app.id) with the suffix the APK was built with
+ * (ORG_GRADLE_PROJECT_idSuffix, as the build reads it). The app boots its own baked plan with its own assets, at the phone's size, in the phone's fonts, or a
  * drive's local `--plan`, pushed to the device and named by the launch extra `x_plan` (EXACT_PLAN, which the reader
  * reads as the Linux host does). A drive's `--world`, `--size` and launch URL do not reach it, and all but the size
  * are refused. A dev loop's `--url` does: the reader polls it (LLP 1122 D4), through `adb reverse` when it is this
@@ -301,7 +301,7 @@ function readerDeploy(app, apk, env) {
   const devUrl = env.EXACT_DEV_PLAN ? URL.parse(env.EXACT_DEV_PLAN) : null;
   if (env.EXACT_DEV_PLAN && !['http:', 'https:'].includes(devUrl?.protocol)) throw new Error('android --reader: a development plan is a dev loop\'s http(s) URL (--url), not a file');
   if (devUrl) env = { ...env, EXACT_DEV_PLAN: devUrl.href };
-  const serial = androidDevice(env), tool = adb(env), id = app.id.replaceAll('-', '_') + (env.ORG_GRADLE_PROJECT_idSuffix ?? ''); // as the Gradle shell names the package
+  const serial = androidDevice(env), tool = adb(env), id = androidPackageId(app.manifest ?? { app }) + (env.ORG_GRADLE_PROJECT_idSuffix ?? ''); // as the Gradle shell names the package
   const dir = `/data/local/tmp/exact/${id}`, shot = `${dir}/reader-shot-${process.pid}.png`;
   const run = (args, what) => {
     const r = spawnSync(tool, ['-s', serial, ...args], { encoding: 'utf8' });
@@ -1180,7 +1180,7 @@ function installApk(app, apk, { run = false, built = 0, installed: onInstalled =
     console.error(error.message);
     return 1;
   }
-  const id = app.id.replaceAll('-', '_') + (process.env.ORG_GRADLE_PROJECT_idSuffix ?? ''), started = Date.now();
+  const id = androidPackageId(app.manifest ?? { app }) + (process.env.ORG_GRADLE_PROJECT_idSuffix ?? ''), started = Date.now();
   const installed = spawnSync(adb(), ['-s', serial, 'install', '-r', apk], { encoding: 'utf8' });
   if (installed.status !== 0 || /^Failure/m.test(installed.stdout)) { console.error(`adb install: ${(installed.stderr || installed.stdout).trim()}`); return 1; }
   console.error(`built in ${(built / 1000).toFixed(1)} s, installed on ${serial} as ${id} in ${((Date.now() - started) / 1000).toFixed(1)} s`);

@@ -272,7 +272,7 @@ fn a_browser_reads_each_region_as_its_safe_area() {
         style
             .set_dynamic(StyleId::PaddingLeft, &StyleValue::Text(text.into()))
             .unwrap();
-        let Dimension::Compare(c) = style.padding_left else {
+        let Dimension::Compare(c) = style.padding_left.clone() else {
             panic!("a calculation: {text}: {:?}", style.padding_left);
         };
         let mut out = String::new();

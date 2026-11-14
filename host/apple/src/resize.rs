@@ -4,6 +4,29 @@
 use super::*;
 
 impl<D: DataSource> Host<D> {
+    pub(super) fn finish(&mut self, mut batch: Batch, error: Option<String>) -> String {
+        // A host's fact laid out again (a native control's measured size, an
+        // inset, the text size): a box already moving was retargeted from where
+        // it shows, and its new frame and offset go in one batch. Without the
+        // offset the presenter showed the new frame with the old offset until
+        // the next tick, which then put the box back where it started (#134).
+        if self.presence.unauthored {
+            self.present(&mut batch, false);
+        }
+        // Clear the mark first: the resize handlers below commit the app's own moves
+        self.presence.unauthored = false;
+        let _roles = self.runner.bind_roles(); // Its own, crossing (LLP 1121 stage 5).
+        crate::doc_watch::sync(&mut self.doc_watch, &mut self.runner);
+        let (mut batch, error) = self.resize_rounds(batch, error);
+        self.route_overflow.settled =
+            error.is_none() && !batch.layout_provisional && !self.layout_owed;
+        self.request_route_overflow();
+        self.drain_canvas_captures(&mut batch);
+        self.forget_canvas_captures();
+        self.state_onto(&mut batch);
+        self.write(batch, error.as_deref())
+    }
+
     /// Observe the viewport at the host's time, laying out due timer commits
     /// before resize notifications choose their depth threshold.
     pub fn resize_at(&mut self, width: f32, height: f32, now_ms: f64) -> String {
@@ -12,7 +35,7 @@ impl<D: DataSource> Host<D> {
         self.resize_inner(width, height, None, batch, error, None)
     }
 
-    fn settle_resize_clock(
+    pub(super) fn settle_resize_clock(
         &mut self,
         batch: Batch,
         error: Option<String>,

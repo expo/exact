@@ -94,7 +94,13 @@ list-step, string and extent accounting, and a
 refinement proof against the runner. Its local invariants do not prove
 the transformation's scope, binder or transitive-dependency conditions.
 
-The strict browser conformance comparison before and after sharing also remains owed.
+The strict browser comparison before and after sharing found no new failure.
+`conform.mjs` over every web app with `--synthetic --build --strict`, on Linux
+at `fb75c911c` (before `b2927269b`) and at `275ca744a`, failed the same steps
+on both sides, apart from two. Caltrain's `app.test.contract` fails a
+different test on each run, on the wasm side too, at either commit. Markdown's
+JS build error did not recur when Caltrain and Markdown were run twice more on
+each side. Its page fails to boot under Chrome's Linux sandbox at both commits.
 Focused browser regressions cover row-field updates, metric CSS before and
 after a condition changes, and executable rows in stateless and slot-owning
 arms through deeper frames.

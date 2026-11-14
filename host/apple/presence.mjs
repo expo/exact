@@ -7,8 +7,8 @@
 // with that profile's team's identity and embeds it. With none, a
 // development build signs none of them and says what each feature then
 // reports; a release build with a line it cannot keep is refused.
-import { installedProfiles, decodeProfile, profilesFor, byExpiry, signedEnvironment, allowsEntitlement, profileMisfit, macHardwareID, METHODS, identity } from './devices.mjs';
-import { widgetSigningTeam, macWidgetProfiles } from './widgets.mjs';
+import { installedProfiles, decodeProfile, profilesFor, byExpiry, signedEnvironment, allowsEntitlement, profileMisfit, macHardwareID, METHODS, identity, profileIdentity, developmentIdentities } from './devices.mjs';
+import { widgetSigningTeam, macWidgetProfiles, macWidgetSigning, platformWidgetEntries } from './widgets.mjs';
 
 const POLICIES = ['user-presence', 'biometry-any', 'biometry-current-set', 'device-credential'];
 
@@ -58,24 +58,35 @@ export function macAllows(p, app, name) {
   return p.entitlements.includes(name);
 }
 
+const signingChoice = method => method === 'developerid'
+  ? 'set EXACT_DEVELOPER_ID=<sha1> to choose a Developer ID Application identity'
+  : 'set DEVELOPMENT_TEAM=<team-id> or EXACT_IDENTITY=<sha1> to choose an Apple Development identity, or EXACT_IDENTITY=- to sign ad hoc (drops Mac extensions, leaves push, App Attest, age range, keychain-access groups and passkeys unsigned, and makes stored login-keychain items prompt after rebuilds)';
+const teamSelectedByEnvironment = (team, method) => method === 'development' && !process.env.EXACT_IDENTITY && team === process.env.DEVELOPMENT_TEAM?.trim();
+
 /** The macOS profile a build of `app` signs `required` under: for its id or the team's wildcard, unexpired, of the
  * build's `method` (`development`, naming this Mac; `developerid`; `appstore`), allowing all of `required`; the
- * longest-lived. EXACT_MAC_PROFILE names one, which must fit: a refusal says why it does not. Null when none fits. */
+ * longest-lived within DEVELOPMENT_TEAM, or the sole fitting team. EXACT_MAC_PROFILE overrides the team and must
+ * fit. Several teams are refused while the identity is unresolved; only DEVELOPMENT_TEAM requires a suitable profile. */
 export function macProfile(app, required, { method = 'development', installed = installedProfiles(),
-  named = process.env.EXACT_MAC_PROFILE ? decodeProfile(process.env.EXACT_MAC_PROFILE) : null, udid } = {}) {
+  named = process.env.EXACT_MAC_PROFILE ? decodeProfile(process.env.EXACT_MAC_PROFILE) : null, udid,
+  team = process.env.DEVELOPMENT_TEAM?.trim(), accept = () => true } = {}) {
   const mac = (p) => p.platforms?.includes('OSX');
   const lacking = (p) => required.filter((name) => !macAllows(p, app, name));
   const misfit = (p) => !mac(p) ? `is for ${p.platforms?.join(', ') || 'another platform'}, not macOS`
     : !profilesFor(app.id, [p]).length ? `is for ${p.appId}, not ${app.id}`
     : p.method !== method ? `is ${METHODS[p.method]}, not ${METHODS[method]}`
     : profileMisfit(p, method === 'development' ? (udid ??= macHardwareID()) : null)?.replace('this phone', 'this Mac')
-    ?? (lacking(p).length ? `does not allow ${lacking(p).join(', ')}` : null);
+    ?? (lacking(p).length ? `does not allow ${lacking(p).join(', ')}` : !accept(p) ? 'does not cover the Mac extensions and their shared groups' : null);
   if (named) {
     const why = misfit(named);
     if (why) throw new Error(`host/apple: EXACT_MAC_PROFILE (${named.name}) ${why}`);
     return named;
   }
-  return installed.filter((p) => mac(p) && !misfit(p)).sort(byExpiry)[0] ?? null;
+  const fitting = installed.filter((p) => (!team || p.team === team) && mac(p) && !misfit(p)).sort(byExpiry);
+  if (team && !fitting.length && teamSelectedByEnvironment(team, method)) throw new Error(`host/apple: no suitable ${METHODS[method]} macOS provisioning profile for ${app.id} of team ${team} (DEVELOPMENT_TEAM); install one allowing ${required.join(', ') || 'the app and its extensions'}, unset DEVELOPMENT_TEAM, or name a profile with EXACT_MAC_PROFILE`);
+  const teams = [...new Set(fitting.map(p => p.team))];
+  if (teams.length > 1) throw new Error(`host/apple: macOS profiles for ${app.id} fit several teams (${teams.join(', ')}); ${signingChoice(method)}`);
+  return fitting[0] ?? null;
 }
 
 /** The entitlements `profile` signs `app` with for `needs`: its application identifier and team, each row's (an
@@ -120,35 +131,63 @@ const certificateTeam = (sha1, distribution) => { try { return widgetSigningTeam
  * launch. A development build takes the team's Apple Development identity (`find`; EXACT_IDENTITY names one, whose
  * certificate must be of that kind and team); a Developer ID build keeps `current` (EXACT_DEVELOPER_ID), refused when
  * it is another team's. */
-export function macProfileIdentity(profile, current, { distribution = false, find = identity, teamOf = certificateTeam } = {}) {
-  const sha1 = distribution ? current : find(profile.team);
+export function macProfileIdentity(profile, current, { distribution = false, find = identity, teamOf = certificateTeam, profiles = [] } = {}) {
+  const authorizing = [profile, ...profiles];
+  const sha1 = distribution ? current : find(profile.team, { profiles: authorizing });
   if (!sha1 || sha1 === '-' || teamOf(sha1, distribution) !== profile.team) {
     throw new Error(distribution
       ? `host/apple: the Developer ID profile "${profile.name}" is team ${profile.team}'s; sign with that team's Developer ID Application identity (EXACT_DEVELOPER_ID=<sha1>)`
       : `host/apple: the macOS profile "${profile.name}" is team ${profile.team}'s, and ${sha1} is not that team's Apple Development identity; name one with EXACT_IDENTITY=<sha1> (security find-identity -v -p codesigning)`);
   }
-  return sha1;
+  return distribution ? profileIdentity(sha1, authorizing, { selector: 'EXACT_DEVELOPER_ID' }) : sha1;
 }
 
 /** How a macOS build of `app` signs, once its bake (`compat`) says what its grants need, resolved together:
- * `{ provisioning, widgets, sha1 }`. With Mac widgets (`widgets`, from `macWidgetSigning`, of the identity `current`'s
- * team) one profile serves both: it is chosen among the widgets' profiles that also allow the grants' needs, and the
- * identity stays `current`, so the widgets' App Group and the profile are one team's. Without widgets the profile's
- * team's identity signs (`macProfileIdentity`). An ad hoc development build (EXACT_IDENTITY=-) signs no profile's
- * entitlements. */
+ * `{ provisioning, widgets, sha1, shareTeam? }`. A null identity is resolved from fitting profiles before deciding
+ * which extensions to build. With widgets one profile serves both their shared groups and the grants. Explicit
+ * ad hoc signing (EXACT_IDENTITY=-) omits extensions and signs no profile's entitlements. */
 export function macSigning(app, compat, { current, widgets = null, release = false, distribution = false, log = console.log,
-  find = macProfile, widgetProfiles = macWidgetProfiles, identityFor = macProfileIdentity, adHoc = !distribution && current === '-' } = {}) {
+  find = macProfile, widgetProfiles = macWidgetProfiles, identityFor = macProfileIdentity, teamOf = certificateTeam,
+  signWidgets = macWidgetSigning, namedWidgetProfile, identities = developmentIdentities, adHoc = !distribution && current === '-' } = {}) {
+  const wantsWidgets = app.manifest && platformWidgetEntries(app, 'macos').length > 0;
+  const wantsShare = !!app.manifest?.share_target;
+  const method = distribution ? 'developerid' : 'development';
+  const ambiguous = !current && !distribution && new Set(identities().map(id => id.team)).size > 1;
+  // Ordinary kept secrets also need a stable certificate signature across rebuilds (LLP 1018 D7).
+  if (!current && (ambiguous || wantsWidgets || wantsShare)) {
+    const required = macProfileNeeds(compat).map(n => n.entitlement);
+    if (wantsWidgets && namedWidgetProfile === undefined) namedWidgetProfile = process.env.EXACT_PROFILE ? decodeProfile(process.env.EXACT_PROFILE) : null;
+    const named = wantsWidgets && namedWidgetProfile?.platforms?.includes('OSX')
+      ? widgetProfiles({ app, team: namedWidgetProfile.team, distribution, log, named: namedWidgetProfile,
+        also: p => required.every(name => macAllows(p, app, name)) }) : null;
+    const profile = find(app, required, { method, ...(named ? { named: named.app } : {}),
+      accept: p => !wantsWidgets || (named ? p.path === named.app.path : !!widgetProfiles({ app, team: p.team, distribution, log,
+        also: owner => owner.path === p.path })) });
+    if (!profile && ambiguous) throw new Error(`host/apple: Apple Development identities span several teams, and no installed macOS profile selects a team for ${app.id}; ${signingChoice(method)}`);
+    if (!profile) throw new Error(`host/apple: Mac extensions for ${app.id} need a signing team; no installed macOS profile covers their requirements. ${distribution ? 'Set EXACT_DEVELOPER_ID=<sha1> to a Developer ID Application identity' : 'Set DEVELOPMENT_TEAM=<team-id> or EXACT_IDENTITY=<sha1> to choose an identity, or EXACT_IDENTITY=- to build without the extensions'}`);
+    current = identityFor(profile, current, { distribution });
+  }
+  if (!widgets && wantsWidgets) widgets = signWidgets(app, current, { distribution, log });
+  const shareTeam = wantsShare && !adHoc ? (widgets?.team ?? teamOf(current, distribution)) : null;
+  if (wantsShare && !adHoc && !shareTeam) throw new Error(`host/apple: the Mac share extension needs ${distribution ? 'a Developer ID Application identity; set EXACT_DEVELOPER_ID=<sha1>' : 'an Apple Development identity; set DEVELOPMENT_TEAM=<team-id> or EXACT_IDENTITY=<sha1>, or EXACT_IDENTITY=- to build without the extension'}`);
+  const result = (provisioning, widgets, sha1) => ({ provisioning, widgets, sha1,
+    ...(wantsShare ? { shareTeam: adHoc ? null : widgets?.team ?? teamOf(sha1, distribution) } : {}) });
   let pair = null;
   const together = (a, required) => {
     pair = widgetProfiles({ app: a, team: widgets.team, distribution, log, also: (p) => required.every((name) => macAllows(p, a, name)) });
+    if (!pair && teamSelectedByEnvironment(widgets.team, method)) throw new Error(`host/apple: no suitable macOS profile of team ${widgets.team} (DEVELOPMENT_TEAM) allows ${required.join(', ')} and the Mac widgets' shared groups; install matching app and extension profiles or name the app's with EXACT_PROFILE`);
     return pair?.app ?? null;
   };
   const reason = adHoc ? 'this build is signed ad hoc (EXACT_IDENTITY=-), and no profile\'s entitlements hold under an ad hoc signature (LLP 1133.010 D7)' : null;
-  const provisioning = macProvisioning(app, compat, { release, method: distribution ? 'developerid' : 'development', log, reason,
-    beside: widgets ? `, with the Mac widgets' App Group and shared Keychain group for team ${widgets.team} (one profile signs both)` : '', find: widgets ? together : find });
-  if (!provisioning) return { provisioning, widgets, sha1: current };
-  if (widgets) return { provisioning, widgets: { ...widgets, profiles: pair }, sha1: current };
-  return { provisioning, widgets, sha1: identityFor(provisioning.profile, current, { distribution }) };
+  const selectedTeam = widgets?.team ?? shareTeam ?? (current && current !== '-' ? teamOf(current, distribution) : null);
+  const provisioning = macProvisioning(app, compat, { release, method, log, reason,
+    beside: widgets ? `, with the Mac widgets' App Group and shared Keychain group for team ${widgets.team} (one profile signs both)` : '',
+    find: widgets ? together : (a, required, options) => find(a, required, { ...options, ...(selectedTeam ? { team: selectedTeam } : {}) }) });
+  const widgetPair = pair ?? widgets?.profiles;
+  if (widgetPair) current = identityFor(widgetPair.app, current, { distribution, profiles: [widgetPair.extension] });
+  if (!provisioning) return result(provisioning, widgets, current);
+  if (widgets) return result(provisioning, { ...widgets, profiles: pair }, current);
+  return result(provisioning, widgets, identityFor(provisioning.profile, current, { distribution }));
 }
 /** The Mac sample host's bundle identifier and name (LLP 1031 D10), signed under `profile` or none: under one, the
  * app's id, the App ID the profile grants its entitlements to (Apple ties them to it), so its sessions keep what the

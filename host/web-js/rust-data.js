@@ -271,7 +271,8 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
     if (r.u8() !== 2) throw new Error('expected a call reply');
     const observed = r.u8() === 1, topics = [];
     for (let n = r.u32(); n--;) topics.push(r.str());
-    r.u32(); // draws of randomness, which only a bake reads (LLP 1069.005 D2)
+    // Draws of randomness, which make a server render's page its reader's alone (render.mjs, LLP 1069.005 D2)
+    if (r.u32() > 0) globalThis.__exactDrew?.();
     const writes = [];
     // A write's tag: bit 0, a value follows; bit 1, written under a lease (the page's store keeps no lease).
     for (let n = r.u32(); n--;) {

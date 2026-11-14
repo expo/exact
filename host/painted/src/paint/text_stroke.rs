@@ -219,10 +219,9 @@ mod tests {
         use std::rc::Rc;
 
         let text = Rc::new(RefCell::new(TextEngine::new()));
-        let style = exact_kernel::StyleProps {
-            font_size: 24.0,
-            ..Default::default()
-        };
+        let style = exact_kernel::StyleProps::default().with_rows(|rows| {
+            rows.font_size = 24.0;
+        });
         let spec = crate::paint::text_spec(&style, "Ab\nCd");
         let paragraph = text.borrow_mut().paragraph(&spec, Some(80.0));
         let palette = [RunPaint {
@@ -293,10 +292,9 @@ mod tests {
         use std::rc::Rc;
 
         let text = Rc::new(RefCell::new(TextEngine::new()));
-        let style = exact_kernel::StyleProps {
-            font_size: 24.0,
-            ..Default::default()
-        };
+        let style = exact_kernel::StyleProps::default().with_rows(|rows| {
+            rows.font_size = 24.0;
+        });
         let spec = crate::paint::text_spec(&style, "Ab\nCd");
         let paragraph = text.borrow_mut().paragraph(&spec, Some(80.0));
         let palette = [RunPaint {
@@ -345,11 +343,10 @@ mod tests {
         use std::rc::Rc;
 
         let text = Rc::new(RefCell::new(TextEngine::new()));
-        let style = exact_kernel::StyleProps {
-            font_size: 32.0,
-            font_weight: 800,
-            ..Default::default()
-        };
+        let style = exact_kernel::StyleProps::default().with_rows(|rows| {
+            rows.font_size = 32.0;
+            rows.font_weight = 800;
+        });
         let spec = crate::paint::text_spec(&style, "Exact paints a headline");
         let paragraph = text.borrow_mut().paragraph(&spec, Some(390.0));
         let palette = [RunPaint {

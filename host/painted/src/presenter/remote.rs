@@ -310,6 +310,7 @@ impl<D: DataSource> Presenter<D> {
                     n.props.str(PropId::AccessibilityRole),
                     Some("button" | "link")
                 )
+                && n.props.link().is_none()
         }) && !self
             .host
             .runner()

@@ -51,3 +51,27 @@ resource could be asked on a child's uninitialized state). If neither is
 scheduled, the refusal could say how to keep a feature's requests in the
 root with its names apart (a `members` file per feature, prefixed), and a
 recipe could show a tab's resource gated on that tab showing.
+
+## Refusal and recipe landed
+
+`type-child-resource`, for a child that declares a resource or a mutation,
+now names both repairs: declare the child's resources, mutations and tasks in
+the root under names prefixed by the feature (`Canvas`'s `feed` is
+`canvasFeed`), optionally in a `members` file per feature, and pass the values
+and actions down as props; and gate a resource that only one tab or screen
+reads on that tab or screen showing (`resource canvasFeed = feed(…) when
+nav.tab == "…"`), so a hidden tab asks nothing. `docs/contract-for-agents.md`, "A feature's
+requests", shows a tab's resource gated that way, and `docs/recipes/tabs.md`
+links it. A child whose only requests are tasks (beside device facts) gets the
+task message. The full fix, instance-owned requests (LLP 1035.005.002 §C5
+stage B), remains.
+
+## Decision (2026-11-14)
+
+Stage B stays unselected: LLP 1035.005.002 C5, amended 2026-11-14 from a blind
+panel (`llp/reviews/panel-2026-11-14-diary-decisions.*`, D4; all three seats).
+These two ports are recorded there as consumers. Stage B as written would not
+serve them: a tab's screen is a row of `for e in t.stack`, not of `stack(nav)`,
+and a covered tab stays mounted, so an instance-owned resource would keep
+fetching for a hidden tab. The `when` gate does that today. This issue stays
+open as evidence for C5.

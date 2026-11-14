@@ -1278,3 +1278,80 @@ fn a_column_is_as_tall_as_its_items_clamped_by_max_height() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+/// Chrome 157.0.8103.78: a line's gap is outside its free space, so a line
+/// whose flex factors sum below one distributes that share of the space left
+/// after the gap (CSS Flexbox §9.7 step 4b), growing and shrinking alike.
+#[test]
+fn fractional_flex_factors_share_the_space_beside_the_gap() {
+    let mut wrong = Vec::new();
+    for (container, item, a, b) in [
+        // Each item holds a 100-point child, the first case's automatic minimum.
+        (
+            "display:flex;width:300px;column-gap:40px",
+            "flex-grow:0.25;height:10px",
+            [0.0, 0.0, 115.0, 10.0],
+            [155.0, 0.0, 115.0, 10.0],
+        ),
+        (
+            "display:flex;width:300px;column-gap:40px",
+            "flex-grow:0.25;height:10px;width:0px",
+            [0.0, 0.0, 65.0, 10.0],
+            [105.0, 0.0, 65.0, 10.0],
+        ),
+        (
+            "display:flex;width:200px;column-gap:40px",
+            "flex-shrink:0.25;height:10px;width:100px;min-width:0px",
+            [0.0, 0.0, 90.0, 10.0],
+            [130.0, 0.0, 90.0, 10.0],
+        ),
+    ] {
+        let k = lay_out_with(
+            props(&css_rows("width:400px")),
+            vec![
+                (2, 1, css_rows(container)),
+                (3, 2, css_rows(item)),
+                (4, 3, css_rows("width:100px;height:10px")),
+                (5, 2, css_rows(item)),
+                (6, 5, css_rows("width:100px;height:10px")),
+            ],
+            &[],
+            &[],
+        );
+        wrong.extend(mismatches(item, &k, &[(3, a), (5, b)]));
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// Chrome 157.0.8103.78: a column flex item holding a 100-point child and a
+/// 10-point child pulled up 90 points over it is 20 tall, whether the item is
+/// a block or a column flex container and whether its line wraps.
+#[test]
+fn a_column_flex_item_is_as_tall_as_its_content() {
+    let mut wrong = Vec::new();
+    for (wrap, item) in [
+        ("wrap", ""),
+        ("wrap", "display:flex;flex-direction:column"),
+        ("nowrap", "display:flex;flex-direction:column"),
+    ] {
+        let column = format!("display:flex;flex-direction:column;flex-wrap:{wrap}");
+        let k = lay_out_with(
+            props(&css_rows("width:400px")),
+            vec![
+                (
+                    2,
+                    1,
+                    css_rows(&format!("{column};width:100px;height:300px")),
+                ),
+                (3, 2, css_rows(item)),
+                (4, 3, css_rows("width:10px;height:100px")),
+                (5, 3, css_rows("width:10px;height:10px;margin-top:-90px")),
+            ],
+            &[],
+            &[],
+        );
+        let case = format!("{wrap} {item}");
+        wrong.extend(mismatches(&case, &k, &[(3, [0.0, 0.0, 100.0, 20.0])]));
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}

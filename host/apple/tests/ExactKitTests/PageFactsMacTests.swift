@@ -38,6 +38,8 @@ final class PageFactsMacTests: XCTestCase {
         wait { only.isMiniaturized && heard.last == true }
         XCTAssertTrue(only.isMiniaturized, "AppKit minimized the window")
         XCTAssertTrue(PageFacts.hidden, "with its only window in the Dock nothing of the app is seen")
+        XCTAssertFalse(PageFacts.frozen, "a hidden Mac window keeps ordinary execution")
+        XCTAssertEqual(PageFacts.bits(nil, readsOnLine: false) & 128, 0)
         XCTAssertEqual(heard.last, true, "the minimize is told to the page: \(heard)")
         XCTAssertFalse(PageFacts.persisted(only), "a minimized page is hidden, not put away: no pagehide")
 

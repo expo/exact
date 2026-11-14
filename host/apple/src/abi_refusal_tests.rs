@@ -292,6 +292,81 @@ fn view_words(mask: u32, regions: &[f32], tail: &[u32]) -> Vec<u8> {
     words.iter().flat_map(|w| w.to_le_bytes()).collect()
 }
 
+#[test]
+fn a_view_lays_out_its_viewport_and_owner_blocks_once() {
+    let plan = contract::compile(
+        "component App\n  view\n    column width=\"100%\" height=\"100%\"\n      column testId=\"route\" width=\"100%\" height=\"100%\"\n        box width=\"50vw\" height=10\n",
+    ).unwrap().encode();
+    let mut bridge = Bridge::new();
+    bridge.boot(&plan, Dot, Hooks::none(), 402., 874.);
+    let host = bridge.host.as_ref().unwrap();
+    let kernel = host.runner().kernel();
+    let id = kernel
+        .node_by_key(kernel.find_by_test_id("route")[0])
+        .unwrap()
+        .id;
+    let before = host.layout_calls;
+    let mut wire = view_words(8 | 32 | 64, &[], &[200.0f32.to_bits()]);
+    wire[28..36].copy_from_slice(&[380.0f32.to_le_bytes(), 700.0f32.to_le_bytes()].concat());
+    for word in [id, 4, 360.0f32.to_bits(), 600.0f32.to_bits(), 0, 0, 228] {
+        wire.extend(word.to_le_bytes());
+    }
+    let len = bridge.input_write(&wire);
+    let len = bridge.view(len);
+    let batch = output(&bridge, len);
+    assert!(batch["error"].is_null(), "{batch}");
+    let host = bridge.host.as_ref().unwrap();
+    assert_eq!(host.layout_calls - before, 1);
+    let frame = host.runner().kernel().node(id).unwrap().frame;
+    assert_eq!((frame.width, frame.height), (360., 600.));
+    assert_eq!(host.runner().viewport().keyboard_height, 200.);
+    assert_eq!(host.runner().kernel().env().viewport_width, 380.);
+    // Taking the block back without a viewport change still lays out once.
+    let before = host.layout_calls;
+    let len = bridge.input_write(&view_words(64, &[], &[id, 5, 0, 0, 0, 0]));
+    let len = bridge.view(len);
+    assert!(output(&bridge, len)["error"].is_null());
+    let host = bridge.host.as_ref().unwrap();
+    assert_eq!(host.layout_calls - before, 1);
+    assert!(host.runner().kernel().host_block(id).is_none());
+    assert_eq!(host.runner().kernel().node(id).unwrap().frame.width, 380.);
+}
+
+#[test]
+fn a_view_refuses_truncated_or_non_owner_records_before_changing_geometry() {
+    // A block without its tactic word, or with one that is no permutation
+    for tail in [
+        vec![1, 4],
+        vec![1, 4, 0, 0, 0, 0],
+        vec![1, 4, 0, 0, 0, 0, 0],
+        vec![1, 6, 0, 0, 0, 0],
+        vec![1, 2, 0, 0, 0, 0],
+    ] {
+        preserves_state(
+            |bridge, _| {
+                let mut bytes = view_words(8 | 64, &[], &tail);
+                bytes[28..36]
+                    .copy_from_slice(&[300.0f32.to_le_bytes(), 500.0f32.to_le_bytes()].concat());
+                let len = bridge.input_write(&bytes);
+                let len = bridge.view(len);
+                assert_eq!(
+                    bridge
+                        .host
+                        .as_ref()
+                        .unwrap()
+                        .runner()
+                        .kernel()
+                        .env()
+                        .viewport_width,
+                    390.
+                );
+                len
+            },
+            "view:",
+        );
+    }
+}
+
 /// The segments' rects (mask 16) without their count, or with a count the
 /// buffer does not hold or holds more than, are refused, never read past
 /// the buffer.

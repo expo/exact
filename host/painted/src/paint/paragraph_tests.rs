@@ -325,10 +325,9 @@ fn own_text_suppresses_inline_descendants_in_measurement_and_paint() {
 
 #[test]
 fn identical_fonts_keep_distinct_run_colors_and_source_nodes() {
-    let style = StyleProps {
-        font_size: 24.0,
-        ..StyleProps::default()
-    };
+    let style = StyleProps::default().with_rows(|rows| {
+        rows.font_size = 24.0;
+    });
     let mut spec = text_spec(&style, "MMMM ");
     spec.runs.push(Run::from_style(
         "WWWW",
@@ -1055,10 +1054,9 @@ fn paint_ranks_survive_repaints_and_scroll_until_a_kernel_commit() {
     );
     let id = p.host().kernel().find_by_test_id("row")[0];
     let id = p.host().kernel().node_by_key(id).unwrap().id;
-    let mut style = exact_kernel::StyleProps {
-        opacity: 0.5,
-        ..Default::default()
-    };
+    let mut style = exact_kernel::StyleProps::default().with_rows(|rows| {
+        rows.opacity = 0.5;
+    });
     style.mask.set(exact_kernel::StyleId::Opacity);
     p.host
         .runner_mut()
@@ -1243,4 +1241,34 @@ fn a_boxs_padding_is_on_its_side_in_its_paragraph() {
         (at(&padded, 2) - at(&bare, 2) - 5.0).abs() < 0.05,
         "{bare:?} {padded:?}"
     );
+}
+
+#[test]
+fn a_shadow_follows_aligned_glyphs_past_the_widest_advance() {
+    for align in ["right", "center"] {
+        let draw = |shadow| {
+            let mut p = fixture(&format!(
+                "      text \"H\" width=260 font-size=30 text-align=\"{align}\" color=\"#000000\" text-shadow=\"{shadow}\"\n"
+            ));
+            p.frame().clone()
+        };
+        let reference = draw("none");
+        let pixels = draw("0px 40px 0px #ff0000");
+        let mut covered = 0;
+        for y in 0..reference.height() - 40 {
+            for x in 0..reference.width() {
+                let ink = reference.pixel(x, y).unwrap();
+                if ink.red() == 0 && ink.green() == 0 && ink.blue() == 0 {
+                    let shadow = pixels.pixel(x, y + 40).unwrap();
+                    assert_eq!(
+                        (shadow.red(), shadow.green(), shadow.blue()),
+                        (255, 0, 0),
+                        "text-align={align}: the shadow follows the glyph at {x},{y}"
+                    );
+                    covered += 1;
+                }
+            }
+        }
+        assert!(covered > 20, "text-align={align}: the glyph is drawn");
+    }
 }

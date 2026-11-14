@@ -332,6 +332,7 @@ impl Collection {
                 .any(|h| plan.handler(h).event == EventKind::Reorderdrop),
             edge_armed: [true; 2],
             edge_fired: [None, None],
+            start_owed: false,
             pending: false,
             parent: None,
             nested,

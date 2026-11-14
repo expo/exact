@@ -194,7 +194,8 @@ struct ChipFace: Equatable {
                     UIBezierPath(cgPath: BorderPaint.roundedRect(rect, corners, shape: nil)).fill()
                 })
             case .symbol(let name, let points, let tint):
-                let glyph = FaceSymbol.image(name, points: points, configuration: UIImage.SymbolConfiguration(pointSize: points))?.withTintColor(ink(tint), renderingMode: .alwaysOriginal)
+                let source = FaceSymbol.image(name, points: points, configuration: UIImage.SymbolConfiguration(pointSize: points))
+                let glyph = FaceSymbol.isOriginal(name) ? source : source?.withTintColor(ink(tint), renderingMode: .alwaysOriginal)
                 return (glyph?.size ?? .zero, { rect in glyph?.draw(in: rect) })
             case .text(let text, let font, let color):
                 let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: ink(color)]

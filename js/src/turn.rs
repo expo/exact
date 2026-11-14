@@ -125,12 +125,13 @@ impl TurnClock {
         deadline: bool,
         main_thread: bool,
         source: &str,
-        journal: &mut Vec<String>,
+        journal: &mut crate::Logs,
     ) -> Option<String> {
         let took = self.took();
         let over = took.over(budget_ms, deadline);
         if over.is_none() {
-            journal.extend(took.held(main_thread, deadline, source, budget_ms));
+            let held = took.held(main_thread, deadline, source, budget_ms);
+            journal.extend(held.map(|line| (None, line)));
         }
         over
     }

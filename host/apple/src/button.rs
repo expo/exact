@@ -17,7 +17,7 @@ pub(crate) fn face_json(
 
 /// `face_json`, and the icon token's name as its author wrote it
 /// (`icon.reply`, `icon_path::icon_name`) as `symbolIcon` where the face's
-/// symbol is an svg-only icon's path: the agent's name for it (stage 9 A2).
+/// symbol is an SVG icon: the agent's name for it.
 pub(crate) fn face_json_named(
     face: Option<&PressFace>,
     rows: Option<&ButtonFaceStyle>,
@@ -43,10 +43,18 @@ pub(crate) fn face_json_named(
         Some(apple) => quote(apple, &mut json),
         None => json.push_str("null"),
     }
-    // @ref LLP 1121 D10 — an svg-only icon's path beside its "" name (stage
-    // 9 A2): the face draws it as a template image its control tints.
+    // SVG icons carry a template path or catalog source beside their empty SF name.
     crate::icon_path::push_json(face.symbol.as_deref(), &mut json);
-    if let Some(name) = icon.filter(|_| json.contains("\"symbolPath\"")) {
+    if json.contains("\"symbolAsset\"")
+        && rows.is_some_and(|r| {
+            r.symbol.symbol_rendering == exact_kernel::generated::SymbolRendering::Multicolor
+        })
+    {
+        json.push_str(",\"symbolMulticolor\":true");
+    }
+    if let Some(name) =
+        icon.filter(|_| json.contains("\"symbolPath\"") || json.contains("\"symbolAsset\""))
+    {
         json.push_str(",\"symbolIcon\":");
         quote(name, &mut json);
     }
@@ -395,6 +403,36 @@ mod tests {
                 .get("symbolIcon")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn a_multicolour_file_face_keeps_its_rendering_mode() {
+        let mut face = PressFace {
+            symbol: Some("icon||10 20 40 20||two.svg".into()),
+            fits: true,
+            ..Default::default()
+        };
+        let plan = contract::compile("component App\n  view\n    button appearance=\"auto\" aria-label=\"Colours\"\n      image \"symbol:sf/heart\" -exact-symbol-rendering=\"multicolor\"\n").unwrap();
+        let (host, _) = crate::Host::boot(
+            &plan.encode(),
+            NoData,
+            Box::new(exact_kernel::MonospaceMeasurer::default()),
+            400.0,
+            800.0,
+        )
+        .unwrap();
+        let kernel = host.runner().kernel();
+        let rows = kernel.button_face_style(kernel.roots()[0]).unwrap();
+        let read = |face: &PressFace| -> serde_json::Value {
+            serde_json::from_str(&face_json(Some(face), Some(&rows), None)).unwrap()
+        };
+        let asset = read(&face);
+        assert_eq!(asset["symbolAsset"], "two.svg");
+        assert_eq!(asset["symbolMulticolor"], true);
+        assert_eq!(asset["raster"], false);
+        face.symbol = Some("icon|heart|10 20 40 20||two.svg".into());
+        assert_eq!(read(&face)["symbol"], "heart");
+        assert!(read(&face).get("symbolAsset").is_none());
     }
     /// LLP 1115.000 D15: the face says whether its author wrote a
     /// `buttonStyle`. A written name crosses with its row's columns; with

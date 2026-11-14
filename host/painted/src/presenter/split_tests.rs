@@ -504,11 +504,10 @@ fn placeholder_restyles_again_and_split_survives_desktop_overlays() {
     assert_eq!(p.after_commit(), None);
     assert_eq!(state(&mut p)["empty"], "placeholder");
     let empty = id(&p, "empty");
-    let patch = exact_kernel::StyleProps {
-        display: exact_kernel::Display::None,
-        mask: exact_kernel::StyleMask::of(exact_kernel::StyleId::Display),
-        ..Default::default()
-    };
+    let patch = exact_kernel::StyleProps::default().with_rows(|rows| {
+        rows.display = exact_kernel::Display::None;
+        rows.mask = exact_kernel::StyleMask::of(exact_kernel::StyleId::Display);
+    });
     p.host
         .runner_mut()
         .kernel_mut()

@@ -795,6 +795,9 @@ impl<D: DataSource> Presenter<D> {
                         n.props.str(PropId::AccessibilityRole),
                         Some("button" | "link")
                     )
+                    // An `a` with an `href` (HTML, "The tabindex attribute"),
+                    // a run in a line of text too, which lowers with no role.
+                    || n.props.link().is_some()
                     || self
                         .host
                         .runner()

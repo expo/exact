@@ -81,7 +81,7 @@ struct BadgeFace: Equatable {
             let ink = TextEngine.color(colours[1])
             // A palette colours a symbol; a path's template image is drawn through in the ink.
             if let symbol = self.symbol, let glyph = FaceSymbol.image(symbol, points: self.size * 0.42).flatMap({
-                FaceSymbol.isPath(symbol) ? FaceSymbol.tinted($0, ink) : $0.withSymbolConfiguration(NSImage.SymbolConfiguration(paletteColors: [ink]))
+                FaceSymbol.isOriginal(symbol) ? $0 : FaceSymbol.isCustom(symbol) ? FaceSymbol.tinted($0, ink) : $0.withSymbolConfiguration(NSImage.SymbolConfiguration(paletteColors: [ink]))
             }) {
                 glyph.draw(in: CGRect(x: (rect.width - glyph.size.width) / 2, y: (rect.height - glyph.size.height) / 2, width: glyph.size.width, height: glyph.size.height))
             } else {
@@ -110,7 +110,8 @@ struct BadgeFace: Equatable {
             colour(0).setFill()
             UIBezierPath(cgPath: BorderPaint.roundedRect(rect, corners, shape: nil)).fill()
             let ink = colour(1)
-            if let symbol, let glyph = FaceSymbol.image(symbol, points: size * 0.42, configuration: UIImage.SymbolConfiguration(pointSize: size * 0.42))?.withTintColor(ink, renderingMode: .alwaysOriginal) {
+            if let symbol, let source = FaceSymbol.image(symbol, points: size * 0.42, configuration: UIImage.SymbolConfiguration(pointSize: size * 0.42)) {
+                let glyph = FaceSymbol.isOriginal(symbol) ? source : source.withTintColor(ink, renderingMode: .alwaysOriginal)
                 glyph.draw(at: CGPoint(x: (rect.width - glyph.size.width) / 2, y: (rect.height - glyph.size.height) / 2))
             } else {
                 let attrs: [NSAttributedString.Key: Any] = [.font: UIFont.systemFont(ofSize: size * 0.42, weight: .medium), .foregroundColor: ink]

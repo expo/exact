@@ -122,6 +122,7 @@ def formatting (tables : Format.Tables) (f : String) (args : List Value) : Resul
   | "formatDay", [.num t, .num n, .num o, .str "day", .str ""] => .ok (.str (Format.formatDay t n o "day"))
   | "formatDay", [.num t, .num n, .num o, .str "day-time", .str ""] => .ok (.str (Format.formatDay t n o "day-time"))
   | "formatDay", [.num t, .num n, .num o, .str "list", .str ""] => .ok (.str (Format.formatDay t n o "list"))
+  | "formatDay", [.num t, .num n, .num o, .str "section", .str ""] => .ok (.str (Format.formatDay t n o "section"))
   | "formatNumber", [.num n, .str "compact", _, .str ""] => .ok (.str (Format.compact n))
   -- LLP 1116 D8: `decimal`, `percent`, and `currency` with its code.
   | "formatNumber", [.num n, .str style, .str code, .str ""] =>
@@ -144,7 +145,7 @@ def formatting (tables : Format.Tables) (f : String) (args : List Value) : Resul
   | "formatDate", [.str k, .num o, .str "iso", .str loc] =>
     inLocale tables loc fun _ _ => .some ((Format.dayKeyWall k o).elim "" (Format.formatIsoDate · 0))
   | "formatDay", [.num t, .num n, .num o, .str mode, .str loc] =>
-    if mode = "day" ∨ mode = "day-time" ∨ mode = "list" then
+    if mode = "day" ∨ mode = "day-time" ∨ mode = "list" ∨ mode = "section" then
       inLocale tables loc fun r c => .some (Format.dayIn r c t n o mode)
     else .error (.unsupported "`formatDay` of a mode it does not take")
   | "formatNumber", [.num n, .str "compact", _, .str loc] =>

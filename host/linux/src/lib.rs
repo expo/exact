@@ -22,6 +22,9 @@ pub mod display;
 #[cfg(all(test, unix, not(target_os = "linux")))]
 #[path = "display/flip.rs"]
 mod display_flip;
+#[cfg(any(target_os = "linux", all(test, unix)))]
+#[path = "display/event_loop.rs"]
+mod event_loop;
 #[cfg(target_os = "linux")]
 pub mod input;
 #[cfg(target_os = "linux")]

@@ -1,5 +1,5 @@
 // The app shell: one activity over the reader, packaging the app `-Papp=<name>` names (apps/<name>, or the directory
-// `-PappDir=` gives). The package id and the label are the app's own manifest's (app.json `app.id`, `app.name`).
+// `-PappDir=` gives). The package id and the label are the app's own manifest's (app.json `host.android.id`, default `app.id`; `app.name`).
 // `bun scripts/agent-android.mjs build <name> --apk` builds the app's library (apps/<name>/android), puts it and the
 // app's assets under this module's build directory, and runs `:app:assembleRelease`.
 import groovy.json.JsonSlurper
@@ -15,6 +15,8 @@ val app = providers.gradleProperty("app").get()
 val appDir = providers.gradleProperty("appDir").orNull?.let { file(it) } ?: rootDir.resolve("../../apps/$app")
 val manifest = JsonSlurper().parse(appDir.resolve("app.json")) as Map<*, *>
 val identity = manifest["app"] as Map<*, *>
+val androidHost = (manifest["host"] as Map<*, *>?)?.get("android") as Map<*, *>?
+val packageId = ((androidHost?.get("id") ?: identity["id"]) as String).replace('-', '_')
 // The manifest's `orientation` as Chromium maps an installed web app's: `-primary` is the device's own way up, a
 // bare `portrait` or `landscape` either way up by the sensor. `natural` is resolved in MainActivity.
 val screenOrientation = mapOf(
@@ -24,7 +26,7 @@ val screenOrientation = mapOf(
 )[manifest["orientation"]] ?: "unspecified"
 // The manifest's `host.android.minimumOS`, the oldest Android the app runs on, as its API level. Below 12 the APK keeps
 // the reader's Android 10 and 11 code (proguard-legacy.pro); otherwise R8 leaves none of it.
-val minimumOS = (((manifest["host"] as Map<*, *>?)?.get("android") as Map<*, *>?)?.get("minimumOS") as String?) ?: "12"
+val minimumOS = (androidHost?.get("minimumOS") as String?) ?: "12"
 val minimumApi = mapOf("10" to 29, "11" to 30, "12" to 31, "13" to 33, "14" to 34, "15" to 35, "16" to 36)[minimumOS]
     ?: throw GradleException("app.json host.android.minimumOS \"$minimumOS\": name an Android release from 10 to 16")
 
@@ -45,7 +47,7 @@ android {
     buildToolsVersion = "37.0.0"
     defaultConfig {
         // An Android package name's segments are Java identifiers: a manifest id's `-` becomes `_`.
-        applicationId = (identity["id"] as String).replace('-', '_')
+        applicationId = packageId
         minSdk = minimumApi
         targetSdk = 36
         // CI's version inputs are shared with Apple builds (LLP 1030.003 D6).
@@ -150,7 +152,7 @@ android {
     run {
         val res = layout.buildDirectory.dir("shortcuts/res").get().asFile
         val items = (manifest["shortcuts"] as List<*>?).orEmpty().map { it as Map<*, *> }
-        val pkg = (identity["id"] as String).replace('-', '_') + ((project.findProperty("idSuffix") as String?) ?: "")
+        val pkg = packageId + ((project.findProperty("idSuffix") as String?) ?: "")
         val attr = { v: String -> v.replace("&", "&amp;").replace("<", "&lt;").replace("\"", "&quot;") }
         // A string resource's own escapes: a backslash, an apostrophe, and `@` or `?` leading.
         val text = { v: String -> attr(v).replace("\\", "\\\\").replace("'", "\\'").replace(Regex("^([@?])"), "\\\\$1") }

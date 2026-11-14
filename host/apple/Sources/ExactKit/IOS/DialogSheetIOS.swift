@@ -422,9 +422,13 @@ final class DialogSheets: NSObject, UIAdaptivePresentationControllerDelegate {
             let clip = NativeGeometry.bounds(of: scroller, in: presenter.viewport)
                 .intersection(NativeGeometry.bounds(of: view, in: presenter.viewport))
             let block = entry.usedBlock.map { CGRect(origin: CGPoint(x: -entry.frame.minX, y: -entry.frame.minY), size: $0) }
+            let backdrop = controller.topLayer
+                ? NativeGeometry.hitRegion(of: view, in: presenter.viewport).map { (bounds: $0, excluding: nil as CGRect?) }
+                : controller.presentationController.flatMap { NativeGeometry.sheetBackdrop(of: $0, in: presenter.viewport) }
             return TopLayerBox(view: entry.dialog,
                                frame: (entry.dialog.id, entry.dialog.topLayerFrame(in: presenter.viewport, containingBlock: block), presenter.viewportPoints(clip)),
-                               modal: controller)
+                               modal: controller,
+                               backdrop: backdrop.map { (presenter.viewportPoints($0.bounds), $0.excluding.map(presenter.viewportPoints)) })
         }
     }
 

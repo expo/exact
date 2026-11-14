@@ -18,6 +18,9 @@ impl<D: DataSource> Host<D> {
         now_ms: f64,
     ) -> String {
         self.now_ms = now_ms.max(self.now_ms);
+        // Native blocks and covers arrive after the previous batch was applied.
+        // Diagnose that layout before any reply changes the tree again.
+        self.journal_route_overflow();
         // Sample the presented batch's authored scroll before this pump changes geometry.
         let (batch, intersect_error) = self.intersect_round(Batch::new(), None);
         // Announced topics first: what the device said before these replies.

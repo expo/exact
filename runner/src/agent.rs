@@ -842,6 +842,7 @@ fn state_with<D: DataSource>(runner: &Runner<D>, request: &str) -> String {
         page.restores,
         page.in_background()
     );
+    let _ = write!(s, ",\"frozen\":{}", page.frozen);
     s.push_str(",\"gpuTier\":");
     quote(page.gpu_tier(), &mut s);
     s.push('}');

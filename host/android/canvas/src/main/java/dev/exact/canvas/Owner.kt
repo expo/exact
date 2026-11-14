@@ -277,9 +277,8 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
      * changed: asked after each stream, so it is drawn with the frame it belongs to. */
     @Volatile var chrome: (IntArray) -> Unit = {}
 
-    /** Whether the activity is started. While it is stopped the host does no frame work (LLP 1115.001 D15.2): no
-     * turn at a vsync, no timer, no stream. Replies are still drained as they arrive ([Native.poll]), so what they
-     * change is in the frame drawn when the activity starts again. */
+    /** Whether the activity is started. Stopped, it runs tasks and drains replies without recording frames
+     * (LLP 1115.001 D15.2, LLP 1147 D2). Android still decides whether the process gets to execute. */
     private var running = true
 
     /** The activity stopped ([on] false) or started again. */
@@ -292,6 +291,7 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
             idle()
             handler.removeCallbacks(again)
             handler.removeCallbacks(timer); handler.removeCallbacks(refiner); handler.removeCallbacks(settle)
+            schedule()
         }
     }
 
@@ -460,7 +460,7 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
     private fun produce() {
         // This frame does what a queued `again` was for.
         handler.removeCallbacks(again)
-        if (!running) { requests(); return }
+        if (!running) { schedule(); return }
         drainWindow()
         android.os.Trace.beginSection("exact native frame")
         val started = System.nanoTime()
@@ -534,13 +534,19 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
     private val again = Runnable { produce() }
     /** Timers, and the paint a scroll owes once it pauses (only then the collection pass it left behind). */
     private val timer = Runnable {
-        if (prefetch && Native.owed() && Native.refine(-1, if (led) velocity else 0f) and 2 != 0) handler.post(refiner)
+        if (running && prefetch && Native.owed() && Native.refine(-1, if (led) velocity else 0f) and 2 != 0) handler.post(refiner)
         produce()
     }
 
     private fun schedule() {
-        if (!running) return
         wakes?.sync()
+        if (!running) {
+            val due = Native.background(timerReports.applying)
+            requests()
+            handler.removeCallbacks(timer)
+            if (due >= 0) handler.postDelayed(timer, kotlin.math.ceil(due).toLong())
+            return
+        }
         // One producer at a time. A turn asked for when an overrunning turn began is for the vsync that passed
         // during it, and runs as soon as this returns: that is the retry, and `again` only stands in where no turn
         // is asked for. With nothing animating, none is left asked for.
@@ -718,7 +724,19 @@ internal object Exact {
     /** A turn on exact2's thread, which asks for a display frame while a canvas input's samples wait. */
     fun wake() { owner?.call {} }
     fun presence(answer: String) { val o = owner; if (o != null) o.call { Native.presence(answer) } else Native.presence(answer) }
-    fun hidden(hidden: Boolean) { val o = owner; if (o != null) o.call { Native.hidden(hidden) } else Native.hidden(hidden) }
+    private var pageHidden = false
+    /** Execution sources: a started Activity, or a successfully promoted microphone, call or screen-capture
+     * foreground service with a live claim. Agent claims grant no device execution. */
+    internal fun executionEligible(): Boolean = !pageHidden || Claims.keepsExecution
+    /** The page freeze drops gated streams before returning; socket close handshakes finish asynchronously. */
+    fun hidden(hidden: Boolean) { pageHidden = hidden; publishExecution() }
+    internal fun executionChanged() { if (pageHidden) publishExecution() }
+    private fun publishExecution() {
+        val hidden = pageHidden
+        val eligible = executionEligible()
+        val o = owner
+        if (o != null) o.sync { Native.hidden(hidden, eligible) } else Native.hidden(hidden, eligible)
+    }
     /** The store's writes on disk before the activity goes to the background, so a kill after its stop loses none
      * committed before (exact2 writes them on a thread of its own): at most [ms]. Whether every commit was written
      * ([Native.storeDrain]). */

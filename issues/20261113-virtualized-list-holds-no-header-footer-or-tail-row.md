@@ -60,3 +60,14 @@ The refusal now says what to write today and names `docs/recipes/long-lists.md`,
 whose loading row is the pattern: a row of the `for`'s collection, appended by
 a derive. The chat-thread recipe has no room under its size cap for the
 streaming case. What remains is selecting LLP 1035.005.000 D11.
+
+## Decision (2026-11-14)
+
+LLP 1035.005.000 D11 stays unselected, amended 2026-11-14 from a blind panel
+(`llp/reviews/panel-2026-11-14-diary-decisions.*`, D3). Two of three seats found
+the runtime cost small (`concat` clones `Rc` items; the 65,536-step meter is far
+above a chat screen) and the authoring cost real. When D11 is selected, its first
+build changes only the compiler: fixed nodes before and after the `for` lower to
+synthetic rows of the same collection with reserved keys. The trigger is a third
+diary hitting this, not a performance number. This issue stays open as that
+evidence.

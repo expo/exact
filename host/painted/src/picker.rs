@@ -500,11 +500,20 @@ fn read_dimensions(source: impl std::io::Read) -> Option<(f64, f64)> {
 /// `app:/tmp/picked/`), and describe it as `change` delivers it. The type
 /// comes from the provider or the name; a video's duration is not read here.
 pub fn copy_in(source: &Path, app_path: &str, mime: &str) -> Result<exact_runner::Picked, String> {
+    copy_in_with(source, app_path, mime, |from, to| std::fs::copy(from, to))
+}
+
+pub(crate) fn copy_in_with(
+    source: &Path,
+    app_path: &str,
+    mime: &str,
+    copy: impl FnOnce(&Path, &Path) -> std::io::Result<u64>,
+) -> Result<exact_runner::Picked, String> {
     let target = resolve(app_path).ok_or_else(|| format!("{app_path}: not an app path"))?;
     if let Some(dir) = target.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }
-    let size = copy_size(source, &target, |from, to| std::fs::copy(from, to))?;
+    let size = copy_size(source, &target, copy)?;
     let (width, height) = if matches!(
         mime,
         "image/png" | "image/jpeg" | "image/gif" | "image/webp"

@@ -40,6 +40,7 @@ const PAGE: &str = r##"component Proof
 
 fn is(width: f32, height: f32) -> Option<HostBlock> {
     Some(HostBlock {
+        tactic: Default::default(),
         width: BlockAxis::Is(width),
         height: BlockAxis::Is(height),
     })
@@ -84,6 +85,7 @@ fn two_panes_and_a_sheet_of_one_page_lay_out_each_in_its_block() {
     let page = ["page", "title", "stack", "footer"].map(|name| view(&host, name));
     let stack = host.runner().kernel().node(page[2]).unwrap().frame;
     let maximum = Some(HostBlock {
+        tactic: Default::default(),
         width: BlockAxis::AtMost(480.0),
         height: BlockAxis::AtMost(400.0),
     });

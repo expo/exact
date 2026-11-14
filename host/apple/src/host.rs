@@ -81,6 +81,8 @@ mod persistence;
 mod presence;
 #[path = "renew.rs"]
 mod renew;
+#[path = "route_overflow.rs"]
+mod route_overflow;
 #[path = "tamber.rs"]
 mod tamber;
 #[cfg(test)]
@@ -264,6 +266,7 @@ pub struct Host<D: DataSource> {
     #[cfg(test)]
     pub(crate) layout_calls: usize,
     viewport: (f32, f32),
+    route_overflow: route_overflow::Journal,
     now_ms: f64,
     /// Where the app's kept secrets, and the runner's kept answers, go after
     /// a commit (LLP 1018 D6); `None` keeps them in the runner only (a test,
@@ -619,6 +622,7 @@ impl<D: DataSource> Host<D> {
             #[cfg(test)]
             layout_calls: 0,
             viewport: (viewport.width as f32, viewport.height as f32),
+            route_overflow: Default::default(),
             now_ms: 0.0,
             data_activated: false,
             source_prepared: None,
@@ -825,6 +829,7 @@ impl<D: DataSource> Host<D> {
             store.listen(wake.clone());
         }
         self.preload_wake.set(wake.clone());
+        self.route_overflow.wake = Some(wake.clone());
         self.runner.listen(wake);
     }
 
@@ -1205,26 +1210,6 @@ impl<D: DataSource> Host<D> {
         }
     }
 
-    fn finish(&mut self, mut batch: Batch, error: Option<String>) -> String {
-        // A host's fact laid out again (a native control's measured size, an
-        // inset, the text size): a box already moving was retargeted from where
-        // it shows, and its new frame and offset go in one batch. Without the
-        // offset the presenter showed the new frame with the old offset until
-        // the next tick, which then put the box back where it started (#134).
-        if self.presence.unauthored {
-            self.present(&mut batch, false);
-        }
-        // Clear the mark first: the resize handlers below commit the app's own moves
-        self.presence.unauthored = false;
-        let _roles = self.runner.bind_roles(); // Its own, crossing (LLP 1121 stage 5).
-        crate::doc_watch::sync(&mut self.doc_watch, &mut self.runner);
-        let (mut batch, error) = self.resize_rounds(batch, error);
-        self.drain_canvas_captures(&mut batch);
-        self.forget_canvas_captures();
-        self.state_onto(&mut batch);
-        self.write(batch, error.as_deref())
-    }
-
     fn commit(&mut self, receipts: &[Timed], error: Option<String>) -> String {
         self.commit_into(receipts, error, Batch::new())
     }
@@ -1244,6 +1229,7 @@ impl<D: DataSource> Host<D> {
         error: Option<String>,
         mut batch: Batch,
     ) -> (Batch, Option<String>) {
+        self.route_overflow.dirty |= !receipts.is_empty();
         let _roles = self.runner.bind_roles(); // Its own, crossing (LLP 1121 stage 5).
         self.native_retire_removed_owner(&mut batch);
         self.native_note_receipts(receipts);

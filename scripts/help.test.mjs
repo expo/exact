@@ -108,7 +108,7 @@ test('a flag that takes a value is refused by name when the value is missing or 
   for (const [verb, argv, flag] of [
     ['ios', ['--device', '--archive'], '--archive <out.ipa>'], ['ios', ['--device', '--archive', '--unsigned'], '--archive <out.ipa>'],
     ['ios', ['--ios', '--sim'], '--sim <udid|name>'], ['ios', ['--device', '--phone', '--run'], '--phone <udid|name>'],
-    ['ios', ['--ios', '--optimize'], '--optimize speed|size'], ['mac', ['hello-apple', '--optimize'], '--optimize speed|size'],
+    ['ios', ['--ios', '--optimize'], '--optimize speed|size|balanced'], ['mac', ['hello-apple', '--optimize'], '--optimize speed|size|balanced'],
     ['ios', ['--ios', '--link'], '--link <plan>'], ['web-build', ['--out', '--json'], '--out <dir>'], ['agent', ['web', 'tree', '--url'], '--url <url>'],
   ]) assert.deepEqual(guarded(verb, argv), [2, `${verb}: ${flag.split(' ')[0]} needs a value (${flag})`], argv.join(' '));
   // Every failure in one run: a missing value and an unknown flag are both said.
@@ -163,8 +163,12 @@ test('a first build\'s helps are short, and --help all has every flag', () => {
   // LLP 1116.008 D2: web's help does not teach a background dev server (builders followed it into five steps).
   assert.match(helpText('web', { all: true }), /The dev loop is for a person watching\n\s+the app change: verify, test and agent build and serve their own copy, so checking\n\s+the app needs no dev server\./);
   assert.doesNotMatch(helpText('web', { all: true }), /web\.log| &\s|background|\$!/);
-  // The server's database is the run's, not each test's (LLP 1156.001 D5): test's help says so and where the reset is.
-  assert.match(helpText('test'), /^Server +runs server\.ts once a run .* shared by its tests: a reset per\n\s+test is docs\/recipes\/rest-backend\.md's/m);
+  // The server restarts per test, including when it keeps its state only in memory.
+  assert.match(helpText('test'), /^Server +restarts empty per test .*database:false too/m);
+  assert.match(helpText('test'), /^Server +.*ancestor.*shared/m);
+  assert.match(helpText('verify', { all: true }), /Server +.*restarts empty per test/);
+  assert.match(helpText('verify', { all: true }), /relaunch replays the chosen test/);
+  assert.match(helpText('verify', { all: true }), /ancestor.*shared/);
   // LLP 1116.007 D2: a builder parses `agent` output, so the short text says --json is one object per line.
   assert.match(helpText('agent'), /^ {2}--json +one compact JSON object per op reply, one per line/m);
   // LLP 1116.007 D3.9: `state <name>` is a state or resource read down a dotted path; a big one prints its sizes.

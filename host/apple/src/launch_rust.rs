@@ -53,7 +53,7 @@ impl Running {
     }
 
     fn record(&self, launch: &LaunchPreloads, outcome: PreloadEvent) {
-        launch.0.journal.lock().unwrap().push(PreloadFact {
+        launch.record_fact(PreloadFact {
             name: self.name.into(),
             origin: String::new(),
             outcome,
@@ -376,7 +376,7 @@ impl LaunchContext for Context<'_> {
         if let Some((outcome, reason)) = refusal {
             if valid_name {
                 self.launch.0.set.get().unwrap().control.defined(&name);
-                self.launch.0.journal.lock().unwrap().push(PreloadFact {
+                self.launch.record_fact(PreloadFact {
                     name,
                     origin: origin(&request),
                     outcome,

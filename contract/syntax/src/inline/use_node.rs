@@ -2,8 +2,8 @@
 
 use super::*;
 
-/// Keep the iterator temporaries out of `inline_use`'s recursive frame.
-#[inline(never)]
+/// The component's names that a read takes as a value: its states, derives,
+/// device facts, and props and injects that are not actions.
 fn value_names(c: &Component) -> BTreeSet<String> {
     c.states
         .iter()
@@ -25,10 +25,8 @@ fn value_names(c: &Component) -> BTreeSet<String> {
         .collect()
 }
 
-/// Refuse a use of `name`, which `ctx.path` holds at `at`: out of line, so
-/// `inline_use`'s frame, which recursion repeats, stays small.
+/// Refuse a use of `name`, which `ctx.path` holds at `at`.
 #[cold]
-#[inline(never)]
 fn refuse_recursion(ctx: &mut Ctx<'_>, name: &str, at: usize, span: crate::Span) {
     let via = match &ctx.path[at + 1..] {
         [] => String::new(),
@@ -48,12 +46,58 @@ fn refuse_recursion(ctx: &mut Ctx<'_>, name: &str, at: usize, span: crate::Span)
     );
 }
 
+/// A component use, ready to inline: what [`prepare_use`] made of it.
+struct Prepared {
+    /// The callee's view, renamed apart for this use.
+    view: Vec<Node>,
+    /// What the callee's names read at this use.
+    subst: BTreeMap<String, Expr>,
+    value_only: BTreeSet<String>,
+    fill: Option<Rc<Fill>>,
+    instance: u32,
+    /// The callee's `provide` bindings, in this use's scope.
+    provides: Vec<(String, Expr)>,
+}
+
+/// Inline a component use. The stack holds this frame once for each use
+/// being expanded, under every view site below it, so all the work done
+/// before the callee's view is inlined is in [`prepare_use`], whose frame
+/// (13 KiB in a debug build) is gone by then.
 #[inline(never)]
 pub(super) fn inline_use(
     node: &Node,
     subst: &mut Subst<'_, Expr>,
     ctx: &mut Ctx<'_>,
 ) -> Result<Vec<Node>, SyntaxError> {
+    let Node::Use { name, .. } = node else {
+        unreachable!("inline_use only receives uses")
+    };
+    let Some(prepared) = prepare_use(node, subst, ctx) else {
+        return Ok(Vec::new());
+    };
+    let outer_fill = std::mem::replace(&mut ctx.fill, prepared.fill);
+    let outer_instance = std::mem::replace(&mut ctx.instance, prepared.instance);
+    // The child's `provide` section covers its whole view, after
+    // the fill took the use site's (LLP 1035.005.000 D9).
+    let outer_provides = ctx.provides.len();
+    ctx.provides.extend(prepared.provides);
+    ctx.depth += 1;
+    ctx.path.push(name.clone());
+    let records = ctx.records;
+    let mut child = Subst::new(&prepared.subst, records).with_value_only(&prepared.value_only);
+    let body = inline_nodes(&prepared.view, &mut child, ctx);
+    ctx.path.pop();
+    ctx.depth -= 1;
+    ctx.provides.truncate(outer_provides);
+    ctx.fill = outer_fill;
+    ctx.instance = outer_instance;
+    body
+}
+
+/// Check a use, lift the callee's declarations into the root, and rename
+/// its view apart: `None` when the use is refused.
+#[inline(never)]
+fn prepare_use(node: &Node, subst: &mut Subst<'_, Expr>, ctx: &mut Ctx<'_>) -> Option<Prepared> {
     let Node::Use {
         name,
         args,
@@ -61,7 +105,7 @@ pub(super) fn inline_use(
         span,
     } = node
     else {
-        unreachable!("inline_use only receives uses")
+        unreachable!("prepare_use only receives uses")
     };
     if ctx.depth > 32 {
         ctx.refuse(
@@ -69,18 +113,18 @@ pub(super) fn inline_use(
             format!("component `{name}` nests too deeply (a cycle?)"),
             *span,
         );
-        return Ok(Vec::new());
+        return None;
     }
     let Some(c) = ctx.file.components.iter().find(|c| &c.name == name) else {
         let message = ctx.file.unknown_component_message(name);
         ctx.refuse("syntax-unknown-component", message, *span);
-        return Ok(Vec::new());
+        return None;
     };
     // A use of a component already being inlined above it never ends; with
     // two such uses, expansion doubled for 32 levels before the depth bound.
     if let Some(at) = ctx.path.iter().position(|c| c == name) {
         refuse_recursion(ctx, name, at, *span);
-        return Ok(Vec::new());
+        return None;
     }
     // Renaming walks the child's authored tree while the caller's inline
     // frames remain live. Refuse an over-deep expansion before that walk.
@@ -90,7 +134,7 @@ pub(super) fn inline_use(
             "inlined views nest more than 256 sites deep",
             *span,
         );
-        return Ok(Vec::new());
+        return None;
     }
     let mut child_subst: BTreeMap<String, Expr> = BTreeMap::new();
     if c.props
@@ -420,32 +464,23 @@ pub(super) fn inline_use(
     // Rename only the view: declarations were lifted above.
     let mut renamed = rename_nodes(&c.view, &BTreeMap::new(), n, ctx.discarded_slots);
     share_instance_props(c, &mut renamed, &child_subst, &derives, &value_names, ctx);
-    // Release per-use resolved expressions before expanding nested children.
-    drop(derives);
-    let outer_fill = std::mem::replace(&mut ctx.fill, fill);
-    let outer_instance = std::mem::replace(&mut ctx.instance, instance);
-    // The child's `provide` section covers its whole view, after
-    // the fill took the use site's (LLP 1035.005.000 D9).
-    let outer_provides = ctx.provides.len();
-    for b in &c.provides {
-        ctx.provides
-            .push((b.name.clone(), subst_expr(&b.expr, &mut child)));
-    }
-    ctx.depth += 1;
-    ctx.path.push(name.clone());
-    let body = inline_nodes(&renamed, &mut child, ctx);
-    ctx.path.pop();
-    ctx.depth -= 1;
-    ctx.provides.truncate(outer_provides);
-    ctx.fill = outer_fill;
-    ctx.instance = outer_instance;
-    body
+    let provides = c
+        .provides
+        .iter()
+        .map(|b| (b.name.clone(), subst_expr(&b.expr, &mut child)))
+        .collect();
+    Some(Prepared {
+        view: renamed,
+        subst: child_subst,
+        value_only: value_names,
+        fill,
+        instance,
+        provides,
+    })
 }
 
 /// Share the instance's repeated computed prop and inject reads in its
-/// renamed view (`share_view_props`). Out of line, so `inline_use`'s frame,
-/// which recursion repeats, holds none of this.
-#[inline(never)]
+/// renamed view (`share_view_props`).
 fn share_instance_props(
     c: &Component,
     renamed: &mut [Node],

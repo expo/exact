@@ -2,9 +2,9 @@
 // 1071 §7): the wasm host's own `native-glue.js` over the app's module
 // artifact (`modules/index.js`, its `modules/web/`), and over the views its
 // packages serve (views.js, LLP 1133.001 D1). A loaded chunk,
-// fetched after first paint by the first module element (rt.js `nm`) or a
+// activated after first paint by the first module element (rt.js `nm`) or a
 // TypeScript source's `native` (ts-data.js); an app without modules never
-// has it.
+// has it. The build may preload the chunk without evaluating it.
 import './native-glue.js';
 
 // The runner's dispatch codes (native-glue.js `DISPATCH`) as the runtime's

@@ -150,11 +150,11 @@ fn random_style(rng: &mut Rng, node_type: NodeType) -> Box<StyleProps> {
             1 => s.top = Dimension::Auto,
             2 => (s.left, s.top) = (Dimension::Auto, Dimension::Auto),
             3 => {
-                (s.right, s.left) = (s.left, Dimension::Auto);
+                (s.right, s.left) = (s.left.clone(), Dimension::Auto);
                 s.mask.set(StyleId::Right);
             }
             4 => {
-                (s.bottom, s.top) = (s.top, Dimension::Auto);
+                (s.bottom, s.top) = (s.top.clone(), Dimension::Auto);
                 s.mask.set(StyleId::Bottom);
             }
             _ => {}

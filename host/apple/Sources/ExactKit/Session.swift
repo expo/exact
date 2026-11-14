@@ -341,7 +341,7 @@ public final class ExactSession {
     var dataGeneration: Int?
     var dataActivated: Bool { dataGeneration == generation }
     var pendingActivation: (generation: Int, token: UInt64)? // retried on the session's wake
-    /// The generation whose data source `prepareData` activated on the owner, and whether it still runs there.
+    /// The generation whose data source `prepareData` or `evaluateFromDraw` activated on the owner, and whether it still runs there.
     var preparedGeneration: Int?, dataPreparing = false
     var nativesOpened: Int? // the generation whose native views may attach (LLP 1024 D3)
     private(set) var updateToken: UInt64 = 0; private var receipt: DrawReceipt?
@@ -401,6 +401,8 @@ public final class ExactSession {
     var timerLanding = false
     /// The background task while the batches say the app must finish work an answer started (`mustFinish`).
     let finishHold = FinishHold.platform()
+    /// The bounded socket-close wait during a freeze commit.
+    var freezeCloseHold = FinishHold.platform("closing a frozen page's sockets")
     /// The view presenting this session, while one is mounted (D1).
     weak package var view: ExactView? { didSet { if view !== oldValue { natives.sessionViewChanged() } } }
     #if os(iOS) || os(tvOS)
@@ -512,7 +514,7 @@ public final class ExactSession {
         self.label = label
         let runtime = Runtime()
         runtime.useNativeTimers(true)
-        PresenceKeychain.install(); LocalNetworkFact.install() // before the first boot reads the backend (LLP 1133.010 D6), the fact (LLP 1133.036 D8)
+        LocalNetworkFact.install() // before the first boot reads the fact (LLP 1133.036 D8)
         if ActivityLibrary.packaged { runtime.linkActivities() }
         // Motion starts at the first frame that shows it, until an agent owns the clock (LLP 1003.001 D7).
         if !ExactEnv.agentFreezes { _ = runtime.startOnFrame(true, at: 0) }
@@ -736,7 +738,7 @@ public final class ExactSession {
         landFill()
     }
     private func wire() {
-        runtime.topLayer = { [weak self] in self?.presenter.openTopLayer ?? ([], nil) }
+        runtime.topLayer = { [weak self] in self?.presenter.openTopLayer ?? ([], nil, nil) }
         runtime.setInlineGeometry({ [weak self] id in self?.presenter.inlineFrame(id) },
                                   range: { [weak self] id, start, end in self?.presenter.rangeFrame(id, start: start, end: end) })
         if ExactSession.asyncFills {
@@ -787,6 +789,7 @@ public final class ExactSession {
         }
         presenter.selectOptions = { [unowned self] id in runtime.selectOptions(id) }
         presenter.controls.radioGroup = { [unowned self] id in runtime.radioGroup(id) }
+        presenter.controls.roleKeys = { [unowned self] id, key, focused in runtime.roleKeys(id, key: key, focused: focused) }
         presenter.buttonFace = { [unowned self] id in runtime.buttonFace(id) }
         presenter.onIntrinsic = { [unowned self] sizes in whenIdle(bound: true) { [unowned self] in applyUnlessEmpty(runtime.intrinsics(sizes)) } }
         // @ref LLP 1075.003 §3.5, Q3 (c) — what a bar covers reaches layout as an intrinsic
@@ -1046,7 +1049,7 @@ public final class ExactSession {
     private(set) var routerOp: [String: Any]?
 
     /// A batch from a timer, a scroll event or a host's measurement: one that
-    /// changes nothing only moves the clock. An app's timer that writes nothing
+    /// changes nothing skips the presentation pass. An app's timer that writes nothing
     /// (a poll that finds no news), a `scroll=` handler whose writes show
     /// nowhere (every frame of a fling) and a size layout already had (a list
     /// row's symbol, which the kernel measured) still commit, and the presenter's
@@ -1055,7 +1058,7 @@ public final class ExactSession {
     /// before its handler ran is reconciled by the pass (a refused tab), and
     /// the agent's clock seeks native animations through it. Slices published
     /// before it land first (T4), and it is asked again (a fling's fills).
-    func applyUnlessEmpty(_ batch: Batch, scrolled: Bool = false) {
+    func applyUnlessEmpty(_ batch: Batch, scrolled: Bool = false, resized: Bool = false) {
         guard !batch.busy, !batch.held else { return }
         guard !applying else { apply(batch); return }
         if !landing, ownerInFlight, hasPublished() {
@@ -1070,6 +1073,13 @@ public final class ExactSession {
         if let q = batch.seq { natives.hatchClock.seq = q.1 } // its commits are the hatches' latest
         timerDue = batch.timerDueMs; timerLanding = batch.landing
         scheduleClock(due: batch.timerDueMs)
+        // Fixed roots can emit no operations while their viewport changes.
+        if resized {
+            presenter.fitDocument()
+            #if os(iOS) || os(tvOS)
+            presenter.reachPageEdges()
+            #endif
+        }
         // What the pass did that a scroll moves (`scrolledWithoutPass`).
         if scrolled { presenter.scrolledWithoutPass() }
         drainReports()
@@ -1077,9 +1087,7 @@ public final class ExactSession {
         advanceIfDue()
     }
 
-    /// The controls' measured sizes (#134), laid out before the frame shows, and after every batch made before that layout: a size is reported once.
-    /// The layout follows the owner's work already posted, which publishes each batch as it makes it. Outside an apply and a landing, its batch lands
-    /// those first (T4); inside either, or with a slice in flight (`whenIdle` would run it in that landing), it waits for them, and the landing reports.
+    /// Reports laid-out control sizes after earlier owner batches land (LLP 1034 T4); an in-flight slice leaves the report to its landing.
     func reportMeasured() {
         guard !holdingReports, !(applying || landing || fillInFlight) || !(ownerInFlight || hasPublished()) else { return }
         presenter.controls.reportMeasured()
@@ -1115,11 +1123,13 @@ public final class ExactSession {
     private(set) var appliedBatches = 0
     package func apply(_ batch: Batch) {
         guard state != .destroyed, !batch.busy, !batch.held else { return }
+        #if os(iOS) || os(tvOS)
+        AudioSession.beginPresentation()
+        defer { AudioSession.endPresentation() }
+        #endif
         appliedBatches += 1
-        // A slice the owner committed before this batch applies first (T4).
+        // Land earlier owner slices first; ask what they leave owed after this batch (LLP 1034 T4).
         if !applying, !landing, ownerInFlight, hasPublished() {
-            // What the landed slices leave owed is asked after this batch,
-            // which the owner made after them (T4; LLP 1034 §8).
             holdingReports = true; landFill(); holdingReports = false
             guard state != .destroyed else { return }
         }
@@ -1328,7 +1338,7 @@ public final class ExactSession {
         if let screen = change.screen { screenSize = screen }
         let batch = runtime.view(change)
         if let fold, batch.error == nil { presenter.fold = fold }
-        apply(batch)
+        applyUnlessEmpty(batch, scrolled: true, resized: change.size != nil)
     }
     private(set) var screenSize: CGSize? // the screen last told, for the agent's synthetic segments
     /// The device's posture and the viewport segments a fold makes (LLP 1078 D4, D5): the view's reading,

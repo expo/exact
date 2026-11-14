@@ -1,0 +1,4 @@
+component FixedPage
+  view
+    scroll width=100 height=100 testId="list"
+      box height=200 flex-shrink=0

@@ -1363,6 +1363,7 @@ fn a_host_block_does_not_inherit_its_parents_covered_edges() {
     k.set_host_block(
         5,
         Some(HostBlock {
+            tactic: Default::default(),
             width: BlockAxis::Is(600.),
             height: BlockAxis::Is(500.),
         }),

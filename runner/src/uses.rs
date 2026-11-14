@@ -140,11 +140,14 @@ pub enum Capability {
     TextStroke,
     /// `-exact-symbol-palette`'s grammar (LLP 1077 D10).
     SymbolPalette,
+    /// Locked secrets (LLP 1133.010 D16), selected by `secret.keep` grants
+    /// with a presence policy, including names whose protection is optional.
+    Presence,
 }
 
 impl Capability {
     /// Every capability, in bit order.
-    pub const ALL: [Capability; 36] = [
+    pub const ALL: [Capability; 37] = [
         Capability::Markdown,
         Capability::Motion,
         Capability::Collections,
@@ -181,6 +184,7 @@ impl Capability {
         Capability::Rotate,
         Capability::TextStroke,
         Capability::SymbolPalette,
+        Capability::Presence,
     ];
 
     /// The name an entry, a refusal and a report use.
@@ -222,6 +226,7 @@ impl Capability {
             Capability::Rotate => "rotate",
             Capability::TextStroke => "text_stroke",
             Capability::SymbolPalette => "symbol_palette",
+            Capability::Presence => "presence",
         }
     }
 
@@ -267,6 +272,9 @@ impl Uses {
             uses = uses.with(Capability::Io);
         }
         for line in grants.lines() {
+            if exact_grants::line_presence(line).is_some() {
+                uses = uses.with(Capability::Presence);
+            }
             uses = match line.split_whitespace().next() {
                 Some("sqlite.open") => uses.with(Capability::Sqlite),
                 Some("auth.session") => uses.with(Capability::AuthSession),
@@ -733,6 +741,27 @@ fn names_segment(s: &str) -> bool {
 #[cfg(test)]
 mod grant_tests {
     use super::{Capability, Uses};
+
+    #[test]
+    fn presence_grants_link_the_backend_including_optional_names() {
+        for policy in [
+            "user-presence",
+            "biometry-any",
+            "biometry-current-set",
+            "device-credential",
+        ] {
+            for optional in ["", " optional"] {
+                let grants =
+                    format!("secret.keep token {policy}{optional}\ndevice.local-auth purpose.lock");
+                let uses = Uses::NONE.with_grants(&grants);
+                assert!(uses.has(Capability::Io));
+                assert!(uses.has(Capability::Presence), "{grants}: {uses}");
+            }
+        }
+        for grants in ["", "secret.keep token", "device.local-auth purpose.lock"] {
+            assert!(!Uses::NONE.with_grants(grants).has(Capability::Presence));
+        }
+    }
 
     #[test]
     fn kept_surfaces_link_storage_without_a_data_reader() {

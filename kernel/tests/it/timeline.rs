@@ -28,7 +28,8 @@ fn rows(pairs: &[(StyleId, &str)]) -> Box<StyleProps> {
 fn fade() -> Box<StyleProps> {
     let mut s = StyleProps::default();
     s.animation =
-        crate::keyframed("fade 1s linear both @keyframes fade{from{opacity:1}to{opacity:0}}");
+        crate::keyframed("fade 1s linear both @keyframes fade{from{opacity:1}to{opacity:0}}")
+            .into();
     s.mask.set(StyleId::Animation);
     Box::new(s)
 }

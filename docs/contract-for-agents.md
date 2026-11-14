@@ -24,6 +24,7 @@ capabilities.
 - [State and action semantics](#state-and-action-semantics)
 - [Composition and lifetime](#composition-and-lifetime)
 - [Data requests and side effects](#data-requests-and-side-effects)
+  - [A TypeScript package for the data module](#a-typescript-package-for-the-data-module)
   - [Native sign-in](#native-sign-in-exactsign-in)
   - [Tools: what a call answers](#tools-what-a-call-answers)
 - [Views, layout, and interaction](#views-layout-and-interaction)
@@ -447,7 +448,8 @@ component Cart
   `formatDate(due, 0, "medium")` labels a picked `YYYY-MM-DD` day directly;
   a key keeps its calendar day at every valid offset ([dates recipe](recipes/dates-and-days.md)).
   `formatDay(then, now, offset, "day")` names a day from `now` (`Today`, `Yesterday`, else
-  the date; `"day-time"` adds the time, `"list"` is a list row's, as Mail's).
+  the date; `"day-time"` adds the time, `"list"` is a list row's, as Mail's, and
+  `"section"` a chat's day separator: a weekday within the week, else `Thu, Oct 15`).
 - `formatTime`, `formatDate`, `formatDay` and `formatNumber` follow the strings table
   the app shows: with `strings/de.json` shown they print `26.09.2026`, `13:02`,
   `1.234,5` and `Heute`, and `setLocale` moves them with the text; the examples above
@@ -710,7 +712,7 @@ component Row
 
 Children may hold state, derives, and actions. They cannot declare resources,
 mutations, or tasks. Lift shared data requests to the root and pass values and
-actions. A child used under `for` owns row state keyed to that row's identity.
+actions ([A feature's requests](#a-features-requests)). A child used under `for` owns row state keyed to that row's identity.
 Stable keys matter when content is inserted, removed, filtered, or reordered.
 A child's derive is compiled once per component use and evaluated at each read
 in that instance's frame. Non-atomic prop and inject arguments share that
@@ -751,7 +753,14 @@ time.epochAtZero`; the compiler and `logs` both say so. A source declared in
 `app.contract` keeps no answer, as the launch asks it at boot, and neither does a
 resource whose identifying arguments read a declared resource, which a launch
 starts on its placeholder: pass such an argument after `with` when it does not
-identify the answer.
+identify the answer. An identifying argument that differs from the kept one and
+is `""` or `none`, or reads a device-state resource still on its placeholder (an
+id an action sets once a session answers, a search field's empty query), is not
+known yet: the kept answer waits, `logs` says so, and it shows once the arguments
+reach the ones it was kept for, also after the data module is ready, unless an
+answer for other arguments was kept in its place first. A known value that
+differs means the kept answer is not used; `logs` names the argument and the
+state or resource it reads.
 An answer that must never reach the device's storage (a one-time code, a message
 shown once) ends its line with `transient`: `resource code = otp(request) as shape
 Code transient`. It is never kept, a launch starts from its placeholder, and an
@@ -809,6 +818,46 @@ render-function props.
 Imports resolve local `.contract` declarations, with cycle and app-boundary
 checks. Paths begin with `./` and cannot contain `..` segments. They do not load app logic or expand the available built-in function
 roster. Compiler-owned router names exist only with a `routes` declaration.
+
+### A feature's requests
+
+A feature written as a child (a canvas with its feed, a tab's screen) keeps its
+resources, mutations and tasks in the root, which passes it their values and the
+actions that send them as props. Name them with the feature's prefix
+(`historyDays`), since the root and its members files share one set of names; a
+members file per feature keeps a feature's declarations together. A root
+resource asks at launch unless it is gated, so gate one that only one tab or
+screen reads on that tab or screen showing.
+
+```contract
+routes nav
+  tab today "/"
+  tab history "/history"
+
+component App
+  resource historyDays = days() when nav.tab == "history" as shape string[] else empty()
+  view
+    main
+      for t in nav.tabs key=t.name
+        column role="tabpanel" display=(nav.tab == t.name ? "flex" : "none")
+          if t.name == "history"
+            History(days=historyDays)
+          else
+            text "Nothing logged yet."
+
+component History
+  props
+    days: string[]
+  view
+    column
+      for d in days key=d
+        text d
+```
+
+`historyDays` asks nothing until the History tab first shows. While the tab is
+hidden it is idle and keeps its last answer; when the tab shows again it is asked
+again, and that answer shows until the new one lands (`current(historyDays)` is
+false until then). A screen of a stack gates on `top(nav).name == "day"`.
 
 ### Tabular numbers
 
@@ -1190,6 +1239,35 @@ export async function toPosts(nodes: Node[]): Promise<Post[]> {
 
 The function that yields is `async`, and so is every caller that awaits it.
 On the web the page has no such budget, and a yield lets it paint mid-parse.
+
+### A TypeScript package for the data module
+
+A package whose runtime entry is TypeScript source must also provide declaration
+files for the type check. This applies to installed packages and linked `file:`
+or workspace dependencies, including packages outside the app folder. The checker
+stages package manifests and `.d.ts`, `.d.mts` and `.d.cts` files; it does not stage
+package source (LLP 1027 D5). The bundler captures runtime code separately.
+
+For example, a package with `index.ts` and `index.d.ts` can export:
+
+```json
+{
+  "name": "my-data-helper",
+  "type": "module",
+  "exports": {
+    ".": { "types": "./index.d.ts", "default": "./index.ts" }
+  }
+}
+```
+
+Put `types` before `default`. Supply declarations for each imported subpath, and
+make their imports resolve to declarations too. Keep declarations in step with
+source: generate them with the package's own TypeScript configuration using
+`declaration` and `emitDeclarationOnly`, or maintain them by hand for a small API.
+A `module outside captured app` refusal naming a package's TypeScript source
+means the checker reached source outside its stage; check that entry's declaration
+export and its declaration imports. Moving the package into the app does not
+supply the missing declarations.
 
 ### Declared sources
 
@@ -1775,8 +1853,10 @@ out (LLP 1157).
   `Authorization: Bearer <jwt>`), so a test's `request` can write as another
   client; `http: (request) => Response | undefined` answers the app's other
   routes (an auth endpoint), with CORS headers added. Keep the
-  rules both run in a file with no Convex import (`convex/tiles.ts`). One
-  server serves a whole run: a test that counts clears first.
+  rules both run in a file with no Convex import (`convex/tiles.ts`). Each
+  test starts an empty stand-in, including with `database: false`. Remote
+  servers stay shared. Only `test` and `agent --test` share an ancestor's server,
+  saying so; `verify` refuses an answering local server, including an ancestor's.
 - **Driving a native host against a real deployment.** The driver seeds a
   native host's randomness (`EXACT_AGENT_SEED`, 1 by default), so two launches
   draw the same session id and Convex answers the second's writes with the
@@ -1891,6 +1971,11 @@ must still match `accept`; conversion failures fire `cancel` with a journal reas
 The view forms are element, component use, `if`/`else` (and `else if`),
 keyed `for`, exhaustive option `match`, and `children`. Wrap root regions in a
 stable element.
+A literal `role` must name a concrete ARIA role, or it is refused.
+`aria-activedescendant` names the active option while a field keeps focus
+([combobox recipe](recipes/combobox.md)); the web exposes it, and other hosts carry it
+without using it.
+
 HTML names Contract spells otherwise (the compiler names each): `div` is `column`,
 `row` or `view`; `span`, `p`, `strong`, `em`, `b` and `i` are `text`; `h1`–`h6` are
 headings, as written; `label` is `text` beside its field, which
@@ -2094,8 +2179,12 @@ Tab/menu projections keep their existing ancestor `text-transform` on the
 projected title, which the face query reads as painted.
 `white-space="nowrap"` asks for one truncated line, `line-clamp=N` caps wrapping,
 and `text-align="start"` places the face at the start of its box. The symbol
-admits its own `-exact-tint-color`, `font-size` and `font-weight`; absent symbol rows
-follow the title. Its `width`, `height` and `object-fit` are refused.
+admits its own `-exact-tint-color`, `font-size`, `font-weight` and
+`-exact-symbol-rendering`; a non-template icon keeps its colours under `multicolor`.
+Absent symbol rows follow the title. Its `width`, `height` and `object-fit` are refused.
+Apple rasterizes non-template icon SVGs into its asset catalog, so editing one
+requires a native rebuild. Linux-hosted Apple builds use the installed Chromium
+(`CHROME` can select it).
 
 `gap` (or `column-gap` for a row, `row-gap` for a column) sets image-to-title
 spacing. Absent means the platform's spacing, not zero; title-to-subtitle
@@ -2187,10 +2276,10 @@ menus and confirmations keep platform placement. Physical areas also accept
 `top span-left`, `bottom span-left`, `left`/`right` with `span-top`,
 `span-bottom` or `span-all`, and the four `top|bottom left|right` corners.
 Logical areas, `flip-x`, `flip-y`, named rules and area-dependent sizing are
-not implemented. Use fixed sizes, zero insets and default self-alignment
-for native parity; percentage margins are not resolved by the native layer.
-`flip-start` also exchanges `width` and `height` in CSS; the native layers keep
-the laid-out size, so give a popover that uses it equal ones.
+not implemented. Use zero insets and default self-alignment for native parity.
+Painted Apple popovers are sized in each option's region. Flips transform
+margins before percentages resolve there; `flip-start` also exchanges
+`width`/`height`, `min-width`/`min-height` and `max-width`/`max-height`.
 
 A route with `navigationPresentation="modal"` is the same sheet on the Mac
 (LLP 1115.002 D7.4), as large as its content (an authored `width` or `height`
@@ -2256,7 +2345,7 @@ lists any literal colour, font size or weight an app's `.contract` files still w
 | a `dialog` whose own `background-color` or `background-image` you write (your panel, your colours), of any rows | HTML's top layer (LLP 1035.001 D11): presented full screen over whatever is up, a sheet included, with no transition of UIKit's, laid out as written and centred in the window, over UIKit's 20% dimming. Its `animation` is its entrance; removed by an `if`, it stays until its `-exact-exit-animation` ends. `closedby="any"` closes it on a tap outside its box, Escape and VoiceOver's escape are its close request, and a field in it is centred above the keyboard. A box in the page with `z-index` stays under every sheet: use this |
 | any other `dialog` (a field, Save, Cancel), opened by `showModal(id)` or a button's `command="show-modal"` | a sheet as tall as its content, up to the large detent, its content laid out as written and centred across it (`width="100%" box-sizing="border-box"` fills it); `close(id)`, its `command="close"` button or a swipe down closes it. `closedby="none"` refuses the swipe, `"any"` also takes a tap on the page behind, and a dismissal the person made fires `cancel` (LLP 1115.000 D11.5). A form with a title bar is still a sheet route |
 | `role="tablist"`: each tab a symbol over a label / one text or image | `UITabBar` / `UISegmentedControl`, the tablist at least its native height unless `min-height` says otherwise (LLP 1059) |
-| `role="radiogroup"` of `button role="radio" aria-checked=…`, each one text or image (a value chosen from a few) | `UISegmentedControl`, as a tablist's; never a tab bar (LLP 1116.004 D5.2). Android draws Material's segmented buttons (two or more radios: equal shares of the row, the checked one filled with a check), and the Linux desktop and Windows the web's track with the checked radio raised on it. Keys of your own design: a radio that paints itself (its own background, border or radius, LLP 1104 D2), or `appearance="none"` on the `radiogroup`, keeps its buttons as you paint them; on iOS and the Mac the group keeps one Tab stop (the checked radio) and arrow keys that press the next or previous radio (Left and Right swapped right to left); on tvOS the focus engine moves between them |
+| `role="radiogroup"` of `button role="radio" aria-checked=…`, each one text or image (a value chosen from a few) | `UISegmentedControl`, as a tablist's; never a tab bar (LLP 1116.004 D5.2). Android draws Material's segmented buttons (two or more radios: equal shares of the row, the checked one filled with a check), and the Linux desktop and Windows the web's track with the checked radio raised on it. Keys of your own design: a radio that paints itself (its own background, border or radius, LLP 1104 D2), or `appearance="none"` on the `radiogroup`, keeps its buttons as you paint them; on the web, iOS, the Mac and the painted hosts (Linux, Windows and Android’s reader), the group keeps one Tab stop (the checked eligible radio, else the first) and arrow keys that press the next or previous eligible radio (Left and Right swapped right to left); on tvOS the focus engine moves between them |
 | a route whose first child is a `header` holding one heading (`text role="heading"`; an `aria-level` alone is not one), a text after it and its buttons | the navigation bar; a level-1 heading (`aria-level=1`) is a large title, in a sheet too, and any other level an inline one; the text after it the subtitle |
 | a route whose first child is a `header` holding buttons and no heading (readouts, a search field, a tablist and plain boxes around them too, nothing else) | the navigation bar with no title, its buttons trailing and the root's `navigationBack` control leading; a text or an image in it keeps the whole header in the page (`lower-header-no-bar`) |
 | a pushed route with no such `header` | a bar holding the system Back button alone (LLP 1115.000 D5.2) |
@@ -2285,9 +2374,26 @@ explicit focus while excluding sequential focus.
 `contract vocab <name>` lists each one's props. A route does not scroll by
 itself: its content goes in a `scroll`, `list` or `overflow-y="auto"` box, which is
 the bar's scroller with nothing written (`navigationScroll` names another; "Routes
-and web documents"). A sheet's swipe down and a pushed screen's edge swipe press the
+and web documents"). On Apple, `logs` journals `route-overflow` when the active
+route's in-flow content, with the route's bottom padding, passes the route's padding
+edge and nothing scrolls it into view. The route's own scroller does; so does the
+navigation root's or the native document scroll, for content past the route's border
+box, unless the route clips it or sits in a native block of its own. It checks after
+first pixel once native layout settles at the window's layout size, leaving smaller
+sheet and keyboard offers out. Full-window modals are checked too. A fitting layout
+clears suppression so later overflow is reported again.
+
+A sheet's swipe down and a pushed screen's edge swipe press the
 route's enabled control whose `id` is the root's `navigationBack`, or, when the route
-has none, one outside every route (a header the screens share). Naming a control is optional:
+has none, one outside every route (a header the screens share).
+`navigationBack` names that control's `id`, not its action: for example,
+`navigationBack="close"` with `button id="close" press=back`. A literal name that
+no element in the expanded view has as its `id` earns warning
+`lower-navigation-back-id`. A computed name, any computed element id or an
+unexpanded component prevents this check. A
+matching id somewhere in the view does not prove that Back can reach it: a
+control only on an inactive route is not pressed from the active one.
+Naming a control is optional:
 the navigation root is the app view's first element, and `navigationKey` alone there names none. The agent's
 `back` presses it too, as Escape does on a Mac sheet. When a sheet's swipe down should not do what its
 Cancel does (Cancel reverts the edits, a swipe down keeps them), give Cancel another `id`:
@@ -2404,7 +2510,7 @@ column navigationKey=`${e.id}` navigationPresentation="modal" navigationScroll="
 `action reload` is `refresh items`; `pending(items)` is true while it runs.
 A segmented control in the content chooses a value or switches panels: a value
 from two to five (a preset, units, a period, a filter) is a `row role="radiogroup"` of
-`button role="radio" aria-checked=…`, each pressing its value (the web gives it the
+`button role="radio" aria-checked=…`, each pressing its value (the web and painted hosts give it
 arrow keys and one Tab stop); switching panels, a `row role="tablist"` of text tabs
 outside the header. A list row's `delete=action` is its swipe to delete, UIKit's on
 iOS (`contract vocab swipe`). Other swipe actions are a hand-written swipe row, a
@@ -3304,7 +3410,7 @@ Tabs with a stack each have one layout that works on web, macOS and iOS
 `host/web-js/conformance/tabs.steps`):
 
 ```text
-main navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow display="flex" flex-direction="column" height="100%"
+main navigationKey=`${top(nav).id}` navigationBack="close" navigate=follow display="flex" flex-direction="column" height="100%"
   column flex=1 min-height=0 position="relative"
     for t in nav.tabs key=t.name
       column role="tabpanel" id=`panel-${t.name}` position="absolute" inset=0
@@ -3312,7 +3418,7 @@ main navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow displa
           column navigationKey=`${e.id}` navigationScroll=`content-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
             header
               if e.name == "item"
-                button id="back" press=back
+                button id="close" press=back
                   text "Home"
               text e.name role="heading" aria-level=(e.name == "item" ? 2 : 1)
             scroll id=`content-${e.id}` flex=1 min-height=0
@@ -3332,7 +3438,7 @@ main navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow displa
   before it reads or presses anything inside it; a target in an unopened tab is
   refused with the tap that opens it (LLP 1075.003 §9.14).
 - Each route starts with a `header` (its heading, and on a pushed route the
-  `id="back"` control), which iOS makes the navigation bar. Leave the tablist's and the
+  `id="close"` control), which iOS makes the navigation bar. Leave the tablist's and the
   routes' backgrounds, heights and colours unsaid: the platform draws the bars and the
   page. For an authored design, put `appearance="none"` on the `header` or root
   `tablist` to keep that bar's layout, colours and type on iOS too. A header
@@ -3478,10 +3584,11 @@ main navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow displa
   axis, and Back is previewed from Android 14 (`host/android/README.md`, "Sheets
   and route motion"). Both move on the agent's clock there: `clock settle` before
   reading where a sheet or a route is. Under the agent's frozen timing (the
-  default) on iOS, a `tap` or `type` that opens or closes a sheet, its answer's `then`
-  included, waits up to two seconds for UIKit to finish it; a reply with `settled:
-  false, reason: "transition"` says it had not. `--timing platform` leaves that to
-  `clock settle`.
+  default) on iOS, a `tap`, `back` or `type` that opens or closes a sheet, or pushes
+  or pops a route, waits up to two seconds for UIKit to finish it, its answer's
+  `then` included. A reply with `settled: false, reason: "transition"` says the
+  transition had not ended, or Exact had not followed it yet. `--timing platform`
+  leaves that to `clock settle`.
 - A full-screen route (`navigationPresentation="fullscreen"`) that paints nothing
   stands on the platform's background. One whose author wrote a `background-color`
   (`transparent` included) or a `background-image` stands on nothing else: the page it
@@ -3656,6 +3763,13 @@ including through derives, resource arguments, called actions, mutations or othe
 change tasks (`analyze-change-cycle`). Keep pure computed values in `derive`.
 `change` takes no timer options; existing `after` and `every` schedules keep their
 elapsed-time behavior.
+
+On Android, these tasks can run while the activity is in the background and its
+process can execute; they need no drawn frame. `every(frame, …)` pauses there.
+Timers do not keep the process alive or bypass Android's
+[Doze and App Standby](https://developer.android.com/training/monitoring-device-state/doze-standby)
+restrictions. Use the background packages for work the system schedules;
+an in-process poll cannot guarantee a timely alert while the app is suspended.
 
 A task with `when` (a gated task), such as
 `task hide when toast != "" key=toastUntil` with `after(5000, expire)`, has its
@@ -4147,8 +4261,12 @@ mounted, displayed, non-inert nodes bearing the declared `data-paint` word in
 tree order. Covered routes and unselected tabs do not answer; a split list
 answers with its detail where the host presents it (the web at desktop widths).
 Closed popovers and dialogs do not answer; open ones do. Point reads skip inert
-subtrees and use the presenter's placement for open top-layer content. Both reads
-run only in actions and give one snapshot. Use `frame(id)`
+subtrees and use the presenter's placement for open top-layer content. Point reads
+also name the front modal dialog or presented route where its native backdrop accepts input,
+beneath any later popover. Native sheet chrome outside authored content is
+not part of the backdrop. The backdrop's hit region is independent of the
+content's clip and pointer events; it never exposes the page or a lower
+modal. Both reads run only in actions and give one snapshot. Use `frame(id)`
 for each returned id when drawing outlines.
 For a drag still built by hand, test the dragged node's visual centre (the middle of
 its `frame(id)`, which includes the `translate` the drag gave it), not the
@@ -4360,7 +4478,7 @@ screen is never `high`, nor is any iOS or Android device natively. A game's rend
 read it to offer a quality setting. A native host answers its GPU module's tier
 once the module loads (`high` before it). Under the agent it is `high` from launch, and
 `prefer gpu-tier low` substitutes it and remakes each world's renderer at its rung.
-`exactPage` answers `visibilityState`, `onLine`, `canShare`,
+`exactPage` answers `visibilityState`, `frozen`, `onLine`, `canShare`,
 `canShareFiles` and `canSharePictures` (whether `share(files=…)` takes
 `app:/` files and an element's `"#id"`; the web never takes a picture),
 `canOpenFiles` and `hasFocus` (`document.hasFocus()`: the app's window has the
@@ -4380,6 +4498,34 @@ is the drive's (`prefer has-focus false`; `state.device`). Use dimensions,
 media preferences, page facts,
 and capability state rather than suffixing files by platform. Preference facts
 inform authored policy; the engine does not automatically remove all motion.
+
+`frozen: bool` means the host has backgrounded the app and will stop its ordinary
+work, until execution resumes. Gate a feed with `when not page.frozen`: the runner
+lets its resource or stream go in the commit that turns `frozen` true, without
+waiting for an authored cleanup handler. A sequence stops in that commit too
+(LLP 1125 D4). This is a dynamic execution fact, not a phone or desktop label:
+`visibilityState` can be hidden while `frozen` stays false.
+
+| Host | `frozen` producer |
+|---|---|
+| Web (both targets) | Page Lifecycle `freeze`/`resume` on `document`, where fired; false elsewhere |
+| Android | Stopped Activity with no successfully promoted foreground-service claim; a started Activity or promoted service keeps it false |
+| Linux desktop | Constant false |
+| Windows desktop | Constant false |
+| iOS and tvOS | Background without active audio eligible for background execution; an idle playback category grants nothing |
+| macOS | Constant false |
+| watchOS | Constant false: the live watch driver has no page lifecycle producer yet |
+| Terminal and render hosts | Constant false |
+
+A browser promises nothing after `hidden`: it may stop or discard a page without
+a `freeze` event. False does not promise continued execution. Persist data as it
+changes; do not depend on a final asynchronous cleanup. The bake and an agent
+launch answer false; `prefer frozen true` substitutes the transition, and
+`prefer frozen false` resumes it. See the [feed recipe](recipes/suspending-feed.md).
+
+Leave navigation presentation to the host first: a root `tablist` becomes UIKit's
+tab bar on iOS and a sidebar on macOS, and `navigationPresentation` chooses a
+route's presentation. Neither pointer coarseness nor `frozen` identifies a phone.
 
 `exactCanvasPerformance("world")` is an opt-in, read-only metrics resource for
 that named canvas. Declare only the fields your HUD needs, each as an option:
@@ -5039,6 +5185,8 @@ its value the same way, in a drive or a test (a tap does not open a native
 VoiceOver's reading order. An iOS simulator drive containing `tree --ax` enables
 UIKit's accessibility runtime before launch and restores the simulator's setting
 after launch. Library drives request this with `open({host: 'ios', ax: true})`.
+`verify` reads it once at each screen it checks and counts its findings as `check`'s:
+a control with no name, an element exposed while hidden, one reachable outside an open modal.
 Use `tree` to find targets, `state` for data and delivery, `layout` for
 geometry, `perf` for the work a drive cost (`perf <target> during "<op>" …`: per
 plan site, evaluations, unchanged results, instances created and retired), and
@@ -6256,7 +6404,8 @@ on (`exactDelivery`, `exactSurface`, `exactViewport().displayMode` read
 from the viewport wherever the package passes it: an alias, a `provide`, a
 `fn`; a prop's `displayMode` is the app's data; `lower-library-platform`). Not checked yet: an injected value whose
 provider is outside the package, and per-platform host entries (no syntax
-for them). Its names are its API: an app line or a Contract row naming a
+for them). A field names its active option with `aria-activedescendant`
+([combobox recipe](recipes/combobox.md)). Its names are its API: an app line or a Contract row naming a
 name under its namespace that it doesn't define, or a param line naming one
 it lacks, fails the build (`tamber-package-unknown`; the nine base names are
 no package's), and its params are named in full, a short name that names

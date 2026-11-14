@@ -726,7 +726,7 @@ fn a_field_goes_under_its_label_when_both_do_not_fit() {
         let style = |t: &str| k.node(id(&r, t)).unwrap().computed_style(StyleMask::ALL);
         let wrap = style("menu-row").flex_wrap;
         assert_eq!(wrap, exact_kernel::FlexWrap::Wrap, "{root}: wraps");
-        let basis = style("aisle").flex_basis;
+        let basis = style("aisle").flex_basis.clone();
         assert_eq!(basis, exact_kernel::Dimension::Auto, "{root}: grown");
         for (label, field) in [("date-label", "date"), ("menu-label", "menu")] {
             let (l, f) = (frame(label), frame(field));

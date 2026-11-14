@@ -417,11 +417,10 @@ fn padded_reorder_rejects_unreported_scroll_and_padding() {
             "native scroll must be reported first"
         );
         p.scroll.insert(list, (0., 0.));
-        let mut style = exact_kernel::StyleProps {
-            padding_top: exact_kernel::Dimension::Points(64.),
-            padding_bottom: exact_kernel::Dimension::Points(100.),
-            ..Default::default()
-        };
+        let mut style = exact_kernel::StyleProps::default().with_rows(|rows| {
+            rows.padding_top = exact_kernel::Dimension::Points(64.);
+            rows.padding_bottom = exact_kernel::Dimension::Points(100.);
+        });
         style.mask.set(side);
         p.host.apply_test_ops(&[exact_kernel::Op::SetStyle {
             id: list,

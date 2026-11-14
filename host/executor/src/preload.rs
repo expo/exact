@@ -7,6 +7,7 @@ mod fetch;
 use fetch::run;
 #[path = "prefetch.rs"]
 mod prefetch;
+use std::sync::atomic::AtomicBool;
 use std::sync::{mpsc, Weak};
 use std::time::{Duration, Instant};
 
@@ -265,6 +266,7 @@ fn notify_observer(observer: &Observer, name: &str, observation: Observation) {
 /// reach them through [`Control`]: they are compiled into every build.
 struct Location {
     state: Mutex<Destination>,
+    journal_pending: Arc<AtomicBool>,
     changed: Condvar,
     threads: Mutex<usize>,
     exited: Condvar,
@@ -345,6 +347,7 @@ impl Preloads {
             .map(|(i, p)| (i, p.generation))
             .collect::<Vec<_>>();
         let destination = Arc::new(Location {
+            journal_pending: cache.journal_pending.clone(),
             state: Mutex::new(Destination::Staging(Box::new(cache))),
             changed: Condvar::new(),
             threads: Mutex::new(0),
@@ -374,10 +377,7 @@ impl Preloads {
     }
     /// Drain the bounded launch journal; the host chooses where to write it.
     pub fn take_journal(&self) -> Vec<Fact> {
-        update(&self.destination, |cache| {
-            std::mem::take(&mut cache.journal)
-        })
-        .unwrap_or_default()
+        take_journal(&self.destination)
     }
 }
 /// A launch's control remains usable after the executor adopts its owner.
@@ -570,10 +570,7 @@ impl Control {
     }
     /// Drain facts before or after adoption.
     pub fn take_journal(&self) -> Vec<Fact> {
-        update(&self.destination, |cache| {
-            std::mem::take(&mut cache.journal)
-        })
-        .unwrap_or_default()
+        take_journal(&self.destination)
     }
     /// Settle a complete reply without an executor or a wait.
     pub fn settle(&self, request: &RequestOut) -> Option<(Outcome, CompletionTiming)> {
@@ -612,10 +609,44 @@ fn update<T>(location: &Location, f: impl FnOnce(&mut cache::Cache) -> T) -> Opt
             let result = f(state.cache.as_mut()?);
             cache::serve_ready(&mut state);
             rouse(&shared, &state);
+            #[cfg(test)]
+            shared.worker_notifications.fetch_add(1, Ordering::Relaxed);
             shared.ready.notify_all();
             Some(result)
         }
         Destination::Closed => None,
+    }
+}
+
+// The pending bit is cleared under the same lock as every writer. Adoption
+// moves that lock from Location to Shared without moving the bit (LLP 1171 D1).
+fn take_journal(location: &Location) -> Vec<Fact> {
+    if !location.journal_pending.load(Ordering::Acquire) {
+        return Vec::new();
+    }
+    let mut destination = location.state.lock().unwrap();
+    match &mut *destination {
+        Destination::Staging(cache) => cache.take_preload_journal(),
+        Destination::Adopted(shared, _) => {
+            let Some(shared) = shared.upgrade() else {
+                location.journal_pending.store(false, Ordering::Release);
+                return Vec::new();
+            };
+            drop(destination);
+            let mut state = shared.state.lock().unwrap();
+            match state.cache.as_mut() {
+                Some(cache) => cache.take_preload_journal(),
+                // A retired executor discarded its cache and the facts in it.
+                None => {
+                    location.journal_pending.store(false, Ordering::Release);
+                    Vec::new()
+                }
+            }
+        }
+        Destination::Closed => {
+            location.journal_pending.store(false, Ordering::Release);
+            Vec::new()
+        }
     }
 }
 
@@ -680,7 +711,7 @@ impl Core {
             .unwrap()
             .cache
             .as_mut()
-            .map(|cache| std::mem::take(&mut cache.journal))
+            .map(cache::Cache::take_preload_journal)
             .unwrap_or_default()
     }
     /// Boot may fulfil complete replies from its initial requests, in ticket
@@ -995,8 +1026,9 @@ fn taken(cache: &mut cache::Cache, i: usize, ticket: u64) {
         r.used = used;
     }
     if !held.taken && !held.prefetch {
-        cache.journal.push(held.fact(Event::Taken));
+        let fact = held.fact(Event::Taken);
         held.taken = true;
+        cache.record_preload_fact(fact);
     }
 }
 pub(super) fn drop_held(cache: &mut cache::Cache, i: usize, event: Event) {
@@ -1017,12 +1049,14 @@ pub(super) fn drop_held(cache: &mut cache::Cache, i: usize, event: Event) {
         ReplyState::Ready(r) => r.bytes,
         ReplyState::Gone => return,
     };
-    if !held.prefetch && (event != Event::NeverTaken || !held.taken) {
-        cache.journal.push(held.fact(event));
-    }
+    let fact =
+        (!held.prefetch && (event != Event::NeverTaken || !held.taken)).then(|| held.fact(event));
     held.request = None;
     held.key = Equal::default();
     held.answered_at = None;
+    if let Some(fact) = fact {
+        cache.record_preload_fact(fact);
+    }
     cache.release(bytes);
     // Cancellation settles before the transport can report its failure (LLP 1162 D4).
     if let Some((url, _)) = invalidates {

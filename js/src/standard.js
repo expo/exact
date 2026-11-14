@@ -102,11 +102,13 @@
   });
 
   // A microtask: a callback's throw is reported, as the web reports it, and
-  // never rejects anything the module awaits.
+  // never rejects anything the module awaits. The report is the runtime's
+  // line (js/src/console.js), not the app's.
+  var runtimeLine = global.__exact_runtime_line;
   method(global, 'queueMicrotask', function queueMicrotask(callback) {
     if (typeof callback !== 'function') throw new TypeError('queueMicrotask requires a function');
     Promise.resolve().then(function () {
-      try { callback(); } catch (e) { global.console.error('Uncaught ' + (e && e.stack ? e.stack : String(e))); }
+      try { callback(); } catch (e) { runtimeLine('Uncaught ' + (e && e.stack ? e.stack : String(e))); }
     });
   });
 

@@ -505,6 +505,7 @@ impl TcpSocketTransport {
             queued_messages: 0,
             terminal: None,
             graceful_teardown: false,
+            close_flushed: Arc::default(),
             #[cfg(test)]
             history: Vec::new(),
         }));
@@ -839,6 +840,7 @@ struct SendState {
     /// The pump has handed its final frame to TCP (or is already
     /// half-closing) and owns a graceful TCP teardown from here on.
     graceful_teardown: bool,
+    close_flushed: Arc<(Mutex<bool>, std::sync::Condvar)>,
     #[cfg(test)]
     history: Vec<TerminalStep>,
 }
@@ -1008,6 +1010,20 @@ impl MessageSender for TcpSender {
             },
         )
         .map_err(CommandQueueError::host_error)
+    }
+
+    fn wait_close(&self, timeout: Duration) -> bool {
+        let progress = self
+            .state
+            .lock()
+            .expect("WebSocket sender poisoned")
+            .close_flushed
+            .clone();
+        let (lock, changed) = &*progress;
+        let (flushed, _) = changed
+            .wait_timeout_while(lock.lock().unwrap(), timeout, |done| !*done)
+            .unwrap();
+        *flushed
     }
 
     fn buffered_amount(&self) -> usize {
@@ -1611,6 +1627,9 @@ fn release_terminal(
         // deliverable, so a caller dropping the socket on that result never
         // races the pump into a resetting shutdown.
         send.graceful_teardown = true;
+        let (flushed, changed) = &*send.close_flushed;
+        *flushed.lock().unwrap() = true;
+        changed.notify_all();
         #[cfg(test)]
         send.history.push(TerminalStep::CloseSent);
         if let Some(terminal) = send.terminal.as_mut() {

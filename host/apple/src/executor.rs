@@ -149,8 +149,12 @@ impl Executor {
         self.core.resume_ordered()
     }
     /// Let go of the work for tickets the runner no longer holds.
-    pub fn forget(&self, held: impl Fn(u64) -> bool) {
-        self.core.forget(held);
+    pub fn forget(&self, held: impl Fn(u64) -> bool, suspending: bool) {
+        if suspending {
+            self.core.forget_before_suspend(held);
+        } else {
+            self.core.forget(held);
+        }
     }
     /// The uploads let go that had begun to go out, for
     /// `Runner::uploads_started` (LLP 1016.000 D10).
@@ -229,7 +233,7 @@ pub trait Io {
     /// [`Executor::resume_ordered`].
     fn resume_ordered(&self) -> Vec<(u64, &'static str)>;
     /// [`Executor::forget`].
-    fn forget(&self, held: &dyn Fn(u64) -> bool);
+    fn forget(&self, held: &dyn Fn(u64) -> bool, suspending: bool);
     /// [`Executor::let_go_started`].
     fn let_go_started(&self, held: &dyn Fn(u64) -> bool) -> Vec<u64>;
     /// [`Executor::cancel`].
@@ -273,8 +277,8 @@ impl Io for Executor {
     fn resume_ordered(&self) -> Vec<(u64, &'static str)> {
         Executor::resume_ordered(self)
     }
-    fn forget(&self, held: &dyn Fn(u64) -> bool) {
-        Executor::forget(self, held)
+    fn forget(&self, held: &dyn Fn(u64) -> bool, suspending: bool) {
+        Executor::forget(self, held, suspending)
     }
     fn let_go_started(&self, held: &dyn Fn(u64) -> bool) -> Vec<u64> {
         Executor::let_go_started(self, held)

@@ -64,7 +64,8 @@ extension ExactSession {
     /// and this generation's `onLine` reading is known.
     func tellPageSoon() {
         guard booted, state != .destroyed else { return }
-        guard dataPreparing, let reads = readsOnLineKnown, reads.generation == generation, !Owner.shared.isServingMain else { return tellPage() }
+        // A freeze releases streams and stops sequences before the lifecycle callback returns.
+        guard !PageFacts.frozen, dataPreparing, let reads = readsOnLineKnown, reads.generation == generation, !Owner.shared.isServingMain else { return tellPage() }
         #if canImport(UIKit)
         if view?.window?.windowScene?.activationState != .foregroundActive { presenter.supersedePress() }
         #endif

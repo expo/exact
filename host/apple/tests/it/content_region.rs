@@ -1089,6 +1089,7 @@ fn native_region_publication_excludes_popovers_through_open_close_and_resize() {
     let block = exact_kernel::HostBlock {
         width: exact_kernel::BlockAxis::Region(780.),
         height: exact_kernel::BlockAxis::Region(540.),
+        tactic: Default::default(),
     };
     let measured = host.measure_block(pop, block).unwrap();
     assert_eq!(measured.used.0, 390.);
@@ -1280,6 +1281,7 @@ fn a_popover_transfers_between_native_publication_and_ordinary_views() {
             let block = exact_kernel::HostBlock {
                 width: exact_kernel::BlockAxis::Region(780.),
                 height: exact_kernel::BlockAxis::Region(540.),
+                tactic: Default::default(),
             };
             wire = host.set_blocks(&[(pop, Some(block))]);
             projection_complete(&mut host, &mut wire);

@@ -62,6 +62,7 @@ mod compression;
 mod crypto;
 mod door;
 mod engine;
+mod launch;
 mod module_work;
 mod native;
 mod native_storage;
@@ -108,6 +109,11 @@ use watch::{Watch, Watched};
 use wire::outcome_to_json;
 
 type NativeFactory = fn(&str) -> Box<dyn NativeModule>;
+
+/// The module's journal lines since the last take: the runtime's own
+/// (`None`), those it wrote through the console among them, and the app's
+/// `console` lines, each with the method that wrote it.
+pub(crate) type Logs = Vec<(Option<exact_runner::Console>, String)>;
 
 /// The seam ABI this executor speaks. ABI 2 adds Canvas 2D's `draw` and
 /// `surfaces` (LLP 1056 D1); a module without them still reports 1, and
@@ -295,6 +301,8 @@ struct HostState {
     kept: Option<u64>,
     /// The bake's module ([`Module::inspect`]): storage refuses as `bake`.
     baking: bool,
+    /// The settings a launch may give this module: its grants' `env.launch` names (LLP 1153.002).
+    launch: Vec<String>,
     /// A replacement candidate must answer successfully before it can be installed.
     validating: bool,
     readonly_secrets: bool,
@@ -365,7 +373,7 @@ pub struct Module {
     /// Where a test holds compressions (`Module::hold_compressions`).
     compression_hold: Option<std::sync::Arc<storage::Gate>>,
     document_owner: u64,
-    logs: Vec<String>,
+    logs: Logs,
     overruns: u32,
     /// The Canvas 2D roster the bake read (LLP 1056 D1), known before the
     /// engine loads.
@@ -416,6 +424,7 @@ impl Module {
     ) -> Module {
         let grants = grants.into();
         let auth_callback = exact_runner::auth::carrier_callback(&grants, None);
+        let launch = (exact_runner::grants::launch_names(&grants).map(str::to_owned)).collect();
         let module = Module {
             revision: std::sync::OnceLock::new(),
             bytecode: bytecode.into(),
@@ -432,6 +441,7 @@ impl Module {
             directories: None,
             host: Box::new(HostState {
                 auth_callback,
+                launch,
                 ..HostState::default()
             }),
             native_factory: None,
@@ -547,10 +557,13 @@ impl Module {
         let watch = template.watch.clone();
         let native_slot = template.native_slot.clone();
         let secrets = template.host.secrets.clone();
+        let launch = template.host.launch.clone();
         Box::new(move || {
             let mut module = Module::new(bytecode, app_id, grants)
                 .with_agent_seed(agent_seed)
                 .with_preloads(preloads);
+            // A render's template reads no launch's value (`render_web`), nor does its instance.
+            module.host.launch = launch;
             // Before `activate`, which loads: a worker's answers wait for
             // their storage (LLP 1097 D6).
             module.main_thread = false;
@@ -621,9 +634,9 @@ impl Module {
         self.install(engine)?;
         let took_ms = started.elapsed().as_secs_f64() * 1e3;
         if took_ms > SLOW_LOAD_MS {
-            self.logs.push(format!(
+            self.logs.push((None, format!(
                 "the module's top level took {took_ms:.0} ms to evaluate, and every answer waits for it after first pixel: compute what a source needs in that source, or once on its first call"
-            ));
+            )));
         }
         Ok(())
     }
@@ -875,6 +888,15 @@ impl Module {
     /// The module's `console` lines since the last take — for the runner's
     /// `logs` (LLP 1012).
     pub fn take_logs(&mut self) -> Vec<String> {
+        self.take_lines()
+            .into_iter()
+            .map(|(_, line)| line)
+            .collect()
+    }
+
+    /// [`Module::take_logs`], each `console` line with the method that wrote
+    /// it (LLP 1027.009 D1).
+    pub(crate) fn take_lines(&mut self) -> Logs {
         if let Some(engine) = self.engine.as_mut() {
             self.logs.extend(engine.take_log());
         }

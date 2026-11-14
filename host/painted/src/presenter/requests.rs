@@ -794,6 +794,10 @@ impl<D: DataSource> Presenter<D> {
         }
     }
 
+    pub(crate) fn reader_requests_pending(&self) -> bool {
+        !self.requests.queued.is_empty()
+    }
+
     /// The requests queued since the shell last took them, each once, as
     /// words: for each its kind, its id, the count of words that follow,
     /// and those words. `None` when nothing is queued.

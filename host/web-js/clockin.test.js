@@ -18,7 +18,7 @@ midi({}, true);
 transport({});
 
 const ticks = (from, interval, n) => Array.from({ length: n }, (_, k) => [from + k * interval, [0xF8]]);
-const change = () => { Sounds.gate(); Sounds.stood(); };
+const change = () => { const pending = Sounds.gate(); Sounds.committed(pending); Sounds.stood(pending); };
 const now = byte => Sounds.clockIn([[clock.now, [byte]]]);
 
 test('MIDI grants use Rust whitespace and keep FEFF significant', () => {

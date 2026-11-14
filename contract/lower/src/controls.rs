@@ -1088,7 +1088,7 @@ fn face_counts(
                             if tag == "text" {
                                 matches!(r, StyleId::FontSize | StyleId::FontWeight | StyleId::TextColor | StyleId::WhiteSpace | StyleId::LineClamp | StyleId::TextAlign)
                             } else {
-                                matches!(r, StyleId::TintColor | StyleId::FontSize | StyleId::FontWeight)
+                                matches!(r, StyleId::TintColor | StyleId::FontSize | StyleId::FontWeight | StyleId::SymbolRendering)
                             }
                         }),
                         _ => false,

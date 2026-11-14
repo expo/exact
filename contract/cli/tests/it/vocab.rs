@@ -139,6 +139,35 @@ fn a_handler_leads_with_the_action_it_calls() {
     assert!(!out.contains("`selectionchange=act` calls"), "{out}");
 }
 
+/// The same signature as data, for a tool that types a handler without
+/// reading prose: `params`, and `record` when the event has one.
+#[test]
+fn a_handler_names_its_parameters_and_record_as_data() {
+    let all: Value = serde_json::from_str(&stdout(&vocab(&["--json", "--all"]))).unwrap();
+    let handler = |name: &str| {
+        (all["attributes"].as_array().unwrap().iter())
+            .find(|a| a["name"] == name)
+            .unwrap_or_else(|| panic!("no {name}"))
+            .clone()
+    };
+    let press = handler("press");
+    assert_eq!(
+        (&press["params"], &press["record"]),
+        (&serde_json::json!([]), &serde_json::json!("MouseEvent"))
+    );
+    let scroll = handler("scroll");
+    assert_eq!(
+        scroll["params"],
+        serde_json::json!([
+            { "name": "scrollLeft", "type": "number" },
+            { "name": "scrollTop", "type": "number" },
+        ])
+    );
+    // A handler whose parameters depend on its element has neither.
+    let change = handler("change");
+    assert!(change.get("params").is_none() && change.get("calls").is_none());
+}
+
 /// LLP 1116.009 D6: a builder guessed a colour role (tip-splitter), so a colour property's entry lists the roles it takes:
 /// Exact's, written `-exact-<role>`, and CSS's system colours by name; a property that is not a colour lists none.
 #[test]

@@ -1,4 +1,6 @@
-// Run by `test` or `verify`, which start server.ts, the API's stand-in, for the whole run. A fetch fault names a
+// `test` and `verify` restart server.ts, the API's stand-in, empty for each test. Remote servers stay shared.
+// Only `test` and `agent --test` share an ancestor's server, saying so; `verify` refuses an answering local server,
+// including an ancestor's. A fetch fault names a
 // path under the API (`/planets`), so it follows API_BASE_URL wherever it points.
 test "the table sorts by the column pressed, and the other way when pressed again"
   clock data

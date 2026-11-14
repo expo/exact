@@ -28,6 +28,7 @@ fn main() {
         "engine_receipt.rs",
         "src/shim.cc",
         "src/console.js",
+        "src/launch.js",
         "src/pure.js",
         "src/standard.js",
         "src/streams.js",
@@ -137,7 +138,8 @@ fn main() {
         );
     };
 
-    // Ibex's abort binding captures console.error at installation.
+    // Ibex's abort binding captures its exception reporter at installation:
+    // console.js's `reportError`, the runtime's line.
     compile(&manifest.join("src/console.js"), &out.join("console.hbc"));
 
     // Ibex installs PURE | CRYPTO | ABORT before Exact's trusted policy
@@ -147,6 +149,7 @@ fn main() {
     // through prelude.js, in this order (host/web-js/glue.mjs `MODULE_PRELUDE`).
     let prelude = [
         "src/pure.js",
+        "src/launch.js",
         "src/standard.js",
         "src/streams.js",
         "src/binary.js",
@@ -160,6 +163,7 @@ fn main() {
         "src/reply.js",
         "src/prelude.js",
         "src/process.js",
+        // Last: it deletes console.js's hand-offs to the files above.
         "src/intl.js",
     ]
     .iter()
@@ -270,6 +274,8 @@ fn main() {
         "outlive",
         "kept-json",
         "nul-byte",
+        "runtime-lines",
+        "native-init",
     ] {
         let source = manifest.join(format!("tests/fixtures/{name}.ts"));
         println!("cargo:rerun-if-changed={}", source.display());

@@ -517,8 +517,8 @@ export function sessionInput(s, { carrier, host, timing, touch, app }) {
       const ticket = ticketOf(target) ?? heldTicket(pending, target);
       if (op === 'tap') return s.landed(await s.op({ op, ticket, choice: String(value) }));
       // A picker's answer is files on this machine (LLP 1069.002 D9): each
-      // made absolute here, where the host copies it from; the browser is
-      // handed the bytes, as a real picker hands it a File.
+      // made absolute here. The browser and Android receive bytes: Android
+      // cannot read a path on the driver's machine.
       const held = pending.find(p => p.ticket === ticket);
       // An export's answer is where the copy goes (LLP 1069.010 D3): a
       // path on this machine; the browser hands back the bytes to write.
@@ -565,7 +565,7 @@ export function sessionInput(s, { carrier, host, timing, touch, app }) {
           `type ${target}: no such file ${missing}${spaced ? `; \`type @\` takes paths apart at each space, and \`pick ${target} ${JSON.stringify(String(value).trim())}\` keeps a path with a space whole` : ''}`,
         );
       const req = { op, ticket, text: paths.join('\n') + '\n' };
-      if (host === 'web')
+      if (host === 'web' || host === 'android')
         req.files = paths.map(p => ({ name: basename(p), bytes: readFileSync(p).toString('base64') }));
       return s.landed(await s.op(req));
     },

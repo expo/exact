@@ -809,3 +809,56 @@ test('adding and removing preload regenerates native shells with the baked acces
     assert.equal(readFileSync(source, 'utf8'), before);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }, 30000);
+
+test('Android may declare its own package without changing the shared app identity', async () => {
+  const { readManifest, androidPackageId, nativeManifestMetadata } = await import('./app.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'manifest-android-id-'));
+  const save = id => writeFileSync(resolve(dir, 'app.json'), JSON.stringify({
+    name: 'Identity', app: { id: 'com.example.ios', name: 'Identity' }, host: { android: { id } },
+  }));
+  try {
+    save('com.example.android_app');
+    const manifest = readManifest(dir, 'identity');
+    assert.equal(manifest.host.android.id, 'com.example.android_app');
+    assert.equal(manifest.app.id, 'com.example.ios');
+    assert.equal(androidPackageId(manifest), 'com.example.android_app');
+    const { androidAssociation } = await import('../host/web/association.mjs');
+    const certificates = [Array(32).fill('AB').join(':')];
+    manifest.host.android.certificates = certificates;
+    assert.deepEqual(androidAssociation(manifest), {
+      relation: ['delegate_permission/common.get_login_creds'],
+      target: { namespace: 'android_app', package_name: 'com.example.android_app', sha256_cert_fingerprints: certificates },
+    });
+    assert.equal(nativeManifestMetadata(manifest, 'android').host.id, 'com.example.android_app');
+    assert.equal(nativeManifestMetadata(manifest, 'ios').app.id, 'com.example.ios');
+    save(undefined);
+    assert.equal(androidPackageId(readManifest(dir, 'identity')), 'com.example.ios');
+    const shared = { app: { id: 'com.example.shared-app' } };
+    assert.equal(androidPackageId(shared), 'com.example.shared_app');
+    assert.equal(androidAssociation(shared).target.package_name, 'com.example.shared_app');
+    for (const id of ['', 'single', 'com.example.1app', 'com.example.android-app', null, 42]) {
+      save(id);
+      assert.throws(() => readManifest(dir, 'identity'), /host.android.id/);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('the auth fixture origin associates the selected Android package and shared Apple identity', async () => {
+  const { associationFiles } = await import('../apps/auth-fixture/origin.mjs');
+  const certificates = [Array(32).fill('AB').join(':')];
+  const manifest = {
+    id: 'https://example.com/', app: { id: 'com.example.shared-app' },
+    host: { ios: { team: 'TEAM' }, android: { id: 'com.example.android', certificates } },
+  };
+  for (const [id, expected] of [['com.example.android', 'com.example.android'], [undefined, 'com.example.shared_app']]) {
+    manifest.host.android.id = id;
+    const files = associationFiles(manifest);
+    assert.deepEqual(files['assetlinks.json'], [{
+      relation: ['delegate_permission/common.get_login_creds'],
+      target: { namespace: 'android_app', package_name: expected, sha256_cert_fingerprints: certificates },
+    }]);
+    assert.deepEqual(files['apple-app-site-association'], {
+      webcredentials: { apps: ['TEAM.com.example.shared-app', 'SIMULATORX.com.example.shared-app'] },
+    });
+  }
+});

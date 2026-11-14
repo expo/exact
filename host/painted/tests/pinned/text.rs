@@ -343,11 +343,10 @@ fn line_height_resolves_zero_and_paragraph_minimum_in_the_painted_cache() {
         (LineHeight::Length(25.25), 25.25),
         (LineHeight::Number(0.0), 0.0),
     ] {
-        let style = StyleProps {
-            font_size: 16.0,
-            line_height,
-            ..StyleProps::default()
-        };
+        let style = StyleProps::default().with_rows(|rows| {
+            rows.font_size = 16.0;
+            rows.line_height = line_height;
+        });
         let mut spec = exact_painted::paint::text_spec(&style, "Hello");
         let measured = engine.measure(&spec, AxisOffer::MaxContent);
         assert!(
@@ -368,15 +367,13 @@ fn normal_paragraph_preserves_fractional_explicit_child_boxes() {
     use exact_kernel::{AxisOffer, StyleProps};
     pin_font();
     let mut engine = exact_painted::text::TextEngine::new();
-    let style = StyleProps {
-        font_size: 16.0,
-        ..StyleProps::default()
-    };
+    let style = StyleProps::default().with_rows(|rows| {
+        rows.font_size = 16.0;
+    });
     // A preserved segment break makes the second line (CSS; LLP 1053 G5).
-    let preserved = StyleProps {
-        white_space: exact_kernel::WhiteSpace::PreWrap,
-        ..style.clone()
-    };
+    let preserved = style.clone().with_rows(|rows| {
+        rows.white_space = exact_kernel::WhiteSpace::PreWrap;
+    });
     for (text, count) in [("Child", 1.0), ("First\nSecond", 2.0)] {
         let mut spec = exact_painted::paint::text_spec(&preserved, text);
         spec.runs[0].line_height = Some(60.25);
@@ -398,11 +395,10 @@ fn fixed_line_height_keeps_each_inline_fonts_shared_baseline_extents() {
     use exact_kernel::{AxisOffer, LineHeight, StyleProps};
     pin_font();
     let mut engine = exact_painted::text::TextEngine::new();
-    let style = StyleProps {
-        font_size: 20.0,
-        line_height: LineHeight::Length(20.0),
-        ..StyleProps::default()
-    };
+    let style = StyleProps::default().with_rows(|rows| {
+        rows.font_size = 20.0;
+        rows.line_height = LineHeight::Length(20.0);
+    });
     let mut spec = exact_painted::paint::text_spec(&style, "Larger");
     spec.runs[0].size = 40.0;
     let measured = engine.measure(&spec, AxisOffer::MaxContent);

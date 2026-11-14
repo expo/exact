@@ -61,10 +61,9 @@ fn unsupported_height_retires_only_height_and_numeric_readoption_keeps_registrat
             .unwrap()
             .unwrap();
         h.hold_update(held.token, Value::scalar(250.), 0.).unwrap();
-        let mut patch = StyleProps {
-            height,
-            ..Default::default()
-        };
+        let mut patch = StyleProps::default().with_rows(|rows| {
+            rows.height = height;
+        });
         patch.mask.set(StyleId::Height);
         assert!(style(&mut h, patch).is_none());
         assert_eq!(h.height_owner(), owner);
@@ -76,10 +75,9 @@ fn unsupported_height_retires_only_height_and_numeric_readoption_keeps_registrat
             .unwrap()
             .is_none());
         assert!(!h.hold_end(held.token, HoldEnd::Cancel, f64::NAN).unwrap());
-        let mut patch = StyleProps {
-            height: Dimension::Points(100.),
-            ..Default::default()
-        };
+        let mut patch = StyleProps::default().with_rows(|rows| {
+            rows.height = Dimension::Points(100.);
+        });
         patch.mask.set(StyleId::Height);
         assert!(style(&mut h, patch).is_none());
         assert_eq!(h.kernel().node(panel).unwrap().frame.height, 100.);
@@ -96,10 +94,9 @@ fn transition_clear_while_held_preserves_presentation_then_snaps_latest_target()
     h.set_height_owner(Some(panel)).unwrap();
     let held = h.hold_begin(panel, Property::Height, 0.).unwrap().unwrap();
     h.hold_update(held.token, Value::scalar(250.), 0.).unwrap();
-    let mut patch = StyleProps {
-        height: Dimension::Points(100.),
-        ..Default::default()
-    };
+    let mut patch = StyleProps::default().with_rows(|rows| {
+        rows.height = Dimension::Points(100.);
+    });
     patch.mask.set(StyleId::Height);
     patch.mask.set(StyleId::Transition);
     assert!(style(&mut h, patch).is_none());
@@ -140,10 +137,9 @@ fn failed_layout_preserves_publication_and_recovery_reuses_current_projection() 
     h.hold_update(held.token, Value::scalar(250.), 0.).unwrap();
     let frame = h.kernel().node(panel).unwrap().frame;
     fail.set(true);
-    let mut patch = StyleProps {
-        width: Dimension::Points(100.),
-        ..Default::default()
-    };
+    let mut patch = StyleProps::default().with_rows(|rows| {
+        rows.width = Dimension::Points(100.);
+    });
     patch.mask.set(StyleId::Width);
     assert!(style(&mut h, patch).is_some());
     assert_eq!(h.kernel().node(panel).unwrap().frame, frame);
@@ -164,10 +160,9 @@ fn failed_begin_does_not_leave_a_token_the_caller_never_received() {
     h.set_height_owner(Some(panel)).unwrap();
     let key = h.height_owner().unwrap();
     fail.set(true);
-    let mut patch = StyleProps {
-        width: Dimension::Points(100.),
-        ..Default::default()
-    };
+    let mut patch = StyleProps::default().with_rows(|rows| {
+        rows.width = Dimension::Points(100.);
+    });
     patch.mask.set(StyleId::Width);
     assert!(style(&mut h, patch).is_some());
     let frame = h.kernel().node(panel).unwrap().frame;

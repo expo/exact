@@ -18,7 +18,7 @@ test('a proof leaves ordinary builds usable and repins changed logic and added a
     child.on('close', code => code === 0 ? ok(log) : fail(new Error(`exit ${code}: ${args.join(' ')}\n${log.slice(-8000)}`)));
   });
   const prove = async args => {
-    const log = await run(['exact.mjs','prove',...args]);
+    const log = await run([resolve(import.meta.dir,'prove.mjs'),app,...args]);
     const root = log.match(/^ARTIFACTS (.+)$/m)[1];
     return {root, pins:JSON.parse(readFileSync(resolve(app,'pins.json'),'utf8'))};
   };
@@ -27,16 +27,17 @@ test('a proof leaves ordinary builds usable and repins changed logic and added a
     createGame(app, undefined, {assets:true});
     // Keep the regression about build identity; the starter's gameplay has its own proof.
     writeFileSync(resolve(app,'proof.mjs'), `import {resolve} from 'node:path';
-import {tmpdir} from 'node:os';
 import {proof} from ${JSON.stringify(resolve(import.meta.dir,'proof.mjs'))};
 if (import.meta.main) await proof(import.meta, async ({open,pin,pinSave,out}) => {
   const session = await open(); await session.tap('play');
   const world = session.world('world'); pin(0, await world.snapshot());
   const save = resolve(out,'start.world'); await world.save(save); pinSave('start',save);
+  // Repinning requires reconstruction samples after the world advances.
+  await world.run(100);
   await session.close();
 });\n`);
     const first = await prove([]);
-    await run(['exact.mjs','web-build']);
+    await run([resolve(import.meta.dir,'../host/web/build.mjs'),app]);
     const source = resolve(app,'logic/src/lib.rs');
     const original = readFileSync(source,'utf8');
     expect(original).toContain('Transform::at(-4.0, 0.5, -3.0)');
@@ -47,7 +48,7 @@ if (import.meta.main) await proof(import.meta, async ({open,pin,pinSave,out}) =>
     cpSync(resolve(app,'art/crate.gltf'),resolve(app,'art/second.gltf'));
     const added = await prove(['--repin']);
     expect(Object.keys(JSON.parse(readFileSync(resolve(added.root,'src/.baked-assets.json'),'utf8')))).toContain('second.model');
-    await run(['exact.mjs','web-build']);
+    await run([resolve(import.meta.dir,'../host/web/build.mjs'),app]);
     passed = true;
   } finally {
     if (passed) rmSync(parent,{recursive:true,force:true});

@@ -1020,6 +1020,9 @@ pub(crate) fn check_prop_value(
     ty: &Ty,
 ) -> Result<(), LowerError> {
     media::check(name, value, span)?;
+    if prop == PropId::AccessibilityRole {
+        crate::roles::check(value)?;
+    }
     let want = tags::prop_ty(prop);
     if prop == PropId::Popover
         && matches!(ty, Ty::Option(inner) if matches!(**inner, Ty::String | Ty::Enum(_) | Ty::Unknown))

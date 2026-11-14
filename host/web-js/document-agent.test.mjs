@@ -335,8 +335,8 @@ export const answer = (name: string, [value]: number[]): any => {
 const STATUS_BRANCHES = [
   { names: ['plain', 'discardedPlain'], body: `
 head title="Plain"` },
-  { names: ['storeStatus', 'discardedStatus', 'discardedHeldStatus', 'discardedLooseStatus', 'discardedDetachedStatus', 'discardedClient', 'discardedTimerStatus', 'discardedLateTimerStatus', 'backgroundSync', 'backgroundHeldSync', 'backgroundAnswer', 'backgroundHeldAnswer', 'backgroundClient'], body: `
-if stored
+  { names: ['sharedStatus', 'discardedStatus', 'discardedHeldStatus', 'discardedLooseStatus', 'discardedDetachedStatus', 'discardedClient', 'discardedTimerStatus', 'discardedLateTimerStatus', 'backgroundSync', 'backgroundHeldSync', 'backgroundAnswer', 'backgroundHeldAnswer', 'backgroundClient'], body: `
+if status
   head title="Missing" status=404
 else
   head title="Checking"
@@ -531,6 +531,8 @@ function statusView(names) {
   return `    main${rooted.length ? ` navigationBack="" navigationKey=${key}` : ''}
 ${body}
       text page.label testId="loaded"
+      text mode testId="mode"
+      text (pending(discarded) ? "pending" : "answered") testId="discarded"
 `;
 }
 
@@ -552,7 +554,7 @@ test.each([
     ['tabSelection', '/tab-selection', 404, true],
     ['panelRole', '/panel-role', 404, true], ['panelId', '/panel-id', 404, true], ['tabControls', '/tab-controls', 404, true],
   ]],
-  ['navigation waits for store-driven status revalidation', [['storeStatus', '/store-status', 404, true]]],
+  ['navigation waits for a status answer resolved by another source', [['sharedStatus', '/shared-status', 404, true]]],
   ['navigation waits for a discarded request that can change status', [['discardedStatus', '/discarded-status', 404, true]]],
   ['navigation waits for discarded held requests', [['discardedHeldStatus', '/discarded-held-status', 404, true]]],
   ['navigation waits for fetches started in a plain continuation', [
@@ -632,7 +634,7 @@ routes nav
   virtual "/virtual" render=request activate=never
   inactive "/inactive" render=request activate=never
   conditionalInactive "/conditional-inactive" render=request activate=never
-  storeStatus "/store-status" render=request activate=never
+  sharedStatus "/shared-status" render=request activate=never
   discardedStatus "/discarded-status" render=request activate=never
   discardedHeldStatus "/discarded-held-status" render=request activate=never
   discardedLooseStatus "/discarded-loose-status" render=request activate=never
@@ -672,8 +674,8 @@ component App
   state pressed = false
   state selected = "first"
   resource page = page(top(nav).name) as shape Page else empty(key="first")
-  resource stored = stored() as shape bool
-  resource mode = mode() as shape string
+  resource status = status(top(nav).name) as shape bool
+  resource mode = mode(top(nav).name) as shape string
   resource discarded = discarded(mode, top(nav).name) as shape number
   resource initialized = initialized(top(nav).name) as shape number
   action flip
@@ -682,27 +684,37 @@ component App
 ${statusView(cases.map(([name]) => name))}`);
     writeFileSync(resolve(dir, 'app.ts'), `import type { Answer } from './app.contract.d.ts';
 export const appId = 'test.status-document';
-export const grants = ${JSON.stringify('net.fetch ' + api.url.origin + '\nsecret.keep status\nsecret.keep mode')};
-export const answer: Answer = (source, args, store) => {
+export const grants = ${JSON.stringify('net.fetch ' + api.url.origin)};
+// A render's store refuses writes (LLP 1048.000 D9). Shared answers let another source settle status and replace
+// a discarded answer's arguments without using storage.
+let finishStatus: (value: boolean) => void, initialize: (value: string) => void;
+const status = new Promise<boolean>(done => { finishStatus = done; });
+const mode = new Promise<string>(done => { initialize = done; });
+// Adoption can carry the replacement mode; its fresh module still starts its work once.
+let started = false;
+export const answer: Answer = (source, args) => {
   const [name] = args;
-  if (source === 'stored') { return (store.get('status') === 'missing') as never; }
-  if (source === 'mode') { return (store.get('mode') ?? 'old') as never; }
+  if (source === 'status') {
+    return (name === 'sharedStatus' || String(name).startsWith('discarded') || String(name).startsWith('background') ? status : false) as never;
+  }
+  if (source === 'mode') { return (String(name).startsWith('discarded') ? mode : 'old') as never; }
   if (source === 'initialized') {
-    if (String(name).startsWith('discarded')) { store.set('mode', 'new'); }
+    if (String(name).startsWith('discarded')) { initialize('new'); }
     return 0 as never;
   }
   if (source === 'discarded') {
-    const [mode, page] = args;
+    const [, page] = args;
     const background = String(page).startsWith('background');
-    if ((!String(page).startsWith('discarded') && !background) || mode !== 'old') { return 0 as never; }
+    if ((!String(page).startsWith('discarded') && !background) || started) { return 0 as never; }
+    started = true;
     if (page === 'discardedTimerStatus' || page === 'discardedLateTimerStatus') {
-      return new Promise(done => setTimeout(() => { store.set('status', 'missing'); done(0); }, page === 'discardedTimerStatus' ? 0 : 10_000)) as never;
+      return new Promise(done => setTimeout(() => { finishStatus(true); done(0); }, page === 'discardedTimerStatus' ? 0 : 10_000)) as never;
     }
     if (page === 'discardedHeldStatus' || page === 'discardedLooseStatus') { setTimeout(() => {}, 10_000); }
     const request = () => fetch(${JSON.stringify(api.url.origin)} + '/' + page, { cache: 'no-store', exactHeld: !['discardedStatus', 'backgroundSync', 'backgroundAnswer'].includes(String(page)) });
     const loose = page === 'discardedLooseStatus' || page === 'discardedDetachedStatus';
     const answer = (loose ? Promise.resolve().then(request) : request()).then(() => {
-      store.set('status', 'missing');
+      finishStatus(true);
       return 0;
     });
     if (page === 'discardedDetachedStatus' || background) {
@@ -716,7 +728,7 @@ export const answer: Answer = (source, args, store) => {
   }
   return (async () => {
     const value = await (await fetch(${JSON.stringify(api.url.origin)} + '/' + name, { cache: 'no-store' })).json();
-    if (name === 'storeStatus') { store.set('status', 'missing'); }
+    if (name === 'sharedStatus') { finishStatus(true); }
     return value;
   })() as never;
 };
@@ -754,6 +766,11 @@ export const answer: Answer = (source, args, store) => {
         if (!options.timer) { await waitForData().catch(e => { begun.dispose(); throw e; }); }
         const reply = await begun.finish(options.deadline);
         expect({ status: reply.status, settled: reply.settled }).toEqual({ status: expected, settled: options.settled ?? false });
+        expect(reply.failed).toEqual([]);
+        if (name.startsWith('discarded')) {
+          expect(reply.html).toMatch(/data-testid="mode"[^>]*>new</);
+          expect(reply.html).toMatch(/data-testid="discarded"[^>]*>answered</);
+        }
         if (!options.timer) { waiting.get(name)(); waiting.delete(name); }
         if (options.recover) {
           expiredPages.set(path, reply);
@@ -782,6 +799,10 @@ export const answer: Answer = (source, args, store) => {
       if (name === 'cachedOk') { expect(response.headers()['cache-control']).toBe('public, max-age=0, s-maxage=60'); }
       await page.locator('[data-testid="loaded"]').waitFor({ state: 'attached' });
       expect(await page.locator('[data-testid="loaded"]').textContent()).toBe(name + ' loaded');
+      if (name.startsWith('discarded')) {
+        expect(await page.locator('[data-testid="mode"]').textContent()).toBe('new');
+        expect(await page.locator('[data-testid="discarded"]').textContent()).toBe('answered');
+      }
       if (name === 'client') {
         await page.locator('[data-testid="flip"]').click();
         await page.waitForFunction(() => document.title === 'Client missing');
