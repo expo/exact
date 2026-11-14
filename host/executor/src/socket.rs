@@ -49,51 +49,71 @@ pub(crate) fn close(shared: &Shared, tickets: Option<&[u64]>) -> Vec<u64> {
     closed
 }
 
-/// How long a released socket's close frame has to reach the wire before
-/// its stream is aborted: the portable transport queues it, and an abort
-/// shuts the connection at once.
+/// A released socket gets one bounded opportunity to finish its close. A host
+/// about to suspend waits on the same transport confirmation before returning.
 const CLOSE_GRACE: std::time::Duration = std::time::Duration::from_millis(250);
 
-/// Abort the work let go, each with its stream's ticket when it is one: a
-/// socket is closed with 1000 first (unless a mutation already closed it),
-/// and aborted after [`CLOSE_GRACE`] (the reader ends sooner when the far
-/// side answers the close).
-pub(crate) fn release(shared: &Shared, aborts: Vec<(Option<u64>, AbortController)>) {
+pub(crate) fn release(
+    shared: &Shared,
+    aborts: Vec<(Option<u64>, AbortController)>,
+    suspending: bool,
+) {
     let streams: Vec<u64> = aborts.iter().filter_map(|(t, _)| *t).collect();
-    let _ = close(shared, Some(&streams));
-    let sockets: Vec<u64> = {
-        let open = shared.sockets.lock().unwrap();
+    // Retain senders before close: the reader may finish and remove its socket
+    // while URLSession is still completing the handshake.
+    let senders: Vec<_> = {
+        let sockets = shared.sockets.lock().unwrap();
         streams
-            .into_iter()
-            .filter(|t| open.contains_key(t))
+            .iter()
+            .filter_map(|ticket| {
+                sockets
+                    .get(ticket)
+                    .map(|socket| (*ticket, socket.sender.clone()))
+            })
             .collect()
     };
-    let (later, now): (Vec<_>, Vec<_>) =
-        (aborts.into_iter()).partition(|(t, _)| t.is_some_and(|t| sockets.contains(&t)));
-    for (_, abort) in now {
-        abort.abort();
+    let _ = close(shared, Some(&streams));
+    let mut later = Vec::new();
+    for (ticket, abort) in aborts {
+        if let Some((_, sender)) = senders.iter().find(|(t, _)| Some(*t) == ticket) {
+            later.push((sender.clone(), abort));
+        } else {
+            abort.abort();
+        }
     }
     if later.is_empty() {
         return;
     }
-    let aborts: Vec<AbortController> = later.into_iter().map(|(_, abort)| abort).collect();
-    let deferred = aborts.clone();
-    let spawned = std::thread::Builder::new()
-        .name("exact-socket-close".into())
-        .spawn(move || {
-            std::thread::sleep(CLOSE_GRACE);
-            deferred.iter().for_each(AbortController::abort);
-        });
-    // No thread: abort now rather than never.
-    if spawned.is_err() {
-        aborts.iter().for_each(AbortController::abort);
+    let fallback: Vec<_> = later.iter().map(|(_, abort)| abort.clone()).collect();
+    let deadline = std::time::Instant::now() + CLOSE_GRACE;
+    let finish = move || {
+        for (sender, abort) in later {
+            let _ =
+                sender.wait_close(deadline.saturating_duration_since(std::time::Instant::now()));
+            abort.abort();
+        }
+    };
+    if suspending {
+        finish();
+    } else {
+        // A normal gate change does not block the owner's thread on network I/O.
+        if std::thread::Builder::new()
+            .name("exact-socket-close".into())
+            .spawn(finish)
+            .is_err()
+        {
+            fallback.iter().for_each(AbortController::abort);
+        }
     }
 }
 
 /// What became of one frame.
 enum Frame {
     Queued,
-    /// Nobody wants more: forgotten, retired, ended.
+    /// Forgotten: release owns the close and its bounded abort, even before
+    /// it has marked the socket closing or submitted the close frame.
+    Released,
+    /// Retired or ended.
     Gone,
     /// The queue is full.
     Overflow,
@@ -167,7 +187,7 @@ pub(super) fn read(
                 quiet.heard();
             }
             match frame(shared, ticket, m, limit) {
-                Frame::Queued => {}
+                Frame::Queued | Frame::Released => {}
                 // Released, its close on the way: frames are dropped, and the
                 // socket is kept until the far side answers or the abort comes,
                 // so the close is not cut off.
@@ -204,19 +224,14 @@ fn frame(shared: &Shared, ticket: u64, message: Message, limit: usize) -> Frame 
     if state.retired {
         return Frame::Gone;
     }
-    let Some((lane, elapsed_ms)) = state
-        .running
-        .iter()
-        .find(|run| run.ticket == ticket && !run.forgotten)
-        .map(|run| {
-            (
-                run.lane,
-                run.started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
-            )
-        })
-    else {
+    let Some(run) = state.running.iter().find(|run| run.ticket == ticket) else {
         return Frame::Gone;
     };
+    if run.forgotten {
+        return Frame::Released;
+    }
+    let lane = run.lane;
+    let elapsed_ms = run.started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
     let size = |m: &Message| m.binary.as_ref().map_or(m.data.len(), Vec::len);
     let (frames, bytes) = state.completed[lane]
         .iter()

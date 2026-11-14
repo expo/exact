@@ -18,6 +18,7 @@
 //   (clockin.js's follower); midi.js hands its clock messages to
 //   `Sounds.clockIn` before it dispatches a delivery.
 import { journal, clock, Sounds, Mutations, Resources, R, data, drive, untracked, Refusal } from './rt.js';
+import { watchPage } from './facts.js';
 import { plain } from './format.js';
 import { Midi } from './midi.js';
 import { follower, feed, tempo, position, LOOKAHEAD as CLOCK_AHEAD, DRIFT, TICKS_PER_SECOND } from './clockin.js';
@@ -387,8 +388,15 @@ const look = q => {
   return { on, key, args: on ? q.args() : [] };
 };
 Sounds.transportAnswer = Answer;
+let Frozen = false;
 Sounds.gate = () => { Pending = null; if (Seqs.length) Pending = untracked(() => Seqs.map(look)); };
-Sounds.stood = () => { const seen = Pending; Pending = null; if (seen) stood(seen); else T()?.flush(); };
+Sounds.stood = () => {
+  const seen = Pending; Pending = null;
+  const before = answerKey(), freeze = Sounds.frozen && !Frozen;
+  Frozen = Sounds.frozen === true;
+  if (seen) stood(seen); else T()?.flush();
+  if (freeze && Owner != null) { stop(clock.now, 'background'); after(before); }
+};
 // The beat at `t` while a sequence plays, by the segment that holds it; −1 while stopped or waiting (a MIDI input's `beat`).
 // Following a clock, by the one segment hits are issued under: its segments do not join (D9).
 Sounds.beatAt = t => Owner == null || State === 'waiting' || !Segments.length ? -1 : beatAt(Follow ? seg() : Segments.findLast(g => g.at <= t) ?? Segments[0], t);
@@ -399,6 +407,7 @@ Sounds.clockIn = msgs => { const before = answerKey(); follow(msgs, clock.now); 
 /** Every `sequence name when gate key=key` (LLP 1125 D2), `[gate, key, args, ended, name]` each, `args` making `play`'s six
  * arguments: all read first, then armed at mount where a gate holds, as the runner's boot does, so a refusal arms none. */
 export function sequence(list) {
+  watchPage(true);
   for (const [gate, key, args, ended, name] of list) Seqs.push({ gate, key: key || null, args, ended, name, on: false, kt: undefined });
   stood(untracked(() => Seqs.map(look)));
 }

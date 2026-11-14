@@ -968,7 +968,7 @@ fn the_background_stops_it_until_its_gate_turns_true_again() {
     r.act("start", vec![]).unwrap();
     r.advance(1000.0).unwrap();
     let page = crate::Page {
-        suspended: true,
+        frozen: true,
         ..r.page()
     };
     assert!(r.set_page(page).unwrap().is_some());
@@ -981,7 +981,7 @@ fn the_background_stops_it_until_its_gate_turns_true_again() {
         .count();
     assert_eq!(waiting, 0);
     let page = crate::Page {
-        suspended: false,
+        frozen: false,
         ..r.page()
     };
     r.set_page(page).unwrap();
@@ -1020,14 +1020,14 @@ fn a_refused_background_stop_stops_nothing() {
     let before = (voices(&r), r.transport().answer());
     let page = crate::Page {
         hidden: true,
-        suspended: true,
+        frozen: true,
         ..r.page()
     };
     assert!(r.set_page(page).is_err());
     assert!(r.transport().playing());
     assert_eq!((voices(&r), r.transport().answer()), before);
     assert!(r.take_sounds().is_empty(), "no End reached the output");
-    assert!(!r.page().suspended);
+    assert!(!r.page().frozen);
 }
 
 /// Review A1: a refused commit with a keyed sequence and no gated task puts

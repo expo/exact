@@ -1209,7 +1209,10 @@ impl<D: DataSource> Bridge<D> {
     /// The page's facts changed or became known (LLP 1069.000 D2): bit 0
     /// hidden, bit 1 offline, bit 2 a share sheet.
     pub fn set_page(&mut self, bits: u32) -> u32 {
-        let page = exact_runner::Page::from_bits(bits);
+        // Apple still reports its old audio-category prediction in bit 7.
+        // Use the bake default until its producer observes execution eligibility
+        // (LLP 1069.000 D2); the Mac stage also restores D4 sequence stopping.
+        let page = exact_runner::Page::from_bits(bits & !128);
         let out = self
             .host
             .as_mut()

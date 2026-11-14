@@ -1144,3 +1144,57 @@ fn a_stream_asked_at_readiness_is_pending_only_until_its_first_message() {
     }
     assert!(r.in_flight().is_empty() && !r.has_pending());
 }
+
+#[test]
+fn frozen_page_releases_a_gated_stream_in_the_transition_commit() {
+    let plan = contract::compile(
+        r#"shape Page
+  frozen: bool
+component App
+  resource page = exactPage() as shape Page
+  resource feed = progress(1) when not page.frozen as shape number else empty()
+  view
+    text `${page.frozen} ${feed}`
+"#,
+    )
+    .unwrap();
+    let mut r = Runner::boot(
+        plan,
+        Scripted::default(),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    assert_eq!(value(&r, "page"), Value::record(vec![Value::Bool(false)]));
+    let first = one_stream(&mut r);
+    r.fulfill(first, message("5", 0)).unwrap();
+    let hidden = crate::Page {
+        hidden: true,
+        ..r.page()
+    };
+    assert!(
+        r.set_page(hidden).unwrap().is_none(),
+        "visibility alone has no reader"
+    );
+    assert!(r.holds(first), "a hidden desktop keeps its socket");
+    let before = r.kernel().epoch();
+    let frozen = crate::Page {
+        frozen: true,
+        ..hidden
+    };
+    let receipt = r.set_page(frozen).unwrap().unwrap();
+    assert_eq!(receipt.epoch, before + 1);
+    assert_eq!(value(&r, "page"), Value::record(vec![Value::Bool(true)]));
+    assert!(!r.holds(first) && r.streams().is_empty());
+    assert!(r.take_requests().is_empty());
+    assert_eq!(r.fulfill(first, message("99", 0)).unwrap(), None);
+    assert_eq!(value(&r, "feed"), Value::Number(5.));
+    assert!(r.set_page(frozen).unwrap().is_none());
+    r.set_page(hidden).unwrap().unwrap();
+    assert_ne!(
+        one_stream(&mut r),
+        first,
+        "resume asks again while still hidden"
+    );
+}

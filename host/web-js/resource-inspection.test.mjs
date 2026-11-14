@@ -865,3 +865,46 @@ test.each(['promise', 'stream', 'build', 'ready'])('a %s answer retained for pre
     expect(await page.evaluate(() => fixture.lines())).toHaveLength(1);
   } finally { await browser.close(); server.stop(true); }
 });
+
+test.each([false, true])('freezing releases a gated stream in its page commit (agent: %s)', async agent => {
+  const server = runtimeServer(), browser = await suiteBrowser(), page = await browser.newPage();
+  try {
+    await page.goto(server.url.href + (agent ? '?agent' : ''));
+    await page.evaluate(async () => {
+      const rt = await import('/host/web-js/rt.js'), facts = await import('/host/web-js/facts.js');
+      rt.clock.agent = true;
+      facts.page({page:[['frozen']], online:[['onLine']]});
+      const controllers = [], asked = [];
+      const answer = rt.data.reserved.exactPage;
+      rt.data.reserved.exactPage = (...args) => { asked.push(args[2]); return answer(...args); };
+      rt.data.answer = () => ({stream: (deliver, controller) => {
+        controllers.push(controller);
+        deliver({v:7});
+        return new Promise(() => {});
+      }});
+      let pageFact, feed;
+      rt.mount(root => {
+        pageFact = rt.res('page', 'exactPage', () => [], undefined, undefined, {frozen:'b'}, [false]);
+        const online = rt.res('online', 'exactPage', () => [], undefined, undefined, {onLine:'b'}, [true]);
+        online();
+        const args = Object.assign(() => [], {gate: () => !pageFact()[0]});
+        feed = rt.res('feed', 'feed', args, undefined, undefined, 'n', 0);
+        rt.hd(root, {headTitle: () => `${pageFact()[0]} ${feed()}`});
+      });
+      window.fixture = {rt, pageFact, feed, controllers, asked};
+    });
+    await page.waitForFunction(() => fixture.feed() === 7);
+    const freeze = async value => page.evaluate(([agent, value]) => {
+      const epoch = fixture.rt.clock.epoch;
+      if (agent) exact.page.prefer({frozen:value});
+      else document.dispatchEvent(new Event(value ? 'freeze' : 'resume'));
+      return {epoch: fixture.rt.clock.epoch - epoch, frozen:fixture.pageFact()[0],
+        ticket:!!fixture.feed.r.ticket, aborted:fixture.controllers[0].signal.aborted,
+        title:document.title, streams:fixture.controllers.length};
+    }, [agent, value]);
+    expect(await freeze(true)).toEqual({epoch:1, frozen:true, ticket:false, aborted:true, title:'true 7', streams:1});
+    expect(await freeze(true)).toMatchObject({epoch:0, frozen:true, ticket:false});
+    expect(await page.evaluate(() => fixture.asked.filter(n => n === 'online'))).toHaveLength(1);
+    expect(await freeze(false)).toMatchObject({frozen:false, ticket:true, streams:2});
+  } finally { await browser.close(); server.stop(true); }
+}, 30000);

@@ -190,15 +190,15 @@ macro_rules! canvas_jni_extensions {
             with(|h| h.orientation_applied(&applied, conflict == JNI_TRUE, line.as_deref()));
         }
 
-        /// The activity started (`false`) or stopped (`true`): the page's
-        /// `visibilityState` (LLP 1133.010 §9).
+        /// Activity visibility and process execution eligibility (LLP 1133.033 D2).
         #[no_mangle]
         pub unsafe extern "system" fn Java_dev_exact_canvas_Native_hidden(
             _env: *mut JNIEnv,
             _class: jclass,
             hidden: jboolean,
+            eligible: jboolean,
         ) {
-            with(|h| h.page_hidden(hidden == JNI_TRUE));
+            with(|h| h.page_hidden(hidden == JNI_TRUE, eligible == JNI_TRUE));
         }
 
         /// Waits up to `ms` for the store's writes, which the store's own

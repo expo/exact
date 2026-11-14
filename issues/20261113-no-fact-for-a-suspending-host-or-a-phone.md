@@ -51,3 +51,14 @@ second, first check whether the root `tablist`'s presenter, or a route's
 the guide where it discusses adapting to the device. If a device-idiom fact
 is still needed after that, publish it through `exactSurface` per LLP 1101.002
 P11, and record the decision in LLP 1023 D10.
+
+## Partial implementation
+
+`exactPage().frozen` exposes the dynamic execution transition, with web
+Page Lifecycle and Android Activity producers, desktop defaults, runner and JS
+stream cancellation, and `prefer frozen`. Apple reports false until its Mac
+stage replaces the audio-category prediction with actual background execution
+eligibility. That stage must restore sequence stopping with the corrected
+producer, add Apple `prefer` coverage, and qualify socket release on a device.
+The issue stays open for that work and the navigation consumer's tree review;
+no device-idiom field is added.
