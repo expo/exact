@@ -927,7 +927,8 @@ component App
                 .unwrap()
                 .or_else(|| DataSource::background(&mut module, &store));
         }
-        // `b`'s let-go append, then the live `b`'s behind it.
+        // The live `b`'s append is not a background round; wait for its write.
+        assert!(context.wait(Duration::from_secs(30)));
         assert_eq!(log(), "a;b;b;", "the let-go `b`'s append was dropped");
         drop(module);
         std::fs::remove_dir_all(root).unwrap();

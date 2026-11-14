@@ -29,12 +29,12 @@ The verified install lives under `~/.cargo/hermes-lean-sys/`. Exact sets
 `HERMES_LEAN_SYS_OFFLINE=1` in `.cargo/config.toml`, so an ordinary build
 neither downloads a bundle nor compiles Hermes; a missing install fails with
 the one-time command. `HERMES_LEAN_SYS_DIR` remains a development override.
-The v4 set supports macOS, Linux, Windows, iOS devices and the universal iOS
-Simulator, plus tvOS devices and the arm64 tvOS Simulator. Exact selects
-Ibex's English `intl` data tier on Linux, not `intl-all-locales`; Windows
-uses OS ICU and Apple keeps Hermes's OS-backed Intl. Android's published v5
-bundle builds without Intl. A bundle whose receipt enables Intl and binds the
-English ICU tier selects that tier and Ibex's Intl group. A Rust-only app needs no engine at run time.
+The v6 set supports macOS, Linux, Windows, Android arm64, iOS devices and the
+universal iOS Simulator, plus tvOS devices and the arm64 tvOS Simulator. Exact
+selects Ibex's English `intl` data tier on Linux and Android, not
+`intl-all-locales`; Windows uses OS ICU and Apple keeps Hermes's OS-backed Intl.
+Android's receipt enables Intl and binds the English ICU tier. A Rust-only app
+needs no engine at run time.
 `exact setup` installs the host bundle and, on macOS, the iOS and tvOS Simulator
 bundles, and the iOS device bundle where Xcode's iphoneos SDK is installed.
 `exact setup --check` runs Ibex's own offline resolver validation over that
@@ -1720,7 +1720,7 @@ The globals beyond the language are the browser's on the web and these on Hermes
 | `setTimeout`, `clearTimeout` | Inside an answer, on the app's clock (below) |
 | `queueMicrotask`, `Promise` | |
 | `scheduler.yield()` | Ends the answer's turn; it goes on in a new one with a budget of its own (below). Outside an answer's turn it resolves at once; for an answer let go it rejects with an `AbortError`. `scheduler.postTask` refuses |
-| `Intl.NumberFormat`, `Intl.DateTimeFormat`, `Intl.Collator`, `localeCompare`, `toLocaleString` | Android's published v5 bundle has no Intl. With an Intl-enabled bundle carrying receipt-bound English ICU data, Hermes's ICU backend supplies `Collator` and Ibex supplies `NumberFormat` and `DateTimeFormat`. Date formatting needs an explicit timestamp. No `Intl.PluralRules`, `RelativeTimeFormat`, `ListFormat`, `Segmenter` or `DisplayNames` (Apple's engine; Linux's is built `--intl`). `Intl.Locale` is the prelude's on every Hermes host (the engine has none): a tag parsed and canonicalized as Chrome does, its options and getters, and `getWeekInfo()` with Chrome's `{firstDay, weekend}` from CLDR's week data, by the tag's region, its `-u-rg-`, or its language's likely region (two-letter languages and a few others; another reads Monday and a Saturday-Sunday weekend), and `-u-fw-`. It has no `maximize`, `minimize` or other `get…()` list, does not canonicalize aliases (`iw` stays `iw`, `en-840` keeps `840`, and its week is then the default, Monday, where Chrome's is `en-US`'s), a formatter given a `Locale` object rather than its string uses the default locale, and `structuredClone` copies a `Locale` as `{}` where Chrome refuses it. Apple's `ja-JP` long date puts a space before the weekday (`10月6日 火曜日`, Chrome `10月6日火曜日`). Apple's engine has no `notation: "compact"`: the prelude formats its short display as Chrome does for a decimal in en, en-GB, en-IN, de, fr, fr-CA, es, es-MX, it, pt, pt-PT, nl, sv, da, nb, fi, pl, ru, uk, cs, tr, ja, zh, zh-TW, ko, hi, he, id, th and vi (and their regions); `compactDisplay: "long"`, another locale or a compact currency is printed in full and said once in the logs. Apple's engine rounds a tie to even and ignores `roundingMode` (`$0.82` for 0.825 dollars, Chrome `$0.83`); the prelude rounds the number first, as Chrome does: from its shortest digits, by the formatter's `roundingMode` (half away from zero unless it names another), which `resolvedOptions()` then reports; a compact it prints in full rounds so too, to its style's digits (`$0.83` for a compact 0.825 dollars). A `unit` keeps the engine's rounding, since that engine converts it to the locale's unit (`0.622mi` for 1 kilometer). Apple's engine has no `formatToParts` |
+| `Intl.NumberFormat`, `Intl.DateTimeFormat`, `Intl.Collator`, `localeCompare`, `toLocaleString` | On Android, the pinned v6 bundle carries receipt-bound English ICU data: Hermes's ICU backend supplies `Collator` and Ibex supplies `NumberFormat` and `DateTimeFormat`. Date formatting needs an explicit timestamp. No `Intl.PluralRules`, `RelativeTimeFormat`, `ListFormat`, `Segmenter` or `DisplayNames` (Apple's engine; Linux's is built `--intl`). `Intl.Locale` is the prelude's on every Hermes host (the engine has none): a tag parsed and canonicalized as Chrome does, its options and getters, and `getWeekInfo()` with Chrome's `{firstDay, weekend}` from CLDR's week data, by the tag's region, its `-u-rg-`, or its language's likely region (two-letter languages and a few others; another reads Monday and a Saturday-Sunday weekend), and `-u-fw-`. It has no `maximize`, `minimize` or other `get…()` list, does not canonicalize aliases (`iw` stays `iw`, `en-840` keeps `840`, and its week is then the default, Monday, where Chrome's is `en-US`'s), a formatter given a `Locale` object rather than its string uses the default locale, and `structuredClone` copies a `Locale` as `{}` where Chrome refuses it. Apple's `ja-JP` long date puts a space before the weekday (`10月6日 火曜日`, Chrome `10月6日火曜日`). Apple's engine has no `notation: "compact"`: the prelude formats its short display as Chrome does for a decimal in en, en-GB, en-IN, de, fr, fr-CA, es, es-MX, it, pt, pt-PT, nl, sv, da, nb, fi, pl, ru, uk, cs, tr, ja, zh, zh-TW, ko, hi, he, id, th and vi (and their regions); `compactDisplay: "long"`, another locale or a compact currency is printed in full and said once in the logs. Apple's engine rounds a tie to even and ignores `roundingMode` (`$0.82` for 0.825 dollars, Chrome `$0.83`); the prelude rounds the number first, as Chrome does: from its shortest digits, by the formatter's `roundingMode` (half away from zero unless it names another), which `resolvedOptions()` then reports; a compact it prints in full rounds so too, to its style's digits (`$0.83` for a compact 0.825 dollars). A `unit` keeps the engine's rounding, since that engine converts it to the locale's unit (`0.622mi` for 1 kilometer). Apple's engine has no `formatToParts` |
 | `console` | To the runner's logs after each answer and reply, including refused calls; available through the agent's `logs` on native hosts. Outside a drive the web writes it to the browser's console too, and an Android development build to logcat under the tag `exact-app` (`adb logcat -s exact-app`). An Android release build and the other native hosts keep it for `logs` alone |
 
 A `net.fetch` line names one origin (`https://api.example.com`), every host
@@ -1823,17 +1823,15 @@ an independent reply settles as it arrives. Leave writes, and any read whose
 parse depends on an earlier reply, in the queue. Storage steps and native
 continuations cannot opt out of it.
 
-A Hermes data module has a 64 MiB heap limit by default. With an
-exception-on-OOM engine bundle (v6 or later), terminal heap exhaustion fails
-its outstanding requests and tool invocations with
+A Hermes data module has a 64 MiB heap limit by default. Terminal heap exhaustion
+fails its outstanding requests and tool invocations with
 `held more than the 64 MiB a data module's heap may hold`. The executor
 destroys that runtime, including its timers, streams and queued storage
 work. The next new request or canvas call loads a fresh runtime; failed
 requests are not retried automatically. Other modules keep running. A native
 storage write already submitted may finish, so an OOM does not establish
 whether it committed. Its completion is discarded, and queued JavaScript
-writes never start. The pinned v5 engine still aborts on heap exhaustion;
-this recovery requires the v6 pin.
+writes never start.
 
 On Hermes each turn of an answer has 100 ms of its own time: its call, or its
 resumption after a `fetch`, storage step or yield it awaited, until it awaits
@@ -3865,13 +3863,13 @@ replacement app.
 
 Linux uses the same installer command at the top of this reference with its
 Rust target triple. Exact selects Ibex's `intl` feature and `INTL` group on Linux
-and Android (Android requires a rebuilt bundle, as above):
+and Android:
 `en`/`en-US` and complete currency data are present, and unsupported locales
 fall back to `en-US`; it does not select `intl-all-locales`. The verified
 bundle supplies both VM archives, all three ICU data tiers and the matching
 compiler, while the feature links the English tier. Apple does not install
 Ibex's `INTL` group because Hermes retains OS-backed Intl there. iOS, tvOS and
-Windows use their pinned v4 bundles and must not fall back to the former
+Windows use their pinned v6 bundles and must not fall back to the former
 sibling-Ibex/private-cache recipes. tvOS builds set a 17.0 deployment target,
 above the bundle's 15.0 minimum. The normal native
 build captures bundle inputs under the `hermes-lean-sys/` bake receipt root.
