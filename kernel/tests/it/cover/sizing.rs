@@ -138,6 +138,7 @@ fn nested_positioned_boxes_and_host_blocks_take_clearance_once() {
     k.set_host_block(
         4,
         Some(HostBlock {
+            tactic: Default::default(),
             width: BlockAxis::Is(600.),
             height: BlockAxis::Is(500.),
         }),

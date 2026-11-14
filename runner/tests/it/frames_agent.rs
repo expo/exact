@@ -177,6 +177,7 @@ fn a_blocks_root_is_answered_in_its_block() {
     let kernel = runner.kernel_mut();
     kernel.apply(0, 0, &ops).unwrap();
     let sheet = HostBlock {
+        tactic: Default::default(),
         width: BlockAxis::AtMost(300.),
         height: BlockAxis::AtMost(200.),
     };

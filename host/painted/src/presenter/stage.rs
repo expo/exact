@@ -491,6 +491,7 @@ impl<D: DataSource> Presenter<D> {
                 };
                 let tallest = sheet.heights[sheet.heights.len() - 1];
                 HostBlock {
+                    tactic: Default::default(),
                     width: BlockAxis::Is(width),
                     height: BlockAxis::Is(tallest.round()),
                 }
@@ -504,6 +505,7 @@ impl<D: DataSource> Presenter<D> {
                     continue;
                 };
                 HostBlock {
+                    tactic: Default::default(),
                     width: BlockAxis::Is(frame.width),
                     height: BlockAxis::Is(frame.height),
                 }

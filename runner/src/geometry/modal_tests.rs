@@ -353,6 +353,7 @@ fn a_native_content_viewport_scrolls_the_root_without_moving_its_clip() {
         .set_host_block(
             route,
             Some(exact_kernel::HostBlock {
+                tactic: Default::default(),
                 width: exact_kernel::BlockAxis::Is(200.0),
                 height: exact_kernel::BlockAxis::Is(200.0),
             }),

@@ -212,13 +212,13 @@ final class PositionAreaTests: XCTestCase {
     func testPlaceMeasuresEachOptionInItsRegion() {
         let block = CGRect(x: 0, y: 0, width: 400, height: 600), anchor = CGRect(x: 300, y: 100, width: 40, height: 20)
         // Six 50x18 boxes in a wrapping row: fit-content in the region's width.
-        func measure(_ region: CGSize) -> PositionArea.Measured {
+        func measure(_ region: CGSize, _ tactic: HostBlock.Tactic) -> PositionArea.Measured {
             let across = max(1, min(6, Int(region.width / 50)))
             return .init(size: CGSize(width: CGFloat(across * 50), height: CGFloat((6 + across - 1) / across * 18)))
         }
         var history = PositionArea.History(), asked: [CGSize] = []
         let placed = PositionArea.place("bottom span-right", anchor: anchor, fallbacks: "flip-inline", history: &history, in: block) {
-            asked.append($0); return measure($0)
+            asked.append($0); return measure($0, $1)
         }
         XCTAssertEqual(placed, PositionArea.Placement(origin: CGPoint(x: 300, y: 120), size: CGSize(width: 100, height: 54),
                                                       region: CGRect(x: 300, y: 120, width: 100, height: 480)), "the base, narrowed")
@@ -238,7 +238,7 @@ final class PositionAreaTests: XCTestCase {
         let block = CGRect(x: 0, y: 0, width: 400, height: 600), anchor = CGRect(x: 300, y: 100, width: 40, height: 20)
         var history = PositionArea.History()
         func at(_ width: CGFloat) -> PositionArea.Placement {
-            PositionArea.place("bottom span-right", anchor: anchor, fallbacks: "flip-inline", history: &history, in: block) { _ in
+            PositionArea.place("bottom span-right", anchor: anchor, fallbacks: "flip-inline", history: &history, in: block) { _, _ in
                 .init(size: CGSize(width: width, height: 20))
             }
         }
@@ -248,24 +248,21 @@ final class PositionAreaTests: XCTestCase {
         XCTAssertEqual(history.choice, 0)
     }
 
-    /// Each option flips the margins the layout resolved: `flip-start` makes
-    /// a top margin a left one, so a 120-point box with a 100-point top
-    /// margin fits the flipped region as 220 by 120 (Astra round 1); and a
-    /// percentage margin is what the layout made of it, an offset and no
-    /// part of the box.
-    func testPlaceFlipsTheMarginsTheLayoutResolved() {
+    /// The measurer receives the tactic and returns transformed margins.
+    /// Placement uses them once, including percentages resolved in the region.
+    func testPlaceUsesTheTransformedMarginsTheLayoutResolved() {
         let block = CGRect(x: 0, y: 0, width: 400, height: 600)
         var history = PositionArea.History()
         let flipped = PositionArea.place("bottom span-right", anchor: CGRect(x: 100, y: 450, width: 40, height: 20),
-                                         margins: .init(top: 100), fallbacks: "flip-start", history: &history, in: block) { _ in
-            .init(size: CGSize(width: 120, height: 120), margins: .init(top: 100))
+                                         margins: .init(top: 100), fallbacks: "flip-start", history: &history, in: block) { _, tactic in
+            .init(size: CGSize(width: 120, height: 120), margins: tactic == .none ? .init(top: 100) : .init(left: 100))
         }
         XCTAssertEqual(history.choice, 1)
         XCTAssertEqual(flipped, PositionArea.Placement(origin: CGPoint(x: 240, y: 450), size: CGSize(width: 120, height: 120),
-                                                       region: CGRect(x: 140, y: 450, width: 260, height: 150)))
+                                                       region: CGRect(x: 140, y: 450, width: 260, height: 150), tactic: PositionArea.tactic("flip-start", rtl: false)))
         var fresh = PositionArea.History()
         let percent = PositionArea.place("bottom span-right", anchor: CGRect(x: 150, y: 100, width: 40, height: 20),
-                                         history: &fresh, in: block) { region in
+                                         history: &fresh, in: block) { region, _ in
             .init(size: CGSize(width: 100, height: 20), margins: .init(left: region.width / 10))
         }
         XCTAssertEqual(percent.origin, CGPoint(x: 175, y: 120), "10% of the 250-point region")
@@ -283,7 +280,7 @@ final class PositionAreaTests: XCTestCase {
         func at(_ scroll: CGPoint) -> PositionArea.Placement {
             // The anchor at (100, 100) unscrolled, moved up and left by the scroll.
             let anchor = CGRect(x: 100 - scroll.x, y: 100 - scroll.y, width: 40, height: 20)
-            return PositionArea.place("bottom span-right", anchor: anchor, fallbacks: "flip-block", scroll: scroll, history: &history, in: block) { region in
+            return PositionArea.place("bottom span-right", anchor: anchor, fallbacks: "flip-block", scroll: scroll, history: &history, in: block) { region, _ in
                 .init(size: CGSize(width: region.width / 2, height: region.height / 2))
             }
         }
@@ -298,14 +295,14 @@ final class PositionAreaTests: XCTestCase {
         let flipped = at(CGPoint(x: 0, y: -300))
         XCTAssertEqual(history.choice, 1)
         XCTAssertEqual(flipped, PositionArea.Placement(origin: CGPoint(x: 100, y: 200), size: CGSize(width: 150, height: 200),
-                                                       region: CGRect(x: 100, y: 0, width: 300, height: 400)))
+                                                       region: CGRect(x: 100, y: 0, width: 300, height: 400), tactic: PositionArea.tactic("flip-block", rtl: false)))
         XCTAssertEqual(history.scroll, CGPoint(x: 0, y: -300), "the scroll it was chosen at")
         // No fallback: the box keeps its size and follows its anchor out of the window, aligned
         // where it was chosen, then moved (Astra's round 3 re-check).
         var alone = PositionArea.History()
         for scroll in [CGPoint.zero, CGPoint(x: 0, y: -300)] {
             let anchor = CGRect(x: 100 - scroll.x, y: 100 - scroll.y, width: 40, height: 20)
-            let placed = PositionArea.place("bottom span-right", anchor: anchor, fallbacks: "none", scroll: scroll, history: &alone, in: block) { region in
+            let placed = PositionArea.place("bottom span-right", anchor: anchor, fallbacks: "none", scroll: scroll, history: &alone, in: block) { region, _ in
                 .init(size: CGSize(width: region.width / 2, height: region.height / 2))
             }
             XCTAssertEqual(placed.origin, CGPoint(x: 100, y: 120 - scroll.y))
@@ -318,7 +315,7 @@ final class PositionAreaTests: XCTestCase {
             let anchor = CGRect(x: 100, y: 10 - scroll.y, width: 40, height: 20)
             let document = CGRect(x: 0, y: -scroll.y, width: 400, height: 2000)
             let placed = PositionArea.place("top span-right", anchor: anchor, fallbacks: "none", overflow: .absolute(page: document), scroll: scroll, pageScroll: scroll,
-                                            history: &page, in: block) { _ in .init(size: CGSize(width: 50, height: 100)) }
+                                            history: &page, in: block) { _, _ in .init(size: CGSize(width: 50, height: 100)) }
             XCTAssertEqual(placed.origin.y, -scroll.y, "at the page's top, as it scrolls")
         }
         // An anchor in a scroller of its own, the page still: aligned as chosen, it follows the anchor.
@@ -326,7 +323,7 @@ final class PositionAreaTests: XCTestCase {
         for scroll in [CGPoint.zero, CGPoint(x: 0, y: 20)] {
             let anchor = CGRect(x: 100, y: 60 - scroll.y, width: 40, height: 20)
             let placed = PositionArea.place("top span-right", anchor: anchor, fallbacks: "none", overflow: .absolute(page: CGRect(x: 0, y: 0, width: 400, height: 2000)),
-                                            scroll: scroll, history: &inner, in: block) { _ in .init(size: CGSize(width: 50, height: 100)) }
+                                            scroll: scroll, history: &inner, in: block) { _, _ in .init(size: CGSize(width: 50, height: 100)) }
             XCTAssertEqual(placed.origin.y, -scroll.y, "moved with the anchor")
         }
     }
@@ -354,6 +351,11 @@ final class PositionAreaTests: XCTestCase {
         XCTAssertEqual(asked, 5, "a moved stamp in the same batch measures again")
         XCTAssertNil(measure(3, refuse: true)); XCTAssertNil(measure(3, refuse: true))
         XCTAssertEqual(asked, 7, "a refusal is not kept")
+        _ = cache.measured(7, region, tactic: PositionArea.tactic("flip-start", rtl: false), batch: 3, stamp: 1) {
+            asked += 1; return .init(size: CGSize(width: 54, height: 100))
+        }
+        _ = measure(3)
+        XCTAssertEqual(asked, 9, "different tactics in the same region measure separately")
     }
 
     /// LLP 1021 D2: a box asked for at a point sits there; on an axis

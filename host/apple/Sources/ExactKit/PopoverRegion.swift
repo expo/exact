@@ -51,14 +51,14 @@ extension Presenter {
             return PositionArea.Placement(origin: origin, size: laid, region: bounds)
         }
         let at = PositionArea.place(placed.area, anchor: anchor, margins: margins, fallbacks: placed.fallbacks,
-                                    overflow: overflow, rtl: rtl, scroll: scroll, pageScroll: pageScroll, history: &history, in: bounds) { region in
+                                    overflow: overflow, rtl: rtl, scroll: scroll, pageScroll: pageScroll, history: &history, in: bounds) { region, tactic in
             guard let session = self.session else { return PositionArea.Measured(size: laid, margins: margins) }
             let stamp = session.runtime.layoutStamp()
-            return self.regionMeasures.measured(id, region, batch: session.appliedBatches, stamp: stamp) {
-                session.runtime.measureBlock(id, in: .region(region))?.box
+            return self.regionMeasures.measured(id, region, tactic: tactic, batch: session.appliedBatches, stamp: stamp) {
+                session.runtime.measureBlock(id, in: .region(region, tactic: tactic))?.box
             } ?? PositionArea.Measured(size: laid, margins: margins)
         }
-        tellRegion(id, .region(at.region.size), told: &told)
+        tellRegion(id, .region(at.region.size, tactic: at.tactic), told: &told)
         return at
     }
 
@@ -134,14 +134,14 @@ extension PositionArea {
     /// popover opens, and what the kernel answers for a region stands until
     /// then. A refusal is not kept.
     struct MeasureCache {
-        private struct Key: Hashable { let view: UInt32, width: CGFloat, height: CGFloat }
+        private struct Key: Hashable { let view: UInt32, width: CGFloat, height: CGFloat, tactic: HostBlock.Tactic }
         private var batch = -1, stamp: UInt64 = 0, kept: [Key: Measured] = [:]
 
         /// `view`'s measure in a region `region` big, asked of `measure` only
         /// when it hasn't been asked since the batch and stamp were these.
-        mutating func measured(_ view: UInt32, _ region: CGSize, batch: Int, stamp: UInt64, _ measure: () -> Measured?) -> Measured? {
+        mutating func measured(_ view: UInt32, _ region: CGSize, tactic: HostBlock.Tactic = .none, batch: Int, stamp: UInt64, _ measure: () -> Measured?) -> Measured? {
             if batch != self.batch || stamp != self.stamp { (self.batch, self.stamp, kept) = (batch, stamp, [:]) }
-            let key = Key(view: view, width: region.width, height: region.height)
+            let key = Key(view: view, width: region.width, height: region.height, tactic: tactic)
             if let known = kept[key] { return known }
             let answer = measure()
             if let answer { kept[key] = answer }

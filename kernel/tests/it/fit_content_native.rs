@@ -154,6 +154,7 @@ fn a_scrolling_routes_natural_height_ignores_its_block_and_preserves_layout() {
             k.set_host_block(
                 2,
                 Some(HostBlock {
+                    tactic: Default::default(),
                     width: BlockAxis::Is(390.0),
                     height: BlockAxis::Is(height),
                 }),

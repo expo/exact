@@ -1004,7 +1004,10 @@ uint32_t exact_intrinsics(ExactRuntime rt, size_t len);
 /* What native containers cover of boxes (LLP 1075.003 §3.5) under one
  * layout: LE records of (uint32 view, uint32 kind — 0 clears, 1 edges,
  * 2 whole — float top, right, bottom, left). Edges add to the box's
- * padding; a whole box is laid out as display: none. Kind 6 places a host
+ * padding; a whole box is laid out as display: none. Kind 4 gives a block:
+ * float width, height, width policy, height policy, then a u32 tactic
+ * (28 bytes): four two-bit side indices, top/right/bottom/left, low first;
+ * identity is 228. Kind 5 takes it back (24 bytes). Kind 6 places a host
  * block: float x, y, width, height, uint32 holding view, then float content
  * scroll offsets x and y (36 bytes including view and kind). Kind 13 uses
  * the same record for a scrollport, including at offset zero; kind 6 ignores
@@ -1019,8 +1022,9 @@ uint32_t exact_host_covers(ExactRuntime rt, size_t len);
  * position-area's region). The used width and height, the border box's
  * width and height, then the margins (top, right, bottom, left) as the layout
  * resolved them, eight LE floats in the output buffer, and 32; 0 when refused.
+ * The tactic uses kind 4's side permutation.
  * Not a batch: nothing is laid out, published or sent. */
-uint32_t exact_measure_block(ExactRuntime rt, uint32_t view, float width, float height, uint32_t width_policy, uint32_t height_policy);
+uint32_t exact_measure_block(ExactRuntime rt, uint32_t view, float width, float height, uint32_t width_policy, uint32_t height_policy, uint32_t tactic);
 /* A number that moves whenever exact_measure_block could answer otherwise
  * (a commit that changed something, a layout, a reset): a host keeps a
  * measure while it stands. Not a batch. */

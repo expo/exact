@@ -1145,8 +1145,8 @@ macro_rules! host {
         /// size, border box and margins, eight LE f32s, in the output buffer; 0 when refused.
         /// No batch.
         #[no_mangle]
-        pub extern "C" fn exact_measure_block(rt: u32, view: u32, width: f32, height: f32, width_policy: u32, height_policy: u32) -> u32 {
-            $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.measure_block(view, [width, height], [width_policy, height_policy]), |_| 0)
+        pub extern "C" fn exact_measure_block(rt: u32, view: u32, width: f32, height: f32, width_policy: u32, height_policy: u32, tactic: u32) -> u32 {
+            $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.measure_block(view, [width, height], [width_policy, height_policy], tactic), |_| 0)
         }
 
         /// What moves whenever a block measure could answer differently

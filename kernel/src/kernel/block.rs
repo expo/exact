@@ -64,6 +64,8 @@ impl BlockAxis {
 /// A containing block a host gives one node, in points.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct HostBlock {
+    /// The selected position-try transformation, applied before sizing.
+    pub tactic: crate::position_try::BlockTactic,
     /// Its width.
     pub width: BlockAxis,
     /// Its height.
@@ -259,6 +261,7 @@ pub(crate) fn apply(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
         s.display = taffy::style::Display::None;
         return;
     }
+    block.tactic.apply(s);
     let _env = crate::style::LayoutEnv::set(arena.env());
     let in_flow = s.position != Position::Absolute;
     if s.position == Position::Static {
@@ -378,6 +381,7 @@ impl Kernel {
         let (env, lifted) = (arena.env(), &arena.top_layer_slots);
         let (width, height) = (env.viewport_width, env.viewport_height);
         let viewport = (width > 0.0 && height > 0.0).then_some(HostBlock {
+            tactic: Default::default(),
             width: BlockAxis::Fit(width),
             height: BlockAxis::Fit(height),
         });
