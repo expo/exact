@@ -155,6 +155,117 @@ fn an_earlier_304_answers_its_caller_without_renewing_over_a_refresh() {
 }
 
 #[test]
+fn dropping_a_validations_previous_entry_releases_its_retired_bytes() {
+    let mut wrong = Vec::new();
+    for asynchronous in [false, true] {
+        for status in [304, 503, 200] {
+            for withheld in [false, true] {
+                if status != 200 && !withheld {
+                    continue;
+                }
+                let server = Server::new();
+                let (core, woke) = server.core(asynchronous, true);
+                server.plan("/feed", Plan::new(200, &[("ETag", "\"old\"")], b"old"));
+                read(&core, &woke, &server, 1, "/feed");
+                let (release, held) = channel();
+                let redirected = status == 200;
+                let mut old = if redirected {
+                    Plan::new(302, &[("Location", "/other")], b"")
+                } else {
+                    Plan::new(status, FRESH, b"")
+                };
+                old.held = Some(held);
+                server.plan("/feed", old);
+                if redirected {
+                    server.plan("/other", Plan::new(200, FRESH, b"other"));
+                }
+                core.run(job(20, server.request("/feed")), None).unwrap();
+                server.seen(2);
+                assert_eq!(first(&server.headers(1), "if-none-match"), Some("\"old\""));
+                if withheld {
+                    server.plan("/feed", Plan::new(200, FRESH, b"new"));
+                    let mut refresh = job(10, server.request("/feed"));
+                    refresh.forced = true;
+                    core.run(refresh, None).unwrap();
+                    wait_for_reply(&core, 10);
+                    let state = core.shared.state.lock().unwrap();
+                    assert_eq!(state.cache.as_ref().unwrap().retired.len(), 1);
+                }
+                release.send(()).unwrap();
+                let (ticket, outcome, timing) = collect(&core, &woke);
+                assert_eq!(ticket, 20);
+                let Outcome::Response(reply) = outcome else {
+                    panic!("{outcome:?}");
+                };
+                assert_eq!(reply.status, if status == 304 { 200 } else { status });
+                if status == 304 {
+                    assert!(timing.cached);
+                    assert_eq!(reply.body, b"old");
+                }
+                if withheld {
+                    expect_reply(&core, &woke, 10, b"new");
+                }
+                let state = core.shared.state.lock().unwrap();
+                let cache = state.cache.as_ref().unwrap();
+                let live_bytes: usize = cache.entries.iter().map(|entry| entry.bytes).sum();
+                if cache.bytes != live_bytes || !cache.retired.is_empty() {
+                    wrong.push((asynchronous, status, withheld, cache.bytes, live_bytes));
+                }
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "retired entries still charged: {wrong:?}");
+}
+
+#[test]
+fn a_redirected_304_releases_retired_bytes_before_its_unconditional_retry() {
+    let mut wrong = Vec::new();
+    for asynchronous in [false, true] {
+        let server = Server::new();
+        let (core, woke) = server.core(asynchronous, true);
+        server.plan("/feed", Plan::new(200, &[("ETag", "\"old\"")], b"old"));
+        read(&core, &woke, &server, 1, "/feed");
+        let (release, held) = channel();
+        let mut redirect = Plan::new(302, &[("Location", "/other")], b"");
+        redirect.held = Some(held);
+        server.plan("/feed", redirect);
+        server.plan("/other", Plan::new(304, FRESH, b""));
+        core.run(job(20, server.request("/feed")), None).unwrap();
+        server.seen(2);
+        server.plan("/feed", Plan::new(200, FRESH, b"new"));
+        let mut refresh = job(10, server.request("/feed"));
+        refresh.forced = true;
+        core.run(refresh, None).unwrap();
+        wait_for_reply(&core, 10);
+        let (finish_retry, held) = channel();
+        let mut retry = Plan::new(200, FRESH, b"retry");
+        retry.held = Some(held);
+        server.plan("/feed", retry);
+        release.send(()).unwrap();
+        server.seen(5);
+        assert_eq!(first(&server.headers(4), "if-none-match"), None);
+        {
+            let state = core.shared.state.lock().unwrap();
+            let cache = state.cache.as_ref().unwrap();
+            let live_bytes: usize = cache.entries.iter().map(|entry| entry.bytes).sum();
+            if cache.bytes != live_bytes || !cache.retired.is_empty() {
+                wrong.push((asynchronous, cache.bytes, live_bytes));
+            }
+        }
+        finish_retry.send(()).unwrap();
+        expect_reply(&core, &woke, 20, b"retry");
+        expect_reply(&core, &woke, 10, b"new");
+        let (reply, cached) = read(&core, &woke, &server, 30, "/feed");
+        assert!(cached);
+        assert_eq!(reply.body, b"new");
+    }
+    assert!(
+        wrong.is_empty(),
+        "retry still charges retired entries: {wrong:?}"
+    );
+}
+
+#[test]
 fn a_read_asked_after_a_refresh_still_stores() {
     for asynchronous in [false, true] {
         for mode in [CacheMode::Default, CacheMode::Reload, CacheMode::NoCache] {

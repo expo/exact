@@ -239,6 +239,7 @@ pub(super) fn asked(state: &mut State, r: &RequestOut, work: bool) -> Option<Exc
     let exchange = (!work).then(|| exchange(&r.request, r.class)).flatten()?;
     if replacing(&r.request, r.class, r.forced, work).is_some() {
         // A refresh must survive older completions, even before they start (LLP 1162 D4).
+        super::preload::withhold_store(state.cache.as_mut().expect("enabled"), &r.request);
         for old in state
             .running
             .iter_mut()
@@ -526,8 +527,10 @@ pub(super) fn retry(state: &mut State, ticket: u64, status: u16, redirected: boo
         return false;
     }
     exchange.started = Instant::now();
-    if let Some(cache) = state.cache.as_mut().filter(|_| exchange.store) {
-        cache.drop_key(&exchange.key);
+    if let Some(cache) = state.cache.as_mut() {
+        if exchange.store {
+            cache.drop_key(&exchange.key);
+        }
         cache.collect();
     }
     true
@@ -558,6 +561,8 @@ pub(super) fn response(state: &mut State, ticket: u64, response: &mut Response, 
         if store {
             cache.drop_key(&key);
         }
+        drop(previous);
+        cache.collect();
         return;
     }
     if response.status == 304 {
@@ -597,6 +602,7 @@ pub(super) fn response(state: &mut State, ticket: u64, response: &mut Response, 
     }
     let preloads = previous.as_ref().map_or(0, |entry| entry.preloads);
     drop(previous);
+    cache.collect();
     store_response(
         cache, key, started, store, response, run.cached, preloads, now, wall,
     );
@@ -611,7 +617,11 @@ pub(super) fn store_preload(
     started: Instant,
     redirected: bool,
 ) {
-    if !redirected && eligible(request, RequestClass::Read) && request.cache != CacheMode::NoStore {
+    if cache.preloads[index].store
+        && !redirected
+        && eligible(request, RequestClass::Read)
+        && request.cache != CacheMode::NoStore
+    {
         store_response(
             cache,
             Key::of(request),
