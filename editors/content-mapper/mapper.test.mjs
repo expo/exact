@@ -119,6 +119,29 @@ test('a project reached through a linked directory imports its other file beside
   } finally { rmSync(link, { force: true }); rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('a file an app uses from a directory below it is built with that app', async () => {
+  const bin = process.env.EXACT_CONTRACT ?? resolve(root, 'target/debug/contract');
+  if (!existsSync(bin)) { console.log('skipped: no contract binary'); return; }
+  const { transform } = await import('./mapper.js');
+  const dir = mkdtempSync(resolve(root, 'target/content-mapper-test-'));
+  // The row has props, which no app's first component has, and reaches a file outside its own directory.
+  const row = 'use Label from "../shapes.contract"\ncomponent Row\n  props\n    label: string\n  view\n    text label\n';
+  mkdirSync(resolve(dir, 'lib/deep'), { recursive: true });
+  writeFileSync(resolve(dir, 'shapes.contract'), 'shape Label\n  text: string\n');
+  writeFileSync(resolve(dir, 'lib/row.contract'), row);
+  writeFileSync(resolve(dir, 'app.contract'), 'use Row from "./lib/row.contract"\ncomponent App\n  view\n    Row(label="a")\n');
+  // A file no app uses, below one: built alone, as before.
+  const alone = row.slice(row.indexOf('component'));
+  writeFileSync(resolve(dir, 'lib/deep/row.contract'), alone);
+  try {
+    const f = resolve(dir, 'lib/row.contract'), errors = (file, text) => transform(file, text, { contract: bin }).diagnostics;
+    expect(errors(f, row)).toEqual([]);
+    const broken = row.replace('text label', 'text nope'), [unsaved] = errors(f, broken);
+    expect(broken.slice(unsaved.start, unsaved.start + unsaved.length)).toBe('nope');
+    expect(errors(resolve(dir, 'lib/deep/row.contract'), alone).map(e => e.messageText.split(':')[0])).toContain('analyze-root-props');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('a file an app uses has the errors of the text the editor holds, not of the file as saved', async () => {
   const bin = process.env.EXACT_CONTRACT ?? resolve(root, 'target/debug/contract');
   if (!existsSync(bin)) { console.log('skipped: no contract binary'); return; }

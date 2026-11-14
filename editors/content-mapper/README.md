@@ -116,7 +116,8 @@ the repository's apps. They skip when `EXACT_TSC71` is not set.
 
 - Completion offers an enum attribute's values and nothing else: not attribute
   names, and nothing while the file has a syntax error.
-- A file an app uses is built with its `app.contract`: this file as the editor
+- A file an app uses is built with that app, the nearest `app.contract` beside or
+  above it whose sources include the file: this file as the editor
   holds it (`build --stdin-as`), the app's other files as saved.
 - A source is not renamed from a contract: its name is also the key of the
   function in `app.ts` that answers it.

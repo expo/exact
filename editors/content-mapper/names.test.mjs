@@ -253,6 +253,31 @@ for (const [name, kind, file] of [['realworld', 'state'], ['realworld', 'action'
     expect(r.uses[1]).toBe(r.uses[0]);
   }, 120_000);
 
+test('an import used by an alias is renamed where it is declared and where it is imported, and its alias stays', async () => {
+  if (!ready()) return;
+  const row = 'component Row\n  props\n    label: string\n  view\n    text label\n';
+  const main = 'use Row as TheirRow from "./row.contract"\ncomponent App\n  view\n    TheirRow(label="a")\n';
+  const p = project({ 'app.contract': main, 'row.contract': row }), f = p.file('app.contract'), g = p.file('row.contract'), server = await open(tsc, p.dir);
+  try {
+    // No name of the app meets the import's, so the compiler keeps its name.
+    expect(symbols(f).definitions.filter(d => d.kind === 'component').map(d => d.name)).toEqual(['App', 'Row']);
+    server.openFile(f); server.openFile(g);
+    const declared = [g, 1, 11, 14], imported = [f, 1, 5, 8];
+    // The rename is the same from the declaration and from the import that names it.
+    const renamed = async (file, line, character) => {
+      const answer = await server.request('textDocument/rename', { textDocument: { uri: pathToFileURL(file).href }, position: { line, character }, newName: 'Line' });
+      return Object.entries(answer?.changes ?? {}).flatMap(([uri, es]) => es.map(e => [fileURLToPath(uri), e.range.start.line + 1, e.range.start.character + 1, e.range.end.character + 1, e.newText]))
+        .concat((answer?.documentChanges ?? []).flatMap(c => c.edits.map(e => [fileURLToPath(c.textDocument.uri), e.range.start.line + 1, e.range.start.character + 1, e.range.end.character + 1, e.newText]))).sort(order);
+    };
+    const edits = await renamed(g, 0, 10);
+    expect(edits).toEqual([[...imported, 'Line'], [...declared, 'Line']].sort(order));
+    expect(await renamed(f, 0, 4)).toEqual(edits);
+    for (const [file, line, start, end, to] of edits) { const lines = text(file); lines[line - 1] = lines[line - 1].slice(0, start - 1) + to + lines[line - 1].slice(end - 1); writeFileSync(file, lines.join('\n')); }
+    expect(text(f).slice(0, 4)).toEqual(['use Line as TheirRow from "./row.contract"', 'component App', '  view', '    TheirRow(label="a")']);
+    expect(errors(f)).toEqual([]);
+  } finally { server.close(); p.end(); }
+}, 60_000);
+
 test('an import renamed for meeting a local name is renamed where it is declared and where it is imported, and its alias stays', async () => {
   if (!ready()) return;
   const row = 'component Row\n  props\n    label: string\n  view\n    text label\n';

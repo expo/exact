@@ -41,14 +41,19 @@ export function names(ctx) {
   const placed = d => { if (ctx.here(d)) return spelling(ctx, d); const other = elsewhere(d) ? text(d.file) : null; return other === null ? null : spelling(ctx, d, other); };
   // A source's name is also the key of the function in app.ts that answers it, which a rename here would not reach.
   const renamable = definitions.map(d => d.kind !== 'source' && placed(d) !== null), used = definitions.map(() => false);
+  /** Whether a use is by an alias: another whole name, in this file, where the compiler places a use of another file's definition. */
+  const alias = r => {
+    const at = ctx.here(r) && elsewhere(definitions[r.to]) ? ctx.span(r) : null, authored = at && ctx.content.slice(at[0], at[0] + at[1]);
+    return !!authored && IDENTIFIER.test(authored) && authored !== definitions[r.to].name;
+  };
   /** Each place in this file the compiler names a use at, with every definition it says the use is of. */
   const uses = new Map();
   for (const r of references) {
     const d = definitions[r.to], named = r.name === d.compiled, at = ctx.here(r) && named ? spelling(ctx, { ...r, name: d.name }) : null;
     if (at) { const use = uses.get(`${at[0]}:${at[1]}`) ?? uses.set(`${at[0]}:${at[1]}`, { at, of: [] }).get(`${at[0]}:${at[1]}`); use.of.push(r.to); used[r.to] = true; }
-    // A use TypeScript is not shown would be left out of a rename. A renamed import's alias (`use Row as TheirRow`)
-    // is no use of the name: it stays as it is when the name changes.
-    else if (d.compiled === d.name && (ctx.here(r) || !contract(r) || !named)) renamable[r.to] = false;
+    // A use TypeScript is not shown would be left out of a rename. An import's alias (`use Row as TheirRow`, then
+    // `TheirRow(…)`) is no use of the name: it stays as it is when the name changes.
+    else if (!alias(r) && d.compiled === d.name && (ctx.here(r) || !contract(r) || !named)) renamable[r.to] = false;
   }
   // Renaming one of a use's several definitions would leave the use naming the others.
   for (const { of } of uses.values()) if (of.length > 1) for (const i of of) renamable[i] = false;
