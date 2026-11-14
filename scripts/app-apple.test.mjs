@@ -22,24 +22,24 @@ test('Apple production optimization defaults, manifest choices and command-line 
   const { appleProduction } = await import('../host/apple/link.mjs');
   const { appleArtifacts } = await import('../host/apple/build.mjs');
   for (const [platform, destination] of [['ios', 'ios'], ['ios', 'ios-simulator'], ['tvos', 'tvos'], ['tvos', 'tvos-simulator'], ['macos', 'macos']]) {
-    for (const game of [false, true]) for (const embed of [false, true]) for (const manifest of [undefined, 'speed', 'size']) for (const cli of [undefined, 'speed', 'size']) {
+    for (const game of [false, true]) for (const embed of [false, true]) for (const manifest of [undefined, 'speed', 'size', 'balanced']) for (const cli of [undefined, 'speed', 'size', 'balanced']) {
       const key = platform === 'macos' ? 'macos' : 'ios';
       const app = { dir: import.meta.dir, target: '/fixture/target', id: 'test.fixture', name: 'fixture', displayName: 'Fixture', manifest: { ...(game ? { game: { crate: 'fixture-logic' } } : {}), host: { [key]: { optimize: manifest } } } };
       const args = [...(embed ? ['--embed'] : []), ...(cli ? ['--optimize', cli] : [])];
-      const expected = cli ?? manifest ?? (game ? 'speed' : embed || platform !== 'macos' ? 'size' : 'speed');
-      if (game && expected === 'size') {
-        assert.throws(() => appleProduction(app, platform, args), /games cannot optimize for size because their generated Cargo workspace has no size profile; use speed/);
+      const expected = cli ?? manifest ?? (game ? 'speed' : embed ? 'size' : platform !== 'macos' ? 'balanced' : 'speed');
+      if (game && expected !== 'speed') {
+        assert.throws(() => appleProduction(app, platform, args), new RegExp(`games cannot optimize for ${expected} because their generated Cargo workspace has no ${expected} profile; use speed`));
         continue;
       }
       const selected = appleProduction(app, platform, args);
-      assert.deepEqual(selected, { optimize: expected, profile: expected === 'size' ? 'size' : 'release' });
+      assert.deepEqual(selected, { optimize: expected, profile: expected === 'speed' ? 'release' : expected });
       const paths = appleArtifacts(app, { destination, trust: 'production', ...(embed || cli ? { optimize: selected.optimize } : {}) });
-      assert.ok(paths.swift.endsWith(expected === 'size' ? '-size' : '-whole'), JSON.stringify({ platform, args, manifest, paths }));
+      assert.ok(paths.swift.endsWith(expected === 'speed' ? '-whole' : `-${expected}`), JSON.stringify({ platform, args, manifest, paths }));
       const development = appleArtifacts(app, { destination, trust: 'development' });
-      assert.doesNotMatch(development.swift, /-(size|whole)$/);
+      assert.doesNotMatch(development.swift, /-(size|balanced|whole)$/);
     }
   }
-  for (const args of [['--optimize', 'other'], ['--optimize']]) assert.throws(() => appleProduction({ manifest: {} }, 'ios', args), /--optimize is speed or size/);
+  for (const args of [['--optimize', 'other'], ['--optimize']]) assert.throws(() => appleProduction({ manifest: {} }, 'ios', args), /--optimize is speed, size or balanced/);
   const trust = process.env.EXACT_UPDATE_TRUST;
   process.env.EXACT_UPDATE_TRUST = 'production';
   try {

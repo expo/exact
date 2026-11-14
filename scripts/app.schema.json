@@ -798,8 +798,8 @@
               }
             },
             "optimize": {
-              "enum": ["speed", "size"],
-              "description": "What a production build optimizes the Rust archive and ExactKit for (LLP 1047.001 D9): \"speed\" (opt-level 3, Swift -O) or \"size\" (opt-level z, Swift -Osize -internalize-at-link; on 2026-10-06 a one-text app's 9.8 MB was 6.2). Absent: size for an iOS or tvOS app and for an embed (`build.mjs --embed`); a game keeps speed. Games refuse size because their generated Cargo workspace has no size profile. tvOS shares this iOS setting. `build.mjs --optimize` overrides it."
+              "enum": ["speed", "size", "balanced"],
+              "description": "What a production build optimizes the Rust archive and ExactKit for (LLP 1047.001 D9): \"speed\" (opt-level 3, Swift -O), \"size\" (opt-level z, Swift -Osize -internalize-at-link; on 2026-10-06 a one-text app's 9.8 MB was 6.2) or \"balanced\" (size, with the crates a scrolling list spends its time in at opt-level 3, and Swift -O; on a 10,000-message chat 21.1 MB against speed's 24.3 and size's 16.5, scrolling within noise of speed). Absent: balanced for an iOS or tvOS app, size for an embed (`build.mjs --embed`); a game keeps speed. Games refuse size and balanced because their generated Cargo workspace has neither profile. tvOS shares this iOS setting. `build.mjs --optimize` overrides it."
             },
             "designRequiresCompatibility": {
               "type": "boolean",
@@ -954,8 +954,8 @@
               "description": "\"accessory\": a menu-bar app (LLP 1133.025 D6), written as LSUIElement: no Dock tile and no menu bar of its own, and every launch opens no window; a `-exact-menu=\"status\"` button is how the person reaches it, and `focus()` shows its window. Absent: regular."
             },
             "optimize": {
-              "enum": ["speed", "size"],
-              "description": "What a production build optimizes the Rust archive and ExactKit for (LLP 1047.001 D9): \"speed\" (opt-level 3, Swift -O) or \"size\" (opt-level z, Swift -Osize -internalize-at-link; on 2026-10-06 a one-text app's 9.8 MB was 6.2). Absent: speed for a Mac app, size for an embed (`build.mjs --embed`); a game keeps speed. Games refuse size because their generated Cargo workspace has no size profile. `build.mjs --optimize` overrides it."
+              "enum": ["speed", "size", "balanced"],
+              "description": "What a production build optimizes the Rust archive and ExactKit for (LLP 1047.001 D9): \"speed\" (opt-level 3, Swift -O), \"size\" (opt-level z, Swift -Osize -internalize-at-link; on 2026-10-06 a one-text app's 9.8 MB was 6.2) or \"balanced\" (size, with the crates a scrolling list spends its time in at opt-level 3, and Swift -O). Absent: speed for a Mac app, size for an embed (`build.mjs --embed`); a game keeps speed. Games refuse size and balanced because their generated Cargo workspace has neither profile. `build.mjs --optimize` overrides it."
             },
             "gameMode": {
               "type": "boolean",

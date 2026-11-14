@@ -34,10 +34,10 @@ export function appleProduction(app, platform, args = []) {
   const at = args.indexOf('--optimize');
   const optimize = at >= 0 ? args[at + 1]
     : app.manifest.host?.[platform === 'macos' ? 'macos' : 'ios']?.optimize
-      ?? (game ? 'speed' : args.includes('--embed') || platform !== 'macos' ? 'size' : 'speed');
-  if (!['speed', 'size'].includes(optimize)) throw new Error(`host/apple: --optimize is speed or size, not ${optimize}`);
-  if (game && optimize === 'size') throw new Error('host/apple: games cannot optimize for size because their generated Cargo workspace has no size profile; use speed');
-  return { optimize, profile: optimize === 'size' ? 'size' : 'release' };
+      ?? (game ? 'speed' : args.includes('--embed') ? 'size' : platform !== 'macos' ? 'balanced' : 'speed');
+  if (!['speed', 'size', 'balanced'].includes(optimize)) throw new Error(`host/apple: --optimize is speed, size or balanced, not ${optimize}`);
+  if (game && optimize !== 'speed') throw new Error(`host/apple: games cannot optimize for ${optimize} because their generated Cargo workspace has no ${optimize} profile; use speed`);
+  return { optimize, profile: optimize === 'speed' ? 'release' : optimize };
 }
 
 /** A Linux builder can target an ARM simulator on another machine, independently of its host CPU. */

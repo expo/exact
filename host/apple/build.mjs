@@ -176,7 +176,7 @@ export function appleArtifacts(app, { destination = 'macos', composition, trust 
   // Only Swift paths need compiler policy; lock and bundle lookups must not validate it.
   const swift = () => {
     optimize ??= trust === 'production' ? appleProduction(app, platform).optimize : 'speed';
-    return resolve(app.target, 'apple-swift', `${destination}-${compiledTargets(app, trust)[platform]}${optimize === 'size' ? '-size' : trust === 'production' ? '-whole' : ''}`);
+    return resolve(app.target, 'apple-swift', `${destination}-${compiledTargets(app, trust)[platform]}${optimize === 'size' || optimize === 'balanced' ? `-${optimize}` : trust === 'production' ? '-whole' : ''}`);
   };
   return { owner, namespace, target, product, executable, products, composition, scratch: resolve(namespace, 'link'),
     get swift() { return swift(); }, get swiftLock() { return `${swift()}.lock`; },

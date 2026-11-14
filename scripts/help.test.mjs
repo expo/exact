@@ -108,7 +108,7 @@ test('a flag that takes a value is refused by name when the value is missing or 
   for (const [verb, argv, flag] of [
     ['ios', ['--device', '--archive'], '--archive <out.ipa>'], ['ios', ['--device', '--archive', '--unsigned'], '--archive <out.ipa>'],
     ['ios', ['--ios', '--sim'], '--sim <udid|name>'], ['ios', ['--device', '--phone', '--run'], '--phone <udid|name>'],
-    ['ios', ['--ios', '--optimize'], '--optimize speed|size'], ['mac', ['hello-apple', '--optimize'], '--optimize speed|size'],
+    ['ios', ['--ios', '--optimize'], '--optimize speed|size|balanced'], ['mac', ['hello-apple', '--optimize'], '--optimize speed|size|balanced'],
     ['ios', ['--ios', '--link'], '--link <plan>'], ['web-build', ['--out', '--json'], '--out <dir>'], ['agent', ['web', 'tree', '--url'], '--url <url>'],
   ]) assert.deepEqual(guarded(verb, argv), [2, `${verb}: ${flag.split(' ')[0]} needs a value (${flag})`], argv.join(' '));
   // Every failure in one run: a missing value and an unknown flag are both said.
