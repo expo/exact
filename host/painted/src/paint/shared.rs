@@ -156,6 +156,8 @@ impl Painter {
             && image_tint(&node, &shown, self.dark).is_none()
             && image.is_none_or(|(i, _)| i.animation_file().is_none())
             && node.style.filter.is_none()
+            && node.computed_row(StyleId::ImageRendering, |s| s.image_rendering)
+                == exact_kernel::ImageRendering::Auto
             && node.style.rare.mask_image.gradient().is_none()
             && node.style.rare.clip_path.commands().is_empty()
             && paint.background[3] == 0

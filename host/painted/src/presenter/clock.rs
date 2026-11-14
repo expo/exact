@@ -57,6 +57,8 @@ impl<D: DataSource> Presenter<D> {
         if live {
             self.dirty |= self.host.present_reader_frame(now);
         }
+        // Asked on every turn: a replaced reader ends flights with no tick after.
+        self.focus_landed();
         error
     }
 

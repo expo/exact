@@ -298,6 +298,7 @@ mod tests {
             ("filter=\"blur(2px)\"", 0),
             ("mask-image=\"linear-gradient(black, transparent)\"", 0),
             ("clip-path=\"path('M0 0 L80 0 L40 60 Z')\"", 0),
+            ("image-rendering=\"pixelated\"", 0),
         ] {
             let app = format!("component App\n  view\n    image \"\" sharedElement=\"photo\" object-fit=\"cover\" width=80 height=60 {style}\n");
             let (mut p, error) = Presenter::boot_with(

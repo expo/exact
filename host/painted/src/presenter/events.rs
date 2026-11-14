@@ -295,7 +295,7 @@ impl<D: DataSource> Presenter<D> {
         }
         // A flight's content takes no input until it lands, pointer or key.
         if self.host.flying(id) {
-            return Some("in a shared-element flight");
+            return Some(crate::host::flights::IN_FLIGHT);
         }
         let region = self.host.content_region();
         let content = region.map(|r| r.binding().content);
@@ -371,6 +371,11 @@ impl<D: DataSource> Presenter<D> {
             Some(id) if !self.focusable(id) => "not focusable",
             Some(id) => {
                 if let Some(reason) = self.focus_refusal(id) {
+                    // A flying node is focused when it lands (`focus_landed`).
+                    if reason == crate::host::flights::IN_FLIGHT {
+                        self.host.flights.focus = self.host.kernel().node(id).map(|n| n.key);
+                        return None;
+                    }
                     self.host.log(format!("focus \"{name}\" refused: {reason}"));
                     return None;
                 }
@@ -435,6 +440,11 @@ impl<D: DataSource> Presenter<D> {
                 false,
                 Some("focus refused: page under the open surface is inert".into()),
             );
+        }
+        // Every way to the focus ends here: a flight's content takes none.
+        if next.is_some_and(|id| self.host.flying(id)) {
+            let refused = format!("focus refused: {}", crate::host::flights::IN_FLIGHT);
+            return (false, Some(refused));
         }
         let previous = self.focus;
         if previous == next {

@@ -1339,7 +1339,6 @@ impl<D: DataSource> Presenter<D> {
                 self.host.log(error);
             }
         }
-        self.focus_landed();
         self.tick_arrange(self.host.now());
         self.step_glides(now_ms);
         if let Some(error) = self.deliver_scroll_ends() {
