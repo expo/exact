@@ -114,6 +114,8 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
         host?.followSelection(showing: self)
         // Its block, at the size UIKit gives it, before its first frame (LLP 1123 D2)
         host?.presenter.owners.publish()
+        // Run the edge passes an app's selection owes it before the transition's first frame; the covers follow below
+        host?.runOwedScrollEdges(of: self)
         // UIKit has attached and sized the real destination. Finish its
         // content and focus here, before the transition's first frame.
         host?.presenter.afterBatch { [weak self] in
@@ -132,6 +134,7 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
         super.viewDidLayoutSubviews()
         fitContentViewport()
         host?.presenter.owners.publish()
+        if scrollEdgesOwed { host?.settleScrollEdges() }
         #if os(iOS)
         search?.labelScopes()
         #endif
@@ -331,6 +334,9 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     }
 
     private(set) var nativeContentScrollEdges: NSDirectionalRectEdge = []
+    /// An app changed the top or bottom selection, and the edge passes and covers that follow are owed
+    /// (`NavigationHost.scrollEdgesChanged`)
+    var scrollEdgesOwed = false
     var nativeContentScroller: NodeView? {
         guard let selected = contentScrollView(for: .top) else { return nil }
         var owner = (selected as? Viewport)?.documentNode
@@ -361,10 +367,15 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
 
     /// An app's selection; Exact's own goes through `projectContentScrollView`.
     override func setContentScrollView(_ scrollView: UIScrollView?, for edge: NSDirectionalRectEdge) {
+        let edges = edge.intersection([.top, .bottom])
         if let scrollView {
+            let changed = !nativeContentScrollEdges.isSuperset(of: edges)
+                || (edges.contains(.top) && contentScrollView(for: .top) !== scrollView)
+                || (edges.contains(.bottom) && contentScrollView(for: .bottom) !== scrollView)
             // Record only the top and bottom edges: UIKit takes no other
-            nativeContentScrollEdges.formUnion(edge.intersection([.top, .bottom]))
+            nativeContentScrollEdges.formUnion(edges)
             select(scrollView, for: edge)
+            if changed { host?.scrollEdgesChanged(self) }
         } else {
             // An app's nil makes the edges it selected automatic again, and the navigation host
             // selects them as for a route no app touched. UIKit gets the nil first: the passes take
@@ -373,7 +384,7 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
             guard !released.isEmpty else { return }
             nativeContentScrollEdges.subtract(released)
             select(nil, for: released)
-            host?.selectScrollEdges(of: self)
+            host?.scrollEdgesChanged(self)
         }
         #if os(iOS)
         if edge.contains(.top) { host?.presenter.syncScrollsToTop() }
@@ -930,6 +941,8 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         controllers = controllers.filter { routeIDs.contains($0.key) }
         presenter.modals.updatePermissions()
         if p.tabs != nil { replayTabs() }
+        // Run the edge passes owed for selections made while the sync ran, a route hatch's among them, before the covers
+        runOwedScrollEdges()
         reportCovers()
         refitForBars()
         // A route that left every stack gives its block back (LLP 1123 D2)
@@ -1051,7 +1064,8 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     }
 
     func modalDidDismiss() {
-        guard pendingSync else { return }
+        // A presentation or dismissal ended: the edge passes a selection made during it owes, when no sync is pending
+        guard pendingSync else { return settleScrollEdges() }
         pendingSync = false
         sync(Batch(ops: [], timers: false, motion: false, clock: nil, error: nil))
         presenter.syncModal()
@@ -1398,7 +1412,8 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
                 if let navigationController { self?.settleTablist(navigationController) }
                 self?.presenter.menus.resumeAfterRouteDismissal()
             }
-            // At rest: a large title's insets are sampled now (§9.10).
+            // At rest: the edge passes a selection made during the transition owes, then a large title's insets (§9.10)
+            runOwedScrollEdges()
             coversChanged()
             #if os(iOS)
             presenter.resolveStatusBar(settled: true)

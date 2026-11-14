@@ -740,9 +740,9 @@ public final class ExactRoute {
     /// view of the route's first vertical scroller; else the route's own viewport, which only an
     /// unpresented route under `interactive-widget="resizes-visual"` has; else nil. A top-edge
     /// selection or nil made with UIKit's `controller.setContentScrollView(_:for:)` reaches it
-    /// when Exact next prepares the route, at the next authored update (after a nil, possibly
-    /// within the call), and the hatch is called again then; nil makes the edge automatic, as
-    /// in UIKit.
+    /// when Exact next prepares the route, at its next sync, which the runtime's answer to the covers
+    /// it changes may bring and the next authored update does; the hatch is called again then. Nil
+    /// makes the edge automatic, as in UIKit.
     /// An authored scroller's offset, insets, size and delegate remain Exact's.
     public internal(set) weak var contentScrollView: UIScrollView?
     /// Whether this call is the controller's first.

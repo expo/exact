@@ -224,8 +224,8 @@ final class PageEdgesIOSTests: XCTestCase {
         XCTAssertTrue(hit.isDescendant(of: filter), "a tap on the switcher is the switcher's, not \(type(of: hit))")
         XCTAssertTrue(filter.interactions.contains { $0 is UIScrollEdgeElementContainerInteraction }, "UIKit's edge effect over the list")
         // An app's own scroll view holds the bar's edge through a batch, and its nil gives the edge
-        // back to the list at once, through the list's band under the switcher, since the title
-        // does not collapse with the list
+        // back to the list by the route's next layout, through the list's band under the switcher,
+        // since the title does not collapse with the list
         let route = try XCTUnwrap(p.navigation.activeRoute)
         XCTAssertNil(route.collapseScroll, "the switcher stands between the title and the list")
         XCTAssertTrue(route.contentScrollView(for: .top) === sv, "the bar follows the list under the switcher")
@@ -236,6 +236,7 @@ final class PageEdgesIOSTests: XCTestCase {
         XCTAssertTrue(route.contentScrollView(for: .top) === own)
         route.setContentScrollView(nil, for: .top)
         own.removeFromSuperview()
+        route.view.layoutIfNeeded()
         XCTAssertTrue(route.contentScrollView(for: .top) === sv, "nil gives the edge back to the list drawn under the switcher")
         sv.contentOffset.y = 100 - list.scrollTopInset(sv)
         p.press(try node(session, "pick-chat").id)

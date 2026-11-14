@@ -3108,9 +3108,13 @@ else the scroll view of the route's first vertical scroller; else the route's ow
 viewport, which only an unpresented route under `interactive-widget="resizes-visual"`
 has; else nil. A native list's scroll view is its collection view. UIKit's
 `contentScrollView(for: .top)` reports Exact's scroller only while it sits under the
-bar. A top-edge selection or nil reaches the hatch when Exact next prepares the
-route, at the next authored update (after a nil, possibly within the call), and the
-hatch is called again then.
+bar. UIKit's bar follows a selection at once. Exact runs its passes for a selection or
+nil at the route's next layout, as the route appears, or, while a push, a pop, a
+presentation or a dismissal is under way, when it ends, and the route's layout follows
+with the runtime's answer to the covers they change; until the passes run, after a nil,
+`contentScrollView(for:)` reports UIKit's own choice, usually none. A top-edge
+selection or nil reaches the hatch when Exact next prepares the route, at its next
+sync, which that answer may bring and the next authored update does.
 
 The containing navigation controller still owns one shared navigation bar. UIKit
 decides where its large title and each pane's edge effect appear; the panes keep

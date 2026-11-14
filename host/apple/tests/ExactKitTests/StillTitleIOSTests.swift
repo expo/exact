@@ -100,7 +100,9 @@ final class StillTitleIOSTests: XCTestCase {
         XCTAssertNil(route.contentScrollView(for: .top), "the list no longer follows the header, so nothing collapses the title")
         // A selection the app gives back with nil returns the edge to Exact's, which names no scroller here
         route.setContentScrollView(list, for: .top)
+        route.view.layoutIfNeeded()
         route.setContentScrollView(nil, for: .top)
+        route.view.layoutIfNeeded()
         XCTAssertNil(route.contentScrollView(for: .top), "a selection given back with nil leaves the title still")
         XCTAssertEqual(route.navigationItem.largeTitleDisplayMode, .always)
         XCTAssertGreaterThan(try titleInk(nav), 100, "'Rooms' is still drawn with the reason above the list")

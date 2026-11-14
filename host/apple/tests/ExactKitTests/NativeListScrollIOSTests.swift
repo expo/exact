@@ -523,6 +523,27 @@ final class NativeListScrollIOSTests: GroupedListFixture {
         }
     }
 
+    func testAReaderDragKeepsItsPlaceOverAPositionExactCarries() throws {
+        let p = presenter(height: 180) { self.model() }
+        let owner = try XCTUnwrap(p.views[1])
+        p.apply(wireBatch([["op": "style", "id": 1, "style": ["overflow_y": "scroll"]], ["op": "props", "id": 1, "set": [String: String](), "clear": ["listStyle"]],
+                           ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 402.0, "h": 180.0], ["op": "content", "id": 1, "w": 402.0, "h": 9000.0],
+                           ["op": "props", "id": 1, "set": ["scrollTop": "140"]]]))
+        let scroll = try XCTUnwrap(owner.scrollView)
+        // Exact carries the position across a change of its own, for the next batch to write
+        owner.retainScrollPosition(from: scroll)
+        owner.scrollViewWillBeginDragging(scroll)
+        scroll.contentOffset.y = 300 - owner.scrollTopInset(scroll)
+        p.apply(wireBatch([]))
+        XCTAssertEqual(scroll.contentOffset.y + owner.scrollTopInset(scroll), 300, accuracy: 0.5, "the reader's drag keeps its place")
+        // A status-bar tap is the reader's move too
+        owner.retainScrollPosition(from: scroll)
+        XCTAssertTrue(owner.scrollViewShouldScrollToTop(scroll))
+        scroll.contentOffset.y = -scroll.adjustedContentInset.top
+        p.apply(wireBatch([]))
+        XCTAssertEqual(scroll.contentOffset.y + owner.scrollTopInset(scroll), 0, accuracy: 0.5, "the tap's scroll to the top keeps its place")
+    }
+
     func testRevealingACarriedRowDoesNotReserveContentPaddingForAKeyboard() throws {
         let p = presenter(height: 180) { self.model(custom: true) }
         p.apply(wireBatch([["op": "style", "id": 1, "style": ["overflow_y": "scroll", "padding_bottom": 83.0]],
