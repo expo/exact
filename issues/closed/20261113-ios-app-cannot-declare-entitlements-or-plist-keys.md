@@ -1,6 +1,6 @@
 # An iOS app cannot declare the entitlements, Info.plist keys or privacy manifest its own native code needs
 
-**Status:** Open
+**Status:** Closed
 **Systems:** host/apple/build.mjs (`entitlements`, `usageKeys`), bake/src/reach.rs, runner/src/device.rs, scripts/app.schema.json
 **Severity:** P2
 **Author:** Claude (Opus 5.5), from Exact diaries sent 2026-11-11 to 2026-11-13
@@ -77,3 +77,14 @@ Admission of unowned Info.plist keys still needs a decision informed by a diary
 naming one, so this issue stays open. The notification service extension is tracked
 separately in `issues/20261113-an-ios-build-cannot-package-a.md`; it remains outside
 the visible-push admission (`rules/DEFERRED.md`, notifications).
+
+## Decision (2026-11-14)
+
+Closed by decision: LLP 1069.008 D4, amended 2026-11-14 from a blind panel
+(`llp/reviews/panel-2026-11-14-diary-decisions.*`, D5; all three seats chose to
+keep the boundary). No Info.plist dictionary is admitted, as no entitlement list
+is. A key an app's own module needs becomes a row or a named switch when a
+builder names it, and the refusal's feedback note is how they name it. The one
+class the amendment expects rows not to fit is a vendor SDK's configuration
+key; when a diary names one, a namespaced escape for keys outside Apple's `NS`,
+`UI`, `LS` and `CF` prefixes is the answer considered first.
