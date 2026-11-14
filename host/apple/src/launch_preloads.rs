@@ -173,7 +173,7 @@ impl dyn LaunchWork {
         let mut pending = Vec::new();
         let mut fulfilled = Vec::new();
         let mut requests = runner.take_requests();
-        requests.sort_by_key(|request| request.ticket);
+        sort_requests(&mut requests);
         let mut requests = requests.into_iter();
         while let Some(request) = requests.next() {
             if !runner.holds(request.ticket) {
@@ -201,10 +201,16 @@ impl dyn LaunchWork {
             }
         }
         pending.extend(runner.take_requests());
-        pending.sort_by_key(|request| request.ticket);
+        sort_requests(&mut pending);
         pending.retain(|request| runner.holds(request.ticket));
         Ok((pending, fulfilled))
     }
+}
+
+// The initial requests and those issued during settlement share one sort.
+#[inline(never)]
+fn sort_requests(requests: &mut [exact_runner::RequestOut]) {
+    requests.sort_by_key(|request| request.ticket);
 }
 
 /// Begin at the top of main; the factory is evaluated only on the launch thread.

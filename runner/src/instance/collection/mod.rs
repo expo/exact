@@ -144,6 +144,13 @@ struct Mounted {
     /// Past the window, kept for the next row it needs ([`reuse`]).
     held: bool,
 }
+
+// Both window publication paths share the sort, including under LTO.
+#[inline(never)]
+fn sort_mounted(rows: &mut [Mounted]) {
+    rows.sort_by_key(|row| row.position);
+}
+
 #[derive(Debug)]
 pub(crate) struct Collection {
     /// The app modes around the list (LLP 1121 D5): what a row it mounts
@@ -778,7 +785,7 @@ impl Collection {
                     }
                 }
             }
-            self.mounted.sort_by_key(|row| row.position);
+            sort_mounted(&mut self.mounted);
             self.pending = pending || kept;
             self.emit_children(u)?;
             self.emit_preview(u)?;
@@ -846,7 +853,7 @@ impl Collection {
             self.reposition(&mut mounted, position, true);
             self.settle_mounted(u, mounted, &text)?;
         }
-        self.mounted.sort_by_key(|row| row.position);
+        sort_mounted(&mut self.mounted);
         self.pending = pending;
         self.emit_children(u)?;
         self.emit_preview(u)?;

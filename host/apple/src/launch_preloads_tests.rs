@@ -11,6 +11,39 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::Duration;
 const HANG: Duration = Duration::from_secs(10);
 
+#[test]
+fn request_ticket_order_keeps_ties_and_all_ticket_bits() {
+    for n in [0, 1, 16, 21, 64, 257] {
+        let tickets = [0, 1, 1 << 63, u64::MAX];
+        let mut requests: Vec<_> = (0..n)
+            .map(|i| exact_runner::RequestOut {
+                ticket: tickets[(i * 17 + i / 5) % tickets.len()],
+                target: i.to_string(),
+                request: exact_runner::Request::get("https://example.invalid/"),
+                class: exact_runner::RequestClass::Read,
+                forced: false,
+            })
+            .collect();
+        let expected: Vec<_> = tickets
+            .into_iter()
+            .flat_map(|ticket| {
+                requests
+                    .iter()
+                    .filter(move |request| request.ticket == ticket)
+                    .map(|request| (request.ticket, request.target.clone()))
+            })
+            .collect();
+        sort_requests(&mut requests);
+        assert_eq!(
+            requests
+                .iter()
+                .map(|request| (request.ticket, request.target.clone()))
+                .collect::<Vec<_>>(),
+            expected
+        );
+    }
+}
+
 struct Server {
     address: std::net::SocketAddr,
     requests: Receiver<String>,
