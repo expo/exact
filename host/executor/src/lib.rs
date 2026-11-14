@@ -66,6 +66,7 @@ struct Job {
     queued_deadline: Option<forget::QueuedDeadline>,
     overlap: bool,
     class: RequestClass,
+    cache_store_withheld: bool,
 }
 /// A job a worker took, until its outcome is complete.
 struct Running {
@@ -135,7 +136,7 @@ struct Completed {
 /// A place behind the ordered barrier.
 enum Fenced {
     /// A request, its retained buffers, and whether its outcome is forgotten.
-    Held(Box<RequestOut>, Option<OwnedWork>, usize, bool),
+    Held(Box<RequestOut>, Option<OwnedWork>, usize, bool, bool),
     /// A request refused while the barrier was up: refused when its turn
     /// comes, after the held requests before it are admitted.
     Refused(u64, &'static str),
@@ -553,7 +554,7 @@ impl Core {
 
     /// Admit work, or return a refusal without an overflow queue.
     pub fn run_owned(&self, r: RequestOut, work: Option<OwnedWork>) -> Result<(), &'static str> {
-        self.admit(r, work, false, false)
+        self.admit(r, work, false, false, None)
             .map_err(|(reason, _work)| reason)
     }
 
@@ -814,7 +815,7 @@ fn fenced_bytes(fenced: &VecDeque<Fenced>) -> usize {
     fenced
         .iter()
         .map(|f| match f {
-            Fenced::Held(_, _, charge, _) => *charge,
+            Fenced::Held(_, _, charge, _, _) => *charge,
             Fenced::Refused(..) => 0,
         })
         .sum()

@@ -131,7 +131,7 @@ fn take_job(state: &mut State, lane: usize, index: usize) -> Option<(Job, AbortC
         generation: 0,
         claim: asynch::Claim::None,
         cached: false,
-        cache_exchange: None,
+        cache_exchange: cache::exchange(state, &job),
         cache_replacing: cache::replacing(&job.request, job.class, job.forced, job.work.is_some()),
         cache_barrier: cache::barrier(&job.request, job.class, job.work.is_some()),
         invalidates: cache::invalidates(&job.request, job.work.is_some()),

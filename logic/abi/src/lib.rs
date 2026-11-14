@@ -1048,7 +1048,9 @@ impl<D: DataSource> Session<D> {
                     Some(name) => Err(exact_runner::StoreError::Locked(name).into()),
                     None => result,
                 };
-                w.u8(u8::from(store.reads() > 0));
+                // A read beyond its draws: each draw counts a read, and the
+                // draws cross apart below (LLP 1069.005 D2)
+                w.u8(u8::from(store.reads() > store.entropy_draws()));
                 let topics = store.take_topics();
                 w.u32(topics.len() as u32);
                 for topic in &topics {
