@@ -837,7 +837,7 @@ final class ConfirmationAlertIOSTests: XCTestCase {
         // covers both, so the tap's reply comes after the press has landed.
         XCTAssertEqual(p.menus.activate(try node(session, "clear-confirm-clear")), true)
         XCTAssertTrue(try counts(session).hasPrefix("count 1"), "the press waits for the dismissal")
-        XCTAssertTrue(session.agentInstance.awaitModalTransitions())
+        XCTAssertTrue(session.agentInstance.awaitTransitions())
         XCTAssertNil(p.menus.observation())
         XCTAssertTrue(try counts(session).hasPrefix("count 0"), "the press has landed")
         settle { controller.presentedViewController == nil }

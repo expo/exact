@@ -101,29 +101,41 @@ extension Agent {
 
     var presenter: Presenter { session.presenter }
 
-    /// An input that started or met a sheet's presentation or dismissal
-    /// returns once UIKit has finished it, bounded at two seconds (LLP
-    /// 1035.003 D5, frozen timing). Unanimated, UIKit still takes a few
-    /// frames of the wall to end one, and a sheet over a sheet is presented
-    /// only once the one under it has finished presenting: a drive's next
-    /// `tap`, a few milliseconds later, found the second sheet's route in
+    /// An input that started or met a sheet's presentation or dismissal, or a
+    /// stack's push or pop, returns once UIKit has finished it and Exact has
+    /// followed it, bounded at two seconds (LLP 1035.003 D5, frozen timing), as
+    /// far as the hosts track it (`hostsInTransition`). Unanimated, UIKit still
+    /// takes a few frames of the wall to end one, and a sheet over a sheet is
+    /// presented only once the one under it has finished presenting: a drive's
+    /// next `tap`, a few milliseconds later, found the second sheet's route in
     /// the tree and not on screen (the Bluesky clone's prompt over its muted
-    /// words sheet). An alert or action sheet is waited for too: a press on
-    /// one of its buttons is dispatched only once UIKit has dismissed it
-    /// (`dismissConfirmation`), and a `clock data` straight after the tap
-    /// found no press. Platform timing leaves this to `clock settle`.
-    /// Answers whether the hosts left their transitions.
-    @discardableResult func awaitModalTransitions(bound: TimeInterval = 2) -> Bool {
-        let modals = presenter.modals, navigation = presenter.navigation, menus = presenter.menus
-        guard modals.inTransition || menus.inTransition else { return true }
+    /// words sheet). A pop can also end after the call that asked for it
+    /// returns, as More's pop to its list does (LLP 1075.003 §9.16). More's pop
+    /// from a plain tab is not tracked: the plain tab's route stays in it, so
+    /// the navigation reads at rest while More still pops. An alert or action
+    /// sheet is waited for too: a press on one of its buttons is dispatched
+    /// only once UIKit has dismissed it (`dismissConfirmation`), and a
+    /// `clock data` straight after the tap found no press. Platform timing
+    /// leaves this to `clock settle`. Answers whether every host finished.
+    @discardableResult func awaitTransitions(bound: TimeInterval = 2) -> Bool {
         let deadline = Date(timeIntervalSinceNow: bound)
-        // The navigation host's pending sync is the next sheet waiting on
-        // the one now presenting or leaving.
-        while modals.inTransition || navigation.inTransition || menus.inTransition {
+        while hostsInTransition {
             if Date() >= deadline { return false }
             RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
         }
         return true
+    }
+
+    /// Whether the navigation, modal or menu host is in a transition, or a
+    /// sync that a move of UIKit's owes in the next turn (`syncNextTurn`) has
+    /// not run, so Exact has not followed the move: what an input waits for
+    /// under frozen timing, and part of what `clock settle` waits for. The
+    /// owed sync counts here and not in `NavigationHost.inTransition`, which a
+    /// confirmation waiting to show also reads (`resumeAfterRouteDismissal`)
+    /// and that sync does not retry.
+    var hostsInTransition: Bool {
+        let navigation = presenter.navigation
+        return navigation.inTransition || navigation.resyncOwed || presenter.modals.inTransition || presenter.menus.inTransition
     }
 
     /// Under platform timing UIKit animates an alert's dismissal, and a
@@ -142,7 +154,7 @@ extension Agent {
     /// Native transitions, keyboard work and an agent-issued caret reveal
     /// must finish before `clock settle` returns (LLP 1035.003 D5).
     func nativeInFlight() -> Bool {
-        if presenter.navigation.inTransition || presenter.modals.inTransition || presenter.menus.inTransition || nativeGeometryInFlight() { return true }
+        if hostsInTransition || nativeGeometryInFlight() { return true }
         // A smooth correction (a list following its end, a smooth
         // `scrollIntoView`) and an element reveal are UIKit's scroll
         // animation under platform timing (LLP 1070.000 §11, §14): the fixed

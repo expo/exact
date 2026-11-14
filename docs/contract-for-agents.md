@@ -3537,10 +3537,11 @@ main navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow displa
   axis, and Back is previewed from Android 14 (`host/android/README.md`, "Sheets
   and route motion"). Both move on the agent's clock there: `clock settle` before
   reading where a sheet or a route is. Under the agent's frozen timing (the
-  default) on iOS, a `tap` or `type` that opens or closes a sheet, its answer's `then`
-  included, waits up to two seconds for UIKit to finish it; a reply with `settled:
-  false, reason: "transition"` says it had not. `--timing platform` leaves that to
-  `clock settle`.
+  default) on iOS, a `tap`, `back` or `type` that opens or closes a sheet, or pushes
+  or pops a route, waits up to two seconds for UIKit to finish it, its answer's
+  `then` included. A reply with `settled: false, reason: "transition"` says the
+  transition had not ended, or Exact had not followed it yet. `--timing platform`
+  leaves that to `clock settle`.
 - A full-screen route (`navigationPresentation="fullscreen"`) that paints nothing
   stands on the platform's background. One whose author wrote a `background-color`
   (`transparent` included) or a `background-image` stands on nothing else: the page it

@@ -1054,14 +1054,14 @@ public final class Agent {
         }
     }
 
-    /// An input's reply under frozen timing, once a sheet it opened or
-    /// closed has been presented or dismissed (`awaitModalTransitions`,
-    /// LLP 1035.003 D5); past the bound it says so, as `clock settle` does
-    /// (`settled: false`, `reason: "transition"`). An error reply is as it
-    /// was; platform timing leaves the wait to `clock settle`, but for a
-    /// chosen alert button's press, which still lands before the reply.
+    /// An input's reply under frozen timing, once the transitions the hosts
+    /// track that the input started or met have ended and Exact has followed
+    /// them (`awaitTransitions`, LLP 1035.003 D5); past the bound it says so,
+    /// as `clock settle` does (`settled: false`, `reason: "transition"`). An error reply is as it was; platform
+    /// timing leaves the wait to `clock settle`, but for a chosen alert
+    /// button's press, which still lands before the reply.
     func completingInput(_ reply: [String: Any]) -> [String: Any] {
-        let settled = reply["error"] != nil || (ExactEnv.agentFreezes ? awaitModalTransitions() : awaitChosenPress())
+        let settled = reply["error"] != nil || (ExactEnv.agentFreezes ? awaitTransitions() : awaitChosenPress())
         guard !settled else { return reply }
         var out = reply
         out["settled"] = false
