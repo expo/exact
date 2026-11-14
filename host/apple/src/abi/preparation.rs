@@ -47,6 +47,7 @@ fn same_carried(a: &exact_runner::Carried, b: &exact_runner::Carried) -> bool {
         slots,
         panels,
         resources,
+        waiting,
         streams,
         store_readers,
         read_contents,
@@ -85,6 +86,13 @@ fn same_carried(a: &exact_runner::Carried, b: &exact_runner::Carried) -> bool {
             .zip(&b.resources)
             .all(|((an, asrc, aa, av), (bn, bsrc, ba, bv))| {
                 an == bn && asrc == bsrc && equivalent_all(aa, ba) && equivalent(av, bv)
+            })
+        && waiting.len() == b.waiting.len()
+        && waiting
+            .iter()
+            .zip(&b.waiting)
+            .all(|((an, asrc, aa, ad), (bn, bsrc, ba, bd))| {
+                an == bn && asrc == bsrc && equivalent_all(aa, ba) && ad == bd
             })
         && uploads.len() == b.uploads.len()
         && uploads.iter().zip(&b.uploads).all(|(a, b)| {

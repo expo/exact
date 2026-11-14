@@ -36,7 +36,7 @@ pub(super) struct Checkpoint {
     sockets: usize,
     /// The root font size, and the window's app tuple (`setMode`).
     root_font: (super::root_font::RootFont, f32, u32),
-    /// Kept answers refused before this commit (`kept::refuse`).
+    /// Kept-answer lines made before this commit (`Keeping::refused`).
     refused: usize,
     /// Who each request and `then` is from (LLP 1133.023 D7).
     origins: super::modules::OriginsSaved,

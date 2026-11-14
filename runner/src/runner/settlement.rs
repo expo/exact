@@ -800,6 +800,16 @@ impl<D: DataSource> Runner<D> {
                             p.args.clone_from(&args);
                         }
                     }
+                    // @ref LLP 1027.005 D3/D4 — only a persisted boot seed, or
+                    // an entry waiting for its identity, ignores context, and
+                    // only for known, equal identifying arguments (`kept_wait`).
+                    // A refused commit restores `states` and the resource row.
+                    let kept = self.admit_kept(i, &args, valid_args, ready, &mut states);
+                    let (kept_seed, hold) = (kept.kept_seed, kept.hold);
+                    if kept.admitted_early {
+                        pending_res[i] = false;
+                        awaiting[i] = false;
+                    }
                     // The value may still answer older arguments while a
                     // request is in flight. Reuse follows the current ask;
                     // the standing value keeps its own provenance.
@@ -814,41 +824,6 @@ impl<D: DataSource> Runner<D> {
                             .find(|p| p.target == Target::Resource(i))
                             .map(|p| &p.args),
                     };
-                    // @ref LLP 1027.005 D3/D4 — only a persisted boot seed
-                    // ignores context, and only until its source is ready.
-                    // Consume the mark on mismatch or activation even when
-                    // the old value stands during an asynchronous request.
-                    // `states` is tentative, so a refused pass restores both.
-                    // A seed whose identity reads a resource still on its
-                    // fallback is not this launch's answer yet: it is
-                    // neither admitted nor reused (LLP 1027.005 D3, 2026-10-10).
-                    let unknown = states[i].as_ref().is_some_and(|s| s.kept_seed)
-                        && !ready
-                        && self.identity_unknown(i, &states);
-                    let kept_seed = valid_args
-                        && !unknown
-                        && states[i].as_ref().is_some_and(|s| {
-                            s.kept_seed
-                                && (if super::kept::kept_surface(&self.plan, i) {
-                                    self.surface_seed_waiting(i)
-                                } else {
-                                    !ready
-                                })
-                                && s.args
-                                    == args[..row.args.len as usize - usize::from(row.context)]
-                        });
-                    if let Some(state) = states[i].as_mut().filter(|s| s.kept_seed && !kept_seed) {
-                        // Refused before readiness, not consumed by it: say so.
-                        if !ready {
-                            let identity = row.args.len as usize - usize::from(row.context);
-                            let kept = state.args.clone();
-                            let now = (!unknown).then(|| &args[..identity]);
-                            super::kept::refuse(&mut self.keeping, &self.plan, i, &kept, now);
-                        }
-                    }
-                    if let Some(state) = &mut states[i] {
-                        state.kept_seed = kept_seed;
-                    }
                     // A store-reading resource is reusable only at the exact
                     // store revision it observed. `answer` and `parse` both
                     // write through Store, so this is the one dirtying point.
@@ -858,7 +833,7 @@ impl<D: DataSource> Runner<D> {
                     let reuse = states[i]
                         .as_ref()
                         .filter(|_| valid_args || failed)
-                        .filter(|_| !unknown)
+                        .filter(|_| !hold)
                         .filter(|s| {
                             kept_seed
                                 || failed

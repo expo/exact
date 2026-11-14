@@ -752,7 +752,14 @@ time.epochAtZero`; the compiler and `logs` both say so. A source declared in
 `app.contract` keeps no answer, as the launch asks it at boot, and neither does a
 resource whose identifying arguments read a declared resource, which a launch
 starts on its placeholder: pass such an argument after `with` when it does not
-identify the answer.
+identify the answer. An identifying argument that differs from the kept one and
+is `""` or `none`, or reads a device-state resource still on its placeholder (an
+id an action sets once a session answers, a search field's empty query), is not
+known yet: the kept answer waits, `logs` says so, and it shows once the arguments
+reach the ones it was kept for, also after the data module is ready, unless an
+answer for other arguments was kept in its place first. A known value that
+differs means the kept answer is not used; `logs` names the argument and the
+state or resource it reads.
 An answer that must never reach the device's storage (a one-time code, a message
 shown once) ends its line with `transient`: `resource code = otp(request) as shape
 Code transient`. It is never kept, a launch starts from its placeholder, and an

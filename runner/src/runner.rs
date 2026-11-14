@@ -107,6 +107,7 @@ mod into_view;
 pub(crate) mod kept;
 #[cfg(test)]
 mod kept_tests;
+mod kept_wait;
 mod lines;
 mod lists;
 mod media_session;
@@ -1022,6 +1023,7 @@ impl<D: DataSource> Runner<D> {
         let ready = runner.data.ready();
         runner.keeping.on = !private && (!ready || carried.is_some_and(|c| c.keeps_answers));
         runner.seed_at_boot(&seeded, ready, private);
+        runner.carry_waiting_in(carried.filter(|_| same_logic), private);
         // A seeded answer asked again, an open stream's or, on a device with
         // its own store, a store reader's, shows until it answers: asked now
         // when its source can answer, else at `data_ready`.

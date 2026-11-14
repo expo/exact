@@ -27,6 +27,8 @@ pub(crate) struct ResourceRow {
     pub(super) stale: bool,
     /// No answer yet because the source is not ready: the resource reads pending.
     pub(super) awaiting: bool,
+    /// Its kept entry, waiting for its identifying arguments (LLP 1027.005 D3).
+    pub(super) waiting: Option<super::kept_wait::Waiting>,
     pub(super) member: Option<each::Member>,
     /// While a boot from a rendered page settles, a list's answers for the
     /// elements it makes (LLP 1048.000 D6). Boxed: every commit copies each

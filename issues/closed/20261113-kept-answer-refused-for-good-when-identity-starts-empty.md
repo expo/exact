@@ -1,7 +1,8 @@
 # A kept answer whose identifying argument is still empty at launch is refused for the whole launch
 
-**Status:** Open
-**Systems:** runner/src/runner/settlement.rs, runner/src/runner/kept.rs
+**Status:** Closed
+**Resolution:** As LLP 1027.005 D3 and D5 now say (amended 2026-11-13): a kept answer whose differing identifying arguments are all `""`, `none` or read a store reader still on its fallback waits, and their first known match admits it, before or after readiness; the journal says it is waiting, and a known mismatch names each differing argument and the state or resource it reads.
+**Systems:** runner/src/runner/settlement.rs, runner/src/runner/kept.rs, runner/src/runner/kept_wait.rs
 **Severity:** P2
 **Author:** Claude (Opus 5.5), from Exact diaries sent 2026-11-11 to 2026-11-13
 **Date:** 2026-11-13
