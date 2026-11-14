@@ -16,7 +16,7 @@ component App
   action follow(url: string)
     nav = go(nav, url)
   view
-    main navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow width="100%" height="100%"
+    main navigationKey=`${top(nav).id}` navigate=follow width="100%" height="100%"
       for e in stack(nav) key=e.id
         if e.name == "habits"
           if welcomed

@@ -233,7 +233,7 @@ const KEY: &str = "lower-navigation-key";
 /// (lines 8 and 11).
 fn stack(root: &str, home: &str, pushed: &str) -> String {
     format!(
-        "routes nav\n  rooms \"/\"\n    room \"/room/:id\"\ncomponent App\n  view\n    main navigationKey={root} navigationBack=\"back\" width=\"100%\" height=\"100%\"\n      for e in stack(nav) key=e.id\n        if e.name == \"rooms\"\n          column navigationKey={home} position=\"absolute\" inset=0\n            text \"Rooms\"\n        if e.name == \"room\"\n          column navigationKey={pushed} position=\"absolute\" inset=0\n            text \"Room\"\n"
+        "routes nav\n  rooms \"/\"\n    room \"/room/:id\"\ncomponent App\n  view\n    main navigationKey={root} navigationBack=\"\" width=\"100%\" height=\"100%\"\n      for e in stack(nav) key=e.id\n        if e.name == \"rooms\"\n          column navigationKey={home} position=\"absolute\" inset=0\n            text \"Rooms\"\n        if e.name == \"room\"\n          column navigationKey={pushed} position=\"absolute\" inset=0\n            text \"Room\"\n"
     )
 }
 
@@ -297,8 +297,8 @@ fn a_navigation_split_where_no_host_reads_it_is_named_with_its_repair() {
     // recipe-finder, round 12 (and seven apps of rounds 10 and 11): `navigationSplit`
     // on `main`, which the split reads on the root route only.
     let on_root = stack("`${top(nav).id}`", "`${e.id}`", "`${e.id}`").replace(
-        "navigationBack=\"back\"",
-        "navigationBack=\"back\" navigationSplit=360",
+        "navigationBack=\"\"",
+        "navigationBack=\"\" navigationSplit=360",
     );
     assert_eq!(warned(&on_root), [(SPLIT.to_string(), 6)]);
     let m = &messages(&on_root)[0];
@@ -373,7 +373,7 @@ const ROOT: &str = "lower-replace-root";
 /// `follow` is the navigation root's `navigate`, as in every pattern.
 fn first_screen(body: &str, cond: &str) -> String {
     format!(
-        "routes nav\n  welcome \"/\"\n  habits \"/habits\"\n    habit \"/habit/:id\"\ncomponent App\n  state welcomed = false\n  action follow(url: string)\n    nav = go(nav, url)\n  action begin\n{body}  view\n    main navigationKey=`${{top(nav).id}}` navigationBack=\"back\" navigate=follow width=\"100%\" height=\"100%\"\n      for e in stack(nav) key=e.id\n        if {cond}\n          column navigationKey=`${{e.id}}` position=\"absolute\" inset=0\n            button press=begin testId=\"continue\"\n              text \"Continue\"\n"
+        "routes nav\n  welcome \"/\"\n  habits \"/habits\"\n    habit \"/habit/:id\"\ncomponent App\n  state welcomed = false\n  action follow(url: string)\n    nav = go(nav, url)\n  action begin\n{body}  view\n    main navigationKey=`${{top(nav).id}}` navigationBack=\"\" navigate=follow width=\"100%\" height=\"100%\"\n      for e in stack(nav) key=e.id\n        if {cond}\n          column navigationKey=`${{e.id}}` position=\"absolute\" inset=0\n            button press=begin testId=\"continue\"\n              text \"Continue\"\n"
     )
 }
 
@@ -498,9 +498,9 @@ fn a_replace_that_may_not_be_refused_or_reached_at_launch_is_not_named() {
     }
     // A launch at `/` that opens no root alone (here `notfound` over the first
     // tab's root), and tabs, whose panels are made as the tablist selects them.
-    let src = "routes nav\n  tab welcome \"/a b/one\"\n  section \"/a%20b/:id\"\n  notfound\ncomponent App\n  action begin\n    nav = replace(nav, path(\"section\", \"one\"))\n  view\n    main navigationKey=`${top(nav).id}` navigationBack=\"back\" width=\"100%\" height=\"100%\"\n      for e in stack(nav) key=e.id\n        if e.name == \"welcome\"\n          column navigationKey=`${e.id}` position=\"absolute\" inset=0\n            button press=begin\n              text \"Continue\"\n";
+    let src = "routes nav\n  tab welcome \"/a b/one\"\n  section \"/a%20b/:id\"\n  notfound\ncomponent App\n  action begin\n    nav = replace(nav, path(\"section\", \"one\"))\n  view\n    main navigationKey=`${top(nav).id}` navigationBack=\"\" width=\"100%\" height=\"100%\"\n      for e in stack(nav) key=e.id\n        if e.name == \"welcome\"\n          column navigationKey=`${e.id}` position=\"absolute\" inset=0\n            button press=begin\n              text \"Continue\"\n";
     assert_eq!(warned(src), [], "{src}");
-    let src = "routes nav\n  tab today \"/\"\n  tab history \"/history\"\ncomponent App\n  action see\n    nav = replace(nav, path(\"history\"))\n  view\n    main navigationKey=`${top(nav).id}` navigationBack=\"back\"\n      column\n        for t in nav.tabs key=t.name\n          column role=\"tabpanel\" id=`panel-${t.name}`\n            for e in t.stack key=e.id\n              column navigationKey=`${e.id}`\n                if e.name == \"today\"\n                  button press=see\n                    text \"History\"\n      row role=\"tablist\"\n        button role=\"tab\" aria-controls=\"panel-today\" aria-selected=(nav.tab == \"today\")\n          text \"Today\"\n        button role=\"tab\" aria-controls=\"panel-history\" aria-selected=(nav.tab == \"history\")\n          text \"History\"\n";
+    let src = "routes nav\n  tab today \"/\"\n  tab history \"/history\"\ncomponent App\n  action see\n    nav = replace(nav, path(\"history\"))\n  view\n    main navigationKey=`${top(nav).id}` navigationBack=\"\"\n      column\n        for t in nav.tabs key=t.name\n          column role=\"tabpanel\" id=`panel-${t.name}`\n            for e in t.stack key=e.id\n              column navigationKey=`${e.id}`\n                if e.name == \"today\"\n                  button press=see\n                    text \"History\"\n      row role=\"tablist\"\n        button role=\"tab\" aria-controls=\"panel-today\" aria-selected=(nav.tab == \"today\")\n          text \"Today\"\n        button role=\"tab\" aria-controls=\"panel-history\" aria-selected=(nav.tab == \"history\")\n          text \"History\"\n";
     assert_eq!(warned(src), [], "{src}");
 }
 
@@ -718,4 +718,115 @@ fn a_geometry_read_in_a_child_is_checked_against_the_whole_view() {
     let src = app("frame(\"pane\")");
     assert_eq!(warned(&src), [(GEOMETRY.to_string(), 13)]);
     assert!(messages(&src)[0].contains("did you mean `frame(\"panel\")`?"));
+}
+
+const NAVIGATION_BACK: &str = "lower-navigation-back-id";
+
+fn back_id(name: &str, view: &str) -> String {
+    let view: String = view.lines().map(|l| format!("      {l}\n")).collect();
+    format!("component App\n  state closed = 0\n  action back\n    closed = closed + 1\n  action close(v: number)\n    closed = v\n  view\n    main navigationKey=\"root\" {name}\n{view}")
+}
+
+fn back_warnings(src: &str) -> Vec<(String, u32)> {
+    warned(src)
+        .into_iter()
+        .filter(|(id, _)| id == NAVIGATION_BACK)
+        .collect()
+}
+
+#[test]
+fn navigation_back_names_a_press_controls_id_not_an_action() {
+    for press in ["back", "close(1)"] {
+        let name = if press == "back" { "back" } else { "close" };
+        let src = back_id(
+            &format!("navigationBack=\"{name}\""),
+            &format!("button press={press}\n  text \"Close\""),
+        );
+        assert_eq!(back_warnings(&src), [(NAVIGATION_BACK.to_string(), 8)]);
+        let m = messages(&src)
+            .into_iter()
+            .find(|m| m.contains("names a control's `id`, not an action"))
+            .unwrap();
+        assert!(
+            m.contains("no element in the view has that id")
+                && m.contains("root's `navigate` handler")
+                && m.contains("router's Back"),
+            "{m}"
+        );
+        assert!(m.contains(&format!("id=\"{name}\"")), "{m}");
+        let repaired = src.replace("button press=", &format!("button id=\"{name}\" press="));
+        assert_eq!(back_warnings(&repaired), []);
+    }
+    // The warning does not depend on a namesake action or any press handler.
+    for view in ["text \"Body\"", "button press=back\n  text \"Close\""] {
+        let src = back_id("navigationBack=\"close\"", view);
+        assert_eq!(
+            back_warnings(&src),
+            [(NAVIGATION_BACK.to_string(), 8)],
+            "{src}"
+        );
+    }
+    let src = back_id(
+        "navigationBack=\"close\"",
+        "button testId=\"close\" press=back\n  text \"Close\"",
+    );
+    assert!(messages(&src)
+        .iter()
+        .any(|m| m.contains("`testId=\"close\"`")));
+    let src = back_id(
+        "navigationBack=\"clsoe\"",
+        "button id=\"close\" press=back\n  text \"Close\"",
+    );
+    assert!(messages(&src)
+        .iter()
+        .any(|m| m.contains("did you mean `navigationBack=\"close\"`?")));
+}
+
+#[test]
+fn navigation_back_checks_only_provably_missing_controls() {
+    for (name, view) in [
+        ("", "text \"Body\""),
+        ("navigationBack=\"\"", "text \"Body\""),
+        ("navigationBack=`${closed}`", "text \"Body\""),
+        (
+            "navigationBack=\"close\"",
+            "column id=\"close\"\n  text \"Body\"",
+        ),
+        (
+            "navigationBack=\"close\"",
+            "button id=\"close\" commandfor=\"ask\" command=\"show-modal\"\n  text \"Close\"\ndialog id=\"ask\"\n  text \"Confirm\"",
+        ),
+        (
+            "navigationBack=\"close\"",
+            "button id=\"close\" press=back\n  text \"Close\"",
+        ),
+        (
+            "navigationBack=\"close\"",
+            "button id=`${closed}` press=back\n  text \"Close\"",
+        ),
+        (
+            "navigationBack=\"close\"",
+            "button id=\"close\" disabled=true press=back\n  text \"Close\"",
+        ),
+        (
+            "navigationBack=\"close\"",
+            "if closed == 0\n  button id=\"close\" press=back\n    text \"Close\"",
+        ),
+    ] {
+        let src = back_id(name, view);
+        assert_eq!(back_warnings(&src), [], "{src}");
+    }
+    // A matching id only on another route is not proof of reachability.
+    let src = back_id("navigationBack=\"close\"", "column navigationKey=\"home\"\n  button id=\"close\" press=back\n    text \"Close home\"\ncolumn navigationKey=\"detail\"\n  text \"Detail\"");
+    assert_eq!(back_warnings(&src), []);
+    // A computed id on any element could match the Back name.
+    let src = back_id(
+        "navigationBack=\"close\"",
+        "column id=`${closed}`\n  text \"Body\"",
+    );
+    assert_eq!(back_warnings(&src), []);
+    let src = "component App\n  view\n    main navigationKey=\"root\" navigationBack=\"close\"\n      Close()\ncomponent Close\n  state closed = false\n  action back\n    closed = true\n  view\n    button id=\"close\" press=back\n      text \"Close\"\n";
+    assert_eq!(back_warnings(src), []);
+    let src = src.replace(" id=\"close\"", "");
+    assert_eq!(back_warnings(&src), [(NAVIGATION_BACK.to_string(), 3)]);
 }

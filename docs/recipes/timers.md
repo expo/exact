@@ -33,7 +33,7 @@ component Tea
     minutes = m
     finished = false
   view
-    main navigationKey=`${top(nav).id}` navigationBack="back" testId="app" width="100%" height="100%"
+    main navigationKey=`${top(nav).id}` testId="app" width="100%" height="100%"
       for e in stack(nav) key=e.id
         column navigationKey=`${e.id}` navigationScroll="presets" position="absolute" inset=0
           display="flex" flex-direction="column"

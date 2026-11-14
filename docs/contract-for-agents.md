@@ -2346,7 +2346,15 @@ itself: its content goes in a `scroll`, `list` or `overflow-y="auto"` box, which
 the bar's scroller with nothing written (`navigationScroll` names another; "Routes
 and web documents"). A sheet's swipe down and a pushed screen's edge swipe press the
 route's enabled control whose `id` is the root's `navigationBack`, or, when the route
-has none, one outside every route (a header the screens share). Naming a control is optional:
+has none, one outside every route (a header the screens share).
+`navigationBack` names that control's `id`, not its action: for example,
+`navigationBack="close"` with `button id="close" press=back`. A literal name that
+no element in the expanded view has as its `id` earns warning
+`lower-navigation-back-id`. A computed name, any computed element id or an
+unexpanded component prevents this check. A
+matching id somewhere in the view does not prove that Back can reach it: a
+control only on an inactive route is not pressed from the active one.
+Naming a control is optional:
 the navigation root is the app view's first element, and `navigationKey` alone there names none. The agent's
 `back` presses it too, as Escape does on a Mac sheet. When a sheet's swipe down should not do what its
 Cancel does (Cancel reverts the edits, a swipe down keeps them), give Cancel another `id`:
@@ -3363,7 +3371,7 @@ Tabs with a stack each have one layout that works on web, macOS and iOS
 `host/web-js/conformance/tabs.steps`):
 
 ```text
-main navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow display="flex" flex-direction="column" height="100%"
+main navigationKey=`${top(nav).id}` navigationBack="close" navigate=follow display="flex" flex-direction="column" height="100%"
   column flex=1 min-height=0 position="relative"
     for t in nav.tabs key=t.name
       column role="tabpanel" id=`panel-${t.name}` position="absolute" inset=0
@@ -3371,7 +3379,7 @@ main navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow displa
           column navigationKey=`${e.id}` navigationScroll=`content-${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
             header
               if e.name == "item"
-                button id="back" press=back
+                button id="close" press=back
                   text "Home"
               text e.name role="heading" aria-level=(e.name == "item" ? 2 : 1)
             scroll id=`content-${e.id}` flex=1 min-height=0
@@ -3391,7 +3399,7 @@ main navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow displa
   before it reads or presses anything inside it; a target in an unopened tab is
   refused with the tap that opens it (LLP 1075.003 §9.14).
 - Each route starts with a `header` (its heading, and on a pushed route the
-  `id="back"` control), which iOS makes the navigation bar. Leave the tablist's and the
+  `id="close"` control), which iOS makes the navigation bar. Leave the tablist's and the
   routes' backgrounds, heights and colours unsaid: the platform draws the bars and the
   page. For an authored design, put `appearance="none"` on the `header` or root
   `tablist` to keep that bar's layout, colours and type on iOS too. A header
