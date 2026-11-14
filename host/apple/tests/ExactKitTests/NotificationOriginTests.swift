@@ -106,6 +106,27 @@ final class NotificationOriginTests: XCTestCase {
         }
     }
 
+    /// The Expo push service sends a message's `data` as the payload's `body`
+    /// object, beside keys of its own: a push opens that object's `navigate`,
+    /// and a top-level `navigate` comes first.
+    func testAPushFromTheExpoPushServiceOpensItsBodysNavigate() {
+        let expo: [AnyHashable: Any] = ["aps": ["alert": ["title": "Deploy", "body": "Finished in 2 minutes"]],
+                                        "experienceId": "@owner/app", "scopeKey": "@owner/app", "projectId": "p",
+                                        "body": ["workflowRunId": "7", "navigate": "/workflows/7"]]
+        var both = expo
+        both["navigate"] = "/top"
+        for (info, opened) in [(expo, "/workflows/7"), (both, "/top"),
+                               (["body": ["navigate": 42]] as [AnyHashable: Any], nil),
+                               (["body": "/workflows/7"] as [AnyHashable: Any], nil),
+                               (["body": ["workflowRunId": "7"]] as [AnyHashable: Any], nil)] {
+            let (session, activations) = self.session()
+            push(info, to: session)
+            XCTAssertEqual(session.launchLocation, opened, "\(info)")
+            XCTAssertTrue(session.heldModuleEvents.isEmpty, "\(info)")
+            XCTAssertEqual(activations(), opened == nil ? 0 : 1, "\(info)")
+        }
+    }
+
     /// A push's location is reduced as a local notification's is
     /// (`openLocation`, the router's `location_of`): whatever its scheme or
     /// origin, it is a location of the app's own. The app's own link handlers

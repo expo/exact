@@ -6,8 +6,9 @@
 // host's activation entry (`userInfo["exact"]`): it opens the entry's
 // `navigate` location, or raises the module's event on the session that
 // posted it, held until that session can hear it. A remote notification's
-// payload is its sender's: its click opens the payload's top-level
-// `navigate` as a local notification's opens, and nothing else of the
+// payload is its sender's: its click opens the payload's `navigate`, at
+// the top level or in the `body` the Expo push service sends a message's
+// `data` as, as a local notification's opens, and nothing else of the
 // payload is read (LLP 1133.004 §9 P5). A chosen action is the app's
 // declared action, read against its declarations (NotifyActions.swift).
 // A notification shows with the app in front
@@ -101,15 +102,17 @@ final class NotificationPresenter: NSObject, UNUserNotificationCenterDelegate {
         deliver(id: request.identifier, date: notification.date, info: request.content.userInfo)
     }
 
-    /// A push's tap: its top-level `navigate`, a string, opened as a local
-    /// notification's is (`openLocation`, the router's `location_of`), so it
-    /// reaches only the app's own routes; the app's link handlers are not the
+    /// A push's tap: its `navigate`, a string at the top level or in the
+    /// `body` object the Expo push service sends a message's `data` as, the
+    /// top level first. It opens as a local notification's does
+    /// (`openLocation`, the router's `location_of`), so it reaches only the
+    /// app's own routes; the app's link handlers are not the
     /// sender's to pick. It opens in `chosen`, or the first live session when
     /// none was chosen; a chosen session that is gone gets nothing, and no
     /// other session stands in for it. Nothing else is read, no event is
     /// raised, and without a location nothing is opened.
     func deliverPush(id: String, date: Date, info: [AnyHashable: Any], to chosen: ExactSession?) {
-        guard let text = info["navigate"] as? String,
+        guard let text = (info["navigate"] ?? (info["body"] as? [AnyHashable: Any])?["navigate"]) as? String,
               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, firstDelivery(id, date) else { return }
         let session = chosen ?? app?.sessions.first { $0.state != .destroyed }
         guard let session, session.state != .destroyed else {
