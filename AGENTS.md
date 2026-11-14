@@ -196,7 +196,7 @@ section binds (`rules/RULES.md`, "Agents").
   them): `cargo test -p exact-painted --lib --tests --no-fail-fast`, or `--bins` for a
   bin-only crate such as `exact-web-js`. Advice, not a check.
 - Verify by running, never by grepping. Fix loops get three rounds, then stop and say so.
-- Land it (LLP 1172; Charlie, 2026-11-14: "just land stuff, we can fix it later if it breaks
+- Land it (LLP 1176; Charlie, 2026-11-14: "just land stuff, we can fix it later if it breaks
   something"). When your change passes the six checks on your own tree, merge it yourself, at
   once, as a squash, and fix forward what it breaks. Do not hold it for a main that moved
   during the checks, for a failure main already has (say so where its owner will see it), or
