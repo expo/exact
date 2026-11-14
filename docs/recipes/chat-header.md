@@ -34,7 +34,7 @@ component Chat
             for m in thread key=m.id
               column padding="3px 12px"
                 if m.newDay
-                  text formatDay(m.at, time.epochAtZero, time.utcOffset, "day") align-self="center"
+                  text formatDay(m.at, time.epochAtZero, time.utcOffset, "section") align-self="center"
                     padding="2px 10px" border-radius=10 background-color="-exact-fill" font="-exact-caption1"
                     testId=`day-${m.id}`
                 text m.body white-space="pre-wrap" testId=`message-${m.id}`

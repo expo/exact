@@ -18,7 +18,7 @@ functions: call -> result
   xs.flat() -> T[]
   floor(n) -> number
   formatDate(msOrDayKey, offsetMinutes, "medium"|"month-year"|"iso") -> string
-  formatDay(then, now, offsetMinutes, "day"|"day-time"|"list") -> string  (Today, Monday)
+  formatDay(then, now, offsetMinutes, "day"|"day-time"|"list"|"section") -> string  (Today)
   formatDecimal(units, digits) -> string  (cents to "12.34"; literal digits)
   formatNumber(n, "compact"|"decimal"|"percent"|"currency", "USD") -> string  (1,234.5; 26%)
   formatTime(ms, offsetMinutes, "short") -> string  ("2:13 PM"; minutes east of UTC)
