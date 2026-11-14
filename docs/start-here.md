@@ -341,7 +341,10 @@ const sources: Sources = {
 export const answer: Answer = (source, args, store, storage, native) => sources[source](args, store, storage, native);
 ```
 
-**The tests** drive by `testId` on every host, each from empty storage (an app's own server's database is empty at the start of a run and shared by its tests):
+**The tests** drive by `testId` on every host, each from empty client storage. An
+owned server restarts empty for each test, including with `database: false`. Remote
+servers stay shared. Only `test` and `agent --test` share an ancestor's server, saying so;
+`verify` refuses an answering local server, including an ancestor's:
 
 ```contract-test
 test "an item is added, a repeat refused, checked off and kept"

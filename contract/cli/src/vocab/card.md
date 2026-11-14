@@ -25,7 +25,7 @@ filter: xs.filter(x => bool) -> T[]
 flat: xs.flat() -> T[]
 first: first(xs) -> option<T>
 formatDate: formatDate(msOrDayKey, offsetMinutes, "medium"|"month-year"|"iso") -> string
-formatDay: formatDay(then, now, offsetMinutes, "day"|"day-time"|"list") -> string  (Today, Monday)
+formatDay: formatDay(then, now, offsetMinutes, "day"|"day-time"|"list"|"section") -> string  (Today)
 formatDecimal: (cents to "12.34"; literal digits)
 formatNumber: formatNumber(n, "compact"|"decimal"|"percent"|"currency", "USD") -> string  (1,234.5; 26%)
 formatTime: ("2:13 PM"; minutes east of UTC)

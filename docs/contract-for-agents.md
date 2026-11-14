@@ -447,7 +447,8 @@ component Cart
   `formatDate(due, 0, "medium")` labels a picked `YYYY-MM-DD` day directly;
   a key keeps its calendar day at every valid offset ([dates recipe](recipes/dates-and-days.md)).
   `formatDay(then, now, offset, "day")` names a day from `now` (`Today`, `Yesterday`, else
-  the date; `"day-time"` adds the time, `"list"` is a list row's, as Mail's).
+  the date; `"day-time"` adds the time, `"list"` is a list row's, as Mail's, and
+  `"section"` a chat's day separator: a weekday within the week, else `Thu, Oct 15`).
 - `formatTime`, `formatDate`, `formatDay` and `formatNumber` follow the strings table
   the app shows: with `strings/de.json` shown they print `26.09.2026`, `13:02`,
   `1.234,5` and `Heute`, and `setLocale` moves them with the text; the examples above
@@ -1775,8 +1776,10 @@ out (LLP 1157).
   `Authorization: Bearer <jwt>`), so a test's `request` can write as another
   client; `http: (request) => Response | undefined` answers the app's other
   routes (an auth endpoint), with CORS headers added. Keep the
-  rules both run in a file with no Convex import (`convex/tiles.ts`). One
-  server serves a whole run: a test that counts clears first.
+  rules both run in a file with no Convex import (`convex/tiles.ts`). Each
+  test starts an empty stand-in, including with `database: false`. Remote
+  servers stay shared. Only `test` and `agent --test` share an ancestor's server,
+  saying so; `verify` refuses an answering local server, including an ancestor's.
 - **Driving a native host against a real deployment.** The driver seeds a
   native host's randomness (`EXACT_AGENT_SEED`, 1 by default), so two launches
   draw the same session id and Convex answers the second's writes with the

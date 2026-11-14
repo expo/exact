@@ -1,6 +1,6 @@
 // The app's server: `bun server.ts` (bun:sqlite; a persona signs in with its token). It listens where
 // app.ts calls it, its API: the one place the address is. `test` and `verify` run it there
-// themselves on an empty database, its path in DB; the default keeps data.db beside it.
+// themselves on an empty database for each test, its path in DB; the default keeps data.db beside it.
 import { Database } from 'bun:sqlite';
 import { API } from './app.ts';
 

@@ -202,7 +202,7 @@ test("a Rust source's store read reaches rt.js whether its call answers or fails
   writeFileSync(resolve(dir, 'storage-request.js'), "export const createStorageRequests = () => ({ run: async () => { throw new Error('storage failed'); } });\n");
   const memory = new WebAssembly.Memory({ initial: 1 }), out = 32768;
   let capture = false;
-  let output = new Uint8Array(), read = false, fails = false, unknown = false, socket = false, writes = false, cache, preload, prefetch = false, method = 'GET', abi = 12;
+  let output = new Uint8Array(), read = false, draws = 0, fails = false, unknown = false, socket = false, writes = false, cache, preload, prefetch = false, method = 'GET', abi = 12;
   let held = false, heldTag;
   const scopes = [], targets = [];
   const response = fill => {
@@ -231,7 +231,7 @@ test("a Rust source's store read reaches rt.js whether its call answers or fails
         const names = Array.from({ length: u32() }, string), pairs = Array.from({ length: u32() }, () => [string(), string()]);
         scopes.push({ names, pairs });
         response(w => {
-          w.u8(2); w.u8(read ? 1 : 0); w.u32(0); w.u32(0); w.u32(writes ? 1 : 0);
+          w.u8(2); w.u8(read ? 1 : 0); w.u32(0); w.u32(draws); w.u32(writes ? 1 : 0);
           if (writes) { w.string('k'); w.u8(1); w.string('private'); }
           w.u32(0); w.u8(0); w.string('');
           if (held) w.u8(15);
@@ -337,6 +337,16 @@ test("a Rust source's store read reaches rt.js whether its call answers or fails
     capture = true;
     expect(data.answer('reader', [], store).req).toEqual({ canvas: { surface: 'ink', path: 'app:/tmp/ink.png' }, scope: '' });
     capture = false;
+    // A draw the module reports reaches a server render, a failed call's too (LLP 1069.005 D2), and is no read of the
+    // store: a module may mark one without importing the page's entropy
+    let drew = 0;
+    globalThis.__exactDrew = () => { drew++; };
+    [read, draws, fails] = [false, 1, false];
+    expect(data.answer('reader', [], store).store).toBeUndefined();
+    fails = true;
+    expect(() => data.answer('reader', [], store)).toThrow('nothing kept');
+    expect([drew, data.threwRead()]).toEqual([2, false]);
+    delete globalThis.__exactDrew; draws = 0;
     [read, fails] = [true, false];
     expect(data.answer('reader', [], store).store).toBe(true);
     expect(data.parse('reader', [], failed, store).store).toBe(true);

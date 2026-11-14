@@ -1,0 +1,7 @@
+# The reader never leaves the start: each landed page re-arms it.
+clock +600
+clock +600
+clock +600
+clock +600
+clock +600
+expect slots.pages == 5
