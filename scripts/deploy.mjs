@@ -241,16 +241,47 @@ export function assertCapturedContractSources(graph, sourceRoot) {
   }
 }
 
+function packageDependencies(root) {
+  const manifest = resolve(root, 'package.json');
+  if (!existsSync(manifest)) return [];
+  const pkg = JSON.parse(readFileSync(manifest, 'utf8'));
+  return Object.entries({ ...pkg.dependencies, ...pkg.devDependencies, ...pkg.optionalDependencies });
+}
+
+export function assertCapturedPackageDependencies(root, sourceRoot) {
+  const captured = realpathSync.native(sourceRoot), visited = new Set();
+  const checked = path => {
+    const file = realpathSync.native(path);
+    if (!inside(captured, file) || resolve(captured, relative(captured, file)) !== file)
+      refuse(`${path}: a local package dependency outside the captured snapshot`);
+    return file;
+  };
+  const walk = path => {
+    const file = checked(path);
+    if (visited.has(file)) return;
+    visited.add(file);
+    // Bun can link individual files while the package directory stays inside.
+    if (statSync(file).isDirectory()) for (const name of readdirSync(file)) walk(resolve(file, name));
+  };
+  for (const [name, spec] of packageDependencies(root)) {
+    if (typeof spec !== 'string' || !/^(file|link):/.test(spec)) continue;
+    for (let at = root; inside(captured, at); at = dirname(at)) {
+      const installed = resolve(at, 'node_modules', name);
+      if (!existsSync(installed)) continue;
+      if (spec.startsWith('file:')) checked(resolve(root, spec.slice(5)));
+      walk(installed);
+      break;
+    }
+  }
+}
+
 function contractPackageRoots(app, exactRoot, compiler) {
-  // A library installed by an absolute `file:` path or a `link:` would be
-  // reinstalled from the live tree after capture: only a relative `file:`
-  // path moves with the snapshot.
-  const manifest = resolve(app.workspace ?? app.dir, 'package.json');
-  if (existsSync(manifest)) {
-    const pkg = JSON.parse(readFileSync(manifest, 'utf8'));
-    for (const [name, spec] of Object.entries({ ...pkg.dependencies, ...pkg.devDependencies })) {
+  // Only relative file: paths move with the snapshot. Check every manifest
+  // whose lockfile materializeSnapshot can install before reading packages.
+  for (const root of new Set([exactRoot, app.workspace ?? app.dir, app.dir])) {
+    for (const [name, spec] of packageDependencies(root)) {
       if (unrelocatableContractDependency(spec))
-        refuse(`${manifest}: "${name}": "${spec}" would be read live after the snapshot; use a relative \`file:\` path`);
+        refuse(`${resolve(root, 'package.json')}: "${name}": "${spec}" would be read live after the snapshot; use a relative \`file:\` path`);
     }
   }
   const owned = new Set([repoTop(app.dir, 'app source'), repoTop(exactRoot, 'Exact source')]);
@@ -579,12 +610,13 @@ export function materializeSnapshot(snapshot, run, app, cache = null) {
   // node_modules is an output, never captured: a TypeScript app's bake runs Rolldown from it, ships SQLite WASM out of it,
   // and a module package's crate is under it (LLP 1133.001 D9). Install exactly what the captured bun.lock pins, from
   // Bun's cache, into the captured tree, before the Cargo closure is asserted.
-  for (const root of new Set([exactRoot, workspace])) {
+  for (const root of new Set([exactRoot, workspace, dir])) {
     if (!existsSync(resolve(root, 'package.json')) || !existsSync(resolve(root, 'bun.lock'))) continue;
     const installed = spawnSync(process.execPath, ['install', '--frozen-lockfile', '--prefer-offline'], {
       cwd: root, env: sealedSourceEnv(sourceRoot), stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8' });
     if (installed.status !== 0) refuse(`${root}: bun install --frozen-lockfile failed in the captured source: ${(installed.stderr || installed.stdout || installed.error?.message || '').trim()}`);
   }
+  for (const root of new Set([exactRoot, workspace, dir])) assertCapturedPackageDependencies(root, sourceRoot);
   assertMaterializedCargoClosure([workspace, exactRoot], sourceRoot, target, {workspace, manifest});
   // Every Contract file the bake will read is in the captured tree: an
   // installed library that still leads outside it is live bytes (LLP 1091 D10).
