@@ -376,10 +376,20 @@ fn different_bodies_bypass_the_http_copy_despite_different_redirect_or_cache_pol
                 request.redirect = Redirect::Manual;
             }
             server.plan("/item", Plan::new(200, &[], b"different"));
-            let (reply, cached) = ask(&core, &woke, job(2, request));
-            assert!(!cached);
-            assert_eq!(reply.body, b"different");
-            assert_eq!(server.count(), 2);
+            core.run(job(2, request), None).unwrap();
+            let (ticket, outcome, timing) = collect(&core, &woke);
+            assert_eq!(ticket, 2);
+            assert!(!timing.cached);
+            // URLSession refuses a GET that has a body, as a browser's fetch does.
+            if cfg!(target_vendor = "apple") {
+                assert!(matches!(outcome, Outcome::Failed { .. }), "{outcome:?}");
+            } else {
+                assert!(
+                    matches!(&outcome, Outcome::Response(r) if r.body == b"different"),
+                    "{outcome:?}"
+                );
+                assert_eq!(server.count(), 2);
+            }
         }
     }
 }
