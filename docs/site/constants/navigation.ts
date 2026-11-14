@@ -389,6 +389,12 @@ export const sections: NavSection[] = [
         description: 'A WebSocket whose server checks the signed-in person at connect opens with a single-use ticket bought over HTTPS with @exact/oauth.',
       },
       {
+        route: 'recipeSuspendingFeed',
+        path: '/recipes/suspending-feed',
+        source: 'recipes/suspending-feed.md',
+        description: 'A WebSocket feed that stays open while a desktop window is hidden and closes when the host freezes the page.',
+      },
+      {
         route: 'recipeSymbols',
         path: '/recipes/symbols',
         source: 'recipes/symbols.md',
