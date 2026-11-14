@@ -139,17 +139,13 @@ enum PositionArea {
     /// a box that narrows to fit keeps its place where one laid out once at
     /// the viewport's size would flip (Chrome, the plan's table). `measure`
     /// lays the box out in a region that size and answers its border box and
-    /// margins as that layout resolved them (`Runtime.measureBlock`); each
-    /// option flips those margins as it flips the area. The caller gives the
-    /// chosen region as the box's block, so it is laid out at the size it was
-    /// placed at. When no option fits, the history's option is aligned as
+    /// margins as that layout resolved them (`Runtime.measureBlock`), with
+    /// the option's tactic applied to sizing rows and margins before layout.
+    /// The caller gives the chosen region and tactic as the box's block,
+    /// so it is laid out at the size it was placed at. When no option fits, the history's option is aligned as
     /// `origin` aligns it. `margins` are the authored ones, which with the
     /// box's size in the whole block (which no option changes) keep the
     /// history as `origin` keeps it.
-    ///
-    /// `flip-start` exchanges the margins, not the width and height, and the
-    /// box is laid out with its authored margins: its border box is the one
-    /// its region gives with those (the plan's stated limit).
     ///
     /// `scroll` is how far the scrollers between the anchor and the block are
     /// scrolled (`Presenter.anchorScroll`). The chosen option keeps the scroll
@@ -163,9 +159,9 @@ enum PositionArea {
     /// start edges where they were (its extent the page's now).
     static func place(_ area: String, anchor: CGRect, margins: Margins = .init(), fallbacks: String = "none",
                       overflow: Overflow = .fixed, rtl: Bool = false, scroll: CGPoint = .zero, pageScroll: CGPoint = .zero, history: inout History,
-                      in bounds: CGRect, measure: (CGSize) -> Measured) -> Placement {
+                      in bounds: CGRect, measure: (CGSize, HostBlock.Tactic) -> Measured) -> Placement {
         // As `origin`'s, its size the box's in the whole block: a box that grows or shrinks starts again.
-        let whole = measure(bounds.size).size
+        let whole = measure(bounds.size, .none).size
         if history.area != area || history.fallbacks != fallbacks || history.size != whole || history.margins != margins
             || history.mode != overflow.mode || history.rtl != rtl {
             history = History(area: area, fallbacks: fallbacks, size: whole, margins: margins, mode: overflow.mode, rtl: rtl)
@@ -180,13 +176,13 @@ enum PositionArea {
         func option(_ index: Int, at anchor: CGRect) -> Option {
             let (x, y, _) = flipped(options[index], axes, margins, rtl: rtl)
             let region = Self.region(x, y, anchor: anchor, in: bounds)
-            let measured = measure(region.size), size = measured.size
-            let m = flipped(options[index], axes, measured.margins, rtl: rtl).2
+            let tactic = Self.tactic(options[index], rtl: rtl)
+            let measured = measure(region.size, tactic), size = measured.size, m = measured.margins
             let outer = CGSize(width: size.width + m.left + m.right, height: size.height + m.top + m.bottom)
             let corner = CGPoint(x: at(x, anchor.minX, anchor.maxX, outer.width, bounds.minX, bounds.maxX),
                                  y: at(y, anchor.minY, anchor.maxY, outer.height, bounds.minY, bounds.maxY))
             let origin = CGPoint(x: corner.x + m.left, y: corner.y + m.top)
-            return Option(placement: Placement(origin: origin, size: size, region: region), box: CGRect(origin: corner, size: outer), x: x, y: y)
+            return Option(placement: Placement(origin: origin, size: size, region: region, tactic: tactic), box: CGRect(origin: corner, size: outer), x: x, y: y)
         }
         // A centred cell's box may overflow its cell, as anchor-center lets it: it fits inside the containing block.
         func fits(_ o: Option) -> Bool {
@@ -203,7 +199,7 @@ enum PositionArea {
         let then = anchor.offsetBy(dx: shift.x, dy: shift.y), current = option(history.choice, at: then)
         func moved(_ p: Placement) -> Placement {
             Placement(origin: CGPoint(x: p.origin.x - shift.x, y: p.origin.y - shift.y), size: p.size,
-                      region: p.region.offsetBy(dx: -shift.x, dy: -shift.y))
+                      region: p.region.offsetBy(dx: -shift.x, dy: -shift.y), tactic: p.tactic)
         }
         var test = current
         test.box = current.box.offsetBy(dx: -shift.x, dy: -shift.y)
@@ -238,6 +234,7 @@ enum PositionArea {
     /// region (the option's inset-modified containing block) it was sized in.
     struct Placement: Equatable {
         var origin: CGPoint, size: CGSize, region: CGRect
+        var tactic: HostBlock.Tactic = .none
     }
 
     /// An option's region: on each axis the grid's band its side names, the
@@ -287,6 +284,16 @@ enum PositionArea {
             }
         }
         return (x, y, m)
+    }
+
+    /// Reuse the area's ordered flips to tell the kernel which authored
+    /// side belongs on each physical side before it resolves lengths.
+    static func tactic(_ option: String, rtl: Bool) -> HostBlock.Tactic {
+        let m = flipped(option, (0, 0), Margins(top: 0, right: 1, bottom: 2, left: 3), rtl: rtl).2
+        let sides = [m.top, m.right, m.bottom, m.left].enumerated().reduce(UInt32(0)) {
+            $0 | (UInt32($1.element) << (2 * $1.offset))
+        }
+        return HostBlock.Tactic(sides: sides)
     }
 
     /// The history's option when none fits: CSS Box Alignment §4.4.1.2

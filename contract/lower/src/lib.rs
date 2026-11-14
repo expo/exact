@@ -68,6 +68,7 @@ mod overflow;
 pub mod params;
 mod popover_surface;
 mod resource_args;
+mod roles;
 mod root_names;
 mod routes;
 mod row_look;

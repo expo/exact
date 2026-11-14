@@ -112,38 +112,6 @@ function apply(batch) {
           }
           break;
         // a scroll to the visit's fragment, made at the runner's `scrollToFragment` once its content has arrived, which a scroll by the person since cancels (LLP 1153 D5)
-        case "sound":
-          if (!agentMode) {
-            (host.soundModule ??= new Promise((r) => requestAnimationFrame(r)).then(() => loadAfterPaint("./sound-glue.js", "installSound")).then((install) => install({
-              files: op.files ?? [],
-              log,
-              origin: () => t0
-            }))).then((s) => {
-              host.soundOut = s;
-              if (op.files && op.files !== s.files) {
-                s.reset(op.files);
-              }
-              s.ops(op.ops);
-            }).catch(console.error);
-          }
-          break;
-        case "midi":
-          if (!agentMode) {
-            (host.midiModule ??= new Promise((r) => requestAnimationFrame(r)).then(() => loadAfterPaint("./midi-glue.js", "installMidi")).then((install) => install({
-              log,
-              origin: () => t0,
-              deliver: (m) => {
-                if (host.wasm?.exact_midi) {
-                  applyBatch(JSON.parse(readOut(host.wasm.exact_midi(writeIn(JSON.stringify(m))))));
-                }
-              }
-            }))).then((m) => {
-              host.midiOut = m;
-              m.ops(op.ops, op.boot);
-            }).catch(console.error);
-          }
-          break;
-        // LLP 1096 D7: the voice table's ops, after first paint; never under the agent, whose clock is virtual (D10); LLP 1125 D7: the MIDI queue's ops and the ports, after first paint; never under the agent, whose runner answers a request itself
         case "create": {
           // Canvas overlays use a div; data-surface is the host-owned drawing leaf.
           const adopted = host.page?.adopting?.get(op.id);
@@ -1008,19 +976,118 @@ function apply(batch) {
   return batch.timers;
 }
 const heldLinks = new WeakMap();
+const heldOutputs = new Map();
 export function applyBatch(batch) {
   for (const line of batch.alerts?.splice(0) ?? []) {
     console.error("exact:", line);
   }
+  // Cancellations commit immediately; starts and their timed ends wait for
+  // their tree. A later cancellation removes an older held start, so revealing
+  // it cannot replay it.
+  let output = heldOutputs.get(batch);
+  if (!output) {
+    output = batch.ops?.filter(op => op.op === "sound" || op.op === "midi") ?? [];
+    if (output.length) batch.ops = batch.ops.filter(op => op.op !== "sound" && op.op !== "midi");
+    const stops = [];
+    for (const row of output) {
+      const stop = op => row.op === "sound" ? op.op === "end" || op.op === "unhaptic"
+        : op.op === "retract" || op.op === "send" && (op.data[0] === 0xfc || (op.data[0] & 0xf0) === 0x80 || (op.data[0] & 0xf0) === 0x90 && op.data[2] === 0);
+      const immediate = [];
+      for (const op of [...row.ops]) {
+        if (!stop(op)) continue;
+        if (row.op === "sound" && op.op === "end") {
+          const earlier = [...heldOutputs.values(), output].flat().find(row => row.op === "sound"
+            && row.ops.some(start => start.op === "play" && start.id === op.id && start.at < op.at));
+          // A choke after the start is playback, not cancellation. Keep it
+          // with its pending voice so the output hears Play before End.
+          if (earlier) {
+            if (earlier !== row) {
+              earlier.ops.push(op);
+              row.ops = row.ops.filter(other => other !== op);
+            }
+            continue;
+          }
+        }
+        immediate.push(op);
+        if (op.op === "send") continue;
+        for (const pending of [...heldOutputs.values(), output]) {
+          for (const earlier of pending) {
+            if (earlier.op !== row.op) continue;
+            earlier.ops = earlier.ops.filter(start => start.id !== op.id || !(row.op === "midi" ? start.op === "send"
+              : op.op === "end" ? start.op === "play" || start.op === "set" || start.op === "end" : start.op === "haptic"));
+          }
+        }
+      }
+      row.ops = row.ops.filter(op => !immediate.includes(op));
+      if (immediate.length || row.boot) stops.push({ ...row, ops: immediate });
+      row.boot = false;
+    }
+    outputNow(stops);
+  }
+  function outputNow(output) {
+    if (!agentMode) {
+      for (const op of output) {
+        try {
+          switch (op.op) {
+            case "sound": {
+              if (host.soundOut) {
+                if (op.files && op.files !== host.soundOut.files) host.soundOut.reset(op.files);
+                host.soundOut.ops(op.ops);
+                break;
+              }
+              (host.soundModule ??= new Promise((r) => requestAnimationFrame(r)).then(() => loadAfterPaint("./sound-glue.js", "installSound")).then((install) => install({
+                files: op.files ?? [],
+                log,
+                origin: () => t0
+              }))).then((s) => {
+                host.soundOut = s;
+                if (op.files && op.files !== s.files) {
+                  s.reset(op.files);
+                }
+                s.ops(op.ops);
+              }).catch(console.error);
+              break;
+            }
+            case "midi": {
+              if (host.midiOut) {
+                host.midiOut.ops(op.ops, op.boot);
+                break;
+              }
+              (host.midiModule ??= new Promise((r) => requestAnimationFrame(r)).then(() => loadAfterPaint("./midi-glue.js", "installMidi")).then((install) => install({
+                log,
+                origin: () => t0,
+                deliver: (m) => {
+                  if (host.wasm?.exact_midi) {
+                    applyBatch(JSON.parse(readOut(host.wasm.exact_midi(writeIn(JSON.stringify(m))))));
+                  }
+                }
+              }))).then((m) => {
+                host.midiOut = m;
+                m.ops(op.ops, op.boot);
+              }).catch(console.error);
+              break;
+            }
+          }
+        } catch (e) {
+          console.error(`exact: ${op.op} op failed`, e);
+        }
+      }
+    }
+  }
+  // The runner has already released gated streams; presentation may wait past suspension.
+  letGo();
   const link = heldLinks.get(batch) ?? navigation.holdLink();
   if (host.page?.hold(batch) || presence.hold(batch)) {
     if (link) heldLinks.set(batch, link);
+    heldOutputs.set(batch, output);
     return {
       timers: batch.timers,
       batch
     };
   }
   heldLinks.delete(batch);
+  heldOutputs.delete(batch);
+  outputNow(output);
   host.textflow?.beforeBatch(batch);
   const began = host.frameSampler ? performance.now() : 0;
   // what applying it cost, for the next frame's record (LLP 1079 D3)

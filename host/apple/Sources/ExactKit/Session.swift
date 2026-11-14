@@ -401,6 +401,8 @@ public final class ExactSession {
     var timerLanding = false
     /// The background task while the batches say the app must finish work an answer started (`mustFinish`).
     let finishHold = FinishHold.platform()
+    /// The bounded socket-close wait during a freeze commit.
+    var freezeCloseHold = FinishHold.platform("closing a frozen page's sockets")
     /// The view presenting this session, while one is mounted (D1).
     weak package var view: ExactView? { didSet { if view !== oldValue { natives.sessionViewChanged() } } }
     #if os(iOS) || os(tvOS)
@@ -787,6 +789,7 @@ public final class ExactSession {
         }
         presenter.selectOptions = { [unowned self] id in runtime.selectOptions(id) }
         presenter.controls.radioGroup = { [unowned self] id in runtime.radioGroup(id) }
+        presenter.controls.roleKeys = { [unowned self] id, key, focused in runtime.roleKeys(id, key: key, focused: focused) }
         presenter.buttonFace = { [unowned self] id in runtime.buttonFace(id) }
         presenter.onIntrinsic = { [unowned self] sizes in whenIdle(bound: true) { [unowned self] in applyUnlessEmpty(runtime.intrinsics(sizes)) } }
         // @ref LLP 1075.003 §3.5, Q3 (c) — what a bar covers reaches layout as an intrinsic
@@ -1077,9 +1080,7 @@ public final class ExactSession {
         advanceIfDue()
     }
 
-    /// The controls' measured sizes (#134), laid out before the frame shows, and after every batch made before that layout: a size is reported once.
-    /// The layout follows the owner's work already posted, which publishes each batch as it makes it. Outside an apply and a landing, its batch lands
-    /// those first (T4); inside either, or with a slice in flight (`whenIdle` would run it in that landing), it waits for them, and the landing reports.
+    /// Reports laid-out control sizes after earlier owner batches land (LLP 1034 T4); an in-flight slice leaves the report to its landing.
     func reportMeasured() {
         guard !holdingReports, !(applying || landing || fillInFlight) || !(ownerInFlight || hasPublished()) else { return }
         presenter.controls.reportMeasured()
@@ -1115,11 +1116,13 @@ public final class ExactSession {
     private(set) var appliedBatches = 0
     package func apply(_ batch: Batch) {
         guard state != .destroyed, !batch.busy, !batch.held else { return }
+        #if os(iOS) || os(tvOS)
+        AudioSession.beginPresentation()
+        defer { AudioSession.endPresentation() }
+        #endif
         appliedBatches += 1
-        // A slice the owner committed before this batch applies first (T4).
+        // Land earlier owner slices first; ask what they leave owed after this batch (LLP 1034 T4).
         if !applying, !landing, ownerInFlight, hasPublished() {
-            // What the landed slices leave owed is asked after this batch,
-            // which the owner made after them (T4; LLP 1034 §8).
             holdingReports = true; landFill(); holdingReports = false
             guard state != .destroyed else { return }
         }

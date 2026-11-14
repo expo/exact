@@ -55,6 +55,7 @@ char *dup_utf8(NSString *value) {
 @property(nonatomic, assign) BOOL ended;
 @property(nonatomic, assign) BOOL cancelled;
 @property(nonatomic, assign) BOOL closing;
+@property(nonatomic, assign) BOOL closeCompleted;
 @property(nonatomic, strong) NSString *failure;
 @property(nonatomic, strong) NSString *protocol;
 @property(nonatomic, assign) NSUInteger pendingBytes;
@@ -90,6 +91,7 @@ char *dup_utf8(NSString *value) {
               reason:(NSData *)reason {
   [self.condition lock];
   self.ended = YES;
+  self.closeCompleted = YES;
   [self.condition broadcast];
   [self.condition unlock];
 }
@@ -436,6 +438,17 @@ void ibex2_darwin_ws_close(void *handle, int code,
   [socket.task cancelWithCloseCode:platformCode
                             reason:data];
   [socket.condition unlock];
+}
+
+// The delegate confirms the handshake, rather than mere submission to NSURLSession.
+int ibex2_darwin_ws_wait_close(void *handle, double timeout_seconds) {
+  Ibex2Socket *socket = (__bridge Ibex2Socket *)handle;
+  NSDate *limit = [NSDate dateWithTimeIntervalSinceNow:timeout_seconds];
+  [socket.condition lock];
+  while (!socket.ended && !socket.cancelled && [socket.condition waitUntilDate:limit]) {}
+  BOOL completed = socket.closeCompleted;
+  [socket.condition unlock];
+  return completed ? 1 : 0;
 }
 
 void ibex2_darwin_ws_test_pause_next_send(void *handle) {

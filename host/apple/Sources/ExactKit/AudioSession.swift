@@ -76,9 +76,6 @@ package enum AudioSession {
     /// stop a running one, so the session is only given up when none is left.
     nonisolated(unsafe) private static var players: Set<ObjectIdentifier> = []
     nonisolated(unsafe) private static var observing = false
-    /// A canvas's hold, which it never gives back.
-    private final class Forever {}
-    private static let forever = Forever()
 
     /// A capture's claim: its mode, options, whether it may run in the
     /// background, and what it is told (1 interrupted, 2 the interruption
@@ -113,14 +110,70 @@ package enum AudioSession {
     static var inCall: Bool { !calls.isEmpty || callActive }
     static let spokenTypes = ["transient", "transient-solo", "playback"]
 
-    /// The process keeps running in the background with `audio` in
-    /// `UIBackgroundModes` and either playback value (LLP 1096 D8), so
-    /// a sequence plays on with the screen locked (LLP 1125 D4), or a capture
-    /// claim that may run in the background (LLP 1133.009 D7).
-    static var playsInBackground: Bool {
+    /// Activation alone grants no background execution: an owner must be
+    /// running, under a category and mode eligible for background audio.
+    nonisolated(unsafe) private static var active = false
+    nonisolated(unsafe) private static var activated: Set<ObjectIdentifier> = []
+    nonisolated(unsafe) private static var running: [ObjectIdentifier: () -> Bool] = [:]
+    nonisolated(unsafe) private static var lastEligibility = false
+    nonisolated(unsafe) private static var backgroundCheck: DispatchWorkItem?
+    nonisolated(unsafe) private static var backgrounding = false
+    /// Background execution sources (iOS/tvOS): a system-activated call; an activated
+    /// background capture or playback speech claim; or an activated, running sound
+    /// or audible AVPlayer owner. Canvas audio releases on the background edge.
+    /// All require the audio background mode;
+    /// non-call owners use the effective playback/playAndRecord category. Video
+    /// owners report timeControlStatus == .playing, never waiting or merely unpaused.
+    static func backgroundExecutionEligible() -> Bool {
         guard (Bundle.main.object(forInfoDictionaryKey: "UIBackgroundModes") as? [String] ?? []).contains("audio") else { return false }
-        return configuration.category == .playback || captures.values.contains { $0.background }
-            || (spoken == "playback" && speeches.values.contains { $0.type == "playback" })
+        if callActive { return true }
+        guard active, !inCall else { return false }
+        let category = AVAudioSession.sharedInstance().category
+        guard category == .playback || category == .playAndRecord else { return false }
+        return holders.contains { activated.contains($0) && running[$0]?() == true }
+            || captures.values.contains { $0.background }
+            || speeches.values.contains { $0.type == "playback" }
+    }
+
+    nonisolated(unsafe) private static var presentationDepth = 0
+    nonisolated(unsafe) private static var eligibilityOwed = false
+
+    /// A sound op can change eligibility before its tree is presented. Publish
+    /// that change only after every enclosing presentation has finished.
+    static func beginPresentation() { presentationDepth += 1 }
+    static func endPresentation() {
+        presentationDepth -= 1
+        if presentationDepth == 0, eligibilityOwed {
+            eligibilityOwed = false
+            playbackChanged()
+        }
+    }
+
+    /// Owners report pause, end and failure on main. The mixer's live count
+    /// is atomic, with no main-thread callback; while hidden, sample it through
+    /// sequences and until the final finite voice ends.
+    package static func playbackChanged() {
+        guard !backgrounding else { return }
+        guard presentationDepth == 0 else { eligibilityOwed = true; return }
+        if AppBackground.now {
+            for holder in Array(holders) where running[holder]?() == false { _ = idlers[holder]?() }
+        }
+        let eligible = backgroundExecutionEligible()
+        if eligible != lastEligibility {
+            lastEligibility = eligible
+            if AppBackground.now { PageFacts.changed() }
+        }
+        if AppBackground.now, eligible, !running.isEmpty, backgroundCheck == nil {
+            let check = DispatchWorkItem {
+                backgroundCheck = nil
+                playbackChanged()
+            }
+            backgroundCheck = check
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: check)
+        } else if !AppBackground.now || !eligible {
+            backgroundCheck?.cancel()
+            backgroundCheck = nil
+        }
     }
     /// For tests: the next activation fails with this, as it can during a call.
     nonisolated(unsafe) static var nextHoldFailure: Error?
@@ -135,16 +188,12 @@ package enum AudioSession {
         try? apply(resting)
     }
 
-    /// Set the app's category and options and activate the session, for good (a
-    /// canvas's audio).
-    package static func activate() throws {
-        try hold(ObjectIdentifier(forever))
-    }
-
     /// `holder` plays sound: the session takes the app's category and options and is
     /// active while anything wants it. A failure to activate throws, and the
     /// want stays for the interruption's end to activate.
-    package static func hold(_ holder: ObjectIdentifier) throws {
+    package static func hold(_ holder: ObjectIdentifier, running plays: @escaping () -> Bool = { true }) throws {
+        defer { playbackChanged() }
+        running[holder] = plays
         holders.insert(holder)
         observe()
         try reconcile()
@@ -158,6 +207,9 @@ package enum AudioSession {
     /// may resume) only once no player is left. A capture's category stays;
     /// a call keeps its category and activation.
     package static func release(_ holder: ObjectIdentifier) {
+        defer { playbackChanged() }
+        running[holder] = nil
+        activated.remove(holder)
         guard holders.remove(holder) != nil, holders.isEmpty, captures.isEmpty, !inCall else { return }
         // A boundary at which nothing may run: speech takes its configuration, or gives it up.
         if !speeches.isEmpty || spoken != nil { return composeSpeech() }
@@ -184,6 +236,7 @@ package enum AudioSession {
     /// A queue's speech claim (LLP 1133.012 D4) of `type`, one of
     /// `spokenTypes`. 0 when the session would not activate (a call).
     package static func claimSpeech(type: String, events: @escaping (UInt32) -> Void) -> UInt64 {
+        defer { playbackChanged() }
         observe()
         nextCapture += 1
         let id = nextCapture
@@ -199,6 +252,7 @@ package enum AudioSession {
     /// A speech claim ends: with none left and nothing else running, the
     /// session is given up and other apps' audio returns.
     package static func releaseSpeech(_ id: UInt64) {
+        defer { playbackChanged() }
         guard speeches.removeValue(forKey: id) != nil else { return }
         composeSpeech()
     }
@@ -242,19 +296,19 @@ package enum AudioSession {
         guard captures.isEmpty else { return }
         let want = strongestSpeech, session = AVAudioSession.sharedInstance()
         if want == spoken {
-            if want != nil { try activateForSpeech(session) }
+            if want != nil { try activate() }
             return
         }
         if othersRun {
             // Speech plays in the session as it stands; the next boundary applies it.
-            if want != nil { try activateForSpeech(session) }
+            if want != nil { try activate() }
             return
         }
         if let want {
             if let failure = nextHoldFailure { nextHoldFailure = nil; throw failure }
             let (mode, options) = speechConfiguration(want)
             try session.setCategory(.playback, mode: mode, options: options)
-            try session.setActive(true)
+            try activate()
             spoken = want
         } else {
             spoken = nil
@@ -263,9 +317,11 @@ package enum AudioSession {
         }
     }
 
-    private static func activateForSpeech(_ session: AVAudioSession) throws {
+    private static func activate() throws {
         if let failure = nextHoldFailure { nextHoldFailure = nil; throw failure }
-        try session.setActive(true)
+        try AVAudioSession.sharedInstance().setActive(true)
+        active = true
+        activated = holders
     }
 
     /// A capture claims the session (LLP 1133.009 D7): `.playAndRecord`
@@ -274,6 +330,7 @@ package enum AudioSession {
     package static func claimCapture(mode: AVAudioSession.Mode, options: AVAudioSession.CategoryOptions, background: Bool,
                                      failure: (Error) -> Void = { _ in },
                                      events: @escaping (UInt32) -> Void) -> UInt64 {
+        defer { playbackChanged() }
         observe()
         let claim = Capture(mode: mode, options: options, background: background, events: events)
         if captures.isEmpty {
@@ -284,7 +341,7 @@ package enum AudioSession {
                     // The session is the capture's now: speech after it applies its own configuration again.
                     spoken = nil
                     try session.setCategory(.playAndRecord, mode: mode, options: options)
-                    try session.setActive(true)
+                    try activate()
                 } catch {
                     failure(error)
                     restoreAfterCaptures()
@@ -301,6 +358,7 @@ package enum AudioSession {
     /// A capture's claim ends; with none left the session goes back to what
     /// the app's sound wants.
     package static func releaseCapture(_ id: UInt64) {
+        defer { playbackChanged() }
         guard captures.removeValue(forKey: id) != nil, captures.isEmpty else { return }
         configuring = nil
         restoreAfterCaptures()
@@ -316,13 +374,14 @@ package enum AudioSession {
             if players.isEmpty { try? session.setActive(false, options: .notifyOthersOnDeactivation) }
         } else {
             try? apply(configuration)
-            try? session.setActive(true)
+            try? activate()
         }
     }
 
     /// A call's claim (file doc): the call's category and mode, set now and
     /// not activated. Every claim made meanwhile hears the session's events.
     package static func claimCall(video: Bool, events: @escaping (UInt32) -> Void) -> UInt64 {
+        defer { playbackChanged() }
         observe()
         if calls.isEmpty {
             callMode = video ? .videoChat : .voiceChat
@@ -348,6 +407,7 @@ package enum AudioSession {
     /// comes back now only if the session is already inactive; else at
     /// `callActivated(false)`.
     package static func releaseCall(_ id: UInt64) {
+        defer { playbackChanged() }
         guard calls.remove(id) != nil else { return }
         callEvents[id] = nil
         if calls.isEmpty && !callActive { restoreAfterCall() }
@@ -357,7 +417,9 @@ package enum AudioSession {
     /// calls' session: every claim hears it, as an interruption's end (2) or
     /// beginning (1) would tell it.
     package static func callActivated(_ active: Bool) {
+        defer { playbackChanged() }
         callActive = active
+        self.active = false
         tell(active ? 2 : 1)
         for e in Array(callEvents.values) { e(active ? 2 : 1) }
         if !active && calls.isEmpty { restoreAfterCall() }
@@ -384,6 +446,12 @@ package enum AudioSession {
 
     /// For tests: nothing held, no player, no capture, the category back to ambient.
     static func reset() {
+        active = false
+        activated.removeAll()
+        running.removeAll()
+        backgroundCheck?.cancel()
+        backgroundCheck = nil
+        defer { playbackChanged() }
         holders.removeAll()
         players.removeAll()
         captures.removeAll()
@@ -403,10 +471,9 @@ package enum AudioSession {
     private static func reconcile() throws {
         guard !holders.isEmpty || !captures.isEmpty, !inCall else { return }
         if let failure = nextHoldFailure { nextHoldFailure = nil; throw failure }
-        let session = AVAudioSession.sharedInstance()
         // A sound started during speech plays in the configuration in force (LLP 1133.012 D4).
         if captures.isEmpty, spoken == nil { try apply(configuration) }
-        try session.setActive(true)
+        try activate()
     }
 
     private static func apply(_ configuration: Configuration) throws {
@@ -432,6 +499,8 @@ package enum AudioSession {
     /// What a holder of sound hears of the session (D7): the owner observes
     /// once for the process and tells each, before the claims.
     package enum Heard {
+        /// Canvas output stops before the background page commit reads eligibility.
+        case background
         /// An interruption began, or ended with or without the system's recommendation to resume.
         case interruption(began: Bool, resume: Bool)
         /// The app became active, and whether another app's primary audio plays.
@@ -449,8 +518,17 @@ package enum AudioSession {
 
     private static func heard(_ event: Heard) { for hear in Array(listeners.values) { hear(event) } }
 
+    static func enteredBackground() {
+        backgrounding = true
+        heard(.background)
+        backgrounding = false
+        playbackChanged()
+    }
+
     /// An interruption began (the session was deactivated by the system).
-    private static func interrupted() {
+    static func interrupted() {
+        active = false
+        defer { playbackChanged() }
         heard(.interruption(began: true, resume: false))
         tell(1)
     }
@@ -460,6 +538,7 @@ package enum AudioSession {
     /// next want activates the session instead; a capture's tracks hear the
     /// end either way, and its recorders stay paused for the app (D8).
     private static func resumable(_ resume: Bool) {
+        defer { playbackChanged() }
         if resume { try? reconcile() }
         heard(.interruption(began: false, resume: resume))
         tell(2)
@@ -494,10 +573,18 @@ package enum AudioSession {
                 resumable(AVAudioSession.InterruptionOptions(rawValue: note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0).contains(.shouldResume))
             }
         }
+        for name in [UIApplication.didEnterBackgroundNotification, UIApplication.willEnterForegroundNotification] {
+            center.addObserver(forName: name, object: nil, queue: .main) { _ in
+                AppBackground.heard(name)
+                playbackChanged()
+            }
+        }
         center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
             heard(.appActive(othersPlaying: AVAudioSession.sharedInstance().secondaryAudioShouldBeSilencedHint))
         }
         center.addObserver(forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main) { _ in
+            active = false
+            defer { playbackChanged() }
             if inCall { configureCall() }
             else {
                 if let claim = configuring { try? AVAudioSession.sharedInstance().setCategory(.playAndRecord, mode: claim.mode, options: claim.options) }

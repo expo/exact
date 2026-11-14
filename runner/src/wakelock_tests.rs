@@ -276,6 +276,7 @@ fn a_splits_list_beside_its_detail_holds_under_a_sheet_too() {
     press(&mut r, "close");
     let detail = r.kernel().node(view(&r, "back")).unwrap().parent.unwrap();
     let pane = HostBlock {
+        tactic: Default::default(),
         width: BlockAxis::Is(500.0),
         height: BlockAxis::Is(400.0),
     };

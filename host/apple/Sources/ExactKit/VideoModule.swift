@@ -152,7 +152,10 @@ final class VideoView {
             // Held even when activation fails: the session activates it when
             // the interruption ends, and a mute still releases it.
             holdsSession = true
-            do { try AudioSession.hold(ObjectIdentifier(self)) } catch { fputs("exact audio session: \(error)\n", stderr) }
+            do { try AudioSession.hold(ObjectIdentifier(self), running: { [weak self] in
+                guard let self else { return false }
+                return self.observed["playing"] as? Bool == true && self.observed["muted"] as? Bool == false && (self.observed["volume"] as? Double ?? 0) > 0
+            }) } catch { fputs("exact audio session: \(error)\n", stderr) }
         } else {
             holdsSession = false
             AudioSession.release(ObjectIdentifier(self))
@@ -281,6 +284,9 @@ final class VideoView {
         if let remoteRequest { props["exactRemote"] = remoteRequest }
         var listeners = owner.handlers.intersection(Self.events)
         if autoplayRule { listeners.formUnion(["pause", "play"]) }
+        #if os(iOS) || os(tvOS)
+        listeners.formUnion(["playing", "waiting", "pause", "ended", "error", "volumechange"])
+        #endif
         if !listeners.isEmpty { props["exactListeners"] = listeners.sorted().joined(separator: " ") }
         // A video with sound, or a media-session claimant (Now Playing needs
         // a non-mixable category), holds the app's session; muted (applied to
@@ -340,6 +346,9 @@ final class VideoView {
     }
     private func receive(_ message: [String: Any]) {
         if let state = message["state"] as? [String: Any] { observed = state; sessionReport = state["session"] as? [String: Any] ?? sessionReport }
+        #if os(iOS) || os(tvOS)
+        AudioSession.playbackChanged()
+        #endif
         if let result = message["remoteResult"] as? [String: String] { remoteResult = (result["n"] ?? "", result["status"] ?? "") }
         guard let owner else { return }
         if message["remote"] as? String == "play" { latched = true; latchedFrom = owner.props["paused"] }

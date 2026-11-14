@@ -848,6 +848,7 @@ mod tests {
         let _ = h.measure_block(
             root,
             exact_kernel::HostBlock {
+                tactic: Default::default(),
                 width: exact_kernel::BlockAxis::Is(300.0),
                 height: exact_kernel::BlockAxis::AtMost(300.0),
             },

@@ -360,10 +360,7 @@ impl<D: DataSource> Runner<D> {
             .data
             .overlay(&source, args, answer.get(&self.plan), &list);
         drop(list);
-        self.hear_aborted();
-        for line in self.data.take_logs() {
-            self.log(line);
-        }
+        self.take_data_logs();
         let (shown, keep) = match result {
             Ok(Some(o)) if self.check_shape(i, &o.value).is_ok() => {
                 self.log(format!("overlay {resource} ({} writes)", writes.len()));

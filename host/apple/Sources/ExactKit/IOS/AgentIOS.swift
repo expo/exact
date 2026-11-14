@@ -1185,7 +1185,7 @@ extension Agent {
                     else if Agent.caretKey(name, in: f) {} else if types { f.insertText(name) }
                     (f as? TextField)?.heard = nil
                     (f.delegate as? PromptField)?.heard = nil
-                } else if presenter.controls.radioKey(focus, name, held: held) { // x2apps survey #2
+                } else if presenter.controls.roleKey(focus, name, held: held) || presenter.controls.radioKey(focus, name, held: held) { // LLP 1166.000; x2apps survey #2
                 } else {
                     #if os(iOS)
                     _ = focus.activateKey(name)
