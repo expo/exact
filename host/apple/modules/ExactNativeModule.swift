@@ -334,11 +334,14 @@ open class ExactModule {
     /// Exact's tab container (LLP 1075.003 §3.7): once, before its tabs are
     /// laid out. Its appearance is the app's; its tabs Exact's. A person's
     /// selection is UIKit's, which Exact's router follows through UIKit's
-    /// delegate calls. To select a tab, press its authored tab: a selection
-    /// the app sets in code sends no tab delegate call, so the router follows
-    /// it only for a tab under More, whose `willShow` More sends. Each tab's
-    /// controller is made with the container and kept for the tab's life
-    /// (`ExactTab.controller`).
+    /// delegate calls. To select a tab, press its authored tab. A selection
+    /// the app sets in code is followed too (LLP 1075.003 §3.7): a tab under
+    /// More at More's `willShow`; where the tabs are `UITab`s, at
+    /// `didSelectTab`; otherwise as the tab's route appears or as a pop UIKit
+    /// runs there reaches Exact, whichever is first, so a tab not built yet,
+    /// which has no route to show, is followed only once it has one. Each
+    /// tab's controller is made with the container and kept for the tab's
+    /// life (`ExactTab.controller`).
     open func tabs(_ tabs: ExactTabs) {}
     /// Own the tabs yourself: return a container holding each tab's
     /// controller (`contents.tabs`), which Exact keeps current, or nil to

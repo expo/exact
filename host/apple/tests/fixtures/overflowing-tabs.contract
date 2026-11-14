@@ -21,7 +21,7 @@ component OverflowingTabs
               column navigationKey=`${e.id}` testId=`route-${e.name}` position="absolute" inset=0
                 text e.name testId=`text-${e.name}`
       row role="tablist" testId="tabs" appearance="none" flex-direction="row"
-        width="100%" padding="0 4px" flex-shrink=0 z-index=1
+        width="100%" padding="0 4px" flex-shrink=0
         button role="tab" aria-controls="panel-home" aria-selected=(nav.tab == "home") press=pick("home")
           testId="tab-home" flex=1
           text "Home"
