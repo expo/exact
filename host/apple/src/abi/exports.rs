@@ -1327,6 +1327,14 @@ macro_rules! host {
         pub extern "C" fn exact_svg_islands(rt: u32) -> u8 {
             $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.svg_islands(), |_| 0)
         }
+
+        /// 1 when the data source's activation evaluates a TypeScript module
+        /// on the owner, which the presenter then posts from the first draw
+        /// (LLP 1027.008 D1); 0 otherwise, and before a boot.
+        #[no_mangle]
+        pub extern "C" fn exact_evaluates_from_draw(rt: u32) -> u8 {
+            $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| u8::from(b.evaluates_from_draw()), |_| 0)
+        }
     };
 }
 

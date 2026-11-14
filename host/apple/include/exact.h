@@ -1111,6 +1111,11 @@ uint32_t exact_command(ExactRuntime rt, size_t len);
  * when it should make its GPU filter pipelines now. */
 uint8_t exact_svg_islands(ExactRuntime rt);
 
+/* 1 when the data source's activation evaluates a TypeScript module on the
+ * owner (exact_prepare_data), which the presenter then posts from the first
+ * draw's own callback (LLP 1027.008 D1); 0 otherwise, and before a boot. */
+uint8_t exact_evaluates_from_draw(ExactRuntime rt);
+
 /* An auth session's word (LLP 1069.006), JSON in the input buffer:
  * {"op":"hold","ticket":N} under the agent, or {"op":"done","ticket":N,
  * "url":…} / {"op":"done","ticket":N,"status":N,"message":…}. Returns 0; the

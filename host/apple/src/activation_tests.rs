@@ -178,6 +178,56 @@ fn prepared_data_activates_once_and_its_refusal_is_committed_then_retried() {
     assert_eq!(count(), 2, "nothing to prepare once activated");
 }
 
+/// Says only what `evaluates_from_draw` reads: whether it has a native slot
+/// (a TypeScript module), where it runs, and its grants.
+struct Shaped {
+    native: bool,
+    placement: exact_runner::Placement,
+    grants: &'static str,
+}
+impl DataSource for Shaped {
+    fn query(&mut self, name: &str, _: &[Value]) -> Result<Value, DataError> {
+        Err(DataError::UnknownSource(name.into()))
+    }
+    fn native(&self) -> Option<exact_runner::Native> {
+        self.native.then(exact_runner::Native::default)
+    }
+    fn placement(&self) -> exact_runner::Placement {
+        self.placement
+    }
+    fn grants(&self) -> &str {
+        self.grants
+    }
+}
+
+/// LLP 1027.008 D3: the presenter posts the evaluation from the first draw
+/// only for a TypeScript module on the runner's thread.
+#[test]
+fn only_a_module_on_the_runners_thread_is_evaluated_from_the_draw() {
+    use exact_runner::Placement::{Main, Worker};
+    let mut builder = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
+    builder.node(NodeType::View as u8, None, None, 0, &[], &[], None);
+    let plan = builder.finish().unwrap().encode();
+    let evaluates = |native, placement, grants| {
+        let source = Shaped {
+            native,
+            placement,
+            grants,
+        };
+        let measurer = Box::new(MonospaceMeasurer::default());
+        let (host, _) = Host::boot(&plan, source, measurer, 10.0, 10.0).unwrap();
+        host.evaluates_from_draw()
+    };
+    assert!(evaluates(true, Main, ""), "a module on the runner's thread");
+    assert!(!evaluates(false, Main, ""), "a Rust source");
+    assert!(!evaluates(true, Worker, ""), "a module on a worker");
+    assert_eq!(
+        evaluates(true, Main, "doc.keep\n"),
+        !cfg!(target_os = "macos"),
+        "a module that keeps documents waits for them on a Mac"
+    );
+}
+
 #[test]
 fn peer_store_refresh_reasks_readers_and_restores_persisted_slots_in_every_session() {
     use crate::store::{KeptStore, Platform};

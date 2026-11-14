@@ -1,6 +1,7 @@
 // What follows first pixel: the app module, the data source, native views.
 // @ref LLP 1027 D4 — app logic loads after first pixel.
 // @ref LLP 1024 D3 — native views attach after the paint gate.
+// @ref LLP 1027.008 D1–D3 — an owner-placed TypeScript module is evaluated from the first draw.
 import Foundation
 import QuartzCore
 import ExactCore
@@ -13,25 +14,65 @@ extension ExactSession {
         ExactLaunch.shared.drawn(self)
         guard activatedGeneration != drawnGeneration else { return }
         activatedGeneration = drawnGeneration
+        if runtime.evaluatesFromDraw, preparedGeneration != drawnGeneration { return evaluateFromDraw(drawnGeneration, token: token) }
         DispatchQueue.main.async { [weak self] in
             guard let self, state != .destroyed, generation == drawnGeneration else { return }
             dataPreparing = true
-            declareNotificationCategories { [weak self] in
-                guard let self, state != .destroyed, generation == drawnGeneration else { return }
-                dataPreparing = false
-                // Prepare before any source calls the module (LLP 1067.000 D8).
-                let started = CACurrentMediaTime()
-                natives.prepareAppModule()
-                ExactLaunch.shared.modulePrepared(self, seconds: CACurrentMediaTime() - started)
-                presenter.releaseLaunchAutofocus() // the next turn, never waiting on a loading source
-                restoreKeptDocuments() // before any answer reads a kept document (LLP 1069.010.000 D4)
-                if preparedGeneration != drawnGeneration { prepareData(drawnGeneration, token: token) } else { activateData(drawnGeneration, token: token) }
-            }
+            afterFirstDraw(drawnGeneration, token: token)
+        }
+    }
+
+    /// What follows first pixel on this thread, in order: the notification
+    /// categories (registered before any answer), the app's native module,
+    /// autofocus and kept documents, then the data source: posted to the
+    /// owner to be evaluated or, when it has been, activated in this turn.
+    private func afterFirstDraw(_ drawnGeneration: Int, token: UInt64) {
+        declareNotificationCategories { [weak self] in
+            guard let self, state != .destroyed, generation == drawnGeneration else { return }
+            dataPreparing = false
+            // Prepare before any source calls the module (LLP 1067.000 D8).
+            let started = CACurrentMediaTime()
+            natives.prepareAppModule()
+            ExactLaunch.shared.modulePrepared(self, seconds: CACurrentMediaTime() - started)
+            presenter.releaseLaunchAutofocus() // the next turn, never waiting on a loading source
+            restoreKeptDocuments() // before any answer reads a kept document (LLP 1069.010.000 D4)
+            if preparedGeneration != drawnGeneration { return prepareData(drawnGeneration, token: token) }
+            openNativeViews(drawnGeneration)
+            activateData(drawnGeneration, token: token)
         }
     }
 
     /// Whether activation still has work queued: the agent's settle waits for it.
     var activationInFlight: Bool { natives.activationQueued || dataPreparing }
+
+    /// The module's evaluation, posted to the owner from the draw's own
+    /// callback, a turn of this thread before `prepareData` would post it
+    /// (LLP 1027.008 D1). Nothing here waits for it: when it has ended, the
+    /// rest of what follows first pixel is posted back, in the same order
+    /// (D2). It needs nothing of this thread, since a native call outside an
+    /// answer is refused. `dataPreparing` is set before the post, so a system
+    /// notice meanwhile goes to the owner without waiting (`tellSoon`), and
+    /// the agent's settle waits from the draw on.
+    private func evaluateFromDraw(_ drawnGeneration: Int, token: UInt64) {
+        preparedGeneration = drawnGeneration
+        dataPreparing = true
+        ExactLaunch.shared.evaluating(self)
+        let runtime = runtime
+        Owner.shared.post {
+            let started = CACurrentMediaTime()
+            runtime.prepareData()
+            let ended = CACurrentMediaTime()
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                ExactLaunch.shared.evaluated(self, from: started, to: ended)
+                guard state != .destroyed, generation == drawnGeneration else {
+                    if preparedGeneration == drawnGeneration { dataPreparing = false }
+                    return
+                }
+                afterFirstDraw(drawnGeneration, token: token)
+            }
+        }
+    }
 
     /// The data source activates on the owner thread, where a TypeScript
     /// module evaluates its top level, while this thread goes on: images
@@ -39,7 +80,9 @@ extension ExactSession {
     /// held this thread for the whole evaluation (325 ms for a 2 MB catalog
     /// on an iPhone 17 Pro Max). A call this thread makes to the runtime
     /// meanwhile still waits its turn behind it: on a cold launch, the
-    /// page's facts when the app becomes active do.
+    /// page's facts when the app becomes active do. A source the draw did
+    /// not post (`evaluateFromDraw`) comes here: a Rust source, a module on
+    /// a worker, and on a Mac a module that keeps documents.
     private func prepareData(_ drawnGeneration: Int, token: UInt64) {
         preparedGeneration = drawnGeneration
         dataPreparing = true

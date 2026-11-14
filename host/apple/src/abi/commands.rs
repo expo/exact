@@ -265,6 +265,12 @@ impl<D: DataSource> Bridge<D> {
         })
     }
 
+    /// Whether the data source's activation evaluates a TypeScript module on
+    /// the owner (`exact_evaluates_from_draw`, `Host::evaluates_from_draw`).
+    pub fn evaluates_from_draw(&self) -> bool {
+        self.host.as_ref().is_some_and(|h| h.evaluates_from_draw())
+    }
+
     /// A command the session is about to run (`exact_command`).
     pub fn command(&mut self, len: usize) -> u32 {
         let request = String::from_utf8_lossy(&self.input[..len.min(self.input.len())]);

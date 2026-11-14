@@ -36,6 +36,22 @@ impl<D: DataSource> Host<D> {
             Some(Self::activate_source(self.runner.data()).map_err(|e| format!("{e:?}")));
     }
 
+    /// Whether `prepare_data` evaluates a TypeScript module on this thread,
+    /// so the presenter may post it from the first draw's own callback (LLP
+    /// 1027.008 D1, D3). A Rust source's activation runs no module, and a
+    /// worker-placed module's engine is made on its worker when it
+    /// activates: both take the path after the main thread's first turn. So
+    /// does a module that keeps documents (on a Mac): its engine opens its
+    /// storage session with the document owner when it loads, after the
+    /// kept documents are restored. A source with a native slot is one that
+    /// has a TypeScript module: only TypeScript calls `native`.
+    pub fn evaluates_from_draw(&self) -> bool {
+        let data = self.runner.data_ref();
+        data.native().is_some()
+            && data.placement() == exact_runner::Placement::Main
+            && !crate::documents::keeps(data.grants())
+    }
+
     /// Load deferred app logic only after the presenter reports first pixel.
     pub fn activate_data(&mut self) -> String {
         if self

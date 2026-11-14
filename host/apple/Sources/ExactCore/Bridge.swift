@@ -308,13 +308,20 @@ package final class Runtime {
     /// The Canvas 2D text measurer (LLP 1056 D8), with the measurer's context.
     package func setCanvasText(_ measure: ExactCanvasTextFn?) { on { exact_set_canvas_text(rt, measure) } }
     package func boot(width: CGFloat, height: CGFloat) -> Batch { islands(on { read(exact_boot(rt, Float(width), Float(height))) }) }
+    /// Whether the data source's activation evaluates a TypeScript module on
+    /// the owner, which the presenter then posts from the first draw's own
+    /// callback (`exact_evaluates_from_draw`, LLP 1027.008 D1). Read after
+    /// each boot and commit, so the draw makes no call to learn it.
+    package var evaluatesFromDraw = false
     /// A plan that can show an SVG island opens the island module off the
     /// main thread now, before its first mask or filter needs it (LLP
     /// 1055.000 §8 ruling 4); a plan without one never loads it. One that
     /// can show a filter makes the GPU filter pipelines now too: a first
-    /// picture is drawn in the commit that shows it.
+    /// picture is drawn in the commit that shows it. The same owner job reads
+    /// `evaluatesFromDraw`.
     private func islands(_ batch: Batch) -> Batch {
-        let svg = on(busy: UInt8(0)) { exact_svg_islands(rt) }
+        let (svg, early) = on(busy: (UInt8(0), false)) { (exact_svg_islands(rt), exact_evaluates_from_draw(rt) != 0) }
+        evaluatesFromDraw = early
         hooks.prewarmIslands?(svg)
         return batch
     }

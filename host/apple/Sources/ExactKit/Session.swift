@@ -341,7 +341,7 @@ public final class ExactSession {
     var dataGeneration: Int?
     var dataActivated: Bool { dataGeneration == generation }
     var pendingActivation: (generation: Int, token: UInt64)? // retried on the session's wake
-    /// The generation whose data source `prepareData` activated on the owner, and whether it still runs there.
+    /// The generation whose data source `prepareData` or `evaluateFromDraw` activated on the owner, and whether it still runs there.
     var preparedGeneration: Int?, dataPreparing = false
     var nativesOpened: Int? // the generation whose native views may attach (LLP 1024 D3)
     private(set) var updateToken: UInt64 = 0; private var receipt: DrawReceipt?
