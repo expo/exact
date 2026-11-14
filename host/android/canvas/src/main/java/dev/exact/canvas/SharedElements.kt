@@ -61,10 +61,10 @@ internal class SharedElements(
     fun node(key: Long): RenderNode = elements.getOrPut(key) { Element(key) }.slot
     fun nodes(): Map<Long, RenderNode> = elements.mapValues { it.value.slot }
 
-    /** Op 49 must precede IMAGE_FREE and every RenderNode mutation. Capture all sources
+    /** Op 50 must precede IMAGE_FREE and every RenderNode mutation. Capture all sources
      * before hiding any destination, including an interrupted parent/child pair. */
     fun begin(b: IntBuffer) {
-        if (b.limit() < 4 || b.get(0) != 49) return
+        if (b.limit() < 4 || b.get(0) != 50) return
         reduced = b.get(2) != 0
         val next = LinkedHashMap<Long, Flight>()
         repeat(b.get(3)) { n ->
@@ -103,7 +103,7 @@ internal class SharedElements(
         return pose
     }
 
-    /** Op 50's body is ordinary drawing, including independently named child slots. */
+    /** Op 51's body is ordinary drawing, including independently named child slots. */
     fun define(b: IntBuffer, at: Int, ingest: (Int, Int) -> Unit) {
         val h = at + 2
         val id = key(b, h)

@@ -3,9 +3,9 @@ use super::*;
 use crate::paint::{SharedElement, SharedState};
 use exact_kernel::motion::motion_node;
 
-pub(super) const STATE: u32 = 49;
-pub(super) const SET: u32 = 50;
-pub(super) const DRAW: u32 = 51;
+pub(super) const STATE: u32 = 50;
+pub(super) const SET: u32 = 51;
+pub(super) const DRAW: u32 = 52;
 
 #[derive(Default)]
 pub(super) struct Shared {

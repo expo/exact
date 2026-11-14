@@ -992,8 +992,8 @@ internal class Player(private val fonts: Map<Int, Font>) {
                 30, 31 -> i += 3 + b.get(i + 2)
                 32 -> i += 2
                 33 -> i += 3
-                49, 50 -> i += 2 + b.get(i + 1)
-                51 -> {
+                50, 51 -> i += 2 + b.get(i + 1)
+                52 -> {
                     shared(SharedElements.key(b, i + 1))?.let { s -> c.save(); matrix.setTranslate(-shiftX, -shiftY); c.setMatrix(matrix); c.drawRenderNode(s); c.restore() }
                     i += 3
                 }

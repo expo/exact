@@ -1209,8 +1209,8 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
                     slots.set(id, b, i + 3, i + 3 + len, main)
                     i += 3 + len
                 }
-                50 -> { shared.define(b, i) { from, end -> ingest(b, from, end) }; i += 2 + b.get(i + 1) }
-                51 -> { shared.node(SharedElements.key(b, i + 1)); i += 3 }
+                51 -> { shared.define(b, i) { from, end -> ingest(b, from, end) }; i += 2 + b.get(i + 1) }
+                52 -> { shared.node(SharedElements.key(b, i + 1)); i += 3 }
                 else -> i = structure.end(b, i)
             }
         }

@@ -27,7 +27,7 @@ class SharedElementsTest {
         for ((a, b, p) in pairs) body.addAll((key(a) + key(b) + f(p) + f(ancestorOpacity)).toList())
         body.add(alive.size)
         for (k in alive) body.addAll(key(k).toList())
-        return IntBuffer.wrap(intArrayOf(49, body.size) + body.toIntArray())
+        return IntBuffer.wrap(intArrayOf(50, body.size) + body.toIntArray())
     }
     private fun definition(k: Long, box: RectF, image: Int = 0, fit: Int = 0,
         crop: RectF = box, group: Int = 0, row: Int = 0, layers: IntArray = intArrayOf(),
@@ -36,7 +36,7 @@ class SharedElementsTest {
         val head = key(k) + intArrayOf(k.toInt(), group, row, 0, 0) + rect(box) + f(12f) + image + rect(crop) +
             intArrayOf(fit, 400, 200) + rect(RectF(0f, 0f, 1f, 1f)) + rect(contentBox) + f(opacity) + f(scale) + layers.size + layers + parents.size + parents.flatMap { key(it).toList() }.toIntArray()
         val paint = if (content.isNotEmpty()) content else intArrayOf(1, f(1f), 0, 0, f(1f), 0, 0, 2, Color.RED) + rect(box) + IntArray(8)
-        return IntBuffer.wrap(intArrayOf(50, head.size + paint.size) + head + paint)
+        return IntBuffer.wrap(intArrayOf(51, head.size + paint.size) + head + paint)
     }
     private class Fixture {
         val pictures = HashMap<Int, Bitmap>()
@@ -154,7 +154,7 @@ class SharedElementsTest {
         val pairs = listOf(Triple(1L, 3L, 0.5f), Triple(2L, 4L, 0.5f))
         t.shared.begin(state(listOf(3, 4), pairs))
         t.define(definition(4, RectF(40f, 80f, 280f, 120f), parents = listOf(3)))
-        t.define(definition(3, RectF(0f, 60f, 400f, 500f), content = intArrayOf(51) + key(4)))
+        t.define(definition(3, RectF(0f, 60f, 400f, 500f), content = intArrayOf(52) + key(4)))
         t.shared.finish(); t.draw()
         assertEquals(0f, t.shared.node(3).alpha, 0f); assertEquals(0f, t.shared.node(4).alpha, 0f)
         assertRect(RectF(30f, 55f, 180f, 85f), t.shared.shown(4)!!.box)
