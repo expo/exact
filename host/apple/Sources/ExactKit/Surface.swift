@@ -74,6 +74,9 @@ extension NodeView {
         #endif
         paintSurface(s, box)
         clipSurface(s, box)
+        #if os(iOS) || os(tvOS)
+        sizeMaterial(box)
+        #endif
         if started { surfaceChanged() }
     }
 
@@ -89,8 +92,24 @@ extension NodeView {
         if s.clippedSelf { clipsToBounds = overflowClips && clipBox == nil }
         s.removeFromSuperlayer()
         CATransaction.commit()
+        #if os(iOS) || os(tvOS)
+        sizeMaterial(nil)
+        #endif
         surfaceChanged()
     }
+
+    #if os(iOS) || os(tvOS)
+    /// A material (glass or a blur) is a view the node holds, not paint, so the
+    /// surface's size is set on it too, from the same corner: a glass in a glass
+    /// group then morphs with its neighbours as the box resizes. `nil` gives it
+    /// the laid-out bounds back.
+    private func sizeMaterial(_ box: CGRect?) {
+        guard let material = glassSlot ?? materialView else { return }
+        let shown = box ?? bounds
+        guard material.frame != shown else { return }
+        UIView.performWithoutAnimation { material.frame = shown }
+    }
+    #endif
 
     private func surfaceChanged() {
         applyShadow(outline: roundedPath(in: bounds).cgPath)
