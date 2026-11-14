@@ -287,6 +287,8 @@ export function renderer(dist, { closed = false, read = path => readFileSync(res
       } }), getRandomValues: view => { const filled = crypto.getRandomValues(view); if (filled.byteLength > 0) read.random = true; return filled; },
       randomUUID: drew(() => crypto.randomUUID()) },
       WebAssembly, atob, btoa, Event: class {}, CustomEvent: class {}, __exactRender: true, __files: files,
+      // A draw a Rust module reports (rust-data.js)
+      __exactDrew: () => { read.random = true; },
       ...(closed ? { __exactMarkdown: new Map() } : {}),
       __exactMarkdownBuilt: JSON.parse(builtMarkdown(shell, seen)),
     }, { codeGeneration: { strings: false } });
