@@ -16,6 +16,32 @@ const command = (cmd, args) => {
   assert.equal(out.status, 0, out.stderr); return out.stdout;
 };
 
+test.skipIf(process.platform !== 'darwin')('SQLite\'s probe replacement links with both Darwin inode layouts and returns an empty filesystem type', () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-sqlite-probe-'));
+  try {
+    const source = resolve(dir, 'probe.c');
+    writeFileSync(source, `#include <sys/mount.h>
+#include <string.h>
+int main(void) {
+  struct statfs info;
+  memset(&info, 0xa5, sizeof(info));
+  if (fstatfs(-1, &info) != 0) return 1;
+  for (unsigned long i = 0; i < sizeof(info); ++i) {
+    if (((unsigned char *)&info)[i] != 0) return 2;
+  }
+  return 0;
+}`);
+    for (const arch of ['arm64', 'x86_64']) {
+      const binary = resolve(dir, arch);
+      command('xcrun', ['clang', '-arch', arch, '-Dfstatfs=exact_sqlite_fstatfs', source,
+        resolve(import.meta.dir, '../../vendor/ibex/crates/ibex2-sqlite/src/apple.c'), '-o', binary]);
+      assert.doesNotMatch(command('xcrun', ['nm', '-u', binary]), /_(?:fstatfs|statfs|exact_sqlite_fstatfs)(?:\$|\s)/);
+      assert.deepEqual(privacyManifestForBinaries([binary]), manifest());
+      if (arch === process.arch || arch === 'x86_64' && process.arch === 'x64') command(binary, []);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test.skipIf(process.platform !== 'darwin')('the manifest generator packages parenthesized executable names with linked API reasons and valid plists', () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-privacy-'));
   try {

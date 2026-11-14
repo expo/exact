@@ -11,6 +11,21 @@ import process from 'node:process';
 import { appleCargo } from './cargo-check.mjs';
 import { keptCrates } from '../host/apple/crates.mjs';
 
+test('SQLite filesystem probes are disabled only for required-reason Apple destinations', () => {
+  const env = { LIBSQLITE3_FLAGS: '-DSQLITE_MAX_COLUMN=1234' };
+  const flags = '-DSQLITE_ENABLE_LOCKING_STYLE=0 -Dfstatfs=exact_sqlite_fstatfs';
+  for (const target of ['aarch64-apple-ios', 'aarch64-apple-ios-sim', 'x86_64-apple-ios', 'aarch64-apple-tvos', 'aarch64-apple-tvos-sim', 'arm64_32-apple-watchos', 'aarch64-apple-watchos-sim']) {
+    const args = ['build', `--target=${target}`];
+    const once = appleCargo('cargo', args, { env })[2];
+    expect(once.env.LIBSQLITE3_FLAGS).toBe(`${env.LIBSQLITE3_FLAGS} ${flags}`);
+    expect(appleCargo('cargo', args, once)[2].env.LIBSQLITE3_FLAGS).toBe(once.env.LIBSQLITE3_FLAGS);
+    for (const mac of ['aarch64-apple-darwin', 'x86_64-apple-darwin']) {
+      expect(appleCargo('cargo', ['build', '--target', mac], once)[2].env.LIBSQLITE3_FLAGS).toBe(env.LIBSQLITE3_FLAGS);
+    }
+  }
+  expect(env.LIBSQLITE3_FLAGS).toBe('-DSQLITE_MAX_COLUMN=1234');
+});
+
 // One macOS deployment target for every cargo call's host side: two calls sharing a target directory
 // that differ in it rebuild every build script recording it (ring's), each build (the lead's 20:40Z).
 test('every cargo call on a Mac gives its host side one deployment target, and a named one stands', () => {

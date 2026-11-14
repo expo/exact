@@ -1475,10 +1475,13 @@ The motion and altimeter packages also declare `8FFB.1` for converting sensor
 events to timestamps. Other packages declare their own uses beside their Apple
 implementation. The build includes only the packages the app links. Hermes is
 statically linked; its surviving calls are covered in the containing bundle.
-Apple builds use the system SQLite, avoiding the bundled SQLite filesystem-type
-probes, for which no approved disk-space reason applies. Exact declares no
-disk-space use; an unaccounted-for disk-space import fails packaging on
-platforms subject to required-reason reporting.
+Apple builds bundle SQLite. On iOS, tvOS and watchOS, its filesystem-type
+probe is replaced with an empty result and filesystem-specific locking is
+disabled: neither has an approved disk-space reason. This omits SQLite's
+FAT/exFAT inode workaround and proxy locking, which app-container storage does
+not need. macOS retains both. Recheck the probe's uses when updating SQLite.
+Exact declares no disk-space use; an unaccounted-for disk-space import fails
+packaging on platforms subject to required-reason reporting.
 
 Put an Apple-format `PrivacyInfo.xcprivacy` beside your `app.json` to add your
 app's declarations. A package puts the same file beside its Apple implementation's
@@ -1967,9 +1970,15 @@ answers; `doc:/` handles do not need that store.
 Generated declarations export Ibex2's `Storage` and related types; Rust sources
 can use the same implementations through `ibex2::host`.
 
-On Apple, SQLite is the OS library, so its SQL version follows the OS. Other
-native hosts bundle the pinned SQLite. A native production build links SQLite
-only when the app grants `sqlite.open`
+Native hosts, including Apple, bundle the pinned SQLite (3.54.1). Apple's
+minimum supported OS versions have older SQLite libraries than rusqlite
+requires (3.45.3), so linking the OS library can prevent the app from launching.
+Rust and TypeScript storage share the bundled provider. Swift code in the same
+process must not open a database the Rust provider owns: Apple's launch-service
+dylibs still link system SQLite (`host/apple/launch-parts.mjs`), and closing a
+file through another copy can release the provider's POSIX locks
+([SQLite's locking rules](https://sqlite.org/howtocorrupt.html#posix_advisory_locks_canceled_by_a_separate_thread_doing_close_)).
+A native production build links SQLite only when the app grants `sqlite.open`
 or names `"sqlite"` in the manifest's `link` list. Naming it without the grant
 links unused code: adding `sqlite.open` changes the compatibility identity and
 requires a new binary, even when SQLite was linked. Development builds and

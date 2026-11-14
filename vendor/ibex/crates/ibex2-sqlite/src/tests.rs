@@ -1,5 +1,15 @@
 use super::*;
 use ibex2::stdlib::sqlite::{Database, ForeignKeys, Provider};
+
+#[test]
+fn sqlite_is_the_bundled_version_with_the_wal_page_size_fix() {
+    assert!(rusqlite::version_number() >= 3_054_001);
+    assert_eq!(
+        rusqlite::version_number(),
+        rusqlite::ffi::SQLITE_VERSION_NUMBER
+    );
+}
+
 fn open(dir: &tempfile::TempDir) -> Database {
     let path = dir.path().canonicalize().unwrap().join("app.db");
     Database::new(SqliteProvider.open(Location { path }).unwrap())

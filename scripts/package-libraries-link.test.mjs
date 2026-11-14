@@ -19,7 +19,7 @@ import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'nod
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { forget, makeApp } from '../packages/fixtures/vault/test/fixture.mjs';
-import { buildPackage } from '../packages/fixtures/vault/test/library.mjs';
+import { buildLibrary, buildPackage } from '../packages/fixtures/vault/test/library.mjs';
 
 const root = resolve(import.meta.dir, '..');
 const scratch = realpathSync(mkdtempSync(join(tmpdir(), 'exact-package-library-')));
@@ -40,6 +40,19 @@ const fixture = () => {
   return made = { pkg, library, app: makeApp(join(scratch, 'vaultfixture'), pkg) };
 };
 const rpaths = (binary) => [...run('otool', ['-l', binary], scratch).matchAll(/cmd LC_RPATH\n\s+cmdsize \d+\n\s+path (\S+)/g)].map(m => m[1]);
+
+test.skipIf(!mac)('the vault frameworks bundle SQLite without mobile filesystem probes', () => {
+  const out = join(scratch, 'sqlite');
+  buildLibrary(out);
+  for (const [platform, path] of [['mac', 'Versions/A/vault'], ['sim', 'vault']]) {
+    const binary = join(out, 'libraries', platform, 'vault.framework', path);
+    for (const imports of [run('nm', ['-u', binary], scratch), run('dyld_info', ['-imports', binary], scratch)]) {
+      expect(imports).not.toMatch(/_sqlite3_/);
+      if (platform === 'sim') expect(imports).not.toMatch(/_(?:fstatfs|statfs|exact_sqlite_fstatfs)(?:\$|\s)/);
+    }
+    expect(run('otool', ['-L', binary], scratch)).not.toContain('libsqlite3');
+  }
+}, 3_600_000);
 
 test('the Linux host links the library and carries it beside its executable, which finds it by its run path', () => {
   const { app } = fixture();

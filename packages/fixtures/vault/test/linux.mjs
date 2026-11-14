@@ -38,7 +38,7 @@ const walk = (at, depth) => {
 };
 walk(join(app, 'target'), 5);
 const module = modules.map(file => readFileSync(file, 'utf8')).find(text => text.includes('exact_native')) ?? '';
-check('linux', 'module.rs joins the shim and writes the factory', module.includes(`#[path = "${realpathSync(join(app, 'node_modules/@fixture/vault/native/lib.rs'))}"]`) && module.includes('Box::new(exact_native_shim::Vault::new(APP))'), modules.join(', ') || 'no module.rs found');
+check('linux', 'module.rs joins the shim and writes the factory', module.includes(`#[path = "${realpathSync(join(app, 'node_modules/@fixture/vault/native/lib.rs'))}"]`) && module.includes('Box::new(exact_native_shim::Vault::new(&APP))'), modules.join(', ') || 'no module.rs found');
 const carried = process.platform === 'darwin' ? 'vault.framework/Versions/A/vault' : 'libvault.so';
 check('linux', `the build carries the library beside the executable (${carried})`, !!binary && existsSync(join(dirname(binary), carried)), binary);
 

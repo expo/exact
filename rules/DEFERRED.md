@@ -45,9 +45,12 @@ handlers for any app that does not opt in.
 write `PrivacyInfo.xcprivacy` before signing each app, extension and Exact
 framework. Built under #366: imports and Objective-C selector references select
 the categories each bundle uses; an audited table supplies Exact's reasons.
-Apple uses system SQLite, removing bundled SQLite's filesystem-type probes
-rather than claiming a disk-space reason. An unexplained disk-space or
-`getattrlist` use refuses packaging on platforms requiring API reasons.
+Apple targets bundle SQLite to support their minimum OS versions (LLP 1027 D8;
+#565). On iOS, tvOS and watchOS, its filesystem-type probe and
+filesystem-specific locking are disabled rather than claiming a disk-space
+reason; macOS retains them.
+An unexplained disk-space or `getattrlist` use refuses packaging on platforms
+requiring API reasons.
 An app may supply a manifest beside `app.json`; a package supplies one beside
 its Apple implementation. Supplied API reasons join only categories the owning
 bundle uses, including frameworks and the watch companion. The app's tracking

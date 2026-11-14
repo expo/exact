@@ -965,6 +965,21 @@ folder's copy no longer leaves an empty file behind. `js/tests/it/storage.rs`
 checks both codes and that no file is made. Replay on a refresh unless
 upstream refuses folders so.
 
+## Local patch 43, bundled SQLite on Apple
+
+`ibex2-sqlite` bundles SQLite 3.54.1 on Apple too: the minimum supported OS
+libraries are older than rusqlite's 3.45.3 floor (#565). Exact's Apple Cargo
+driver sets `SQLITE_ENABLE_LOCKING_STYLE=0` and renames `fstatfs` to
+`exact_sqlite_fstatfs` for iOS, tvOS and watchOS. `src/apple.c`, compiled by
+`build.rs` under the same SDK declaration, returns a zero-filled `statfs` and
+success. This removes the FAT/exFAT inode workaround and filesystem-specific
+locking, including proxy locks, for app-container storage. macOS app builds
+retain SQLite's defaults. The replacement is available to Mac build tools too,
+since `LIBSQLITE3_FLAGS` also reaches an iOS build's host dependencies.
+
+Recheck every filesystem probe when updating the amalgamation. Replay the
+bundled dependency, C replacement and build driver together on a refresh.
+
 ## Terminal heap exhaustion
 
 The borrowed adapter propagates native engine exceptions through installation,

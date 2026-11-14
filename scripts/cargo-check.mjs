@@ -308,6 +308,13 @@ export function appleCargo(command, arguments_, options = {}) {
     !targets.length && process.platform === 'darwin' && ['build', 'rustc', 'check', 'test', 'clippy'].includes(arguments_[0]));
   if (!apple) return [command, arguments_, options];
   const environment = { ...(options.env ?? process.env) };
+  // LIBSQLITE3_FLAGS is global to a Cargo invocation. Recompute it for each
+  // destination, including a nested Mac bake after an iOS compile.
+  const sqliteFlags = ['-DSQLITE_ENABLE_LOCKING_STYLE=0', '-Dfstatfs=exact_sqlite_fstatfs'];
+  const flags = (environment.LIBSQLITE3_FLAGS ?? '').split(/\s+/).filter(flag => flag && !sqliteFlags.includes(flag));
+  if (targets.some(target => /-apple-(ios|tvos|watchos)(?:-|$)/.test(target))) flags.push(...sqliteFlags);
+  if (flags.length) environment.LIBSQLITE3_FLAGS = flags.join(' ');
+  else delete environment.LIBSQLITE3_FLAGS;
   // No SDKROOT, whatever the caller inherited: rustc and cc-rs ask xcrun for each target's own SDK. One left here
   // reaches the build scripts' C and C++ compiles for the Mac too, where cc-rs passes no -isysroot and clang takes
   // SDKROOT: an iOS SDK there fails `-Werror` (aws-lc-sys's probes) on -Wincompatible-sysroot.
