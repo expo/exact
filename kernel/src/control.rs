@@ -466,6 +466,8 @@ pub struct RoleStep {
     /// The group's role, a row of the `roles` table.
     pub role: &'static str,
     /// The eligible members the key moves to, in the order they are tried.
+    /// Home's and End's hold the focused member in its place when it is
+    /// eligible: reached first, it is that end and the key moves nothing.
     pub order: Vec<ViewId>,
     /// Whether a move presses the member it reaches.
     pub press: bool,
@@ -759,9 +761,6 @@ impl Kernel {
         let (before, after) = (&members[..at], &members[at + 1..]);
         // Past one end, around from the other when the row wraps.
         let around = |part: &[ViewId]| if row.wraps { part.to_vec() } else { Vec::new() };
-        // Home and End go to the first and last eligible member (D1): from an
-        // eligible member, one before or after it; from an ineligible one, any.
-        let ends = (!self.role_eligible(view)).then(|| [before, after].concat());
         let order: Vec<ViewId> = match forward {
             Some(true) => after.iter().copied().chain(around(before)).collect(),
             Some(false) => before
@@ -770,12 +769,12 @@ impl Kernel {
                 .copied()
                 .chain(around(after).into_iter().rev())
                 .collect(),
-            None if key == "Home" => ends.unwrap_or_else(|| before.to_vec()),
-            None => ends
-                .unwrap_or_else(|| after.to_vec())
-                .into_iter()
-                .rev()
-                .collect(),
+            // Home and End go to the first and last eligible member the host
+            // can focus (D1), which only the host's predicate settles: every
+            // member from that end, the focused one in its place. Reached
+            // first, it is that end and the key moves nothing.
+            None if key == "Home" => members,
+            None => members.into_iter().rev().collect(),
         };
         Some(RoleStep {
             group,

@@ -330,6 +330,52 @@ fn host_focusability_inert_and_display_filter_destinations_and_entry() {
     assert_eq!(kernel.role_tab_stop(a, None, |_| true), Some(false));
 }
 
+/// Home and End go to the first and last member the host can focus, which
+/// the kernel cannot tell from its tree: from the first tab, which the host
+/// cannot focus (a zero-sized one an action focused), Home goes to the
+/// second; from the last, End to the one before. The order holds every
+/// eligible member from that end, the focused one in its place.
+#[test]
+fn home_and_end_reach_the_first_member_the_host_can_focus() {
+    let case = cases()
+        .into_iter()
+        .find(|c| c.name == "tablist unselected entry")
+        .unwrap();
+    let (kernel, ids) = tree(&case.tree);
+    let (a, b, c) = (ids["a"], ids["b"], ids["c"]);
+    assert_eq!(
+        kernel.role_step(a, "Home", None, |id| id != a),
+        Some((b, false))
+    );
+    assert_eq!(
+        kernel.role_step(c, "End", None, |id| id != c),
+        Some((b, false))
+    );
+    assert_eq!(
+        kernel.role_step(a, "End", None, |id| id != c),
+        Some((b, false))
+    );
+    // The host can focus it: it is the end, and the key moves nothing.
+    assert_eq!(
+        kernel.role_step(a, "Home", None, |_| true),
+        Some((a, false))
+    );
+    assert_eq!(kernel.role_step(c, "End", None, |_| true), Some((c, false)));
+    // Nothing the host can focus: the key is still the group's.
+    assert_eq!(
+        kernel.role_step(b, "Home", None, |_| false),
+        Some((b, false))
+    );
+    assert_eq!(
+        kernel.role_step_order(b, "Home", None).unwrap().order,
+        vec![a, b, c]
+    );
+    assert_eq!(
+        kernel.role_step_order(b, "End", None).unwrap().order,
+        vec![c, b, a]
+    );
+}
+
 /// A native radio's role is the lowering's (`contract/lower/src/controls.rs`):
 /// in a `radiogroup` it keeps HTML's group and keys, and is no painted member.
 #[test]

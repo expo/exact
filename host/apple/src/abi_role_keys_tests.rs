@@ -125,12 +125,20 @@ fn a_painted_group_answers_its_orders_and_skips_an_aria_disabled_radio() {
         Value::Null,
         "a vertical tablist's Right is not its key"
     );
-    assert_eq!(ask(&mut bridge, c, "Home", 0)["step"]["to"], json!([a, b]));
-    assert_eq!(ask(&mut bridge, a, "End", 0)["step"]["to"], json!([c, b]));
+    // Home and End: every member from that end, the focused one in its
+    // place, for the host to take the first it can focus.
+    assert_eq!(
+        ask(&mut bridge, c, "Home", 0)["step"]["to"],
+        json!([a, b, c])
+    );
+    assert_eq!(
+        ask(&mut bridge, a, "End", 0)["step"]["to"],
+        json!([c, b, a])
+    );
     assert_eq!(
         ask(&mut bridge, a, "Home", 0)["step"]["to"],
-        json!([]),
-        "at the first: consumed in place"
+        json!([a, b, c]),
+        "at the first: itself first, which moves nothing"
     );
 
     // A horizontal tablist mirrors Left and Right right to left.
@@ -159,11 +167,11 @@ fn a_painted_group_answers_its_orders_and_skips_an_aria_disabled_radio() {
     );
     assert_eq!(
         ask(&mut bridge, paste, "Home", 0)["step"]["to"],
-        json!([cut, copy])
+        json!([cut, copy, paste])
     );
     assert_eq!(
         ask(&mut bridge, cut, "End", 0)["step"]["to"],
-        json!([paste, copy])
+        json!([paste, copy, cut])
     );
     assert_eq!(
         ask(&mut bridge, cut, "ArrowRight", 0),
