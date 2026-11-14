@@ -1516,8 +1516,11 @@ On the web and Apple, decoration updates wait until composition ends. The web pa
 `createValueRange()` and `CSS.highlights` and leaves the `<textarea>` in place; a browser
 without `createValueRange` paints nothing. macOS, iOS and tvOS paint TextKit 2 rendering
 attributes; Linux and Windows paint colour runs with unchanged advances; Android and the
-terminal paint nothing yet. Only the web paints `text-shadow`. `input` and
-`textarea markup="markdown"` refuse `decorations`.
+terminal paint nothing yet. The web and the Linux/Windows painter draw `text-shadow`.
+Decoration shadows remain unavailable on Apple: macOS 27.0.1 and scene-backed iOS 27.0
+draw `.shadow` in text storage but not as a TextKit 2 rendering attribute. Decorations
+leave text storage, layout and undo untouched.
+`input` and `textarea markup="markdown"` refuse `decorations`.
 
 The agent's `tree` keeps the authored `decorations` record. `state.decorations` on the
 web, Apple, Linux and Windows reports each field's `id` and `applied` snapshot: `source`,

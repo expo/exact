@@ -1242,3 +1242,33 @@ fn a_boxs_padding_is_on_its_side_in_its_paragraph() {
         "{bare:?} {padded:?}"
     );
 }
+
+#[test]
+fn a_shadow_follows_aligned_glyphs_past_the_widest_advance() {
+    for align in ["right", "center"] {
+        let draw = |shadow| {
+            let mut p = fixture(&format!(
+                "      text \"H\" width=260 font-size=30 text-align=\"{align}\" color=\"#000000\" text-shadow=\"{shadow}\"\n"
+            ));
+            p.frame().clone()
+        };
+        let reference = draw("none");
+        let pixels = draw("0px 40px 0px #ff0000");
+        let mut covered = 0;
+        for y in 0..reference.height() - 40 {
+            for x in 0..reference.width() {
+                let ink = reference.pixel(x, y).unwrap();
+                if ink.red() == 0 && ink.green() == 0 && ink.blue() == 0 {
+                    let shadow = pixels.pixel(x, y + 40).unwrap();
+                    assert_eq!(
+                        (shadow.red(), shadow.green(), shadow.blue()),
+                        (255, 0, 0),
+                        "text-align={align}: the shadow follows the glyph at {x},{y}"
+                    );
+                    covered += 1;
+                }
+            }
+        }
+        assert!(covered > 20, "text-align={align}: the glyph is drawn");
+    }
+}

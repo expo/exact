@@ -119,7 +119,7 @@ impl Painter {
                 );
             },
         );
-        self.paint_text_ink(paragraph, &ink, origin, ts, roll);
+        self.paint_text_ink(paragraph, &ink, origin, ts, roll, None);
     }
 
     pub(super) fn capture_text_ink(
@@ -151,10 +151,53 @@ impl Painter {
             }
         }
         let decorations =
-            self.text_decorations(kernel, paragraph, &palette, reveal, selected.clone());
+            self.text_decorations(kernel, paragraph, &palette, reveal, selected.clone(), None);
         TextInk {
             palette,
             looks,
+            decorations,
+        }
+    }
+
+    pub(super) fn capture_field_ink(
+        &mut self,
+        kernel: &Kernel,
+        paragraph: &Paragraph,
+        palette: &[RunPaint],
+        shadows: &[exact_kernel::style::TextShadow],
+        reveal: Option<ViewId>,
+    ) -> TextInk {
+        let shadows: Vec<_> = shadows
+            .iter()
+            .zip(palette)
+            .map(|(shadow, ink)| {
+                shadow.shadow().map(|s| {
+                    (
+                        (s.offset.x, s.offset.y),
+                        s.blur,
+                        s.color
+                            .map_or(ink.color, |c| super::rgba(c.resolve(self.dark))),
+                    )
+                })
+            })
+            .collect();
+        let decorations = self.text_decorations(
+            kernel,
+            paragraph,
+            palette,
+            reveal,
+            0..palette.len(),
+            Some(&shadows),
+        );
+        TextInk {
+            palette: palette.to_vec(),
+            looks: shadows
+                .into_iter()
+                .map(|shadow| RunLook {
+                    shadow,
+                    stroke: None,
+                })
+                .collect(),
             decorations,
         }
     }
@@ -166,7 +209,9 @@ impl Painter {
         origin: (f32, f32),
         ts: Transform,
         roll: Option<&(Roll, f64)>,
+        field_clips: Option<(Rect4, Rect4)>,
     ) {
+        let (foreground_clip, shadow_clip) = field_clips.unzip();
         let palette = ink.palette.as_slice();
         let looks = &ink.looks;
         let decorations = &ink.decorations;
@@ -198,7 +243,16 @@ impl Painter {
                 let glyphs = shadowed
                     .as_deref()
                     .filter(|_| joins && index + 1 == masks.len());
-                self.shadow_pass(paragraph, glyphs, &s.mask, s.shadow, origin, ts, roll);
+                self.shadow_pass(
+                    paragraph,
+                    glyphs,
+                    &s.mask,
+                    s.shadow,
+                    origin,
+                    ts,
+                    roll,
+                    shadow_clip,
+                );
             }
             if let Some(shadow) = look.shadow.filter(|_| !joins) {
                 self.shadow_pass(
@@ -209,7 +263,12 @@ impl Painter {
                     origin,
                     ts,
                     roll,
+                    shadow_clip,
                 );
+            }
+            // A field's shadow reaches the padding; its foreground stays in the content box.
+            if let Some(clip) = foreground_clip {
+                self.backend.push_clip(&super::Shape::rect(clip), ts);
             }
             // CSS Text Decoration 3 §5.1: shadows, underlines, glyphs, strikes.
             decorations.paint(
@@ -257,6 +316,9 @@ impl Painter {
                 ts,
                 TextDecorationLine::LineThrough,
             );
+            if foreground_clip.is_some() {
+                self.backend.pop_clip();
+            }
         }
     }
 
@@ -284,21 +346,45 @@ impl Painter {
         origin: (f32, f32),
         ts: Transform,
         roll: Option<&(Roll, f64)>,
+        clip: Option<Rect4>,
     ) {
         let sigma = blur / 2.0;
         let reach = 3.0 * sigma + 1.0;
-        let glyph_bounds = roll.map_or((0.0, 0.0, paragraph.width, paragraph.height), |(r, _)| {
-            r.bounds()
-        });
+        let glyph_bounds = roll.map_or_else(|| line_bounds(paragraph), |(r, _)| r.bounds());
         let (left, top, width, height) = decorations.bounds(glyph_bounds);
         let at = (origin.0 + x, origin.1 + y);
+        let mut bounds = (
+            at.0 + left - reach,
+            at.1 + top - reach,
+            width + 2.0 * reach,
+            height + 2.0 * reach,
+        );
+        if let Some(clip) = clip {
+            let Some(inverse) = ts.invert() else {
+                return;
+            };
+            let viewport = super::bbox(inverse, (0., 0., self.viewport.0, self.viewport.1));
+            let (x, y, w, h) = super::intersect(clip, viewport);
+            if w <= 0. || h <= 0. {
+                return;
+            }
+            // Clip the offset mask before allocating it. Keep offscreen ink
+            // within blur reach so it can still cast into the visible padding.
+            bounds = super::intersect(
+                bounds,
+                (x - reach, y - reach, w + 2. * reach, h + 2. * reach),
+            );
+        }
+        if bounds.2 <= 0. || bounds.3 <= 0. {
+            return;
+        }
         // Whole device pixels preserve the mask's coverage when it is composited.
         let s = self.scale;
         let (x0, y0, x1, y1) = (
-            ((at.0 + left - reach) * s).floor() / s,
-            ((at.1 + top - reach) * s).floor() / s,
-            ((at.0 + left + width + reach) * s).ceil() / s,
-            ((at.1 + top + height + reach) * s).ceil() / s,
+            (bounds.0 * s).floor() / s,
+            (bounds.1 * s).floor() / s,
+            ((bounds.0 + bounds.2) * s).ceil() / s,
+            ((bounds.1 + bounds.3) * s).ceil() / s,
         );
         let rect: Rect4 = (x0, y0, x1 - x0, y1 - y0);
         let Some(mut pixels) = self.island(rect, |p, t| {
@@ -322,6 +408,21 @@ impl Painter {
         }
         self.backend.island_image(Arc::new(pixels), rect, ts, 0);
     }
+}
+
+/// The paragraph's box widened to where its lines sit. `width` is the widest
+/// line's advance, but a centred or right-aligned line (or one in a wider
+/// field) starts past zero, so its glyphs can lie beyond `width`.
+fn line_bounds(paragraph: &Paragraph) -> Rect4 {
+    let (mut left, mut right) = (0.0f32, paragraph.width);
+    for line in paragraph.layout_runs() {
+        // Glyphs are in visual order: the first is leftmost, the last rightmost.
+        if let (Some(first), Some(last)) = (line.glyphs.first(), line.glyphs.last()) {
+            left = left.min(first.x);
+            right = right.max(last.x + last.w);
+        }
+    }
+    (left, 0.0, right - left, paragraph.height)
 }
 
 /// `palette` with the selected runs in `color` and the rest transparent.

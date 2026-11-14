@@ -1,9 +1,9 @@
 //! A textarea's paint-only decorations on the shared Linux/Windows field
-//! presenter (LLP 1114.007): each span's colour, background and
+//! presenter (LLP 1114.007): each span's colour, background, shadow and
 //! text-decoration line as its own run, with the field's font, so every
 //! advance, line break and caret position is the undecorated field's.
-//! `text-shadow` is not painted here.
 use super::Spec;
+use exact_kernel::style::TextShadow;
 use exact_kernel::text::decorations::Decorations;
 use exact_kernel::{ColorValue, StyleId};
 use exact_runner::decorations::StyleTable;
@@ -19,6 +19,7 @@ pub(crate) struct Projection {
     pub spec: Spec,
     pub inks: Vec<Option<ColorValue>>,
     pub backgrounds: Vec<Option<Option<ColorValue>>>,
+    pub shadows: Vec<TextShadow>,
 }
 
 impl FieldDecorations {
@@ -71,6 +72,7 @@ impl FieldDecorations {
         let mut runs = Vec::new();
         let mut inks = Vec::new();
         let mut backgrounds = Vec::new();
+        let mut shadows = Vec::new();
         let mut active = BTreeMap::new();
         for pair in events.windows(2) {
             for &(index, starts) in &pair[0].1 {
@@ -88,6 +90,7 @@ impl FieldDecorations {
             let mut run = spec.strut.clone();
             run.text = value[start..end].into();
             let (mut ink, mut background) = (None, None);
+            let mut shadow = TextShadow::default();
             for style in active.values().flatten() {
                 let has = |id| style.mask.has(id);
                 if has(StyleId::TextColor) {
@@ -95,6 +98,9 @@ impl FieldDecorations {
                 }
                 if has(StyleId::BackgroundColor) {
                     background = Some(style.background_color)
+                }
+                if has(StyleId::TextShadow) {
+                    shadow = style.text_shadow;
                 }
                 if has(StyleId::TextDecorationLine) {
                     use exact_kernel::TextDecorationLine as Line;
@@ -111,6 +117,7 @@ impl FieldDecorations {
             runs.push(run);
             inks.push(ink);
             backgrounds.push(background);
+            shadows.push(shadow);
         }
         if runs.is_empty() {
             let mut run = spec.strut.clone();
@@ -118,12 +125,14 @@ impl FieldDecorations {
             runs.push(run);
             inks.push(None);
             backgrounds.push(None);
+            shadows.push(TextShadow::default());
         }
         spec.runs = runs;
         Projection {
             spec,
             inks,
             backgrounds,
+            shadows,
         }
     }
 }
@@ -219,6 +228,36 @@ mod tests {
         let state = decorations.state(source);
         assert_eq!(state["provisional"], true);
         assert_eq!(state["spans"], json!([{"name":"line","start":0,"end":4}]));
+    }
+
+    #[test]
+    fn overlapping_shadows_resolve_per_attribute_and_none_clears_the_previous_shadow() {
+        let source = "abcd";
+        let record = record(
+            source,
+            json!([
+                {"name":"shadow","start":0,"end":4},
+                {"name":"ink","start":1,"end":3},
+                {"name":"clear","start":2,"end":4},
+            ]),
+        );
+        let styles = json!({
+            "shadow":[[StyleId::TextShadow as u16,"-4px 8px 6px"]],
+            "ink":[[StyleId::TextColor as u16,"#0000ff"]],
+            "clear":[[StyleId::TextShadow as u16,"none"]],
+        });
+        let projected = FieldDecorations::read(&record, &styles.to_string())
+            .unwrap()
+            .project(spec(source), source);
+        let shadow = TextShadow::parse("-4px 8px 6px").unwrap();
+        assert_eq!(
+            projected.shadows,
+            [shadow, shadow, TextShadow::default(), TextShadow::default()]
+        );
+        assert!(projected.shadows[1].shadow().unwrap().color.is_none());
+        assert!(projected.inks[0].is_none());
+        assert_eq!(projected.inks[1], projected.inks[2]);
+        assert!(projected.inks[3].is_none());
     }
 
     #[test]
