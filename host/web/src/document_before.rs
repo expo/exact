@@ -69,6 +69,7 @@ impl Before {
                 *root,
                 false,
                 false,
+                exact_kernel::Visibility::Visible,
                 &mut Vec::new(),
                 &mut live,
             );
@@ -91,6 +92,7 @@ impl Before {
         id: ViewId,
         hidden: bool,
         covered: bool,
+        mut visibility: exact_kernel::Visibility,
         path: &mut Vec<ViewId>,
         live: &mut Vec<Vec<ViewId>>,
     ) {
@@ -110,9 +112,17 @@ impl Before {
         }
         let covered = covered
             || self.routes.get(&id).is_some_and(|r| r.inert)
-            || node.props.bool(PropId::Inert) == Some(true)
-            || node.style.visibility == exact_kernel::Visibility::Hidden;
-        if !covered && !self.hero_seen && tag_of(&node, false) == "img" {
+            || node.props.bool(PropId::Inert) == Some(true);
+        // Unlike `inert`, CSS `visibility` is inherited, and a descendant may
+        // set it back to `visible`.
+        if node.style.mask.has(exact_kernel::StyleId::Visibility) {
+            visibility = node.style.visibility;
+        }
+        if !covered
+            && visibility == exact_kernel::Visibility::Visible
+            && !self.hero_seen
+            && tag_of(&node, false) == "img"
+        {
             let props = props_of(&node);
             if let Some(source) = props.get("src").filter(|source| {
                 !source.is_empty() && !source.starts_with("data:") && !source.starts_with("symbol:")
@@ -133,7 +143,9 @@ impl Before {
         self.route_children(src, handlers, &node, &children);
         path.push(id);
         for child in children.iter().copied() {
-            self.scan(src, handlers, lazy, child, hidden, covered, path, live);
+            self.scan(
+                src, handlers, lazy, child, hidden, covered, visibility, path, live,
+            );
         }
         path.pop();
     }

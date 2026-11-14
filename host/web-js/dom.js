@@ -166,27 +166,36 @@ const HERO_PRIORITY = 'high';
 
 /** A document for one render: `#exact-root` in a body, a head for metas. */
 export function createDocument(shell = '') {
-  // The shell's classes that set a font size, and those that hide (a static style is a class: emit.rs).
-  const fonts = new Map(), hidden = new Set();
+  // The shell's classes that set a font size, and those that set a visibility (a static style is a class: emit.rs).
+  const fonts = new Map(), visibilities = new Map();
   for (const rule of shell.matchAll(/\.([\w-]+)\{([^}]+)\}/g)) {
     const size = /(?:^|;)font-size:([^;]+)(?:;|$)/.exec(rule[2]);
     if (size) fonts.set(rule[1], size[1]);
-    if (/(?:^|;)visibility:hidden(?:;|$)/.test(rule[2])) hidden.add(rule[1]);
+    const visibility = /(?:^|;)visibility:(visible|hidden|collapse)(?:;|$)/.exec(rule[2]);
+    if (visibility) visibilities.set(rule[1], visibility[1]);
   }
+  // The visibility `el` sets, '' when it takes its parent's. An inline value wins over its class's, and `unset` or
+  // `inherit` (a bound blank writes `unset`: tree.js) takes the parent's, as the kernel clears the row for them.
+  const ownVisibility = el => {
+    const inline = el.style.getPropertyValue('visibility');
+    if (inline) return /^(?:visible|hidden|collapse)$/.test(inline) ? inline : '';
+    const names = visibilities.size ? el.getAttribute('class') : null;
+    return names === null ? '' : names.split(/\s+/).map(name => visibilities.get(name)).findLast(Boolean) ?? '';
+  };
   /** The page's hero in `el`'s subtree: its first shown image with a source, as document_before.rs `Before::scan` finds
    * it. `null` when that image is lazy, which a row's is (LLP 1048.007 D5): the page opens with a list and has no
-   * hero; `undefined` when the subtree has no such image. A head (`template`), a covered subtree (a route the stack
-   * covers is `inert`) and a hidden one (inline, or by a `hidden` class) hold none; nor does a symbol written as a
-   * placeholder (`html`). */
-  const heroIn = el => {
-    if (el.localName === 'template' || el.hasAttribute('inert') || el.style.getPropertyValue('visibility') === 'hidden'
-      || (hidden.size && el.classList.some(name => hidden.has(name)))) return undefined;
+   * hero; `undefined` when the subtree has no such image. A head (`template`) and a covered subtree (a route the stack
+   * covers is `inert`) hold none. `inherited` is the parent's `visibility`, which CSS inherits; a descendant may set it
+   * back to `visible`. A symbol written as a placeholder (`html`) is no hero. */
+  const heroIn = (el, inherited = 'visible') => {
+    if (el.localName === 'template' || el.hasAttribute('inert')) return undefined;
+    const visibility = ownVisibility(el) || inherited;
     if (el.localName === 'img') {
       const src = el.getAttribute('src') ?? '', placeholder = el.hasAttribute('data-symbol-source') && !el.hasAttribute('data-symbol-file');
-      if (!src || src.startsWith('data:') || src.startsWith('symbol:') || placeholder) return undefined;
+      if (visibility !== 'visible' || !src || src.startsWith('data:') || src.startsWith('symbol:') || placeholder) return undefined;
       return el.getAttribute('loading') === 'lazy' ? null : el;
     }
-    for (const child of el.childNodes) if (child.nodeType === 1) { const hero = heroIn(child); if (hero !== undefined) return hero; }
+    for (const child of el.childNodes) if (child.nodeType === 1) { const hero = heroIn(child, visibility); if (hero !== undefined) return hero; }
     return undefined;
   };
   const doc = new Node(9);

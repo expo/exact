@@ -42,13 +42,29 @@ test('the render DOM reflects link relations and image alternatives in both dire
 });
 
 test('the render DOM marks its hero first among its attributes and preloads it by the same request, past a hidden image', () => {
-  const doc = createDocument('<style>.c1{visibility:hidden}</style>'), root = doc.getElementById('exact-root');
+  // `visibility` is inherited: the hidden class's image is skipped, and the image whose class sets it back to `visible` is
+  // the hero.
+  const doc = createDocument('<style>.c1{visibility:hidden}.c2{visibility:visible}</style>'), root = doc.getElementById('exact-root');
   const hidden = doc.createElement('div'), unseen = doc.createElement('img'), hero = doc.createElement('img');
-  hidden.setAttribute('class', 'c1'); unseen.setAttribute('src', 'https://example.com/hidden.png'); hidden.append(unseen);
-  hero.setAttribute('alt', 'Hero'); hero.setAttribute('crossorigin', 'anonymous'); hero.setAttribute('src', 'https://example.com/hero.png?a=1&b=2');
-  root.append(hidden, hero);
+  hidden.setAttribute('class', 'c1'); unseen.setAttribute('src', 'https://example.com/hidden.png');
+  hero.setAttribute('alt', 'Hero'); hero.setAttribute('class', 'c2'); hero.setAttribute('crossorigin', 'anonymous'); hero.setAttribute('src', 'https://example.com/hero.png?a=1&b=2');
+  hidden.append(unseen, hero); root.append(hidden);
   expect(doc.heroPreload()).toBe('<link rel="preload" as="image" href="https://example.com/hero.png?a=1&amp;b=2" crossorigin="anonymous" fetchpriority="high">');
-  expect(doc.rootHTML()).toContain('<img fetchpriority="high" alt="Hero" crossorigin="anonymous" src="https://example.com/hero.png?a=1&amp;b=2">');
+  expect(doc.rootHTML()).toContain('<img fetchpriority="high" alt="Hero" class="c2" crossorigin="anonymous" src="https://example.com/hero.png?a=1&amp;b=2">');
+  // Inline, `collapse` hides an image; `inert` hides even an image set `visible`; an inline `unset` (a bound blank) wins
+  // over a hidden class and takes the parent's visibility, here the root's, and `inherit` takes a hidden parent's.
+  const inline = createDocument('<style>.c1{visibility:hidden}</style>'), make = (src, style, attrs = {}) => {
+    const img = inline.createElement('img');
+    for (const [name, value] of Object.entries({ src, ...attrs })) img.setAttribute(name, value);
+    img.style.setProperty('visibility', style);
+    return img;
+  };
+  const inert = inline.createElement('div'), shut = inline.createElement('div');
+  inert.setAttribute('inert', ''); inert.append(make('https://example.com/inert.png', 'visible'));
+  shut.setAttribute('class', 'c1'); shut.append(make('https://example.com/inherit.png', 'inherit'));
+  inline.getElementById('exact-root').append(make('https://example.com/collapsed.png', 'collapse'), inert, shut,
+    make('https://example.com/unset.png', 'unset', { class: 'c1' }));
+  expect(inline.heroPreload()).toBe('<link rel="preload" as="image" href="https://example.com/unset.png" fetchpriority="high">');
 });
 
 test('the render DOM selects options by their value or label', () => {

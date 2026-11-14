@@ -1115,7 +1115,8 @@ const heroRequests = page => {
 
 // LLP 1048.007 D5: an image a `for` repeats loads as its row comes into view, as a platform list's cells load theirs.
 // The page's own first shown image with a source, likely its largest paint, is preloaded ahead of the document at high
-// priority: an image with no source makes no request and a hidden one is not shown, so neither is the hero.
+// priority: an image with no source makes no request and a hidden one is not shown, so neither is the hero. An image in
+// a hidden column that sets its own `visibility` back to `visible` is shown.
 test('both document renderers lazy-load the images a for repeats, and preload the first shown image with a source', async () => {
   for (const how of ['js', 'rust']) await renderedPages(`routes nav
   home "/" render=build
@@ -1130,8 +1131,8 @@ component Page
           image avatar alt="Avatar"
           column visibility="hidden"
             image "https://example.com/hidden.png" alt="Hidden"
-          column aria-label="not inert here"
-            image "https://example.com/hero.png" width=200 alt="a src of light, no crossorigin here"
+            column aria-label="not inert here"
+              image "https://example.com/hero.png" width=200 alt="a src of light, no crossorigin here" visibility="visible"
           for id in ids key=id
             image \`https://example.com/\${id}.png\` width=96 alt=id
 `, (_, html) => {
