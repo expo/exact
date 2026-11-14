@@ -478,8 +478,11 @@ A read may name its preload: `fetch(url, { exactPreload: "feed" })`, or
 `Request::get(url).preload("feed")?` in Rust. Names must match `^[a-z][a-z0-9-]*$`.
 The held reply must have the same method and URL; headers and body may differ.
 With an update selected, including a plan-only update, only full request equality
-can take a preload. A missing or mismatched name falls back to equality once the
-launch can no longer define that name.
+can take a preload. Only a name with no definition yet waits while the launch can
+still define it; when that wait ends, the read falls back to equality. A name
+already defined for another method or URL falls back to equality at once.
+Names are unique across the manifest and launch function: a second handover with
+the same name is refused and leaves the first definition in place.
 A refresh drops both the preload it names at an equal method and URL and any
 fully equal hold; under an update selection only equality applies.
 On the web the option is accepted and ignored. A TypeScript bundle naming it needs

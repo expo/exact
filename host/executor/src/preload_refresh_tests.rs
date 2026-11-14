@@ -16,6 +16,68 @@ fn wait(core: &Core, ticket: u64) {
 }
 
 #[test]
+fn independent_requests_neither_refresh_complete_holds_nor_prevent_prefetch_holds() {
+    for asynchronous in [false, true] {
+        for mode in [CacheMode::Reload, CacheMode::NoCache, CacheMode::Default] {
+            for complete in [false, true] {
+                let server = Server::new();
+                let request = server.request("/feed").header("X-Trace", "one");
+                let definitions = if complete {
+                    server.plan("/feed", Plan::new(200, &[], b"held"));
+                    vec![Definition {
+                        request: request.clone(),
+                        ..definition(&server, "/feed")
+                    }]
+                } else {
+                    Vec::new()
+                };
+                let (set, _clock) = fresh_clock(&server, definitions);
+                complete_set(&set);
+                let (core, woke) = server.core(asynchronous, true);
+                adopt(&core, set);
+                let release = held_plan(&server, "/feed", b"independent");
+                let mut independent = job(1, request.clone().cache(mode).independent_http(1024));
+                independent.forced = mode == CacheMode::Default;
+                core.run(independent, None).unwrap();
+                server.seen(if complete { 2 } else { 1 });
+                {
+                    let state = core.shared.state.lock().unwrap();
+                    let holds = &state.cache.as_ref().unwrap().preloads;
+                    assert_eq!(holds.len(), usize::from(complete));
+                    if complete {
+                        assert!(matches!(holds[0].reply, ReplyState::Ready(_)));
+                    }
+                }
+                if !complete {
+                    server.plan("/feed", Plan::new(200, &[], b"held"));
+                    let (reply, cached) = ask(&core, &woke, job(2, request.clone().prefetch()));
+                    assert!(cached);
+                    assert_eq!(reply.body, b"held");
+                    let state = core.shared.state.lock().unwrap();
+                    let holds = &state.cache.as_ref().unwrap().preloads;
+                    assert_eq!(holds.len(), 1);
+                    assert!(holds[0].prefetch);
+                    assert!(matches!(holds[0].reply, ReplyState::Ready(_)));
+                }
+                let (reply, cached) = ask(&core, &woke, job(3, request.clone()));
+                assert!(cached);
+                assert_eq!(reply.body, b"held");
+                assert_eq!(server.count(), 2);
+                release.send(()).unwrap();
+                let (ticket, outcome, timing) = collect(&core, &woke);
+                assert_eq!(ticket, 1);
+                assert!(!timing.cached);
+                assert!(matches!(outcome, Outcome::Response(r) if r.body == b"independent"));
+                let (reply, cached) = ask(&core, &woke, job(4, request));
+                assert!(cached);
+                assert_eq!(reply.body, b"held");
+                assert_eq!(server.count(), 2);
+            }
+        }
+    }
+}
+
+#[test]
 fn a_queued_or_running_refresh_leaves_a_prefetch_as_a_plain_read() {
     let mut failures = Vec::new();
     for asynchronous in [false, true] {

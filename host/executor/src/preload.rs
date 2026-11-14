@@ -1181,6 +1181,7 @@ impl Refresh {
 // Cache lookup asks only about earlier tickets; a hold must exclude every
 // unfinished refresh, including one behind it (LLP 1162.000 D1, D5).
 fn refresh_underway(state: &State, names: bool, request: &Request, name: &str) -> bool {
+    // Independent requests are never refreshes: Refresh::of requires is_plain_http (LLP 1162.000 D1).
     reads::pending(state).any(|pending| match pending {
         reads::Pending::Running(r) => r
             .refresh
