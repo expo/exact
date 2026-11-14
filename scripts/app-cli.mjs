@@ -567,22 +567,16 @@ if (verb === 'contract') {
   if (verb === 'serve' && !rest.includes('--lan')) rest.push('--loopback');
   if (jsonBuilt) return log(await jsonBuild(spawned, [resolve(exact2, verbs[verb][0]), ...verbs[verb].slice(1), ...rest], verb, reply));
   if (verb !== 'test') return log(await withCargoFault(await script(verbs[verb], rest)));
-  // An app with a server of its own (the rest pattern's) has it run for the tests, where app.ts calls it, on an empty
-  // database kept through them: as verify runs it, by the same code (LLP 1116.007 D2).
-  const { withAppServer } = await import(resolve(exact2, 'scripts/verify.mjs'));
-  return log(await withAppServer(dir, async () => {
-    let failed = 0;
-    // None authored: app.test.contract, whose absence the driver names.
-    const files = tests.length ? tests : (await import(resolve(exact2, 'scripts/app.mjs'))).authoredTests(dir);
-    for (const file of files.length ? files : [resolve(dir, 'app.test.contract')]) {
-      if (files.length > 1) console.log(`# ${relative(process.cwd(), file)}`);
-      const code = await script(verbs.test, ['--test', file, ...rest]);
-      // A signal passed to this file's drive was a request to stop the run, not a failing test.
-      if (stopped) return code || 128 + (constants.signals[stopped] ?? 0);
-      failed = code || failed;
-    }
-    return failed;
-  }, { verb: 'test', optional: true }));
+  // Each file's agent owns its server, so it can restart between that file's tests.
+  let failed = 0;
+  const files = tests.length ? tests : (await import(resolve(exact2, 'scripts/app.mjs'))).authoredTests(dir);
+  for (const file of files.length ? files : [resolve(dir, 'app.test.contract')]) {
+    if (files.length > 1) console.log(`# ${relative(process.cwd(), file)}`);
+    const code = await script(verbs.test, ['--test', file, ...rest]);
+    if (stopped) return log(code || 128 + (constants.signals[stopped] ?? 0));
+    failed = code || failed;
+  }
+  return log(failed);
 }
 
 /** The verbs whose build reports its artifact under `--json` (help.mjs `reportBuilt`). */

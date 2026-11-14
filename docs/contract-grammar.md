@@ -958,8 +958,11 @@ after the persona (a status from 100 through 599, LLP 1116.010 D3) is the test o
 refusal: that status passes it, any other (a success too) fails it. The app
 shows the write when it next reads, so follow it with `clock +<its poll's ms>` and
 `clock data` before the `expect` (a failed `expect` before the clock moved says so).
-`test`, `verify` and `agent --test` run the server on an empty database (one already
-answering there, your dev server, is refused). Runs take the server's port in turn (another checkout's
+`test`, `verify` and `agent --test` restart an owned server empty for each test,
+including memory-only servers (`database: false`). Remote servers stay shared.
+Only `test` and `agent --test` share an ancestor's server, saying so;
+`verify` refuses an answering local server, including an ancestor's.
+A dev server already answering at an owned server's address is refused. Runs take the server's port in turn (another checkout's
 run on it is waited for, and named). `fail fetch` does not reach a `request`: the driver sends
 it, not the app. Arguments after the entry in app.json's `commands.server` are passed
 through in order. For a server that keeps no database, set `"server": { "database": false }`

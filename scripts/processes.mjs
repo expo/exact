@@ -9,7 +9,7 @@ export const commandLine = (pid) => (process.platform === 'win32'
 
 /** Every process's parent, by pid: `ps` has no Windows build, where CIM's Win32_Process reports them, as for
  * `commandLine`. Empty when neither answers. */
-function processParents() {
+export function processParents() {
   const r = process.platform === 'win32'
     ? spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', 'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.ParentProcessId)" }'], { encoding: 'utf8' })
     : spawnSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf8' });
