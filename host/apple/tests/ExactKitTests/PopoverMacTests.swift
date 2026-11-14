@@ -307,6 +307,108 @@ final class PopoverMacTests: XCTestCase {
         }
         p.menus.reset()
     }
+    func testMenuButtonsTakeReturnAndEscapeRestoresFocusAfterAClick() throws {
+        let p = fixture(), pop = try XCTUnwrap(p.views[3]), window = try XCTUnwrap(p.viewport.window)
+        defer { p.menus.reset() }
+        let source = try XCTUnwrap(p.views[2]), row = try XCTUnwrap(p.views[5])
+        p.apply(wireBatch([
+            ["op": "props", "id": 3, "set": ["accessibilityRole": "menu"]],
+        ]))
+        row.handlers.insert("press")
+        var pressed: [UInt32] = []
+        p.onPress = { pressed.append($0) }
+        for code: UInt16 in [36, 53] {
+            // A Mac click does not focus its button. Opening from empty
+            // ground must still give a keyboard dismissal somewhere to land.
+            window.makeFirstResponder(nil)
+            p.press(source.id)
+            XCTAssertTrue(window.makeFirstResponder(row))
+            pressed.removeAll()
+            let chars = code == 36 ? "\r" : "\u{1b}"
+            for type: NSEvent.EventType in [.keyDown, .keyUp] {
+                let event = try XCTUnwrap(NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [], timestamp: 0,
+                    windowNumber: window.windowNumber, context: nil, characters: chars,
+                    charactersIgnoringModifiers: chars, isARepeat: false, keyCode: code))
+                if !p.routeKey(event, focused: true, in: window) { window.sendEvent(event) }
+            }
+            XCTAssertEqual(pressed, code == 36 ? [row.id] : [])
+            XCTAssertFalse(p.menus.isOpen(pop))
+            XCTAssertTrue(window.firstResponder === p.keyView(of: source))
+            p.menus.close(pop)
+        }
+    }
+
+    func testReturnDoesNotPressAButtonInANonMenuPopoverNestedInsideAMenu() throws {
+        let p = fixture(), menu = try XCTUnwrap(p.views[3]), window = try XCTUnwrap(p.viewport.window)
+        defer { p.menus.reset() }
+        p.apply(wireBatch([
+            ["op": "props", "id": 3, "set": ["accessibilityRole": "menu"]],
+            ["op": "create", "id": 7, "kind": "view", "props": ["popover": "auto", "id": "nested"]],
+            ["op": "create", "id": 8, "kind": "button", "handlers": ["press"]],
+            ["op": "create", "id": 9, "kind": "button", "props": ["popovertarget": "nested"]],
+            ["op": "create", "id": 10, "kind": "input"],
+            ["op": "children", "id": 7, "ids": [10, 8]],
+            ["op": "children", "id": 3, "ids": [4, 5, 7, 9]],
+            ["op": "frame", "id": 7, "x": 0, "y": 0, "w": 200, "h": 100],
+            ["op": "frame", "id": 8, "x": 10, "y": 50, "w": 80, "h": 30],
+            ["op": "frame", "id": 9, "x": 100, "y": 80, "w": 80, "h": 30],
+            ["op": "frame", "id": 10, "x": 10, "y": 10, "w": 180, "h": 30],
+        ]))
+        let nested = try XCTUnwrap(p.views[7]), button = try XCTUnwrap(p.views[8])
+        p.press(2)
+        p.press(9)
+        XCTAssertTrue(p.menus.isOpen(menu))
+        XCTAssertTrue(p.menus.isOpen(nested))
+        XCTAssertFalse(nested.isMenu)
+        XCTAssertFalse(nested.menuShaped)
+        XCTAssertTrue(button.owningMenu === menu, "authored ancestry crosses the open popover")
+        XCTAssertTrue(window.makeFirstResponder(button))
+        var pressed: [UInt32] = []
+        p.onPress = { pressed.append($0) }
+        for (chars, code) in [("\r", UInt16(36)), (" ", 49)] {
+            for type: NSEvent.EventType in [.keyDown, .keyUp] {
+                let event = try XCTUnwrap(NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [], timestamp: 0,
+                    windowNumber: window.windowNumber, context: nil, characters: chars,
+                    charactersIgnoringModifiers: chars, isARepeat: false, keyCode: code))
+                if !p.routeKey(event, focused: true, in: window) { window.sendEvent(event) }
+            }
+            XCTAssertEqual(pressed, code == 36 ? [] : [button.id], "only Space presses the form's button")
+            XCTAssertTrue(p.menus.isOpen(nested))
+        }
+    }
+
+    func testMenuDismissalKeepsAuthoredFocusAndSkipsAnUnfocusableInvoker() throws {
+        let p = fixture(), pop = try XCTUnwrap(p.views[3]), window = try XCTUnwrap(p.viewport.window)
+        defer { p.menus.reset() }
+        let outside = try XCTUnwrap(p.views[6]), row = try XCTUnwrap(p.views[5]), root = try XCTUnwrap(p.views[1])
+        let source = try XCTUnwrap(p.views[2])
+        pop.props["accessibilityRole"] = "menu"
+        row.handlers.insert("press")
+        XCTAssertTrue(window.makeFirstResponder(outside))
+        p.press(source.id)
+        XCTAssertTrue(window.makeFirstResponder(row))
+        XCTAssertTrue(p.menus.key(key(window)))
+        _ = p.menus.key(key(window, up: true))
+        XCTAssertFalse(p.menus.isOpen(pop))
+        XCTAssertTrue(window.firstResponder === p.keyView(of: source), "the invoker wins over a different previous responder")
+
+        XCTAssertTrue(window.makeFirstResponder(outside))
+        p.press(source.id)
+        XCTAssertTrue(window.makeFirstResponder(row))
+        p.onPress = { _ in window.makeFirstResponder(outside) }
+        p.press(row.id)
+        XCTAssertFalse(p.menus.isOpen(pop))
+        XCTAssertTrue(window.firstResponder === outside, "the action's focus wins")
+
+        // showPopover's explicit source need not be a focusable control.
+        XCTAssertFalse(root.acceptsFirstResponder)
+        p.menus.show(pop, from: root)
+        XCTAssertTrue(window.makeFirstResponder(row))
+        XCTAssertTrue(p.menus.key(key(window)))
+        XCTAssertFalse(p.menus.isOpen(pop))
+        XCTAssertTrue(window.firstResponder === outside, "an unfocusable source falls back to the previous responder")
+    }
+
     func testToggleShowHideAndAppActionRefreshAreOrdered() {
         let p = fixture(), pop = p.views[3]!
         p.views[2]!.handlers = ["press"]

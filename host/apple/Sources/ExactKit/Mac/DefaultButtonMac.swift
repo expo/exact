@@ -18,7 +18,11 @@ extension NodeView {
     /// with Return (LLP 1115.000 D7.3), so it comes before a dialog's default
     /// button, as an open menu has the keys before its window does.
     var choosesOnReturn: Bool {
-        (isButton || pressable) && Self.choiceRoles.contains(props["accessibilityRole"] ?? "")
+        guard isButton || pressable else { return false }
+        // Menu rows may be ordinary buttons; their item role is optional (LLP 1021 D3).
+        if Self.choiceRoles.contains(props["accessibilityRole"] ?? "") { return true }
+        guard isButton, let menu = owningMenu else { return false }
+        return menu.menuRowsThroughSections.contains { $0 === self }
     }
     private static let choiceRoles: Set<String> = ["menuitem", "menuitemradio", "menuitemcheckbox", "option"]
 
