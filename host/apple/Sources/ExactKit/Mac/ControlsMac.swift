@@ -102,6 +102,8 @@ final class ControlHost: NSObject {
     var appliedRange: [UInt32: String] = [:]
     /// A radio's group from the kernel (`exact_radio_group`; x2apps survey #2).
     var radioGroup: ((UInt32) -> RadioGroup)?
+    /// A painted group's keys from the kernel (`exact_role_keys`; LLP 1166.000 D2).
+    var roleKeys: ((_ view: UInt32, _ key: String?, _ focused: UInt32?) -> RoleKeys?)?
     /// Each `progress`'s spinner (ProgressMac.swift): a view, not a
     /// control, so beside `controls`; and those turning, which AppKit does
     /// not say.

@@ -158,6 +158,14 @@ export function exercise(source: string): string {
     console.info(null, undefined, true, 42, Symbol('label'), { ok: true });
     return 'reached the return';
   }
+  if (source === 'consoleLevels') {
+    console.debug('d');
+    console.log('l');
+    console.info('i');
+    console.warn('w');
+    console.error('e\nsecond');
+    return 'reached the return';
+  }
   if (source === 'consoleEmpty' || source === 'consoleEmptyBatch') {
     console.log('');
     if (source === 'consoleEmptyBatch') {

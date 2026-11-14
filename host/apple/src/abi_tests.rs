@@ -1426,5 +1426,7 @@ fn candidate_profiles_are_isolated_until_commit_and_after_discard() {
 #[path = "abi_block_tests.rs"]
 mod blocks;
 
+#[path = "abi_role_keys_tests.rs"]
+mod role_keys;
 #[path = "abi_roles_tests.rs"]
 mod roles;

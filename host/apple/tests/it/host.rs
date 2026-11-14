@@ -412,14 +412,7 @@ fn text_is_measured_through_the_registered_callback() {
         caltrain_data::Caltrain,
         exact_apple::abi::Hooks {
             measure: Some(wide_glyphs),
-            ctx: std::ptr::null_mut(),
-            lines: None,
-            inline_boxes: None,
-            wake: None,
-            wake_ctx: std::ptr::null_mut(),
-            canvas_text: None,
-            symbol: None,
-            time_format: None,
+            ..exact_apple::abi::Hooks::none()
         },
         390.0,
         844.0,
@@ -500,14 +493,7 @@ fn a_runner_refusal_never_installs_the_candidate_font_catalog() {
         NamedData,
         exact_apple::abi::Hooks {
             measure: Some(wide_glyphs),
-            ctx: std::ptr::null_mut(),
-            lines: None,
-            inline_boxes: None,
-            wake: None,
-            wake_ctx: std::ptr::null_mut(),
-            canvas_text: None,
-            symbol: None,
-            time_format: None,
+            ..exact_apple::abi::Hooks::none()
         },
         390.0,
         844.0,
@@ -527,14 +513,7 @@ fn a_runner_refusal_never_installs_the_candidate_font_catalog() {
         NamedData,
         exact_apple::abi::Hooks {
             measure: Some(wide_glyphs),
-            ctx: std::ptr::null_mut(),
-            lines: None,
-            inline_boxes: None,
-            wake: None,
-            wake_ctx: std::ptr::null_mut(),
-            canvas_text: None,
-            symbol: None,
-            time_format: None,
+            ..exact_apple::abi::Hooks::none()
         },
         390.0,
         844.0,
@@ -556,14 +535,7 @@ fn an_invalid_viewport_plan_boot_keeps_the_running_host() {
         NoData,
         exact_apple::abi::Hooks {
             measure: Some(wide_glyphs),
-            ctx: std::ptr::null_mut(),
-            lines: None,
-            inline_boxes: None,
-            wake: None,
-            wake_ctx: std::ptr::null_mut(),
-            canvas_text: None,
-            symbol: None,
-            time_format: None,
+            ..exact_apple::abi::Hooks::none()
         },
         390.0,
         844.0,
@@ -580,14 +552,7 @@ fn an_invalid_viewport_plan_boot_keeps_the_running_host() {
         NoData,
         exact_apple::abi::Hooks {
             measure: Some(wide_glyphs),
-            ctx: std::ptr::null_mut(),
-            lines: None,
-            inline_boxes: None,
-            wake: None,
-            wake_ctx: std::ptr::null_mut(),
-            canvas_text: None,
-            symbol: None,
-            time_format: None,
+            ..exact_apple::abi::Hooks::none()
         },
         f32::NAN,
         844.0,
@@ -612,14 +577,7 @@ fn an_invalid_initial_viewport_publishes_no_host() {
         NoData,
         exact_apple::abi::Hooks {
             measure: Some(wide_glyphs),
-            ctx: std::ptr::null_mut(),
-            lines: None,
-            inline_boxes: None,
-            wake: None,
-            wake_ctx: std::ptr::null_mut(),
-            canvas_text: None,
-            symbol: None,
-            time_format: None,
+            ..exact_apple::abi::Hooks::none()
         },
         f32::NAN,
         844.0,
@@ -641,14 +599,7 @@ fn a_refused_fresh_boot_keeps_the_running_host() {
         .encode();
     let hooks = exact_apple::abi::Hooks {
         measure: Some(wide_glyphs),
-        ctx: std::ptr::null_mut(),
-        lines: None,
-        inline_boxes: None,
-        wake: None,
-        wake_ctx: std::ptr::null_mut(),
-        canvas_text: None,
-        symbol: None,
-        time_format: None,
+        ..exact_apple::abi::Hooks::none()
     };
     let mut bridge: Bridge<NoData> = Bridge::new();
     let len = bridge.boot(&running, NoData, hooks, 390.0, 844.0);
@@ -675,14 +626,7 @@ fn two_prepared_sessions_keep_their_live_hosts_until_both_accept() {
         .encode();
     let hooks = exact_apple::abi::Hooks {
         measure: None,
-        ctx: std::ptr::null_mut(),
-        lines: None,
-        inline_boxes: None,
-        wake: None,
-        wake_ctx: std::ptr::null_mut(),
-        canvas_text: None,
-        symbol: None,
-        time_format: None,
+        ..exact_apple::abi::Hooks::none()
     };
     let mut a: Bridge<NoData> = Bridge::new();
     let mut b: Bridge<NoData> = Bridge::new();
@@ -732,14 +676,7 @@ fn the_plan_font_catalog_and_family_runs_cross_the_host_seam_before_layout() {
         NoData,
         exact_apple::abi::Hooks {
             measure: Some(record_font_runs),
-            ctx: std::ptr::null_mut(),
-            lines: None,
-            inline_boxes: None,
-            wake: None,
-            wake_ctx: std::ptr::null_mut(),
-            canvas_text: None,
-            symbol: None,
-            time_format: None,
+            ..exact_apple::abi::Hooks::none()
         },
         390.0,
         844.0,

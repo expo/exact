@@ -172,6 +172,14 @@ macro_rules! host {
             $crate::abi::with_entry(&EXACT_RUNTIMES, rt, |e| { e.hooks.time_format = f; });
         }
 
+        /// Where the app's `console` lines go (LLP 1027.009 D1): called on
+        /// this thread with each line as the runner journals it, once its
+        /// host is the one presented.
+        #[no_mangle]
+        pub extern "C" fn exact_set_console(rt: u32, console: Option<extern "C" fn(u8, *const u8, usize)>) {
+            $crate::abi::with_entry(&EXACT_RUNTIMES, rt, |e| { e.hooks.console = console; });
+        }
+
         /// The Canvas 2D text measurer (LLP 1056 D8): called on the runtime's
         /// thread with the context `exact_set_measure` was given.
         #[no_mangle]
@@ -1287,6 +1295,13 @@ macro_rules! host {
         #[no_mangle]
         pub extern "C" fn exact_radio_group(rt: u32, view: u32) -> u32 {
             $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.radio_group(view), |n| n)
+        }
+
+        /// A painted group's keys and Tab stop for a member (LLP 1166.000
+        /// D2), the key's name in the input buffer, JSON; returns its length.
+        #[no_mangle]
+        pub extern "C" fn exact_role_keys(rt: u32, view: u32, focused: u32, len: usize) -> u32 {
+            $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.role_keys(view, focused, len), |n| n)
         }
 
         /// A navigation root's tabs by the kernel's rule (LLP 1115.001

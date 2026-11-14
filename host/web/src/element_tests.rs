@@ -716,3 +716,18 @@ fn a_frame_grants_its_guest_fullscreen() {
         None
     );
 }
+
+#[test]
+fn an_active_descendant_is_written_as_the_aria_attribute() {
+    for value in ["option-apple", ""] {
+        let out = written(
+            NodeType::TextInput,
+            PropId::AccessibilityActiveDescendant,
+            PropValue::Str(value.into()),
+        );
+        assert_eq!(
+            out.get("aria-activedescendant").map(String::as_str),
+            Some(value)
+        );
+    }
+}

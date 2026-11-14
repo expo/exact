@@ -61,6 +61,7 @@ routes nav
   recipeBackgroundTransfers "/recipes/background-transfers" render=build activate=idle
   recipeBackgroundWork "/recipes/background-work" render=build activate=idle
   recipeChatThread "/recipes/chat-thread" render=build activate=idle
+  recipeCombobox "/recipes/combobox" render=build activate=idle
   recipeContentDesign "/recipes/content-design" render=build activate=idle
   recipeConvex "/recipes/convex" render=build activate=idle
   recipeDatesAndDays "/recipes/dates-and-days" render=build activate=idle
@@ -368,7 +369,8 @@ component App
         column height="100%"
           row padding="0 16px" border-bottom="1px solid var(--color-border-secondary)"
             row position="relative" flex=1 align-items="center" margin="16px 0 12px"
-              input id="search-input" type="text" value=query input=ask key=searchKey placeholder="Search…" aria-label="Search the docs" testId="search-input"
+              input id="search-input" role="combobox" aria-expanded=(hits.length > 0) aria-controls="search-hits"
+                aria-activedescendant=(match hits.at(chosen) { case some(h) => `search-hit-${h.id}`, case none => "" }) type="text" value=query input=ask key=searchKey placeholder="Search…" aria-label="Search the docs" testId="search-input"
                 flex=1 min-width=0 min-height=46 box-sizing="border-box" padding="0 40px" font-size="var(--text-base)" border="1px solid var(--color-border-default)" border-radius=24 outline="none" background-color="transparent" color="var(--color-text-default)"
               image "symbol:search" aria-hidden=true position="absolute" left=13 font-size="var(--text-base)" color="var(--color-icon-tertiary)"
               button press=clearOrClose appearance="none" aria-label=(query != "" ? "Clear search" : "Close search") position="absolute" right=9 padding=4 border-radius="var(--radius-full)" testId="search-close"
@@ -382,9 +384,9 @@ component App
             else if hits.length == 0 and not searching
               text "No results found." padding="16px 8px" font-size="var(--text-sm)" color="var(--color-text-secondary)" testId="search-empty"
             else
-              column role="list" gap=2
+              column id="search-hits" role="listbox" aria-label="Search results" gap=2
                 for h, i in hits key=h.id
-                  link href=h.href role="listitem" display="block" padding=(h.nested ? "6px 10px 6px 42px" : "8px 10px") border-radius="var(--radius-lg)" background-color=(i == chosen ? "var(--color-background-element)" : "transparent") testId=`search-hit-${h.id}`
+                  link id=`search-hit-${h.id}` href=h.href role="option" aria-selected=(i == chosen) tabindex=-1 retainFocus=true display="block" padding=(h.nested ? "6px 10px 6px 42px" : "8px 10px") border-radius="var(--radius-lg)" background-color=(i == chosen ? "var(--color-background-element)" : "transparent") testId=`search-hit-${h.id}`
                     if h.nested
                       row align-items="center" gap=8
                         text "#" aria-hidden=true font-size="var(--text-xs)" color="var(--color-text-quaternary)"
