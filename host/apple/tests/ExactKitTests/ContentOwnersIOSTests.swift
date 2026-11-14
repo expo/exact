@@ -521,10 +521,42 @@ final class ContentOwnersIOSTests: XCTestCase {
         for holder in holders { holder.view.frame = holder.view.frame.inset(by: UIEdgeInsets(top: -25, left: 0, bottom: 0, right: 0)) }
         XCTAssertEqual(p.arrangements.scrollers(in: route.node, top: false).count, 2, "panes yet to fill their grown allocations keep the route's bottom edge")
         for (holder, frame) in zip(holders, frames) { holder.view.frame = frame }
+        // A pane owns the bottom edge while its end lies within the route's cover there
         let secondFrame = second.frame
-        second.frame.size.height -= 25
-        XCTAssertTrue(p.arrangements.scrollers(in: route.node, top: false).isEmpty, "a pane shorter than its block gives up the route's bottom edge")
+        var bottomCover: CGFloat = 0
+        if case .edges(let edges)? = p.navigation.covers[route.node.id] { bottomCover = edges.bottom }
+        XCTAssertGreaterThan(bottomCover, 25, "the route's bottom has bars")
+        let wrapperFrame = wrapper.frame, routeCover = p.navigation.covers[route.node.id]
+        wrapper.frame.origin.y -= bottomCover - 2
+        XCTAssertEqual(p.arrangements.scrollers(in: route.node, top: false).count, 2, "an arrangement ending within the cover above the route's bottom keeps its edge")
+        second.frame.size.height = secondFrame.height - 25
+        XCTAssertTrue(p.arrangements.scrollers(in: route.node, top: false).isEmpty, "the arrangement's gap counts with the pane's shortfall, past the cover")
+        wrapper.frame = wrapperFrame
+        XCTAssertEqual(p.arrangements.scrollers(in: route.node, top: false).count, 2, "a pane ending within the cover keeps the route's bottom edge")
+        second.frame.size.height = secondFrame.height + 25
+        XCTAssertTrue(p.arrangements.scrollers(in: route.node, top: false).isEmpty, "a pane taller than its block gives the route's bottom edge up")
+        XCTAssertEqual(p.arrangements.scrollers(in: route.node, top: true).count, 2, "and keeps the top edge, which only its start decides")
+        second.frame = CGRect(x: secondFrame.minX, y: secondFrame.minY + 10, width: secondFrame.width, height: secondFrame.height - 10)
+        XCTAssertTrue(p.arrangements.scrollers(in: route.node, top: true).isEmpty, "a pane below its block's top gives the route's top edge up")
+        XCTAssertEqual(p.arrangements.scrollers(in: route.node, top: false).count, 2, "and keeps the bottom edge")
         second.frame = secondFrame
+        // The top is exact: owning it takes the route's top cover away, which an arrangement nearer the top rises past
+        p.navigation.covers[route.node.id] = .edges(.init(top: 40, right: 0, bottom: bottomCover, left: 0))
+        XCTAssertTrue(p.arrangements.scrollers(in: route.node, top: true).isEmpty, "an arrangement less than the top cover below the route's top does not own it")
+        wrapper.frame.origin.y = wrapperFrame.minY + 40
+        XCTAssertEqual(p.arrangements.scrollers(in: route.node, top: true).count, 2, "one the cover below it does")
+        p.navigation.covers[route.node.id] = routeCover
+        wrapper.frame = wrapperFrame
+        // Leave out of the siblings what a cover takes whole; a box beside the arrangement keeps the route's padding
+        let header = try XCTUnwrap(route.node.container.subviews.compactMap { $0 as? NodeView }.first { p.navigation.covers[$0.id] == .whole })
+        p.navigation.covers[header.id] = nil
+        XCTAssertTrue(p.arrangements.scrollers(in: route.node, top: true).isEmpty, "counted in flow, the header the bar replaces keeps the arrangement from the route's top")
+        p.navigation.covers[header.id] = .whole
+        let aside = try node(session, "pane-aside"), asideStyle = aside.style
+        aside.applyStyle([:])
+        aside.frame = CGRect(x: root.frame.minX, y: root.frame.maxY - 20, width: 20, height: 20)
+        XCTAssertTrue(p.arrangements.scrollers(in: route.node, top: false).isEmpty, "so does a box beside it at its parent's bottom, below the route")
+        aside.applyStyle(asideStyle)
         let frame = holders[1].view.frame, paneFrame = second.frame
         holders[1].view.frame = frame.insetBy(dx: 0, dy: 16)
         second.frame = holders[1].view.bounds

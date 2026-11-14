@@ -42,6 +42,7 @@ component EdgeEffect
                           for r in rows key = r
                             row padding=16
                               text `${pane} row ${r}` testId=`${pane}-row-${r}`
+                    column testId="pane-aside" position="absolute"
                 else
                   scroll id=`content-${e.name}` testId=`content-${e.name}` -exact-scroll-edge-effect=(e.name == "large" ? "soft" : none) flex=1 min-height=0 refresh=reload refreshing=false
                     if e.name == "large"
