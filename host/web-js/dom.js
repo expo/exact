@@ -5,8 +5,7 @@
 // boolean attributes). Region anchors (comments) are not written: adoption
 // inserts its own.
 const VOID = new Set(['img', 'input', 'br', 'hr', 'meta', 'link', 'source', 'area', 'col', 'embed', 'wbr']);
-// An attribute value's `<` and `>` are references too, as HTML's serializer writes them: the render server's hero
-// image scan ends a tag at its first `>` (render.mjs `heroImage`).
+// An attribute value's `<` and `>` are references too, as HTML's serializer and document.rs `escape` write them.
 const esc = (s, attr) => String(s).replace(attr ? /[&"<>\r]/g : /[&<>\r]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\r': '&#13;' })[c]);
 
 let Trees = 0;
@@ -162,13 +161,34 @@ const fontPx = (value, inherited) => {
   return Number(m[1]) * (unit === 'em' ? inherited : unit === 'rem' ? 16 : 1);
 };
 
+// The hero `<img>`'s priority, which its preload carries too (document_before.rs `HeroImage::PRIORITY`).
+const HERO_PRIORITY = 'high';
+
 /** A document for one render: `#exact-root` in a body, a head for metas. */
 export function createDocument(shell = '') {
-  const fonts = new Map();
+  // The shell's classes that set a font size, and those that hide (a static style is a class: emit.rs).
+  const fonts = new Map(), hidden = new Set();
   for (const rule of shell.matchAll(/\.([\w-]+)\{([^}]+)\}/g)) {
     const size = /(?:^|;)font-size:([^;]+)(?:;|$)/.exec(rule[2]);
     if (size) fonts.set(rule[1], size[1]);
+    if (/(?:^|;)visibility:hidden(?:;|$)/.test(rule[2])) hidden.add(rule[1]);
   }
+  /** The page's hero in `el`'s subtree: its first shown image with a source, as document_before.rs `Before::scan` finds
+   * it. `null` when that image is lazy, which a row's is (LLP 1048.007 D5): the page opens with a list and has no
+   * hero; `undefined` when the subtree has no such image. A head (`template`), a covered subtree (a route the stack
+   * covers is `inert`) and a hidden one (inline, or by a `hidden` class) hold none; nor does a symbol written as a
+   * placeholder (`html`). */
+  const heroIn = el => {
+    if (el.localName === 'template' || el.hasAttribute('inert') || el.style.getPropertyValue('visibility') === 'hidden'
+      || (hidden.size && el.classList.some(name => hidden.has(name)))) return undefined;
+    if (el.localName === 'img') {
+      const src = el.getAttribute('src') ?? '', placeholder = el.hasAttribute('data-symbol-source') && !el.hasAttribute('data-symbol-file');
+      if (!src || src.startsWith('data:') || src.startsWith('symbol:') || placeholder) return undefined;
+      return el.getAttribute('loading') === 'lazy' ? null : el;
+    }
+    for (const child of el.childNodes) if (child.nodeType === 1) { const hero = heroIn(child); if (hero !== undefined) return hero; }
+    return undefined;
+  };
   const doc = new Node(9);
   const root = new Element('div'); root.setAttribute('id', 'exact-root');
   const head = new Element('head'); const body = new Element('body');
@@ -181,6 +201,18 @@ export function createDocument(shell = '') {
     querySelector: sel => (/meta\[name="description"\]/.test(sel) ? head.childNodes.find(m => m.getAttribute?.('name') === 'description') ?? null : null),
     querySelectorAll: () => [],
     root, rootHTML: () => root.childNodes.map(c => c.html()).join(''),
+    /** Marks the hero `<img>` (`heroIn`) at high priority, first among its attributes as document.rs writes it, and
+     * returns its preload, which makes the `<img>`'s request: its URL, `crossorigin` and priority, as
+     * `HeroImage::preload` writes them. A page's likely largest paint is fetched early, as web.dev's LCP guidance has
+     * a hero image. '' when the page has none. Call it before `rootHTML`, which writes the mark. */
+    heroPreload: () => {
+      const hero = heroIn(root);
+      if (!hero) return '';
+      hero.attrs = new Map([['fetchpriority', HERO_PRIORITY], ...hero.attrs]);
+      const crossorigin = hero.getAttribute('crossorigin');
+      return `<link rel="preload" as="image" href="${esc(hero.getAttribute('src'), true)}"`
+        + `${crossorigin === null ? '' : ` crossorigin="${esc(crossorigin, true)}"`} fetchpriority="${HERO_PRIORITY}">`;
+    },
   });
   return doc;
 }

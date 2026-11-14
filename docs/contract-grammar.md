@@ -1432,7 +1432,7 @@ included.
 
 An `image` takes no `loading` attribute: Exact decides when its picture is fetched
 (LLP 1048.007 D5). On the web a lone image loads with the page, and the page's first
-one is preloaded. An image a `for` repeats is written `loading="lazy"`, the first
+one is preloaded at high priority. An image a `for` repeats is written `loading="lazy"`, the first
 screen's rows included: the browser fetches those at the page's first layout, not
 while it parses the document, and the rest as they come near. Native hosts fetch the
 picture of every image that is mounted.

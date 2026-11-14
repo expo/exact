@@ -328,7 +328,6 @@ export function renderer(dist, { closed = false, read = path => readFileSync(res
       try {
         const out = await ctx.__render(deadline, info.canSetStatus !== false);
         out.failed = [...(out.failed ?? []), ...made.errors];
-        const hero = heroImage(out);
         const activate = info.activate === 'inferred' ? infer(out) : info.activate;
         const late = info.activate === 'inferred' && activate !== 'interaction' ? preloads : '';
         const wake = activate === 'interaction' && out.wake.length ? ` data-wake="${esc(JSON.stringify(out.wake))}"` : '';
@@ -341,7 +340,7 @@ export function renderer(dist, { closed = false, read = path => readFileSync(res
         // are needed only once the reader acts, and the capture script fetches them with the runtime (LLP 1048.007 D10).
         const deferred = activate === 'interaction' && (info.policy === 'request' || info.policy === 'cached') && checkpoint.length > 1024;
         const src = deferred ? ` data-src="/.exact/checkpoint/${deferAnswers(checkpoint)}.json"` : '';
-        const body = late => `${fields}\n${late}${style}${hero}<div id="exact-root"${rootAttrs}>${out.root}</div>${shell.slice(root + ROOT[0].length, entry)}`
+        const body = late => `${fields}\n${late}${style}${out.hero}<div id="exact-root"${rootAttrs}>${out.root}</div>${shell.slice(root + ROOT[0].length, entry)}`
           + `<script type="application/vnd.exact.checkpoint" data-digest="${digest}" data-activate="${activate}"${wake}${src}>${deferred ? '' : checkpoint.replace(/</g, '\\u003c')}</script>${shell.slice(entryEnd)}`;
         // A complete page marks html and names the preloads in its head; a streamed head has gone already, so the rest
         // marks it before the body and names them after the head's fields, as page.rs does.
@@ -388,32 +387,6 @@ export function renderer(dist, { closed = false, read = path => readFileSync(res
   };
   return render;
 }
-
-/** A rendered page's first image, when it loads with the page (no `for` repeats it, LLP 1048.007 D5), is likely its
- * largest paint: it is fetched at high priority and preloaded ahead of the document, as web.dev's LCP guidance has a
- * hero image (HTML's `fetchpriority` and `<link rel="preload" as="image">`). A page whose first image is a lazy row's
- * opens with a list, and has none. The first shown: a route the stack covers is `inert` and hidden, and what it holds
- * is not the page's. Writes the priority into `out.root`; returns the preload link (host/web/src/document_before.rs). */
-function heroImage(out) {
-  const tags = /<(\/?)([a-zA-Z][\w-]*)([^>]*)>/g, covered = [];
-  for (let m; (m = tags.exec(out.root));) {
-    const [, close, tag, attrs] = m, name = tag.toLowerCase();
-    if (close) { covered.pop(); continue; }
-    if (name === 'img') {
-      const src = /\bsrc="([^"]+)"/.exec(attrs)?.[1];
-      if (covered.includes(true) || !src || src.startsWith('data:')) continue;
-      if (/\bloading="lazy"/.test(attrs)) return '';
-      out.root = out.root.slice(0, m.index) + '<img fetchpriority="high"' + out.root.slice(m.index + 4);
-      return `<link rel="preload" as="image" href="${src}">`;
-    }
-    if (VOID.has(name) || attrs.endsWith('/')) continue;
-    // A style's or a script's text is not markup.
-    if (name === 'style' || name === 'script') { tags.lastIndex = Math.max(tags.lastIndex, out.root.indexOf(`</${name}`, tags.lastIndex)); }
-    covered.push(/\sinert(?=[\s=]|$)/.test(attrs) || /visibility:\s*hidden/.test(attrs));
-  }
-  return '';
-}
-const VOID = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'source', 'track', 'wbr']);
 
 const refusedLine = ([name, api]) => `resource ${name} is pending: a page rendered on the server has no storage (${api}); the reader's page asks it`;
 

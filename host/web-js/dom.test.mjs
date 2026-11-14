@@ -41,6 +41,16 @@ test('the render DOM reflects link relations and image alternatives in both dire
   }
 });
 
+test('the render DOM marks its hero first among its attributes and preloads it by the same request, past a hidden image', () => {
+  const doc = createDocument('<style>.c1{visibility:hidden}</style>'), root = doc.getElementById('exact-root');
+  const hidden = doc.createElement('div'), unseen = doc.createElement('img'), hero = doc.createElement('img');
+  hidden.setAttribute('class', 'c1'); unseen.setAttribute('src', 'https://example.com/hidden.png'); hidden.append(unseen);
+  hero.setAttribute('alt', 'Hero'); hero.setAttribute('crossorigin', 'anonymous'); hero.setAttribute('src', 'https://example.com/hero.png?a=1&b=2');
+  root.append(hidden, hero);
+  expect(doc.heroPreload()).toBe('<link rel="preload" as="image" href="https://example.com/hero.png?a=1&amp;b=2" crossorigin="anonymous" fetchpriority="high">');
+  expect(doc.rootHTML()).toContain('<img fetchpriority="high" alt="Hero" crossorigin="anonymous" src="https://example.com/hero.png?a=1&amp;b=2">');
+});
+
 test('the render DOM selects options by their value or label', () => {
   const doc = createDocument(), select = doc.createElement('select');
   const a = doc.createElement('option'), b = doc.createElement('option'), explicit = doc.createElement('option');
@@ -322,8 +332,7 @@ test('Bun-rendered bound links and symbols keep their attributes through adoptio
 }, 60000);
 
 // An attribute's `<` and `>` are written as references (HTML, "Serializing HTML fragments", attribute mode), as
-// document.rs writes them, so the hero image scan, which ends a tag at its first `>` (render.mjs `heroImage`), reads
-// every attribute of an image and of a covered route: the page preloads the image it shows first.
+// document.rs writes them; and a page preloads the image it shows first, not a covered route's.
 test.each(['js', 'rust'])('%s-rendered pages escape a > in an attribute and preload the image shown first', async how => {
   if (webCompiler().cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
   const root = resolve(import.meta.dir, '../..'), dir = mkdtempSync(resolve(root, 'target/dom-escape-test-'));
@@ -353,8 +362,8 @@ component Pages
     expect({ status, error: status ? stdout + stderr : '' }).toEqual({ status: 0, error: '' });
     const html = path => readFileSync(resolve(dist, path, 'index.html'), 'utf8');
     const preloads = path => html(path).match(/<link rel="preload" as="image"[^>]*>/g);
-    expect([preloads(''), preloads('detail')]).toEqual([['<link rel="preload" as="image" href="https://example.com/home.png">'],
-      ['<link rel="preload" as="image" href="https://example.com/one.png">']]);
+    expect([preloads(''), preloads('detail')]).toEqual([['<link rel="preload" as="image" href="https://example.com/home.png" fetchpriority="high">'],
+      ['<link rel="preload" as="image" href="https://example.com/one.png" fetchpriority="high">']]);
     expect([html('detail').includes('alt="1 &gt; 0"'), html('detail').includes('="1 > 0"')]).toEqual([true, false]);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }, 180000);

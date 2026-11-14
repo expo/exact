@@ -23,6 +23,7 @@ component Cards
   view
     column
       head title="Cards"
+      image "assets/hero.png" alt="Hero" crossorigin="anonymous"
       if cards.length == 0
         text "Loading cards" testId="loading"
       for c in cards key = c
@@ -148,11 +149,12 @@ fn a_boot_document_goes_before_the_answers_and_the_settled_page_replaces_it() {
     // In order: the head's fields (the boot document's), the boot document,
     // the style that hides it, the settled root, the script that removes
     // the boot document, then the checkpoint.
+    let hide = "<style>#exact-root[data-boot]{display:none}</style>";
     let order = [
         "<title>Cards</title>",
         "<div id=\"exact-root\" data-boot=\"\">",
         ">Loading cards<",
-        "<style>#exact-root[data-boot]{display:none}</style>",
+        hide,
         "<div id=\"exact-root\">",
         ">first<",
         "</div><script data-to=\"",
@@ -172,6 +174,11 @@ fn a_boot_document_goes_before_the_answers_and_the_settled_page_replaces_it() {
     // The settled root holds no placeholder.
     let settled = &page[page.find("<div id=\"exact-root\">").unwrap()..];
     assert!(!settled.contains(">Loading cards<"), "{settled}");
+    // The boot document's hero and the settled page's are each preloaded as
+    // their `<img>` asks.
+    let at = page.find(hide).unwrap();
+    super::direct::assert_preload_makes_the_heros_request(&page[..at]);
+    super::direct::assert_preload_makes_the_heros_request(&page[at..]);
 
     // A page with nothing to wait for has no boot document.
     let (page, boot) = navigate(addr, "/fast/fast");

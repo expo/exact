@@ -44,6 +44,7 @@ use crate::css;
 #[path = "document_before.rs"]
 mod before;
 use before::Before;
+pub use before::HeroImage;
 use exact_kernel::paint_order::{self, Child, Facts};
 use exact_kernel::{NodeFacts, PropId, SortedMap, SortedSet, ViewId};
 use exact_plan::EventKind;
@@ -88,15 +89,6 @@ pub struct Document {
     /// The views whose elements carry `data-exact-on`, in document order: a
     /// boot document's swap moves a queued event by them (LLP 1048.005).
     pub controls: Vec<ViewId>,
-}
-
-/// The image selected for a JavaScript page's preload and fetch priority.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HeroImage {
-    /// The source URL before HTML escaping.
-    pub src: String,
-    /// Byte offset in `Document::root` for adding a missing `fetchpriority` attribute.
-    pub priority_at: Option<usize>,
 }
 
 /// Why a tree has no document.
@@ -320,10 +312,7 @@ pub fn before_root(tree: &DocTree, plan: &exact_plan::Plan) -> (String, bool, Op
     (
         keyframes.values().map(String::as_str).collect(),
         scroll,
-        before.hero.map(|(_, src)| HeroImage {
-            src,
-            priority_at: None,
-        }),
+        before.hero.map(|(_, hero)| hero),
     )
 }
 
@@ -449,9 +438,9 @@ fn write<S: Source>(
         walk.scroll_document,
         walk.computed,
         rest,
-        before.hero.map(|(_, src)| HeroImage {
-            src,
+        before.hero.map(|(_, hero)| HeroImage {
             priority_at: walk.image_priority_at,
+            ..hero
         }),
         walk.controls,
     ))
@@ -1099,7 +1088,7 @@ impl<S: Source> Walk<'_, '_, S> {
         self.out.push_str(element);
         if element == "img" && self.hero == Some(id) {
             if self.prioritize_image {
-                self.out.push_str(" fetchpriority=\"high\"");
+                self.out.push_str(HeroImage::PRIORITY);
             } else {
                 self.image_priority_at = Some(self.out.len());
             }
