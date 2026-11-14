@@ -256,7 +256,7 @@ test('a marked read takes what the launch module asked for before any module ran
       expect(script).not.toContain('shadow.example');
       expect(await bundled([])).toContain('shadow.example');
       // The launch module's code is the bundle's first, before the package app.ts imports first.
-      expect(script.match(/\/\/#region (\S+)/g)?.map(region=>region.split('/').at(-1))).toEqual(['__exact_launch.ts','attack.js','app.ts','__exact_entry.ts']);
+      expect([...script.matchAll(/\/\/#region (\S+)/g)].map(region=>region[1].split('/').at(-1))).toEqual(['__exact_launch.ts','attack.js','app.ts','__exact_entry.ts']);
       const run=(files,host)=>{
         const realm=vm.createContext({URL,TextEncoder,TextDecoder,AbortController,AbortSignal,crypto,__exact_host:host,console:{error() {}}});
         for (const file of files) vm.runInContext(readFileSync(resolve(import.meta.dir,'../../src',file),'utf8'),realm);
