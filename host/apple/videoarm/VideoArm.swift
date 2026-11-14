@@ -124,7 +124,7 @@ private enum SharedAssets {
 }
 
 private final class VideoArm: NSObject, NowPlayingPlayer {
-    /// A queue player: a looping source plays on into a copy queued after it.
+    /// Use queue player for gapless looping by queuing a copy of the item after it.
     let player = AVQueuePlayer()
     let container = VideoContainer(frame: .zero)
     let poster = PlatformImageView(frame: .zero)
@@ -154,8 +154,8 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
     var lastError: String?
     var invalidated = false
     var generation = 0
-    /// The item whose end is watched: the one playing, once a loop's copy
-    /// takes over.
+    /// The item whose end we listen for. When the player's current item is no
+    /// longer this one, the queue has moved on to a loop's copy.
     var watched: AVPlayerItem?
     var posterGeneration = 0
     /// HTML's show-poster flag, cleared: playback or a seek has begun since
@@ -426,8 +426,8 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
         set(\.automaticallyWaitsToMinimizeStalling, bool("automaticallyWaitsToMinimizeStalling", true))
         set(\.preventsDisplaySleepDuringVideoPlayback, bool("preventsDisplaySleepDuringVideoPlayback", true))
         // HTML's loop starts over at the end without pausing (no pause, play
-        // or ended): the queue advances into a copy of the item, gaplessly,
-        // where seeking back to the start left a gap.
+        // or ended). The queue advances into a copy of the item with no gap.
+        // Before, seeking back to the start left a gap.
         set(\.actionAtItemEnd, bool("loop") ? .advance : .pause)
         if changed("poster") { loadPoster() }
         if changed("dynamicRangeLimit") { applyDynamicRange() }
@@ -559,10 +559,11 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
             self.emit("ended")
         }]
     }
-    /// The queue moved on (seen through `currentItem`, so whenever the move
-    /// lands): a loop came round. The copy plays; watch its end, queue the
-    /// next copy, and report the jump to the start as a seek, as Chrome does.
-    /// A queue that ran dry (loop turned on at the very end) starts over.
+    /// Runs when the player's current item changes, whenever that happens.
+    /// With loop, the queue has moved on to the copy, which is already
+    /// playing: listen for its end, queue the next copy, and report the jump
+    /// to the start as a seek, as Chrome does. If the queue ran dry (loop was
+    /// turned on at the very end), start over.
     func advanced() {
         guard !invalidated, bool("loop") else { return }
         guard let current = player.currentItem else {
@@ -574,8 +575,8 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
         queueLoop()
         emit("seeking"); emit("seeked"); emit("timeupdate", payload: String(seconds))
     }
-    /// With loop, one copy of the current item waits behind it; without,
-    /// none does.
+    /// With loop, keep one copy of the current item queued behind it.
+    /// Without loop, remove any queued copies.
     func queueLoop() {
         let waiting = Array(player.items().dropFirst())
         guard let current = player.currentItem, bool("loop") else { waiting.forEach(player.remove); return }
