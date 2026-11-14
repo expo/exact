@@ -354,14 +354,14 @@ extension NavigationHost {
         return presenter.session?.app.resolver?.url(source, maximumBytes: 4 << 20).flatMap { UIImage(contentsOfFile: $0.path) }
     }
 
-    /// The items, from the authored tabs: each tab's own item, written in
-    /// place when its face changes, so what else the app set on it (a badge)
-    /// and a handle to it stay good.
     /// The items again, from the tabs they were last made from (a size class change).
     func resyncTabItems() {
         if let tabs = tabItemsSource { syncItems(tabs) }
     }
 
+    /// The items, from the authored tabs: each tab's own item, written in
+    /// place when its face changes, so what else the app set on it (a badge)
+    /// and a handle to it stay good.
     private func syncItems(_ tabs: NavigationTabs) {
         tabItemsSource = tabs
         for tab in tabs.tabs { tab.rejectNativeActiveProperties(on: "UITabBarItem") }
