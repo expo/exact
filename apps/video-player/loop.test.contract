@@ -1,0 +1,5 @@
+test "loop keeps playing round, again and again"
+  clock data
+  clock +32000 real
+  expect state loops == 3
+  expect state paused == false
