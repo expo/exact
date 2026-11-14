@@ -134,10 +134,10 @@ test('a new outside app passes the checks every run makes, and a drifted one is 
       const [, separate] = repoOf(resolve(parent, 'separate'), '--separate-git-dir', resolve(parent, 'meta/separate.git'));
       const refused = launch(separate);
       assert.deepEqual([refused.status, refused.stderr.trim()], [1, `no Exact checkout at ${resolve(realpathSync(separate), '../sdk')} (no scripts/app-cli.mjs): EXACT names the checkout`]);
-      createApp(repo, { update: true });
+      assert.match(createApp(repo, { update: true }), /exact.mjs now names.*it named.*sdk/);
       git(repo, 'commit', '-qam', 'update');
       git(worktree, 'merge', '-q', '--ff-only', git(repo, 'branch', '--show-current').trim());
-      createApp(worktree, { update: true });
+      assert.doesNotMatch(createApp(worktree, { update: true }), /exact.mjs now names/);
       assert.equal(git(worktree, 'status', '--porcelain'), '', 'update in the worktree writes what it wrote in the main checkout');
       const helped = spawnSync(process.execPath, [resolve(repo, 'exact.mjs'), 'help'], { cwd: repo, env, encoding: 'utf8' });
       assert.equal(helped.status, 0, helped.stderr);

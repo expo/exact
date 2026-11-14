@@ -83,8 +83,11 @@ when its source signatures change. `test` and `agent` build and refresh it on
 Rust/TypeScript apps with a composer (such as Fieldnotes), which also refresh the
 editor copy before type-checking. `contract build` reports a refresh on stderr.
 `contract types --check app.contract` checks freshness without writing.
-`bun exact.mjs update` reports lock drift after this checkout moves; `bun exact.mjs lock`
-refreshes it. `contract migrate app.contract` rewrites retired Contract syntax;
+`bun exact.mjs update` refreshes scaffold files and absolute `@exact/*` package paths for the
+checkout it runs from. It reports when `exact.mjs`'s default checkout path changes, including in a linked worktree. Run `bun install` when it reports changed package paths. An older Android
+scaffold moves `canvas_jni!` to `exact-painted`; an authored dependency form gets the manual
+edit in the report. `update` also reports lock drift; `bun exact.mjs lock` refreshes it.
+`contract migrate app.contract` rewrites retired Contract syntax;
 [the Snapback upgrade note](../snapback4/README.md#updating-an-inherited-app) covers
 mutation refusals too.
 Keep scratch files in `.exact/` and helper scripts you commit (a screenshot comparer) in

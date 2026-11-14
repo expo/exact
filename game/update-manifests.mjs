@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from 'node:util';
-import { basename, dirname, resolve } from 'node:path';
-import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { basename, dirname, isAbsolute, resolve } from 'node:path';
+import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { pathFrom } from '../scripts/app.mjs';
 
 const ROOT = resolve(import.meta.dir, '..');
@@ -161,3 +161,90 @@ export function updateManifests(dir, crates, rootText) {
   if (refused.length) throw new Error(`update: edit these manifests by hand, then run update again:\n${refused.join('\n')}`);
   return { changed, unresolved };
 }
+
+/** Scan every target's local sources. External modules, generated code and unreadable sources keep the dependency. */
+function usesLinux(android, doc, source, migrated) {
+  try {
+    const paths = [doc.lib, ...['bin', 'example', 'test', 'bench'].flatMap(kind => doc[kind] ?? [])].map(t => t?.path);
+    if (typeof doc.package?.build === 'string') paths.push(doc.package.build);
+    if (paths.some(path => path && (!path.endsWith('.rs') || !resolve(android, path).startsWith(android + '/') ||
+      resolve(android, path).startsWith(resolve(android, 'target') + '/') || !existsSync(resolve(android, path))))) return true;
+    const pending = [android];
+    while (pending.length) {
+      const dir = pending.pop();
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const file = resolve(dir, entry.name);
+        if (entry.isSymbolicLink()) return true;
+        if (entry.isDirectory()) {
+          if (dir !== android || entry.name !== 'target') pending.push(file);
+        } else if (entry.name.endsWith('.rs')) {
+          const text = file === source ? migrated : readFileSync(file, 'utf8');
+          // Rust may load sources outside the crate or from OUT_DIR. Do not guess their module graph.
+          if (/\bexact_linux\b|\bpath\s*=|\binclude\b/.test(text)) return true;
+        }
+      }
+    }
+    return false;
+  } catch { return true; }
+}
+
+/** Rewrite only the old inline path declaration; authored Cargo forms get the complete manual edit instead. */
+function androidCanvas(dir) {
+  const manifest = resolve(dir, 'android/Cargo.toml'), source = resolve(dir, 'android/src/lib.rs');
+  if (!existsSync(source)) return [];
+  const text = readFileSync(source, 'utf8'), macro = /\bexact_linux\s*::\s*canvas_jni\s*!/g;
+  if (!macro.test(text)) return [];
+  const advice = `android/src/lib.rs: change exact_linux::canvas_jni! to exact_painted::canvas_jni!; android/Cargo.toml: add exact-painted = { path = ${JSON.stringify(pathFrom(resolve(dir, 'android'), resolve(ROOT, 'host/painted')))} } in the macro's dependency table (edit an existing entry instead of adding a second), and remove exact-linux only if no other code uses it`;
+  if (!existsSync(manifest)) return [advice];
+  const cargo = readFileSync(manifest, 'utf8');
+  const entries = [...cargo.matchAll(/^exact-linux[ \t]*=[ \t]*\{[ \t]*path[ \t]*=[ \t]*("(?:\\.|[^"\\])*")[ \t]*\}[ \t]*$/gm)];
+  let doc; try { doc = Bun.TOML.parse(cargo); } catch { return [advice]; }
+  const tables = dependencyTables(doc).filter(([, table]) => table['exact-linux']);
+  if (entries.length !== 1 || tables.length !== 1 || tables[0][0][0] === 'workspace' || (cargo.match(/exact-linux/g) ?? []).length !== 1 || cargo.includes('exact-painted')) return [advice];
+  const old = tables[0][1]['exact-linux'];
+  if (Object.keys(old).length !== 1 || typeof old.path !== 'string' || !old.path.endsWith('/host/linux')) return [advice];
+  const entry = entries[0], keep = usesLinux(resolve(dir, 'android'), doc, source, text.replace(macro, ''));
+  const dependency = `exact-painted = { path = ${JSON.stringify(pathFrom(resolve(dir, 'android'), resolve(ROOT, 'host/painted')))} }`;
+  const next = cargo.slice(0, entry.index) + (keep ? entry[0] + '\n' : '') + dependency + cargo.slice(entry.index + entry[0].length);
+  tables[0][1]['exact-painted'] = { path: pathFrom(resolve(dir, 'android'), resolve(ROOT, 'host/painted')) };
+  if (!keep) delete tables[0][1]['exact-linux'];
+  try { if (!isDeepStrictEqual(Bun.TOML.parse(next), doc)) return [advice]; } catch { return [advice]; }
+  writeFileSync(manifest, next);
+  writeFileSync(source, text.replace(macro, 'exact_painted::canvas_jni!'));
+  return [`android/src/lib.rs now uses exact_painted::canvas_jni!; android/Cargo.toml ${keep ? 'keeps exact-linux and adds' : 'replaces exact-linux with'} exact-painted`];
+}
+
+/** Locate dependency values through parsed JSON so unrelated pairs and the rest of the file keep their bytes. */
+function packagePaths(dir) {
+  const file = resolve(dir, 'package.json');
+  if (!existsSync(file)) return [];
+  try {
+    const text = readFileSync(file, 'utf8'), doc = Bun.JSONC.parse(text), paths = [];
+    for (const group of ['dependencies', 'devDependencies', 'optionalDependencies']) {
+      for (const [name, spec] of Object.entries(doc[group] ?? {})) {
+        const module = /^@exact\/([a-z0-9-]+)$/.exec(name)?.[1];
+        if (!module || typeof spec !== 'string' || !spec.startsWith('file:') || !isAbsolute(spec.slice(5))) continue;
+        const target = resolve(ROOT, 'packages', module);
+        if (!existsSync(resolve(target, 'package.json'))) continue;
+        const next = 'file:' + pathFrom(dir, target);
+        if (spec !== next) paths.push({ group, name, spec, next });
+      }
+    }
+    if (!paths.length) return [];
+    let prefix = '__exact_update_package_';
+    while (text.includes(prefix)) prefix += '_';
+    const spans = [...text.matchAll(/\/\/[^\r\n]*|\/\*[\s\S]*?\*\/|"(?:\\.|[^"\\])*"/g)].filter(m => m[0][0] === '"')
+      .map(m => ({ start: m.index, end: m.index + m[0].length, value: JSON.parse(m[0]) }))
+      .filter(s => paths.some(p => p.spec === s.value));
+    const marked = Bun.JSONC.parse(replaceSpans(text, spans.map((s, i) => ({ ...s, value: JSON.stringify(prefix + i) }))));
+    const edits = paths.map(p => {
+      const span = spans.find((_, i) => marked[p.group]?.[p.name] === prefix + i);
+      if (!span) throw new Error(`update: package.json: set ${p.group}.${p.name} to ${JSON.stringify(p.next)} and run bun install`);
+      return { ...span, value: JSON.stringify(p.next) };
+    });
+    writeFileSync(file, replaceSpans(text, edits));
+    return ['package.json: refreshed absolute @exact package paths; run bun install'];
+  } catch (error) { return [`package.json: left unchanged; could not refresh @exact package paths (${error.message})`]; }
+}
+
+export const updateScaffold = dir => [...androidCanvas(dir), ...packagePaths(dir)];

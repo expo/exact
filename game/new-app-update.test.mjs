@@ -5,7 +5,7 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, write
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { applyPattern, createApp } from './new.mjs';
-import { dependencyTables, updateManifests } from './update-manifests.mjs';
+import { dependencyTables, updateManifests, updateScaffold } from './update-manifests.mjs';
 import { ensureShells } from '../scripts/app-shells.mjs';
 import { pathFrom, resolveApp } from '../scripts/app.mjs';
 
@@ -15,7 +15,7 @@ const target = 'cfg(target_os = "macos")';
 const scopes = ['dependencies', `target.'${target}'.dependencies`, 'workspace.dependencies'];
 const dependencies = (doc, scope) => scope === scopes[0] ? doc.dependencies : scope === scopes[1] ? doc.target[target].dependencies : doc.workspace.dependencies;
 const write = (file, text) => { mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, text); };
-const packageText = name => `[package]\nname = "${name}"\nversion = "0.1.0"\nedition = "2021"\n[lib]\npath = "lib.rs"\n`;
+const packageText = (name, path = 'lib.rs') => `[package]\nname = "${name}"\nversion = "0.1.0"\nedition = "2021"\n[lib]\npath = "${path}"\n`;
 
 test('SDK-named app folders keep one crate identity through update, regeneration and renaming', () => {
   mkdirSync(resolve(root, 'target'), { recursive: true });
@@ -250,3 +250,141 @@ test('update adds the SQLite provider only after checking the complete root mani
     assert.deepEqual(Bun.TOML.parse(readFileSync(file, 'utf8')), Bun.TOML.parse(original));
   } finally { rmSync(parent, { recursive: true, force: true }); }
 });
+
+test('update refreshes an older Android scaffold, absolute packages and the named checkout', () => {
+  mkdirSync(resolve(root, 'target'), { recursive: true });
+  const parent = mkdtempSync(resolve(root, 'target/update-scaffold-')), dir = resolve(parent, 'notes');
+  try {
+    createApp(dir, { with: ['android'] });
+    const { workspace, crates } = ensureShells(dir);
+    for (const entry of ['Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo', ...crates]) cpSync(resolve(workspace, entry), resolve(dir, entry), { recursive: true });
+    rmSync(workspace, { recursive: true, force: true });
+    const manifest = resolve(dir, 'android/Cargo.toml'), source = resolve(dir, 'android/src/lib.rs');
+    writeFileSync(manifest, readFileSync(manifest, 'utf8').replace('exact-painted =', 'exact-linux =').replace('/host/painted', '/host/linux'));
+    writeFileSync(source, readFileSync(source, 'utf8').replace('exact_painted::canvas_jni!', 'exact_linux::canvas_jni!'));
+    const pkg = resolve(dir, 'package.json');
+    const original = '{"name":"notes","large":9007199254740993,"dependencies":{"@exact/motion":"file:/old/sdk/packages/motion"},"devDependencies":{"@exact/device":"file:/old/sdk/packages/device"},"optionalDependencies":{"@exact/unknown":"file:/old/sdk/packages/unknown"},"overrides":{"@exact/motion":"file:/old/sdk/packages/motion"}}\n';
+    writeFileSync(pkg, original);
+    const launcher = resolve(dir, 'exact.mjs');
+    writeFileSync(launcher, readFileSync(launcher, 'utf8').replace(/(const path = .*\?\? )"[^"]+";/, '$1"../old-sdk";'));
+    const said = createApp(dir, { update: true });
+    assert.match(readFileSync(source, 'utf8'), /exact_painted::canvas_jni!/);
+    const deps = Object.values(Bun.TOML.parse(readFileSync(manifest, 'utf8')).target)[0].dependencies;
+    assert.ok(deps['exact-linux'], 'generated includes may still use exact-linux');
+    assert.equal(resolve(dir, 'android', deps['exact-painted'].path), resolve(root, 'host/painted'));
+    assert.equal(readFileSync(pkg, 'utf8'), original.replace('"dependencies":{"@exact/motion":"file:/old/sdk/packages/motion"}', `"dependencies":{"@exact/motion":${JSON.stringify('file:' + pathFrom(dir, resolve(root, 'packages/motion')))}}`)
+      .replace('"devDependencies":{"@exact/device":"file:/old/sdk/packages/device"}', `"devDependencies":{"@exact/device":${JSON.stringify('file:' + pathFrom(dir, resolve(root, 'packages/device')))}}`));
+    assert.match(said, /exact_painted::canvas_jni!/);
+    assert.match(said, /package.json.*bun install/);
+    assert.match(said, /exact.mjs now names.*it named.*old-sdk/);
+    const again = createApp(dir, { update: true });
+    assert.doesNotMatch(again, /canvas_jni|package.json.*bun install|exact.mjs now names/);
+  } finally { rmSync(parent, { recursive: true, force: true }); }
+}, 60_000);
+
+test('update explains authored Android dependencies before changing either file', () => {
+  mkdirSync(resolve(root, 'target'), { recursive: true });
+  const parent = mkdtempSync(resolve(root, 'target/update-android-'));
+  try {
+    const forms = [
+      '[dependencies.exact-linux]\npath = "<exact2>/host/linux"\n',
+      '[dependencies]\nexact-linux = { workspace = true }\n',
+      '[dependencies]\nlinux-host = { package = "exact-linux", path = "<exact2>/host/linux" }\n',
+      '[dependencies]\nexact-linux = { path = "<exact2>/host/linux" }\n[dependencies.exact-painted]\npath = "<exact2>/host/painted"\n',
+    ];
+    for (const [index, dependencies] of forms.entries()) {
+      const dir = resolve(parent, `notes-${index}`);
+      createApp(dir);
+      write(resolve(dir, 'Cargo.toml'), '[workspace]\nmembers = ["android"]\n[workspace.dependencies]\nexact-linux = { path = "<exact2>/host/linux" }\n');
+      const manifest = resolve(dir, 'android/Cargo.toml'), source = resolve(dir, 'android/src/lib.rs');
+      write(manifest, packageText(`notes-${index}-android`, 'src/lib.rs') + dependencies);
+      write(source, 'exact_linux::canvas_jni!(AppData);\n');
+      const said = createApp(dir, { update: true });
+      const loaded = spawnSync('cargo', ['metadata', '--no-deps', '--offline', '--format-version', '1'], { cwd: dir, encoding: 'utf8' });
+      assert.equal(loaded.status, 0, loaded.stderr);
+      assert.equal(JSON.parse(loaded.stdout).packages[0].targets.find(t => t.kind.includes('lib')).src_path, source);
+      assert.equal(readFileSync(source, 'utf8'), 'exact_linux::canvas_jni!(AppData);\n');
+      assert.match(said, /android\/src\/lib.rs.*change.*exact_linux::canvas_jni!.*exact_painted::canvas_jni!/);
+      assert.match(said, /android\/Cargo.toml.*exact-painted/);
+      const parsed = Bun.TOML.parse(readFileSync(manifest, 'utf8'));
+      assert.equal(Boolean(parsed.dependencies['exact-painted']), index === 3);
+    }
+    const dir = resolve(parent, 'other-uses');
+    createApp(dir);
+    write(resolve(dir, 'Cargo.toml'), '[workspace]\nmembers = ["android"]\n');
+    write(resolve(dir, 'android/Cargo.toml'), packageText('other-uses-android', 'src/lib.rs') + '[dependencies]\nexact-linux = { path = "<exact2>/host/linux" }\n');
+    write(resolve(dir, 'android/src/lib.rs'), 'exact_linux::canvas_jni!(AppData);\nmod other;\n');
+    write(resolve(dir, 'android/src/other.rs'), 'use exact_linux::run_empty;\n');
+    createApp(dir, { update: true });
+    const deps = Bun.TOML.parse(readFileSync(resolve(dir, 'android/Cargo.toml'), 'utf8')).dependencies;
+    assert.ok(deps['exact-linux'] && deps['exact-painted']);
+    assert.match(readFileSync(resolve(dir, 'android/src/lib.rs'), 'utf8'), /exact_painted::canvas_jni!/);
+    assert.equal(readFileSync(resolve(dir, 'android/src/other.rs'), 'utf8'), 'use exact_linux::run_empty;\n');
+  } finally { rmSync(parent, { recursive: true, force: true }); }
+}, 60_000);
+
+test('Android canvas migration retains dependencies used outside src or by uncertain sources', () => {
+  const parent = mkdtempSync(resolve(tmpdir(), 'exact-android-sources-'));
+  const cases = [
+    ['example', '', 'examples/headless.rs', 'use exact_linux::run_empty;\n'],
+    ['test', '', 'tests/headless.rs', 'use exact_linux::run_empty;\n'],
+    ['bench', '', 'benches/headless.rs', 'use exact_linux::run_empty;\n'],
+    ['bin', '\n[[bin]]\nname = "headless"\npath = "tools/main.rs"\n', 'tools/main.rs', 'use exact_linux::run_empty;\n'],
+    ['external-target', '\n[[example]]\nname = "external"\npath = "../shared/main.rs"\n', '../shared/main.rs', 'use exact_linux::run_empty;\n'],
+    ['external-module', '', '../shared/other.rs', 'use exact_linux::run_empty;\n', '#[path = "../../shared/other.rs"]\nmod other;\n'],
+    ['generated-module', '', 'build.rs', 'fn main() {}\n', 'include!(concat!(env!("OUT_DIR"), "/bindings.rs"));\n'],
+    ['unused', '', 'src/other.rs', '', '', false],
+  ];
+  try {
+    for (const [name, targets, file, contents, extra = '', keep = true] of cases) {
+      const dir = resolve(parent, name), android = resolve(dir, 'android');
+      write(resolve(android, 'Cargo.toml'), packageText(name, 'src/lib.rs') + '[dependencies]\nexact-linux = { path = "/old/sdk/host/linux" }\n' + targets);
+      write(resolve(android, 'src/lib.rs'), 'exact_linux::canvas_jni!(AppData);\n' + extra);
+      write(resolve(android, file), contents);
+      updateScaffold(dir);
+      const deps = Bun.TOML.parse(readFileSync(resolve(android, 'Cargo.toml'), 'utf8')).dependencies;
+      assert.equal(Boolean(deps['exact-linux']), keep, name);
+      assert.ok(deps['exact-painted'], name);
+      assert.match(readFileSync(resolve(android, 'src/lib.rs'), 'utf8'), /exact_painted::canvas_jni!/);
+      assert.equal(readFileSync(resolve(android, file), 'utf8'), contents);
+    }
+  } finally { rmSync(parent, { recursive: true, force: true }); }
+});
+
+test('update reports checkout changes for the historical EXACT2 launcher', () => {
+  const parent = mkdtempSync(resolve(tmpdir(), 'exact-old-launcher-')), dir = resolve(parent, 'notes');
+  try {
+    createApp(dir);
+    write(resolve(dir, 'exact.mjs'), 'import { resolve } from "node:path";\nconst EXACT2 = resolve(import.meta.dir, process.env.EXACT2 ?? "../sdk");\n');
+    const said = createApp(dir, { update: true });
+    const next = /const path = .*\?\? ("(?:\\.|[^"\\])*");/.exec(readFileSync(resolve(dir, 'exact.mjs'), 'utf8'))[1];
+    assert.ok(said.includes(`exact.mjs now names the Exact checkout ${JSON.parse(next)} (it named ../sdk;`), said);
+    assert.doesNotMatch(createApp(dir, { update: true }), /exact.mjs now names/);
+  } finally { rmSync(parent, { recursive: true, force: true }); }
+});
+
+test('package path updates accept JSONC and leave unparseable files while updating Cargo', () => {
+  const parent = mkdtempSync(resolve(tmpdir(), 'exact-jsonc-update-'));
+  const spec = 'file:/old/sdk/packages/motion';
+  const cases = [
+    ['trailing', `{"dependencies":{"@exact/motion":"${spec}",},}\n`, true],
+    ['comments', `{// a lone " and a fake "${spec}"\n"dependencies":{/* " */"@exact/motion":"${spec}"},"overrides":{"@exact/motion":"${spec}"}}\n`, true],
+    ['invalid', '{"dependencies": {', false],
+  ];
+  try {
+    for (const [name, original, valid] of cases) {
+      const dir = resolve(parent, name);
+      createApp(dir);
+      write(resolve(dir, 'Cargo.toml'), '[workspace]\nmembers = ["android"]\n');
+      write(resolve(dir, 'android/Cargo.toml'), packageText(`${name}-android`, 'src/lib.rs') + '[dependencies]\nexact-painted = { path = "/old/sdk/host/painted" }\n');
+      write(resolve(dir, 'android/src/lib.rs'), '');
+      write(resolve(dir, 'package.json'), original);
+      const said = createApp(dir, { update: true });
+      const expected = valid ? original.replace(`"@exact/motion":"${spec}"`, `"@exact/motion":${JSON.stringify('file:' + pathFrom(dir, resolve(root, 'packages/motion')))}`) : original;
+      assert.equal(readFileSync(resolve(dir, 'package.json'), 'utf8'), expected, name);
+      assert.match(said, valid ? /package.json.*bun install/ : /package.json.*left unchanged/);
+      const deps = Bun.TOML.parse(readFileSync(resolve(dir, 'android/Cargo.toml'), 'utf8')).dependencies;
+      assert.equal(resolve(dir, 'android', deps['exact-painted'].path), resolve(root, 'host/painted'));
+    }
+  } finally { rmSync(parent, { recursive: true, force: true }); }
+}, 60_000);
