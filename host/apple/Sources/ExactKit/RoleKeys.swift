@@ -71,17 +71,13 @@ extension NodeView {
         #endif
     }
 
-    /// Whether this node can be a member of a group with keys, by the
-    /// members the schema's `roles` rows take: a radio or a tab, and inside
-    /// an authored `role="menu"` a button, a link or a `menuitem`. An
-    /// `input type="radio"` is none: its group is HTML's, by `name`
-    /// (`radioKey`).
+    /// Whether this node can be a member of a group with keys
+    /// (`Presenter.mayJoinGroup`). An `input type="radio"` is none: its group
+    /// is HTML's, by `name` (`radioKey`).
     private var mayJoinGroup: Bool {
-        if isRadio { return false }
-        let role = props["accessibilityRole"] ?? ""
-        if role == "radio" || role == "tab" { return true }
-        guard isButton || props["href"] != nil || role.hasPrefix("menuitem"), let presenter else { return false }
-        return presenter.inMenu(presenter.eventParent(of: self))
+        guard !isRadio, let presenter else { return false }
+        return presenter.mayJoinGroup(role: props["accessibilityRole"] ?? "", button: isButton || props["href"] != nil,
+                                      in: presenter.eventParent(of: self))
     }
 
     /// The group whose Tab stop this node's is when Exact paints the group:
@@ -97,14 +93,46 @@ extension NodeView {
     /// Whether this member of a painted group is its one Tab stop; nil for a
     /// node that is none, whose stop is its kind's.
     var roleTabStop: Bool? {
-        guard let stop = paintedGroup?.stop, let controls = presenter?.controls else { return nil }
-        return (stop.held ? stop.order.first : stop.order.first(where: controls.canFocusMember)) == id
+        guard let stop = paintedGroup?.stop else { return nil }
+        return presenter?.isStop(id, of: stop)
     }
 }
 
 extension Presenter {
     /// The kernel's answer for member `id` (a node or an inline run) with `key` pressed.
     func roleKeys(_ id: UInt32, _ key: String?) -> RoleKeys? { controls.roleKeys?(id, key, focusEvents.focused) }
+
+    /// Whether a node or an inline run with `role`, inside `parent`, can be a
+    /// member of a group with keys, by the members the schema's `roles` rows
+    /// take: a radio or a tab, and inside an authored `role="menu"` a button
+    /// or a link (`button`), or a `menuitem`. Only such a one is asked.
+    func mayJoinGroup(role: String, button: Bool, in parent: KeyPlatformView?) -> Bool {
+        if role == "radio" || role == "tab" { return true }
+        return (button || role.hasPrefix("menuitem")) && inMenu(parent)
+    }
+
+    /// Whether member `id` is `stop`'s group's one Tab stop: the focused
+    /// member while one has the focus, else the first the host can focus.
+    func isStop(_ id: UInt32, of stop: RoleKeys.Stop) -> Bool {
+        (stop.held ? stop.order.first : stop.order.first(where: controls.canFocusMember)) == id
+    }
+
+    #if os(macOS)
+    /// The kernel's answer for inline run `id` with `key` pressed: nil for a
+    /// run that is no member of a group with keys.
+    func inlineRoleKeys(_ id: UInt32, _ key: String?) -> RoleKeys? {
+        guard let run = inlineText(id), !inlineInert(id),
+              mayJoinGroup(role: run.props["accessibilityRole"] ?? "", button: run.props["href"] != nil, in: textHost(id)) else { return nil }
+        return roleKeys(id, key)
+    }
+
+    /// `NodeView.roleTabStop` for inline run `id`: whether it is its painted
+    /// group's one Tab stop, nil for a run that is no member of one.
+    func inlineRoleTabStop(_ id: UInt32) -> Bool? {
+        guard let stop = inlineRoleKeys(id, nil)?.stop, paints(stop.group, stop.role) else { return nil }
+        return isStop(id, of: stop)
+    }
+    #endif
 
     /// Whether `view` or one of its authored ancestors is a `role="menu"`.
     func inMenu(_ view: KeyPlatformView?) -> Bool {
@@ -150,16 +178,15 @@ extension ControlHost {
     /// was the group's.
     func roleKey(_ node: NodeView, _ name: String, held: String) -> Bool {
         guard !node.formDisabled, !node.inert, Self.groupKey(name, held) else { return false }
-        return move(node.roleKeys(name)?.step)
+        return move(node.roleKeys(name)?.step, from: node.id)
     }
 
     #if os(macOS)
-    /// `roleKey` at a focused inline run: a link in a line of text inside a menu.
+    /// `roleKey` at a focused inline run: a link in a line of text inside a
+    /// menu, or a run whose role is `tab` or `radio`, in whichever group it is.
     func roleKey(inline id: UInt32, _ name: String, held: String) -> Bool {
-        guard Self.groupKey(name, held), let run = presenter.inlineText(id), !presenter.inlineInert(id),
-              run.props["href"] != nil || (run.props["accessibilityRole"] ?? "").hasPrefix("menuitem"),
-              presenter.inMenu(presenter.textHost(id)) else { return false }
-        return move(presenter.roleKeys(id, name)?.step)
+        guard Self.groupKey(name, held) else { return false }
+        return move(presenter.inlineRoleKeys(id, name)?.step, from: id)
     }
     #endif
 
@@ -167,11 +194,12 @@ extension ControlHost {
         (held.isEmpty || held == "Shift+") && ["ArrowDown", "ArrowRight", "ArrowUp", "ArrowLeft", "Home", "End"].contains(name)
     }
 
-    /// The kernel's step taken: the focus to the first member the host can
-    /// focus, pressed when the step says so.
-    private func move(_ step: RoleKeys.Step?) -> Bool {
+    /// The kernel's step from member `from` taken: the focus to the first
+    /// member the host can focus, pressed when the step says so. When that is
+    /// `from` itself (Home at the first), or there is none, the key moves nothing.
+    private func move(_ step: RoleKeys.Step?, from: UInt32) -> Bool {
         guard let step, presenter.paints(step.group, step.role) else { return false }
-        guard let to = step.to.first(where: canFocusMember) else { return true }
+        guard let to = step.to.first(where: canFocusMember), to != from else { return true }
         if let node = presenter.views[to] {
             focusRadio(node, keyboard: true)
             if step.press { presenter.press(to) }

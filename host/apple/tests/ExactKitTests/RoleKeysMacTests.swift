@@ -297,6 +297,54 @@ final class RoleKeysMacTests: XCTestCase {
         XCTAssertEqual(pressed, [], "nothing pressed")
     }
 
+    /// A link in a line of text with `role="tab"` is its tablist's member as
+    /// a button tab is (LLP 1166.000 D1): the arrows reach it from the
+    /// buttons on either side and leave it to them, Home and End go on from
+    /// it, and it is a Tab stop only as the group's one stop, so Tab and
+    /// Shift-Tab from it leave the group.
+    func testATablistsInlineLinkTabTakesTheGroupsKeysAndItsOneStop() throws {
+        keyboardNavigation(true)
+        let (p, w) = try fixture(plan: try compile("""
+        component App
+          state tab = "a"
+          action setTab(v: string)
+            tab = v
+          view
+            column width="100%" height="100%"
+              button press=setTab("a") testId="before"
+                text "Before"
+              row role="tablist" appearance="none" aria-label="Tabs" testId="tabs"
+                button press=setTab("a") appearance="none" role="tab" aria-selected=(tab == "a") testId="tab-a"
+                  text "A"
+                text testId="tab-line"
+                  text "B" href="/b" role="tab" aria-selected=(tab == "b")
+                button press=setTab("c") appearance="none" role="tab" aria-selected=(tab == "c") testId="tab-c"
+                  text "C"
+              button press=setTab("a") testId="after"
+                text "After"
+        """))
+        let line = try node(p, "tab-line")
+        let onLink = { (w.firstResponder as? InlineKeyView)?.owner === line }
+        XCTAssertEqual(stops(p), ["before", "tab-a", "after"], "the group is one stop, its selected tab")
+        XCTAssertTrue(w.makeFirstResponder(try node(p, "tab-a")))
+        try key("ArrowRight", p, w)
+        XCTAssertTrue(onLink(), "Right from A: the link")
+        try key("ArrowRight", p, w)
+        XCTAssertEqual(focused(p, w), "tab-c", "Right from the link: C")
+        try key("ArrowLeft", p, w)
+        XCTAssertTrue(onLink(), "Left from C: the link")
+        try key("ArrowLeft", p, w)
+        XCTAssertEqual(focused(p, w), "tab-a", "Left from the link: A")
+        for (name, expected) in [("End", "tab-c"), ("Home", "tab-a"), ("Tab", "after"), ("Shift+Tab", "before")] {
+            XCTAssertTrue(w.makeFirstResponder(try node(p, "tab-a")))
+            try key("ArrowRight", p, w)
+            XCTAssertTrue(onLink(), "Right from A: the link, before \(name)")
+            try key(name, p, w)
+            XCTAssertEqual(focused(p, w), expected, "\(name) from the link")
+        }
+        XCTAssertEqual(pressed, [], "a tab's press is the app's action: the keys press nothing")
+    }
+
     /// HTML goes on from a focused element outside the sequential order by
     /// its place in tree order: from a focused member that can never be a
     /// stop (`tabindex=-1`) between a `tabindex=1` and a `tabindex=2`, Tab

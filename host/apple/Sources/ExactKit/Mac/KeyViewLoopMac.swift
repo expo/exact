@@ -97,7 +97,7 @@ extension Presenter {
             if Self.tabbable(v) || v.paintedGroup != nil { listed.append((keyView(of: v), v.tabOrder)) }
             else if keyView(of: v).acceptsFirstResponder || keyView(of: v) === tabStart { starts.append((keyView(of: v), listed.count)) }
             for run in v.syncInlineKeyViews() {
-                if run.canBecomeKeyView { listed.append((run, run.tabOrder)) }
+                if run.canBecomeKeyView || inlineRoleTabStop(run.id) != nil { listed.append((run, run.tabOrder)) }
                 else if run.acceptsFirstResponder { starts.append((run, listed.count)) }
             }
             // A table's rows are in its cells, not among the list's own subviews; a route in the detail's
@@ -288,8 +288,10 @@ final class InlineKeyView: NSView {
               !run.run(dark: owner.drawsDark).hidden else { return false }
         return !owner.formDisabled && owner.presenter?.inlineInert(id) == false
     }
+    /// As `NodeView.tabStop`: a member of a painted group is a stop only as
+    /// its group's one stop (LLP 1166.000 D1).
     override var canBecomeKeyView: Bool {
-        guard acceptsFirstResponder, let run else { return false }
+        guard acceptsFirstResponder, let run, owner?.presenter?.inlineRoleTabStop(id) != false else { return false }
         if let index = run.props["tabIndex"].flatMap(Int.init) { return index >= 0 }
         return KeyboardNavigation.on
     }
@@ -321,7 +323,7 @@ final class InlineKeyView: NSView {
         let key = NodeView.keyName(event)
         if key == "Tab", let window { owner?.presenter?.tab(from: self, back: event.modifierFlags.contains(.shift), in: window) }
         else if key == "Enter" || key == " " && run?.props["href"] == nil { _ = owner?.activateInline(id) }
-        // A menu's link takes the menu's keys (RoleKeys.swift); its `key` handlers heard them first.
+        // A member of a painted group takes its keys (RoleKeys.swift); its `key` handlers heard them first.
         else if owner?.presenter?.controls.roleKey(inline: id, key, held: KeyCodes.held(event.modifierFlags)) == true {}
         else { super.keyDown(with: event) }
     }
