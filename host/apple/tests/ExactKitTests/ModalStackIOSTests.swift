@@ -501,7 +501,7 @@ final class ModalStackIOSTests: XCTestCase {
     func testTheWaitReturnsAtOnceWithNoSheetMoving() throws {
         let session = try fixture("sheet-wait-idle")
         let started = Date()
-        XCTAssertTrue(session.agentInstance.awaitModalTransitions())
+        XCTAssertTrue(session.agentInstance.awaitTransitions())
         XCTAssertLessThan(Date().timeIntervalSince(started), 0.1)
     }
 
@@ -525,7 +525,7 @@ final class ModalStackIOSTests: XCTestCase {
         XCTAssertEqual(presented().count, 1, "the menu waits while Sheet presents")
         XCTAssertEqual(modals.routes.map { $0.node.props["testId"] }, ["route-sheet"])
         let started = Date()
-        XCTAssertFalse(session.agentInstance.awaitModalTransitions(bound: 0.3), "the wait covers Sheet still presenting")
+        XCTAssertFalse(session.agentInstance.awaitTransitions(bound: 0.3), "the wait covers Sheet still presenting")
         XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(started), 0.3)
     }
 

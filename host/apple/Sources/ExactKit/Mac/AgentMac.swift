@@ -69,9 +69,10 @@ extension Agent {
 
     /// A modal route's sheet has arrived or left by the time the input
     /// that asked for it returns (AppKit's `beginSheet` and `endSheet` do
-    /// not return before), so there is nothing to wait for (the iOS host's
-    /// `awaitModalTransitions`).
-    @discardableResult func awaitModalTransitions(bound: TimeInterval = 2) -> Bool { true }
+    /// not return before), and the Mac's navigation counts no transition in
+    /// flight (`nativeInFlight`). So there is nothing to wait for (the iOS
+    /// host's `awaitTransitions`).
+    @discardableResult func awaitTransitions(bound: TimeInterval = 2) -> Bool { true }
     @discardableResult func awaitChosenPress(bound: TimeInterval = 2) -> Bool { true }
 
     /// AppKit's list corrections and element reveals finish on its clock,

@@ -972,31 +972,58 @@ final class NavigationMoreIOSTests: XCTestCase {
 
     /// The agent's `back` over a tab's root or a plain tab that More shows is
     /// More's Back to its list, which UIKit's bar shows there: the router
-    /// keeps the tab.
+    /// keeps the tab. More reports its list only after the pop's call
+    /// returns. A tab's root leaves More with the pop, and the input's wait
+    /// (`awaitTransitions`) ends once More has reported its list; a plain
+    /// tab's route stays in the plain tab. Either way a read straight after
+    /// the wait finds the tab at rest.
     func testTheAgentsBackUnderMoreGoesToMoresList() throws {
         let (session, tabs, more) = try moreFixture("more-agent-back")
         let navigation = session.presenter.navigation
         let agent = Agent(session: session)
         tapTab(tabs, of: tabs.moreNavigationController)
         pickRow(tabs, 4)
-        waitFor("the router follows Five, whose root More holds") { navigation.routerTab == 4 && more.stackRoutes.count == 1 && more.transitionCoordinator == nil }
+        waitFor("the router follows Five, whose root More holds") { navigation.routerTab == 4 && more.stackRoutes.count == 1 && more.transitionCoordinator == nil && !navigation.inTransition }
         let five = try XCTUnwrap(navigation.observation()["route"] as? String)
         XCTAssertNotNil(navigation.observation()["nativeBack"] as? String, "UIKit's Back to the list shows")
         var reply = agent.back()
         XCTAssertNil(reply["error"] ?? reply["refused"], "\(reply)")
-        waitFor("More shows its list") { more.stackRoutes.isEmpty && more.transitionCoordinator == nil && !navigation.changing }
-        waitForMainQueue()
+        XCTAssertTrue(agent.awaitTransitions(), "the input's wait ends within its bound")
+        let state = navigation.observation()
+        XCTAssertNotEqual((state["transition"] as? [String: Any])?["phase"] as? String, "in-progress", "More has reported its list")
+        XCTAssertEqual(state["stack"] as? [String], [five], "and the router's tab shows Five's root")
+        XCTAssertTrue(more.stackRoutes.isEmpty, "More shows its list")
         XCTAssertEqual(navigation.routerTab, 4, "the list is no tab: the router keeps Five")
-        XCTAssertEqual(navigation.observation()["route"] as? String, five, "and its root")
-        XCTAssertTrue(navigation.observation()["nativeBack"] is NSNull, "the list has no Back")
+        XCTAssertEqual(state["route"] as? String, five, "and its root")
+        XCTAssertTrue(state["nativeBack"] is NSNull, "the list has no Back")
 
         let six = try XCTUnwrap(tabs.tabControllers?[5] as? PlainTab)
         pickRow(tabs, 5)
-        waitFor("More shows Six") { navigation.routerTab == 5 && more.topViewController === six && more.transitionCoordinator == nil }
+        waitFor("More shows Six") { navigation.routerTab == 5 && more.topViewController === six && more.transitionCoordinator == nil && !navigation.inTransition }
+        let sixRoute = try XCTUnwrap(navigation.observation()["route"] as? String)
         reply = agent.back()
         XCTAssertNil(reply["error"] ?? reply["refused"], "\(reply)")
+        XCTAssertTrue(agent.awaitTransitions(), "the input's wait ends within its bound")
+        let plain = navigation.observation()
+        XCTAssertNotEqual((plain["transition"] as? [String: Any])?["phase"] as? String, "in-progress", "Six's route stays in Six")
+        XCTAssertEqual(plain["stack"] as? [String], [sixRoute], "and the router's tab shows it")
         waitFor("More shows its list again") { more.topViewController !== six && more.transitionCoordinator == nil }
         XCTAssertEqual(navigation.routerTab, 5)
+    }
+
+    /// A sync a move of UIKit's owes in the next turn (`syncNextTurn`), as
+    /// the tab's root going back to its own controller at the end of More's
+    /// pop does, is still a transition to the agent: until it runs, Exact has
+    /// not followed the move, and an input's wait runs it.
+    func testASyncOwedInTheNextTurnIsATransitionAnInputWaitsFor() throws {
+        let (session, _, _) = try moreFixture("more-owed-sync")
+        let navigation = session.presenter.navigation, agent = session.agentInstance
+        waitFor("the tabs at rest") { !agent.hostsInTransition }
+        let syncs = navigation.syncCalls
+        navigation.syncNextTurn()
+        XCTAssertTrue(agent.hostsInTransition, "the owed sync is in flight")
+        XCTAssertTrue(agent.awaitTransitions(), "the input's wait ends within its bound")
+        XCTAssertGreaterThan(navigation.syncCalls, syncs, "once the sync has run")
     }
 
     /// A navigation controller the app's own container holds, as one its
