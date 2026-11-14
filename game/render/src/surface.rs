@@ -80,12 +80,12 @@ pub struct WorldSurface<G: Game, P: Executor = (), const ASSETS: bool = false, H
     output_opaque: bool,
     frame_ready: bool,
     assets_dirty: bool,
-    // The world's model revision preparation last saw: a cosmetic model
-    // registered by `Game::present` arrives without a host delivery.
+    // Model revision preparation last saw: a `Game::present` cosmetic has no host delivery.
     models_seen: u64,
     asset_check: Option<(exact_game::WorldId, u64, u64)>,
     reported: bool,
     generation: u64,
+    picture: (u64, bool), // `Sim::picture_generation` seen; true until its first frame.
     seekable: bool,
     audio_requested: bool,
     hidden: bool,

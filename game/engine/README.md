@@ -60,9 +60,11 @@ row was borrowed mutably, inserted or removed after it (a despawned slot reports
 its index). Neither is saved or hashed; compare only within one
 `presentation_generation`. After replacing app data in the same world, call
 `w.invalidate_presentation()` once. It advances that generation and resets draw
-histories. The canvas's `presented` waits for a complete frame whose shown assets
-are resident, just as after restore. Simulation state, saves and hashes stay
-unchanged, and `Game::first_frame` does not run again.
+histories. The canvas's `presented` waits for a complete frame whose shown models
+and textures are delivered and prepared, just as after restore. Simulation state,
+saves and hashes stay unchanged, and `Game::first_frame` does not run again.
+`Sim::picture_generation()` counts these new pictures; a paranoid rebuild
+advances `presentation_generation` but not it.
 
 `w.dt()` is one fixed step. `w.tick_end()` names the endpoint currently being
 written; use it when retargeting motion. `w.now()` names the completed boundary.

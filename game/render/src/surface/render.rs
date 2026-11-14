@@ -49,6 +49,7 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> Default
             asset_check: None,
             reported: false,
             generation: 0,
+            picture: (0, false),
             seekable: true,
             audio_requested: false,
             hidden: false,
@@ -287,10 +288,13 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
         }
         self.device = true;
         if let Some(sim) = &self.sim {
-            if self.generation != sim.generation() {
-                self.generation = sim.generation();
+            if self.picture.0 != sim.picture_generation() {
+                self.picture = (sim.picture_generation(), true);
                 self.ready_work = None;
                 self.assets_dirty = true;
+            }
+            if self.generation != sim.generation() {
+                self.generation = sim.generation();
                 self.dirty = true;
             }
         }
@@ -363,6 +367,13 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
             sim.refresh_presented();
             sim.presented_assets_ready()
         };
+        // A new picture waits for what it shows to be delivered too; a first
+        // frame lets content not yet delivered appear later.
+        let ready = ready
+            && (!self.picture.1 || {
+                sim.refresh_presented();
+                sim.presented_assets_resident()
+            });
         if ASSETS && !ready {
             return sim.assets_pending() || asset_work;
         }
@@ -467,8 +478,12 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
             !G::paused(sim.args()),
             frame.seekable,
         );
-        // A tick can replace the picture. Prepare its shown assets before encoding.
-        if self.generation != sim.generation() {
+        // A tick can replace the picture. It is not presented from here on;
+        // prepare its shown assets before encoding.
+        if self.picture.0 != sim.picture_generation() {
+            self.picture = (sim.picture_generation(), true);
+            self.ready_work = None;
+            self.assets_dirty = true;
             return true;
         }
         self.perf.ticks.push(ticks as f64);
@@ -600,6 +615,7 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
                 renderer.pipelines.half
             );
             self.ready_work = Some(renderer.residency_work());
+            self.picture.1 = false;
         }
         self.frame_ready =
             !self.hooks.needs().contains(crate::Needs::PENDING) && self.hooks.error().is_none();

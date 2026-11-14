@@ -372,3 +372,34 @@ fn invalidating_presentation_changes_the_surface_generation_without_changing_sta
         .invalidate_presentation();
     assert_eq!(s.generation(), generation + 2);
 }
+
+#[test]
+fn paranoid_rebuilds_keep_drawing_ticking_frames() {
+    for mode in [exact_game::Paranoid::Save, exact_game::Paranoid::FreshGame] {
+        let Some(gpu) = gpu() else { return };
+        let (mut s, mut now) = switched(&gpu);
+        s.sim = Some(s.sim.take().unwrap().paranoid(mode));
+        let generation = s.generation();
+        let picture = s.sim().unwrap().picture_generation();
+        s.bind(&[Value::Number(1u32.into())], None).unwrap();
+        let mut green = false;
+        for _ in 0..500 {
+            let tick = s.sim().unwrap().world().tick();
+            now += 20.;
+            let pixels = fixture::render(&gpu, &mut s, &live(now)).unwrap().0;
+            assert!(
+                s.sim().unwrap().world().tick() > tick,
+                "{mode:?}: the frame ticks"
+            );
+            assert!(s.frame_ready(), "{mode:?}: a ticking frame draws");
+            if hue(&pixels) == 1 {
+                green = true;
+                break;
+            }
+            std::thread::yield_now();
+        }
+        assert!(green, "{mode:?}: the new look draws");
+        assert!(s.generation() > generation, "{mode:?}: rebuilds ran");
+        assert_eq!(s.sim().unwrap().picture_generation(), picture);
+    }
+}

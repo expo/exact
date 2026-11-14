@@ -331,8 +331,8 @@ impl World {
         self.presentation_generation
     }
     /// Declare a new picture after replacing app data in this world.
-    /// The canvas's `presented` waits for a complete frame with its shown assets
-    /// resident, as after restore. Presentation histories reset; simulation,
+    /// The canvas's `presented` waits for a complete frame whose shown models and
+    /// textures are delivered and prepared, as after restore. Presentation histories reset; simulation,
     /// saves and hashes do not change. This does not rerun `Game::first_frame`.
     pub fn invalidate_presentation(&mut self) {
         self.presentation_generation = self

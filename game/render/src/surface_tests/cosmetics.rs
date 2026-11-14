@@ -21,10 +21,13 @@ impl Game for Dice {
         w.spawn_named("die", (Transform::default(), Mesh::asset("square.model")));
         w.spawn((Transform::at(0., 0., 4.), Camera::default()));
     }
-    fn tick(w: &mut World, _: &Input, look: &Look) {
+    fn tick(w: &mut World, input: &Input, look: &Look) {
         let shape = ["square.model", "round.model", "broken.model"][look.shape as usize];
         if !matches!(&*w.require::<Mesh>("die"), Mesh::Asset(name) if name == shape) {
             *w.require_mut::<Mesh>("die") = Mesh::asset(shape);
+        }
+        if input.messages().iter().any(|m| m == "import") {
+            w.invalidate_presentation();
         }
     }
     fn present(p: &mut exact_game::Present<'_>, look: &Look) {
@@ -487,4 +490,61 @@ fn an_instance_skin_keeps_an_unlit_or_coated_materials_shading() {
         drawn[0],
         "mask survives texture override and fallback"
     );
+}
+
+#[test]
+fn a_new_picture_waits_for_a_shown_texture_not_yet_delivered() {
+    let Some(gpu) = gpu() else { return };
+    let mut s = WorldSurface::<Dice, crate::ModelExecutor, true>::default();
+    s.device_ready(exact_gpu::wgpu::Features::empty());
+    let live = |now| Frame {
+        seekable: false,
+        ..frame(now)
+    };
+    s.bind(
+        &[Value::Number(0u32.into()), Value::Number(0u32.into())],
+        None,
+    )
+    .unwrap();
+    s.clock(false);
+    s.asset("red.tex", Ok(&solid([255, 0, 0])));
+    let mut now = 0.;
+    while s.ready_work.is_none() {
+        assert!(now < 10_000., "a live frame drew");
+        now += 20.;
+        fixture::render(&gpu, &mut s, &live(now)).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    // An import shows a skin whose bytes have not arrived.
+    s.bind(
+        &[Value::Number(1u32.into()), Value::Number(0u32.into())],
+        None,
+    )
+    .unwrap();
+    s.input(&exact_gpu::InputEvent::Message {
+        text: "import".into(),
+        at_ms: now + 1.,
+    });
+    for _ in 0..5 {
+        now += 20.;
+        fixture::render(&gpu, &mut s, &live(now)).unwrap();
+        assert!(
+            !s.frame_ready(),
+            "a shown texture not delivered cannot present"
+        );
+        assert!(s.ready_work.is_none());
+    }
+    assert!(s.assets().requests.contains(&"blue.tex".to_owned()));
+    s.asset("blue.tex", Ok(&solid([0, 0, 255])));
+    let mut complete = None;
+    for _ in 0..500 {
+        now += 20.;
+        let pixels = fixture::render(&gpu, &mut s, &live(now)).unwrap().0;
+        if s.frame_ready() {
+            complete = Some(pixels);
+            break;
+        }
+        std::thread::yield_now();
+    }
+    assert_eq!(hue(&complete.expect("the new picture became ready")), 2);
 }

@@ -81,6 +81,8 @@ impl<G: Game> Sim<G> {
             mode, G::ID
         );
         self.paranoid_checked += 1;
+        // The restore advanced the presentation generation; the picture stays.
+        self.paranoid_rebuilds += 1;
         self.world_us = horizon;
         self.paranoid_skipped = skipped;
         self.last_us = host;
