@@ -74,9 +74,11 @@ impl Module {
     /// A round's work: wait on the host's I/O worker for the completion of
     /// the operation in flight, as an answer's storage continuation does.
     pub(crate) fn background_dispatch(&mut self) -> Dispatch {
-        match self.storage.as_ref() {
-            Some(session) => Dispatch::Run(Work::Now(session.continuation())),
-            None => Dispatch::Missing,
+        match (self.storage.as_ref(), self.engine.as_mut()) {
+            (Some(session), Some(engine)) => {
+                Dispatch::Run(Work::Now(session.background_continuation(engine)))
+            }
+            _ => Dispatch::Missing,
         }
     }
 

@@ -103,6 +103,18 @@ pub(crate) fn call(m: &mut Module, s: &mut Store, op: &str, value: &str) -> Stri
 }
 
 #[test]
+fn application_code_cannot_obtain_a_raw_storage_promise() {
+    let root = Root::new();
+    let mut module = root.module();
+    module.activate().unwrap();
+    let mut store = Store::new(GRANTS, []);
+    assert_eq!(
+        call(&mut module, &mut store, "storage-handoff", ""),
+        "private"
+    );
+}
+
+#[test]
 fn native_modules_are_deferred_retired_and_unavailable_to_validation() {
     struct Native {
         data: Option<PathBuf>,

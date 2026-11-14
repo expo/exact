@@ -217,6 +217,7 @@ pub trait Backend {
         clips: &[Shape],
         ts: Transform,
         tint: Option<[u8; 4]>,
+        rendering: exact_kernel::ImageRendering,
     );
     /// Whether this backend places a CPU island: the walk makes none it
     /// would not (a text stroke's band).

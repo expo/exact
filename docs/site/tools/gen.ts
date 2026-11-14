@@ -416,8 +416,37 @@ const homeMarkdown = () => {
   const rows = agentRows.map(r => `- [${r.title}](${md('/agents', r.anchor)}): ${r.detail}.`);
   return `\n## Explore the docs\n\n${cards.join('\n')}\n\n## For AI agents\n\n${AGENT_INTRO} [See all agent resources](${md('/agents')}).\n\n${rows.join('\n')}\n`;
 };
+const crumbsOf = (page: (typeof pages)[number]) => {
+  const section = sections.find(s => s.pages.some(n => n.source === page.source));
+  if (!section || page.route === 'home') return [];
+  const tab = tabs.find(t => t.id === section.tab)!;
+  const entry = section.pages.find(n => n.source === page.source)!;
+  return [
+    { title: tab.title, href: sections.find(s => s.tab === tab.id)!.pages[0].path, icon: tab.icon },
+    ...(section.title === tab.title ? [] : [{ title: section.title, href: '', icon: '' }]),
+    ...(entry.route === page.route ? [] : [{ title: bySource.get(page.source)!.title, href: entry.path, icon: '' }]),
+  ];
+};
+const groups = sections.filter(section => section.pages.some(p => !p.hidden && !p.landing)).map((section, g) => ({
+  id: `${g}`,
+  title: section.title,
+  tab: section.tab,
+  card: { id: `${g}`, title: section.card?.title ?? '', href: section.card ? firstPage(section)!.path : '', route: firstPage(section)!.route, depth: 0, description: section.card?.description ?? '', parent: '', children: 0 },
+  items: section.pages.filter(p => !p.hidden && !p.landing).flatMap(p => {
+    const doc = bySource.get(p.source)!;
+    const own = pages.filter(x => x.source === p.source);
+    return own.map(x => ({ id: x.route, title: x.route === p.route ? doc.title : x.title, href: x.path, route: x.route, depth: x.route === p.route ? 0 : 1, description: x.description, parent: x.route === p.route ? '' : p.route, children: x.route === p.route ? own.length - 1 : 0 }));
+  }),
+}));
+const sidebar = tabs.map(tab => groups.filter(group => group.tab === tab.id).flatMap(group => group.items));
+const neighbours = (route: string) => {
+  const items = sidebar.find(list => list.some(item => item.route === route)) ?? [];
+  const at = items.findIndex(item => item.route === route);
+  const link = (item: (typeof items)[number] | undefined): Link => (item ? { title: item.title, href: item.href } : none);
+  return { prev: link(at > 0 ? items[at - 1] : undefined), next: link(at >= 0 ? items[at + 1] : undefined) };
+};
 pages.forEach(page => {
-  const i = listed.indexOf(page);
+  const { prev, next } = neighbours(page.route);
   const { blocks, toc } = render(page);
   const markdownPath = page.path === '/' ? '/index.md' : `${page.path}.md`;
   const markdownUrl = ORIGIN ? ORIGIN + markdownPath : GITHUB_DOCS + page.source;
@@ -428,12 +457,13 @@ pages.forEach(page => {
     path: page.path,
     movedFrom: Object.entries(redirects).filter(([, to]) => to === page.path).map(([from]) => from),
     section: sections.find(x => x.pages.some(n => n.source === page.source))?.title ?? '',
+    crumbs: crumbsOf(page),
     title: page.title,
     description: page.description,
     subtitle: page.tocDepth === 2 ? page.description : '',
     updated: dateOf(page.source),
-    prev: i > 0 ? { title: listed[i - 1].title, href: listed[i - 1].path } : none,
-    next: i >= 0 && i < listed.length - 1 ? { title: listed[i + 1].title, href: listed[i + 1].path } : none,
+    prev,
+    next,
     editUrl: `${EDIT}/${page.source}`,
     feedbackUrl: `https://github.com/expo/exact/issues/new?title=${encodeURIComponent(`Docs: ${page.title}`)}&body=${encodeURIComponent(`Page: ${page.path}\n\nWhat was missing or wrong?\n`)}`,
     markdownPath,
@@ -461,17 +491,7 @@ const nav = {
     const sources = new Set(sections.filter(s => s.tab === tab.id).flatMap(s => s.pages.map(p => p.source)));
     return { ...tab, href: sections.find(s => s.tab === tab.id)!.pages[0].path, routes: pages.filter(x => sources.has(x.source)).map(x => x.route) };
   }),
-  groups: sections.filter(section => section.pages.some(p => !p.hidden && !p.landing)).map((section, g) => ({
-    id: `${g}`,
-    title: section.title,
-    tab: section.tab,
-    card: { id: `${g}`, title: section.card?.title ?? '', href: section.card ? firstPage(section)!.path : '', route: firstPage(section)!.route, depth: 0, description: section.card?.description ?? '', parent: '', children: 0 },
-    items: section.pages.filter(p => !p.hidden && !p.landing).flatMap(p => {
-      const doc = bySource.get(p.source)!;
-      const own = pages.filter(x => x.source === p.source);
-      return own.map(x => ({ id: x.route, title: x.route === p.route ? doc.title : x.title, href: x.path, route: x.route, depth: x.route === p.route ? 0 : 1, description: x.description, parent: x.route === p.route ? '' : p.route, children: x.route === p.route ? own.length - 1 : 0 }));
-    }),
-  })),
+  groups,
 };
 writeFileSync(join(OUT, 'nav.ts'), `export default ${JSON.stringify(nav)};\n`);
 writeFileSync(join(OUT, 'index.ts'), `export const pages: Record<string, () => Promise<{ default: unknown }>> = {\n${pages.map(p => `  ${p.route}: () => import('./${p.route}.ts'),`).join('\n')}\n};\n`);

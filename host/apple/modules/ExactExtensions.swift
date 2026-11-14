@@ -184,6 +184,13 @@ enum ExactExtensions {
             return true
         }
         let args = request["args"] as? [String: Any]
+        if let name = request["send"] as? String {
+            for option in (args ?? [:]).keys where !(args?[option] is NSNull) {
+                if let member = exactCredentialMembers["\(extensionName)#\(name).\(option)"] {
+                    _ = adapter(m, member)
+                }
+            }
+        }
         if let view = request["view"] as? String {
             let origin = request["origin"] as? String ?? "app"
             if let shown = request["displayed"] as? Bool { a.displayed(view, shown, origin: origin) }
@@ -278,6 +285,9 @@ enum ExactExtensions {
         let key = ObjectIdentifier(m)
         modules.removeAll { $0.module == nil || $0.module === m }
         let adapters = made.removeValue(forKey: key) ?? [:]
+        #if canImport(ExactPackage)
+        if let session = sessions[key] { ExactCredentialMembers.cancelSession(session) }
+        #endif
         sessions[key] = nil
         tables[key] = nil
         guard !adapters.isEmpty else { return }

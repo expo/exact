@@ -39,7 +39,7 @@ impl Ids {
 impl Tree {
     /// The arms `u.env` would newly show, each realized into `u.ops`.
     pub fn foresee(&self, u: &mut Update<'_>) -> Result<Vec<Mount>, InstanceError> {
-        u.changed = Some(u.sites.deps.changed(&self.seen, &u.env));
+        u.changed = Some(u.sites.data.deps.changed(&self.seen, &u.env));
         let mut out = Vec::new();
         let walked = walk(u, &self.children, &[], None, &mut out);
         u.changed = None;
@@ -58,12 +58,12 @@ fn walk(
     for c in children {
         match c {
             Child::Node(n) => {
-                if n.collection().is_none() && u.stale(&sites.deps.nodes[n.node.0 as usize]) {
+                if n.collection().is_none() && u.stale(&sites.data.deps.nodes[n.node.0 as usize]) {
                     walk(u, &n.children, frames, Some(n.view), out)?;
                 }
             }
             Child::Region(r) => {
-                if u.stale(&sites.deps.regions[r.region.0 as usize]) {
+                if u.stale(&sites.data.deps.regions[r.region.0 as usize]) {
                     region(u, r, frames, parent, out).map_err(|e| {
                         match (parent, u.env.plan.region(r.region).parent) {
                             (Some(view), Some(site)) => e.at_view(view, site),
@@ -91,7 +91,7 @@ fn region(
     let kind_error = InstanceError::SubjectKind { region: r.region };
     match &r.active {
         Active::Rows { rows } => {
-            let body = &sites.deps.bodies[index];
+            let body = &sites.data.deps.bodies[index];
             for row in rows {
                 let saved = u.enter(0, row.slots.as_ref());
                 let walked = if u.stale(body) {
@@ -111,7 +111,7 @@ fn region(
             Ok(())
         }
         Active::Arm { arm, frame, roots } => {
-            let (want, mut new_frame) = if !u.stale(&sites.deps.subjects[index]) {
+            let (want, mut new_frame) = if !u.stale(&sites.data.deps.subjects[index]) {
                 (*arm, frame.scope())
             } else {
                 match (
@@ -156,6 +156,7 @@ fn region(
             let (Some(i), Some(parent)) = (want, parent) else {
                 return Ok(());
             };
+            new_frame.region = Some(r.region.0);
             let arm_id = plan.region(r.region).arms.iter().nth(i);
             if let Some(id) = arm_id.filter(|id| plan.slots.iter().any(|s| s.owner == Some(*id))) {
                 let slots: RowSlots = Rc::new(RefCell::new(BTreeMap::new()));

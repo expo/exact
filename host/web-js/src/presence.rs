@@ -2,7 +2,7 @@
 
 use exact_kernel::StyleId;
 use exact_plan::{Opcode, Plan};
-use exact_runner::vm::instructions;
+use exact_runner::vm::transitive_instructions;
 
 /// Source literals parsed by the kernel for a bound presence declaration.
 /// A held value may write no CSS (`none`); an unset value clears its row.
@@ -21,7 +21,7 @@ fn named_values(
         held: Default::default(),
         unsets: Vec::new(),
     };
-    let strings = instructions(code)
+    let strings = transitive_instructions(plan, code)
         .filter_map(|i| i.ok().filter(|i| i.op == Opcode::Str))
         .map(|i| plan.str(exact_plan::StrId(i.args[0] as u32)));
     for value in strings {

@@ -49,7 +49,7 @@ type Step<'a> = (
 );
 
 fn reads<'a>(plan: &'a Plan, code: &[u8]) -> Reads<'a> {
-    let mut r = exact_plan::bytes::Reader::new(code);
+    let mut r = exact_plan::bytes::Reader::new(plan.read_code(code).0);
     let mut ops: Vec<Step<'a>> = Vec::new();
     while !r.is_empty() {
         let Some(op) = r.u8().ok().and_then(Opcode::from_wire) else {

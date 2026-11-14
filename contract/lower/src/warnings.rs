@@ -909,6 +909,7 @@ fn names(e: &Expr, word: &str) -> bool {
     match e {
         Expr::Str(s, _) => s == word,
         Expr::Ternary(_, a, b, _) => names(a, word) || names(b, word),
+        Expr::Let { body, .. } => names(body, word),
         _ => false,
     }
 }

@@ -101,13 +101,7 @@ pub(super) fn can_start(state: &State, job: &Job) -> bool {
 
 fn take_job(state: &mut State, lane: usize, index: usize) -> Option<(Job, AbortController)> {
     let job = state.jobs[lane].get(index)?;
-    // A module handoff's outcome is the owner's to make; it is charged
-    // what it retains when it completes.
-    let more = if handed_off(job) {
-        0
-    } else {
-        job.limit - job.charge
-    };
+    let more = job.limit - job.charge;
     if more > BYTES[lane].saturating_sub(state.bytes[lane]) {
         return None;
     }
@@ -137,7 +131,7 @@ fn take_job(state: &mut State, lane: usize, index: usize) -> Option<(Job, AbortC
         generation: 0,
         claim: asynch::Claim::None,
         cached: false,
-        cache_exchange: None,
+        cache_exchange: cache::exchange(state, &job),
         cache_replacing: cache::replacing(&job.request, job.class, job.forced, job.work.is_some()),
         cache_barrier: cache::barrier(&job.request, job.class, job.work.is_some()),
         invalidates: cache::invalidates(&job.request, job.work.is_some()),

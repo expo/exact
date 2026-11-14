@@ -6,11 +6,13 @@ import AppKit
 /// background does (LLP 1115.000 D7.1), and ends the reader's text selection.
 package final class PageScrollView: NSScrollView {
     var visibleSizeChanged: (() -> Void)?
+    var personScrolled: (() -> Void)?
     private var visibleSize = NSSize.zero
     private var styleObserver: NSObjectProtocol?
 
     package override init(frame: NSRect) {
         super.init(frame: frame)
+        NotificationCenter.default.addObserver(self, selector: #selector(liveScrollStarted), name: NSScrollView.willStartLiveScrollNotification, object: self)
         followScrollerStyle()
         styleObserver = NotificationCenter.default.addObserver(forName: NSScroller.preferredScrollerStyleDidChangeNotification,
             object: nil, queue: .main) { [weak self] _ in self?.followScrollerStyle() }
@@ -43,6 +45,7 @@ package final class PageScrollView: NSScrollView {
     var lostKey: (() -> Void)?
     private var keyObserver: NSObjectProtocol?
     deinit {
+        NotificationCenter.default.removeObserver(self)
         if let keyObserver { NotificationCenter.default.removeObserver(keyObserver) }
         if let styleObserver { NotificationCenter.default.removeObserver(styleObserver) }
     }
@@ -79,6 +82,12 @@ package final class PageScrollView: NSScrollView {
     package override func mouseEntered(with event: NSEvent) { pointerTracking?(event) }
     package override func mouseMoved(with event: NSEvent) { pointerTracking?(event) }
     package override func mouseExited(with event: NSEvent) { pointerTracking?(event) }
+
+    @objc private func liveScrollStarted() { personScrolled?() }
+    package override func scrollWheel(with event: NSEvent) {
+        personScrolled?() // A mouse wheel's notches need not begin a live scroll.
+        super.scrollWheel(with: event)
+    }
 
     private var documentFit: DocumentFit?
     private var prefittingDocument = false

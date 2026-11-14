@@ -22,15 +22,20 @@ public final class HeadlessSession {
         /// nil takes the node's `text_color`.
         public let color: BatchValue?
         public let background: BatchValue?
+        /// Inline opacity, including enclosing runs. The node's own opacity
+        /// is applied by its view, separately from these viewless runs.
+        public var opacity: Double { opacityGroups.reduce(1) { $0 * $1.alpha } }
+        public let opacityGroups: [InlineOpacity]
         public let decoration: String
         public let href: String
         public let hidden: Bool
         public let font: CTFont
         public init(text: String, size: CGFloat, weight: Int, family: Int, italic: Bool, letterSpacing: CGFloat = 0, numeric: Int = 0,
-                    color: BatchValue? = nil, background: BatchValue? = nil, decoration: String = "", href: String = "", hidden: Bool = false, font: CTFont) {
+                    color: BatchValue? = nil, background: BatchValue? = nil, opacityGroups: [InlineOpacity] = [], decoration: String = "", href: String = "", hidden: Bool = false, font: CTFont) {
             self.text = text; self.size = size; self.weight = weight; self.family = family; self.italic = italic
             self.letterSpacing = letterSpacing; self.numeric = numeric; self.color = color; self.background = background
             self.decoration = decoration; self.href = href; self.hidden = hidden; self.font = font
+            self.opacityGroups = opacityGroups
         }
     }
     /// A line's text in one run: `run` indexes the node's `runs`.
@@ -552,7 +557,7 @@ fileprivate final class HeadlessLines {
         // Decoration 3 §2.1); the paragraph's own are added as it is drawn
         // (`SnapshotTextPaint.decoration`).
         let decorates = node.inline.contains { !$0.paints && !$0.lightRun.decoration.isEmpty }
-        let byId = decorates ? Dictionary(node.inline.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a }) : [:]
+        let byId = Dictionary(node.inline.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         let lines = !decorates ? inline.map(\.lightRun.decoration) : inline.map { leaf in
             var all = [leaf.lightRun.decoration], up = byId[leaf.parent]
             while let run = up {
@@ -583,6 +588,7 @@ fileprivate final class HeadlessLines {
                     letterSpacing: run.letterSpacing, numeric: run.numeric,
                     color: Self.color(input?.colorRef, light: run.color, dark: input?.darkColor),
                     background: Self.color(input?.backgroundRef, light: run.background, dark: input?.darkBackground),
+                    opacityGroups: input?.opacityGroups(in: byId) ?? [],
                     decoration: input == nil ? run.decoration : lines[index], href: run.href, hidden: run.hidden, font: engine.font(run) as CTFont)
             }
             var ends: [Int] = [], offset = 0

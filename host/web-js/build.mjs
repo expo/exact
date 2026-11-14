@@ -1202,4 +1202,4 @@ if (pages.length && how === 'rust') {
 } else if (how !== 'none' && routes.length) {
   writeCrawlerFiles(out, [], null, routes); // robots.txt alone: no page made at build to list
 }
-console.log(`${out}: built`);
+console.log(`${out}: app.js ${statSync(resolve(out, 'app.js')).size} B, built`);

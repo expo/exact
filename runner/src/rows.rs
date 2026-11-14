@@ -11,7 +11,7 @@ use exact_plan::Plan;
 pub fn repeated(plan: &Plan, node: exact_plan::NodesId) -> bool {
     use exact_plan::{Opcode, RegionKind, Stdlib};
     let rows = |subject| {
-        let code: Vec<_> = crate::vm::instructions(plan.code(subject))
+        let code: Vec<_> = crate::vm::instructions(plan.read_code(plan.code(subject)).0)
             .flatten()
             .filter(|i| i.op != Opcode::Return)
             .collect();

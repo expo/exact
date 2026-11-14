@@ -35,7 +35,7 @@ import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 import { writeInstallPages } from '../../scripts/install-page.mjs';
 import { sealEnvelope } from '../../scripts/deploy-signing.mjs';
-import { compilerWarnings, webInputDigests } from '../../scripts/agent-launch.mjs';
+import { compilerWarnings, oneScheme, webInputDigests } from '../../scripts/agent-launch.mjs';
 import { webBuildFailure } from '../../scripts/app-cli.mjs';
 import { builtSettings } from '../../js/bake/src/__exact_env.mjs';
 import { authClientMetadata, checkModuleRoster, gpuModules, markWorlds, rustPolicy, webGpuArtifacts, webHostFiles, worldSurfaces } from '../../scripts/app.mjs';
@@ -277,7 +277,9 @@ if (target !== '--wasm' && !game && !bakeOnly) {
     // What the JS target warned of, in its own words: the count it prints names nothing (workout F3, kanban F30).
     // The bundler's notes on the generated glue are not the app's to act on. The types app.ts imports, when
     // the build rewrote them, are one line (LLP 1116.001 D4.5).
-    for (const line of compiler) console.error(line);
+    // The colours that stay one in dark mode in one line (`oneScheme`), unless a drive reads these lines
+    // (`EXACT_WARNINGS_WHOLE`), which lists each in its file and says the one line itself.
+    for (const line of process.env.EXACT_WARNINGS_WHOLE ? compiler : oneScheme(compiler)) console.error(line);
     for (const line of (js.stderr ?? '').split('\n')) if (/^(warning|app\.contract\.d\.ts): /.test(line)) console.error(line);
     // The origin's association file, from the manifest's claims (LLP 1030 D1). Its `webcredentials` comes from the
     // bake's grants, which only the wasm build below runs.
@@ -307,7 +309,9 @@ if (target !== '--wasm' && !game && !bakeOnly) {
     if (process.argv.includes('--json')) reportBuilt({ path: dist, target: 'web', trust: outDir ? 'production' : 'development' });
     process.exit(0);
   }
-  console.error(`${webBuildFailure(js.stderr).join('\n')}\n${app.name}: the web build (the JS target) failed; the wasm target is internal (--wasm)`);
+  // Its warnings as a success says them: the colours in one line unless a drive reads each (`EXACT_WARNINGS_WHOLE`).
+  const failure = webBuildFailure(js.stderr);
+  console.error(`${(process.env.EXACT_WARNINGS_WHOLE ? failure : oneScheme(failure)).join('\n')}\n${app.name}: the web build (the JS target) failed; the wasm target is internal (--wasm)`);
   process.exit(1);
 }
 const crate = app.crate('web');

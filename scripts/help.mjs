@@ -185,7 +185,7 @@ Ports    --port <n> or EXACT_PORT chooses the page’s port; otherwise web: head
     flags: DRIVE.filter(naming(DRIVE_FIRST, true)),
     more: DRIVE.filter(naming(DRIVE_FIRST, false)),
     internal: ['--test <file>', ...DRIVE_INTERNAL],
-    body: `Gallery: ios|macos widget|activity <entry> tree|state|screenshot|clock · drag: tap <target> drag dx dy [hold ms during "read"] [then dx dy …] (one iOS touch).
+    body: `Gallery: ios|macos widget|activity <entry> tree|state|screenshot|clock · drag: tap <target> drag dx dy [hold ms during "read"] [then dx dy …] (one iOS touch; into keyboard needs --touch platform and keyboard up).
 Ops      a target is a testId, else a view's exact text or label
   tree [<target>|--ax] · logs · layout|perf [<target>] · resize <w>x<h> · close · back
   state [<name>] [--full]  a state, resource or field, dotted: groceries.0.done; >8 KB: sizes
@@ -567,7 +567,7 @@ Ports    none; send makes one HTTPS request. Runs to completion.`,
   // exact2's own verb that makes an app (scripts/exact.mjs new), not one of an app's.
   new: {
     line: 'a new app outside this repo, using this checkout',
-    usage: 'bun <exact2>/scripts/exact.mjs new <path> [--name <name>] [--bundle-id <id>] [--with ios,mac,linux,android,windows]\n       bun <exact2>/scripts/exact.mjs new <path> --game [--assets]',
+    usage: 'bun <exact2>/scripts/exact.mjs new <path> [--name <name>] [--bundle-id <id>] [--with ios,mac,linux,android,windows] [--rust]\n       bun <exact2>/scripts/exact.mjs new <path> --game [--assets]',
     flags: [
       ['--name <name>', 'app only: the name people see (app.json app.name); default: the path\'s last part, capitalised'],
       ['--bundle-id <id>', 'app only: the reverse-DNS id (app.json app.id); default: com.example.<name>-<hex>'],
@@ -575,6 +575,7 @@ Ports    none; send makes one HTTPS request. Runs to completion.`,
       ['--online', 'use the server without a local device'],
       ['--snapback', 'write a guestbook wired to the Snapback backend above the app'],
       ['--port <n>', 'the Snapback origin’s port with --snapback (default 4400)'],
+      ['--rust', 'app only: the data sources in Rust (data/, with apple/ and web/ host crates) instead of app.ts'],
       ['--game', 'a game (game/README.md): a Rust world under Contract\'s menus'],
       ['--assets', 'with --game: declare game.assets'],
       ['--update', 'rewrite an existing app\'s generated files (its exact.mjs update runs this)'],
@@ -582,7 +583,9 @@ Ports    none; send makes one HTTPS request. Runs to completion.`,
     ],
     body: `The app is eight files and no Rust: app.contract, app.ts, app.test.contract, app.json, exact.mjs,
 AGENTS.md, package.json and .gitignore. A native verb (ios, mac, linux, android, windows) names its platform
-in app.json the first time it runs and builds in a workspace generated under .exact/ (LLP 1153 D1). Give
+in app.json the first time it runs and builds in a workspace generated under .exact/ (LLP 1153 D1). With --rust,
+app.ts is a Rust crate instead: data/ answers the sources, apple/ and web/ link it, in the app's own Cargo
+workspace (docs/reference.md, "Rust data sources"). Give
 --name and --bundle-id here, before the first build: a later change to the id makes the next build cold
 and leaves the old app installed. Then cd there: its exact.mjs runs everything, and bun exact.mjs help
 lists its verbs. Read docs/start-here-site.md first for a website, else docs/start-here.md.

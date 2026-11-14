@@ -14,6 +14,7 @@ const read = (cmd, args, opts = {}) => spawnSync(cmd, args, { encoding: 'utf8', 
  * Plans embed the current schema digest. App entries need the test app's `appId` to boot. */
 export function compileFixtures(root, run, env, dir, prefix, appId) {
   const contract = args => run(env.EXACT_CONTRACT, ['build', ...args]);
+  contract([resolve(root, 'host/apple/tests/fixtures/fragment.contract'), '-o', env[`${prefix}_FRAGMENT_PLAN`] = resolve(dir, 'fragment.plan')]);
   if (prefix === 'TEST_RUNNER_EXACT') {
     // LaunchColorIOSTests reads the build's XML and compiled catalogue as an app bundle.
     const fixtures = env[`${prefix}_LAUNCH_COLOR_FIXTURES`] = resolve(dir, 'launch-colors');
@@ -28,6 +29,7 @@ export function compileFixtures(root, run, env, dir, prefix, appId) {
       writeFileSync(resolve(bundle, 'Info.plist'), plistFile({ CFBundleIdentifier: `dev.exact.launch.${name}`, CFBundlePackageType: 'BNDL', ...keys }));
     }
   }
+  contract([resolve(root, 'host/apple/tests/fixtures/navigation-scroller.contract'), '-o', env[`${prefix}_NAVIGATION_SCROLLER_PLAN`] = resolve(dir, 'navigation-scroller.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/overflowing-tabs.contract'), '-o', env[`${prefix}_OVERFLOWING_TABS_PLAN`] = resolve(dir, 'overflowing-tabs.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/scroll-snap.contract'), '-o', env[`${prefix}_SCROLL_SNAP_PLAN`] = resolve(dir, 'scroll-snap.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/arrangement-sizing.contract'), '-o', env[`${prefix}_ARRANGEMENT_SIZING_PLAN`] = resolve(dir, 'arrangement-sizing.plan')]);
@@ -256,9 +258,13 @@ export async function iosTestRuns({ pkg, products, destination, udid, env, canva
   const touchOnly = hostedTests(testDir, 'touch').filter(selected);
   const hostedOnly = hostedTests(testDir).filter(selected).filter(t => !touchOnly.includes(t));
   const failures = [];
+  // A test still running at its allowance fails, and the run goes on with the next test in a new
+  // process: a test that hangs (as a share sheet waiting on a simulator's `sharingd` can) costs its
+  // allowance, not the rest of the run
   const testRun = (xctestrun, selection, runEnv, parallel = true) => {
     try {
       runApple('xcodebuild', ['test-without-building', '-xctestrun', xctestrun, '-destination', destination, '-collect-test-diagnostics', 'never',
+        '-test-timeouts-enabled', 'YES', '-default-test-execution-time-allowance', '600',
         '-parallel-testing-enabled', parallel ? 'YES' : 'NO', ...(parallel ? ['-parallel-testing-worker-count', '2'] : []), ...selection], { cwd: pkg, stdio: 'inherit', env: runEnv });
     } catch (e) { failures.push(e); }
   };

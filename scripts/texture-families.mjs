@@ -42,12 +42,14 @@ export function unbundledTextures(names, held) {
   return dropped;
 }
 
-/** The bundle a stream of `platform` is sent (deploy): its platform's, less the
- *  texture files the platform's bake left out (`thinned`). A cohort baked before thinning names no family (`inputs.textureFamily`), and
- *  its renderer falls back to those files, so it is sent them too. */
+/** The platform's bundle, or the web bake when no native bake ran, thinned
+ * by the installed cohort's texture family. A cohort baked before thinning
+ * names no family and receives the files held aside in `thinned` too. */
 export function streamBundle(bundle, platform, inputs) {
   const own = bundle.platforms?.[platform] ?? bundle;
-  return own.thinned?.length && !inputs?.textureFamily ? { ...own, assets: [...own.assets, ...own.thinned] } : own;
+  const full = own.thinned?.length && !inputs?.textureFamily ? { ...own, assets: [...own.assets, ...own.thinned] } : own;
+  const dropped = unbundledTextures(full.assets.map(a => a.name), inputs?.textureFamily);
+  return dropped.size ? { ...full, assets: full.assets.filter(a => !dropped.has(a.name)) } : full;
 }
 
 /** Remove from `dir`, a bundle's copy of the app's `assets/`, what a bundle

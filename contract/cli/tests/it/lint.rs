@@ -1076,8 +1076,8 @@ fn refusals_name_what_the_author_wrote_and_suggest_one_repair() {
         // The app farm's guesses (round 1): a tag, a count, a placeholder.
         (app("", "heading \"T\""), "lower-unknown-tag", "unknown tag `heading`; a heading is `h1` (to `h6` for the level)"),
         (app("", "grid"), "lower-unknown-tag", "unknown tag `grid`; a grid is `view display=\"grid\"` with `grid-template-columns`, or a `column` of `row`s"),
-        (app("  state xs = [1]\n", "text count(xs).toString()"), "type-refused-idiom", "write `x.length`, of text or of a list"),
-        (app("  state xs = [1]\n", "text xs.size.toString()"), "type-not-a-record", "`number[]` has no fields: write `x.length`, of text or of a list"),
+        (app("  state xs = [1]\n", "text count(xs).toString()"), "type-refused-idiom", "`count` is not in Contract: write `x.length`, of text or of a list"),
+        (app("  state xs = [1]\n", "text xs.size.toString()"), "type-not-a-record", "`number[]` has no fields: `size` is not in Contract: write `x.length`, of text or of a list"),
         (
             app("  resource todos = todosOf() as shape Todo[] else []\n", "text \"a\""),
             "syntax-placeholder-call",
@@ -1322,8 +1322,7 @@ fn one_run_reports_every_independent_mistake_call_sites_first() {
 }
 
 /// A refused member is skipped and the passes after the syntax check the
-/// rest; what they say about a refused name is left out, since it may only
-/// be that the name is missing.
+/// rest; errors caused by the missing refused declaration are left out.
 #[test]
 fn a_refused_member_does_not_hide_the_other_passes_refusals() {
     let source = "component App\n  state n = 0\n  action pick\n    match none\n      case some(r) => n = r\n      case none => n = 0\n  action bump\n    n = n + \"x\"\n  view\n    button \"go\" press=pick color=missingName\n";

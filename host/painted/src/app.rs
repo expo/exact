@@ -201,7 +201,7 @@ impl Config {
         }) else {
             return Some(None);
         };
-        let mut code = exact_runner::vm::instructions(plan.code(binding.expr));
+        let mut code = exact_runner::vm::instructions(plan.read_code(plan.code(binding.expr)).0);
         let literal = code.next()?.ok()?;
         if literal.op != Opcode::Str
             || code.next()?.ok()?.op != Opcode::Return
@@ -1034,16 +1034,22 @@ mod tests {
     #[test]
     fn early_background_resolves_pairs_and_roles_in_the_windows_appearance() {
         for value in ["light-dark(#ffffff, #111111)", "-exact-background"] {
-            let source = format!("component App\n  view\n    main background-color=\"{value}\"\n");
-            let plan = contract::compile(&source).unwrap();
-            for dark in [false, true] {
-                let color = exact_kernel::ColorValue::parse_light_dark(value)
-                    .unwrap()
-                    .resolve(dark);
-                assert_eq!(
-                    Config::initial_window_background(&plan, dark),
-                    Some(Some([color.r(), color.g(), color.b(), color.a()]))
-                );
+            for derived in [false, true] {
+                let source = if derived {
+                    format!("component App\n  view\n    Child()\ncomponent Child\n  derive color = \"{value}\"\n  view\n    main background-color=color\n")
+                } else {
+                    format!("component App\n  view\n    main background-color=\"{value}\"\n")
+                };
+                let plan = contract::compile(&source).unwrap();
+                for dark in [false, true] {
+                    let color = exact_kernel::ColorValue::parse_light_dark(value)
+                        .unwrap()
+                        .resolve(dark);
+                    assert_eq!(
+                        Config::initial_window_background(&plan, dark),
+                        Some(Some([color.r(), color.g(), color.b(), color.a()]))
+                    );
+                }
             }
         }
     }

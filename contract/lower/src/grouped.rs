@@ -329,6 +329,7 @@ fn shown_or_hidden(value: &Expr) -> bool {
         Expr::Str(v, _) => v == "block" || v == "none",
         Expr::None(_) => true,
         Expr::Ternary(_, yes, no, _) => shown_or_hidden(yes) && shown_or_hidden(no),
+        Expr::Let { body, .. } => shown_or_hidden(body),
         _ => false,
     }
 }

@@ -211,13 +211,14 @@ impl<D: DataSource> Swappable<D> {
     }
     fn call(
         &mut self,
+        target: Option<Target>,
         store: &mut Store,
         source: &str,
         args: &[Value],
         outcome: Option<&Outcome>,
     ) -> Result<Answer, DataError> {
-        let request =
-            abi::call_request(store, source, args, outcome).map_err(DataError::Interface)?;
+        let request = abi::call_request(target, store, source, args, outcome)
+            .map_err(DataError::Interface)?;
         let bytes = self.run(&request)?;
         abi::call_reply(&bytes, store)
     }
@@ -409,7 +410,6 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
         let bytes = self.run(&request)?;
         abi::overlay_reply(&bytes)
     }
-    /// A replaced Rust module parks nothing.
     fn forgotten(&mut self, store: &exact_runner::Store, in_flight: &[exact_runner::InFlight<'_>]) {
         if let Some(embedded) = &mut self.embedded {
             embedded.forgotten(store, in_flight);
@@ -514,7 +514,7 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
         if let Some(source_impl) = &mut self.embedded {
             source_impl.parse_tool(fetch, continuation, store, source, args, outcome)
         } else {
-            self.call(store, source, args, Some(&outcome))
+            self.call(None, store, source, args, Some(&outcome))
         }
     }
 
@@ -707,7 +707,7 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
             return embedded.query(source, args);
         }
         let mut store = Store::new(&self.grants, []);
-        match self.call(&mut store, source, args, None)? {
+        match self.call(None, &mut store, source, args, None)? {
             Answer::Now(v) => Ok(v),
             Answer::Later(_) => Err(DataError::Unavailable(
                 "Rust query needs a host request executor".into(),
@@ -723,7 +723,7 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
         if let Some(embedded) = &mut self.embedded {
             embedded.answer(store, source, args)
         } else {
-            self.call(store, source, args, None)
+            self.call(None, store, source, args, None)
         }
     }
     fn parse(
@@ -736,11 +736,9 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
         if let Some(embedded) = &mut self.embedded {
             embedded.parse(store, source, args, outcome)
         } else {
-            self.call(store, source, args, Some(&outcome))
+            self.call(None, store, source, args, Some(&outcome))
         }
     }
-    /// The embedded source keys by target; a replaced module's seam carries
-    /// no target, and a Rust source parks nothing between its calls.
     fn answer_for(
         &mut self,
         target: Target,
@@ -751,7 +749,7 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
         if let Some(embedded) = &mut self.embedded {
             embedded.answer_for(target, store, source, args)
         } else {
-            self.call(store, source, args, None)
+            self.call(Some(target), store, source, args, None)
         }
     }
     fn more_for(&mut self, target: Target) -> Vec<exact_runner::Request> {
@@ -772,7 +770,8 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
         if let Some(embedded) = &mut self.embedded {
             embedded.parse_fetch_for(target, fetch, store, source, args, outcome)
         } else {
-            self.call(store, source, args, Some(&outcome)).map(Some)
+            self.call(Some(target), store, source, args, Some(&outcome))
+                .map(Some)
         }
     }
     fn parse_for(
@@ -786,13 +785,16 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
         if let Some(embedded) = &mut self.embedded {
             embedded.parse_for(target, store, source, args, outcome)
         } else {
-            self.call(store, source, args, Some(&outcome))
+            self.call(Some(target), store, source, args, Some(&outcome))
         }
     }
 }
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod target_tests;
 
 #[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
 mod native_tests;

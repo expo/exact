@@ -55,7 +55,7 @@ function items() {
     id: i + 1,
     title,
     summary: sentence(next, 6 + Math.floor(next() * 6)),
-    body: [paragraph(next, 4), paragraph(next, 5), paragraph(next, 3)].join('\n\n'),
+    body: [paragraph(next, 4), paragraph(next, 5), paragraph(next, 3)],
   }));
 }
 

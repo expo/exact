@@ -110,7 +110,7 @@ pub(super) struct Catalog {
     raw: HashMap<FaceId, Option<shaping::RawFontMetrics>>,
     slots: HashMap<FaceKey, u32>,
     faces: Vec<(FontData, FaceKey)>,
-    pub(super) families: Vec<FamilyChoice>,
+    pub(super) families: Vec<Vec<FamilyChoice>>,
     pub(super) declared_faces: HashMap<(u16, u16, bool), FaceId>,
     pub(super) sans: String,
 }
@@ -148,8 +148,8 @@ impl Catalog {
     fn installed_stack(
         &mut self,
         members: impl IntoIterator<Item = (bool, String)>,
-    ) -> FamilyChoice {
-        let mut chosen = FamilyChoice::SansSerif;
+    ) -> Vec<FamilyChoice> {
+        let mut choices = Vec::new();
         for (installed, name) in members {
             let generic = match name.to_ascii_lowercase().as_str() {
                 "serif" | "ui-serif" => Some(FamilyChoice::Serif),
@@ -160,15 +160,15 @@ impl Catalog {
                 _ => None,
             };
             if let Some(generic) = generic.filter(|_| !installed) {
-                chosen = generic;
-                break;
-            }
-            if fonts::installed_family(&mut self.fonts.collection, &name) {
-                chosen = FamilyChoice::Declared(name);
-                break;
+                choices.push(generic);
+            } else if fonts::installed_family(&mut self.fonts.collection, &name) {
+                choices.push(FamilyChoice::Declared(name));
             }
         }
-        chosen
+        if choices.is_empty() {
+            choices.push(FamilyChoice::SansSerif);
+        }
+        choices
     }
 
     /// The installed faces, with `sans-serif`, `serif` and `monospace` settled
@@ -224,14 +224,14 @@ impl Catalog {
             faces: Vec::new(),
             sans: String::new(),
             families: vec![
-                FamilyChoice::SansSerif,
-                FamilyChoice::SansSerif,
-                FamilyChoice::SansSerif,
-                FamilyChoice::Serif,
-                FamilyChoice::Serif,
-                FamilyChoice::Monospace,
-                FamilyChoice::Monospace,
-                FamilyChoice::SansSerif,
+                vec![FamilyChoice::SansSerif],
+                vec![FamilyChoice::SansSerif],
+                vec![FamilyChoice::SansSerif],
+                vec![FamilyChoice::Serif],
+                vec![FamilyChoice::Serif],
+                vec![FamilyChoice::Monospace],
+                vec![FamilyChoice::Monospace],
+                vec![FamilyChoice::SansSerif],
             ],
             declared_faces: HashMap::new(),
         }
@@ -345,40 +345,33 @@ impl Catalog {
     }
 
     pub(super) fn for_assets(plan: &Plan, assets: &Assets) -> Self {
-        let mut next = Self::new();
-        next.families = Vec::with_capacity(plan.stacks.len());
-        next.families
-            .extend(plan.stacks.iter().enumerate().map(|(i, _)| {
-                let stack = plan.stack(StacksId(i as u32));
-                let member =
-                    plan.stack_member(stack.members.iter().next().expect("validated stack"));
-                generic_choice(member.kind)
-            }));
+        Self::new().with_assets(plan, assets)
+    }
+
+    pub(super) fn with_assets(self, plan: &Plan, assets: &Assets) -> Self {
+        let mut next = self;
+        next.families = vec![Vec::new(); plan.stacks.len()];
         let mut registry = Registry::default();
         // Each declared family: its stack, alias, and faces (weight, italic).
         type Staged = Vec<(u16, bool, fontique::FontInfo)>;
-        let mut declared: Vec<(usize, String, Staged)> = Vec::new();
+        let mut declared: Vec<(usize, bool, String, Staged)> = Vec::new();
         for (stack_index, stack) in plan.stacks.iter().enumerate() {
-            if stack.members.len > 1 {
-                eprintln!("[Fonts] font-stack-fallback: stack={stack_index}; Linux selects the first installed CSS family; missing glyphs use the platform's per-script fallback, not the remaining authored families (LLP 1001)");
-            }
             for member_id in stack.members.iter() {
                 let member = plan.stack_member(member_id);
                 if member.kind != StackMemberKind::Family {
-                    next.families[stack_index] = generic_choice(member.kind);
-                    break;
+                    next.families[stack_index].push(generic_choice(member.kind));
+                    continue;
                 }
                 let family_id = member.family.expect("validated family member");
                 let family = plan.familie(family_id);
                 if family.faces.len == 0 {
                     let name = plan.str(family.name);
                     if fonts::installed_family(&mut next.fonts.collection, name) {
-                        next.families[stack_index] = FamilyChoice::Declared(name.into());
-                        break;
+                        next.families[stack_index].push(FamilyChoice::Declared(name.into()));
                     }
                     continue;
                 }
-                let alias = format!("ExactPlanStack{stack_index}");
+                let alias = declared_alias(stack_index, family_id);
                 let mut staged = Vec::new();
                 let mut failed = false;
                 for face_id in family.faces.iter() {
@@ -440,17 +433,20 @@ impl Catalog {
                     );
                     continue;
                 }
-                next.families[stack_index] = FamilyChoice::Declared(alias.clone());
-                declared.push((stack_index, alias, staged));
-                break;
+                let primary = next.families[stack_index].is_empty();
+                next.families[stack_index].push(FamilyChoice::Declared(alias.clone()));
+                declared.push((stack_index, primary, alias, staged));
+            }
+            if next.families[stack_index].is_empty() {
+                next.families[stack_index].push(FamilyChoice::SansSerif);
             }
         }
         if !declared.is_empty() {
             let mut files = (*next.files).clone();
             files.extend(registry.files.drain());
             next.files = Arc::new(files);
-            for (stack_index, alias, staged) in declared {
-                for (weight, italic, info) in &staged {
+            for (stack_index, primary, alias, staged) in declared {
+                for (weight, italic, info) in staged.iter().filter(|_| primary) {
                     let face = match info.source().kind() {
                         SourceKind::Memory(blob) => FaceId {
                             blob: blob.id(),
@@ -475,14 +471,10 @@ impl Catalog {
     /// The face CSS font matching picks for a run's family, weight and
     /// style, as font data.
     fn resolved_face(&mut self, family: u16, weight: u16, italic: bool) -> Option<FontData> {
-        let choice = self
-            .families
-            .get(family as usize)
-            .cloned()
-            .unwrap_or(FamilyChoice::SansSerif);
+        let choices = self.choice(family);
         let fonts = &mut self.fonts;
         let mut query = fonts.collection.query(&mut fonts.source_cache);
-        query.set_families(std::iter::once(choice.family_query()));
+        query.set_families(choices.iter().map(FamilyChoice::family_query));
         query.set_attributes(Attributes::new(
             FontWidth::NORMAL,
             if italic {
@@ -579,11 +571,11 @@ impl Catalog {
         run.line_height
             .unwrap_or_else(|| self.normal_line_height(run))
     }
-    pub(super) fn choice(&self, family: u16) -> FamilyChoice {
+    pub(super) fn choice(&self, family: u16) -> Vec<FamilyChoice> {
         self.families
             .get(family as usize)
             .cloned()
-            .unwrap_or(FamilyChoice::SansSerif)
+            .unwrap_or_else(|| vec![FamilyChoice::SansSerif])
     }
     /// `text` shaped alone in `run`'s style, unbroken (a probe, or a
     /// symbol text paints in a run's own face: an ellipsis, a hyphen).
@@ -591,7 +583,7 @@ impl Catalog {
         &mut self,
         run: &Run,
         text: &str,
-        family: &FamilyChoice,
+        family: &[FamilyChoice],
     ) -> parley::Layout<u32> {
         let mut builder = self
             .layout
@@ -908,20 +900,20 @@ fn monospace_family(c: &mut fontique::Collection, configured: &str) -> Option<St
 }
 
 impl FamilyChoice {
-    /// The family as Parley's style names it.
-    pub(crate) fn family(&self) -> parley::FontFamily<'_> {
-        use parley::{FontFamily, FontFamilyName};
+    /// The authored families in Parley's shaping order.
+    pub(crate) fn stack(families: &[Self]) -> parley::FontFamily<'_> {
+        match families {
+            [family] => parley::FontFamily::Single(family.family_name()),
+            _ => parley::FontFamily::List(families.iter().map(Self::family_name).collect()),
+        }
+    }
+    fn family_name(&self) -> parley::FontFamilyName<'_> {
+        use parley::FontFamilyName;
         match self {
-            FamilyChoice::SansSerif => {
-                FontFamily::Single(FontFamilyName::Generic(GenericFamily::SansSerif))
-            }
-            FamilyChoice::Serif => {
-                FontFamily::Single(FontFamilyName::Generic(GenericFamily::Serif))
-            }
-            FamilyChoice::Monospace => {
-                FontFamily::Single(FontFamilyName::Generic(GenericFamily::Monospace))
-            }
-            FamilyChoice::Declared(name) => FontFamily::named(name),
+            FamilyChoice::SansSerif => FontFamilyName::Generic(GenericFamily::SansSerif),
+            FamilyChoice::Serif => FontFamilyName::Generic(GenericFamily::Serif),
+            FamilyChoice::Monospace => FontFamilyName::Generic(GenericFamily::Monospace),
+            FamilyChoice::Declared(name) => FontFamilyName::named(name),
         }
     }
     /// The family as a fontique query names it.
@@ -933,6 +925,10 @@ impl FamilyChoice {
             FamilyChoice::Declared(name) => QueryFamily::Named(name),
         }
     }
+}
+
+pub(super) fn declared_alias(stack: usize, family: exact_plan::FamiliesId) -> String {
+    format!("ExactPlanStack{stack}Family{}", family.0)
 }
 
 /// The top of a character's glyph above the baseline, in font units.

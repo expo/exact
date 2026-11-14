@@ -103,48 +103,68 @@ fn a_reboot_with_other_overrides_re_presents_them() {
     assert_eq!(resolved(second), fixed("#020202"));
 }
 
+/// Boot a plan whose theme sets `AccentColor` and whose one view paints
+/// `image`; its batch.
+fn boot_gradient(accent: &str, image: &str) -> String {
+    let plan = contract::compile(&format!(
+        "theme\n  AccentColor = \"{accent}\"\n\ncomponent App\n  view\n    view width=100 height=20 background-image=\"{image}\"\n"
+    ))
+    .unwrap()
+    .encode();
+    let rt = RUNTIMES.with(|r| r.borrow_mut().create());
+    crate::abi::registry::with_runtime(
+        &RUNTIMES,
+        rt,
+        false,
+        |b, _| {
+            let len = b.boot(&plan, StorageModule::default(), Hooks::none(), 200., 200.);
+            String::from_utf8(b.output_bytes(len as usize).to_vec()).unwrap()
+        },
+        |_| String::new(),
+    )
+}
+
+/// The string a batch carries in `field` (the first).
+fn batch_string<'a>(batch: &'a str, field: &str) -> &'a str {
+    let key = format!(r#""{field}":""#);
+    let at = batch
+        .find(&key)
+        .unwrap_or_else(|| panic!("{field}: {batch}"))
+        + key.len();
+    &batch[at..at + batch[at..].find('"').unwrap()]
+}
+
+/// What the presenter resolves for `css` in a 100 × 20 box under `tint`.
+#[allow(unsafe_code)] // The presenter's resolve, over buffers this test owns.
+fn resolve_gradient(css: &str, tint: Option<[f32; 4]>) -> String {
+    let mut out = vec![0u8; 16384];
+    // SAFETY: the buffers are the lengths given; the tint is four floats.
+    let n = unsafe {
+        crate::gradient::resolve(
+            css.as_ptr(),
+            css.len(),
+            [100., 20.],
+            false,
+            tint.as_ref().map_or(std::ptr::null(), |t| t.as_ptr()),
+            out.as_mut_ptr(),
+            out.len(),
+        )
+    };
+    String::from_utf8(out[..n].to_vec()).unwrap()
+}
+
 /// A gradient the presenter resolves later, once it knows the box, carries
 /// its session's overrides as their colours (a tint role's as the theme's
 /// accent), and resolves with none of another session's.
 #[test]
-#[allow(unsafe_code)] // The presenter's resolve, over buffers this test owns.
 fn a_boxed_gradient_carries_its_sessions_accent() {
     let boot = |accent: &str, stop: &str| {
-        let plan = contract::compile(&format!(
-            "theme\n  AccentColor = \"{accent}\"\n\ncomponent App\n  view\n    view width=100 height=20 background-image=\"linear-gradient(90deg, {stop} 0px, transparent 100px)\"\n"
-        ))
-        .unwrap()
-        .encode();
-        let rt = RUNTIMES.with(|r| r.borrow_mut().create());
-        crate::abi::registry::with_runtime(
-            &RUNTIMES,
-            rt,
-            false,
-            |b, _| {
-                let len = b.boot(&plan, StorageModule::default(), Hooks::none(), 200., 200.);
-                String::from_utf8(b.output_bytes(len as usize).to_vec()).unwrap()
-            },
-            |_| String::new(),
+        boot_gradient(
+            accent,
+            &format!("linear-gradient(90deg, {stop} 0px, transparent 100px)"),
         )
     };
-    // What the presenter resolves for the `css` a batch carries.
-    let resolve = |batch: &str| {
-        let at = batch.find(r#""css":""#).expect("a boxed gradient") + 7;
-        let css = &batch[at..at + batch[at..].find('"').unwrap()];
-        let mut out = vec![0u8; 4096];
-        // SAFETY: both buffers are the lengths given.
-        let n = unsafe {
-            crate::gradient::resolve(
-                css.as_ptr(),
-                css.len(),
-                [100., 20.],
-                false,
-                out.as_mut_ptr(),
-                out.len(),
-            )
-        };
-        String::from_utf8(out[..n].to_vec()).unwrap()
-    };
+    let resolve = |batch: &str| resolve_gradient(batch_string(batch, "css"), None);
     let red = r#""stops":[0,255,0,0,255"#;
     let first = boot("#ff0000", "AccentColor");
     let link = boot("#ff0000", "LinkText");
@@ -161,6 +181,66 @@ fn a_boxed_gradient_carries_its_sessions_accent() {
     assert!(
         !resolved.contains(r#""stops":[0,0,0,255,255"#),
         "{resolved}"
+    );
+}
+
+/// The view's tint replaces a tint stop unclipped, in the interpolation the
+/// session's colours chose: a Display P3 theme accent, undimmed, paints as
+/// the CSS its batch carries beside the reference does.
+#[test]
+fn a_wide_theme_accent_keeps_its_colour_and_interpolation_through_the_views_tint() {
+    let p3 = |text: &str| -> [f32; 4] {
+        let Some(exact_color::Parsed::Wide(w)) = exact_color::parse(text) else {
+            panic!("{text}")
+        };
+        let [r, g, b] = w.linear_srgb().map(exact_color::linear_to_srgb);
+        [r as f32, g as f32, b as f32, w.alpha as f32]
+    };
+    let stops = |json: &str| -> Vec<f64> {
+        let v: serde_json::Value = serde_json::from_str(json).unwrap();
+        let list = v["stops"].as_array().unwrap_or_else(|| panic!("{json}"));
+        list.iter().map(|n| n.as_f64().unwrap()).collect()
+    };
+    let same = |a: &[f64], b: &[f64], why: &str| {
+        assert_eq!(a.len(), b.len(), "{why}: {a:?}\n{b:?}");
+        for (x, y) in a.iter().zip(b) {
+            assert!((x - y).abs() < 2e-3, "{why}: {a:?}\n{b:?}");
+        }
+    };
+    let red = p3("color(display-p3 1 0 0)");
+    assert!(red[0] > 1.0 && red[1] < 0.0, "outside sRGB: {red:?}");
+    for image in [
+        "linear-gradient(90deg, AccentColor 0px, AccentColor 100px)",
+        "linear-gradient(90deg, AccentColor 0px, #00ff00 100px)",
+    ] {
+        let batch = boot_gradient("color(display-p3 1 0 0)", image);
+        let session = stops(&resolve_gradient(batch_string(&batch, "css"), None));
+        let tinted = stops(&resolve_gradient(batch_string(&batch, "tint"), Some(red)));
+        assert!(
+            session[1] > 1.0,
+            "the session's ramp is unclipped: {session:?}"
+        );
+        same(&tinted, &session, image);
+    }
+    // A legacy accent keeps the legacy ramp; a wider tint than its theme's
+    // (an embedder's) is unclipped in it.
+    let image = "linear-gradient(90deg, AccentColor 0px, #00ff00 100px)";
+    let batch = boot_gradient("#ff0000", image);
+    let session = resolve_gradient(batch_string(&batch, "css"), None);
+    let legacy = resolve_gradient(batch_string(&batch, "tint"), Some([1., 0., 0., 1.]));
+    same(&stops(&legacy), &stops(&session), "legacy");
+    assert!(!legacy.contains("srgb-linear"), "{legacy}");
+    let wide = stops(&resolve_gradient(batch_string(&batch, "tint"), Some(red)));
+    assert!(wide[1] > 1.0, "{wide:?}");
+    // Each scheme's choice, where they differ.
+    let batch = boot_gradient("light-dark(color(display-p3 1 0 0), #0000ff)", image);
+    assert!(
+        batch_string(&batch, "tint").contains(" in oklab,"),
+        "{batch}"
+    );
+    assert!(
+        !batch_string(&batch, "tintDark").contains(" in "),
+        "{batch}"
     );
 }
 

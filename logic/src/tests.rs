@@ -385,7 +385,9 @@ fn wasm_fuel_memory_imports_and_export_bounds_are_enforced() {
 #[test]
 fn a_call_after_a_trap_runs_in_a_fresh_instance() {
     let store = Store::new("secret.keep token", []);
-    let good = abi::call_request(&store, "x", &[], None).unwrap().len();
+    let good = abi::call_request(None, &store, "x", &[], None)
+        .unwrap()
+        .len();
     let used = "i32.const 1024 i32.load";
     let reach = |pages: u32| {
         format!(
@@ -423,7 +425,9 @@ fn a_call_after_a_trap_runs_in_a_fresh_instance() {
 #[test]
 fn a_call_after_a_refused_one_runs_in_a_fresh_instance() {
     let store = Store::new("secret.keep token", []);
-    let good = abi::call_request(&store, "x", &[], None).unwrap().len();
+    let good = abi::call_request(None, &store, "x", &[], None)
+        .unwrap()
+        .len();
     let module = wasm(&format!(
         "i32.const 2048 i32.load if i32.const 1 return end
         local.get 2 i32.const {good} i32.gt_u

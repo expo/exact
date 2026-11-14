@@ -133,6 +133,9 @@ test('an app\'s command nudges at the end of stderr on failure and success, and 
   try {
     // A checkout whose ios build fails and whose verify passes, with the real feedback scripts.
     const sdk = resolve(parent, 'sdk'), root = resolve(import.meta.dir, '..');
+    // An installed checkout's: a verb that builds is refused without node_modules (app-cli.mjs).
+    mkdirSync(resolve(sdk, 'node_modules/.bin'), { recursive: true });
+    writeFileSync(resolve(sdk, 'node_modules/.bin/rolldown'), '');
     for (const file of ['feedback-note', 'feedback', 'help']) { mkdirSync(resolve(sdk, 'scripts'), { recursive: true }); symlinkSync(resolve(root, `scripts/${file}.mjs`), resolve(sdk, `scripts/${file}.mjs`)); }
     mkdirSync(resolve(sdk, 'host/apple'), { recursive: true });
     writeFileSync(resolve(sdk, 'host/apple/build.mjs'), 'console.error("ios: the signing team is unset\\n  4 | top-secret-source"); process.exit(1);');

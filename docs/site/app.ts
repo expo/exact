@@ -66,6 +66,7 @@ const missing: Page = {
   path: '',
   movedFrom: [],
   section: '',
+  crumbs: [],
   title: 'Page Not Found',
   description: 'No page of the Exact docs is at this address.',
   subtitle: '',

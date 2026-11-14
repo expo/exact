@@ -43,7 +43,7 @@ fn a_module_store_obeys_the_hosts_scope_in_answers_and_parses() {
         );
         for outcome in [None, Some(Outcome::Storage(vec![]))] {
             module
-                .dispatch(&call_request(&store, "scope", &[], outcome.as_ref()).unwrap())
+                .dispatch(&call_request(None, &store, "scope", &[], outcome.as_ref()).unwrap())
                 .unwrap();
             assert_eq!(
                 call_reply(module.output(), &mut store).unwrap(),
@@ -88,7 +88,7 @@ fn topics_entropy_and_durable_writes_reach_the_host_store() {
         [("token".into(), b"old".to_vec())],
     );
     module
-        .dispatch(&call_request(&store, "effects", &[], None).unwrap())
+        .dispatch(&call_request(None, &store, "effects", &[], None).unwrap())
         .unwrap();
     assert_eq!(
         call_reply(module.output(), &mut store).unwrap(),
@@ -220,7 +220,7 @@ fn surface_requests_and_outcomes_round_trip_without_becoming_storage_or_http() {
         ),
     ] {
         module
-            .dispatch(&call_request(&store, source, &[], None).unwrap())
+            .dispatch(&call_request(None, &store, source, &[], None).unwrap())
             .unwrap();
         let Answer::Later(request) = call_reply(module.output(), &mut store).unwrap() else {
             panic!("expected surface request")
@@ -241,7 +241,7 @@ fn surface_requests_and_outcomes_round_trip_without_becoming_storage_or_http() {
         (Outcome::Surface(SurfaceOutcome::Restored), Value::Unit),
     ] {
         module
-            .dispatch(&call_request(&store, "surface-capture", &[], Some(&outcome)).unwrap())
+            .dispatch(&call_request(None, &store, "surface-capture", &[], Some(&outcome)).unwrap())
             .unwrap();
         assert_eq!(
             call_reply(module.output(), &mut store).unwrap(),
@@ -260,7 +260,7 @@ fn portable_storage_and_empty_scopes_round_trip_without_becoming_http() {
         ("storage-scoped", Some("fs.read app:/data/note")),
     ] {
         module
-            .dispatch(&call_request(&store, source, &[], None).unwrap())
+            .dispatch(&call_request(None, &store, source, &[], None).unwrap())
             .unwrap();
         let Answer::Later(request) = call_reply(module.output(), &mut store).unwrap() else {
             panic!("expected storage request")
@@ -274,7 +274,7 @@ fn portable_storage_and_empty_scopes_round_trip_without_becoming_http() {
     }
     let outcome = Outcome::Storage(vec![0, 128, 255]);
     module
-        .dispatch(&call_request(&store, "storage", &[], Some(&outcome)).unwrap())
+        .dispatch(&call_request(None, &store, "storage", &[], Some(&outcome)).unwrap())
         .unwrap();
     assert_eq!(
         call_reply(module.output(), &mut store).unwrap(),
@@ -378,6 +378,7 @@ fn storage_unknown_tags_truncation_and_oversize_are_refused_before_effects() {
     let oversized = vec![0; MAX_MESSAGE + 1];
     assert!(module.dispatch(&oversized).is_err());
     assert!(call_request(
+        None,
         &Store::default(),
         "storage",
         &[],
@@ -423,7 +424,7 @@ fn preserves_session_store_read_marker_and_write_order() {
             ("exact.kept.hidden".into(), "private".into()),
         ],
     );
-    let input = call_request(&store, "answer", &[], None).unwrap();
+    let input = call_request(None, &store, "answer", &[], None).unwrap();
     assert!(!input.windows(7).any(|x| x == b"private"));
     module.dispatch(&input).unwrap();
     assert_eq!(
@@ -440,7 +441,7 @@ fn preserves_session_store_read_marker_and_write_order() {
         [Some(&b"first"[..]), None, Some(&b"last"[..])]
     );
     module
-        .dispatch(&call_request(&store, "answer", &[], None).unwrap())
+        .dispatch(&call_request(None, &store, "answer", &[], None).unwrap())
         .unwrap();
     assert_eq!(
         call_reply(module.output(), &mut store).unwrap(),
@@ -453,7 +454,7 @@ fn request_outcome_and_continuation_refusal_cross_the_seam() {
     let mut module = Session::new(Fixture(0));
     let mut store = Store::new("secret.keep token", []);
     module
-        .dispatch(&call_request(&store, "network", &[], None).unwrap())
+        .dispatch(&call_request(None, &store, "network", &[], None).unwrap())
         .unwrap();
     assert_eq!(
         call_reply(module.output(), &mut store).unwrap(),
@@ -476,12 +477,12 @@ fn request_outcome_and_continuation_refusal_cross_the_seam() {
             Err(DataError::Unavailable("refused".into()))
         };
         module
-            .dispatch(&call_request(&store, "network", &[], Some(&outcome)).unwrap())
+            .dispatch(&call_request(None, &store, "network", &[], Some(&outcome)).unwrap())
             .unwrap();
         assert_eq!(call_reply(module.output(), &mut store), expected);
     }
     module
-        .dispatch(&call_request(&store, "continuation", &[], None).unwrap())
+        .dispatch(&call_request(None, &store, "continuation", &[], None).unwrap())
         .unwrap();
     assert!(
         matches!(call_reply(module.output(),&mut store),Err(DataError::Unavailable(s)) if s.contains("continuations"))
@@ -493,7 +494,7 @@ fn malformed_reply_cannot_partially_write_the_host_store() {
     let mut module = Session::new(Fixture(0));
     let mut store = Store::new("secret.keep token", []);
     module
-        .dispatch(&call_request(&store, "answer", &[], None).unwrap())
+        .dispatch(&call_request(None, &store, "answer", &[], None).unwrap())
         .unwrap();
     let mut reply = module.output().to_vec();
     reply.push(0);
@@ -845,8 +846,8 @@ if (process.argv[2] === 'true') {
   api.encode(w, value, '{s?s[s}'); w.u32(1); w.u64(7); w.str('save'); w.str('save');
   w.u8(6); w.u32(1); api.encode(w, 'a|b', 's'); w.u8(1); api.encode(w, value, '{s?s[s}'); w.u8(1);
 } else {
-  // No secret names, no store pairs; the socket turn: no socket call, no open socket.
-  w.u32(0); w.u32(0); w.u8(0); w.u32(0);
+  // No target, secret names or store pairs; no socket call or open socket.
+  w.u8(0); w.u32(0); w.u32(0); w.u8(0); w.u32(0);
 }
 process.stdout.write(w.done());
 "#;
@@ -929,7 +930,7 @@ fn a_locked_name_crosses_the_seam_as_occupancy_alone() {
         ],
     );
     let mut module = Session::new(Locked);
-    let input = call_request(&store, "read", &[], None).unwrap();
+    let input = call_request(None, &store, "read", &[], None).unwrap();
     assert!(!input.windows(6).any(|x| x == b"secret"));
     assert!(input.windows(6).any(|x| x == b"locked"));
     module.dispatch(&input).unwrap();
@@ -939,7 +940,7 @@ fn a_locked_name_crosses_the_seam_as_occupancy_alone() {
         "{refused}"
     );
     module
-        .dispatch(&call_request(&store, "write", &[], None).unwrap())
+        .dispatch(&call_request(None, &store, "write", &[], None).unwrap())
         .unwrap();
     assert_eq!(
         call_reply(module.output(), &mut store).unwrap(),
@@ -960,9 +961,9 @@ fn a_locked_name_crosses_the_seam_as_occupancy_alone() {
 
 #[test]
 fn cache_modes_cross_the_rust_module_seam() {
-    assert_eq!(ABI, 11);
+    assert_eq!(ABI, 12);
     let mut old = header(0).into_vec();
-    old[..4].copy_from_slice(&9u32.to_le_bytes());
+    old[..4].copy_from_slice(&(ABI - 1).to_le_bytes());
     assert!(matches!(reader(&old), Err(e) if e == "logic ABI version differs"));
     for word in [
         "unspecified",
@@ -1014,6 +1015,48 @@ fn cache_modes_cross_the_rust_module_seam() {
                 Ok(Answer::Later(request))
             );
             end(&reader).unwrap();
+        }
+    }
+}
+
+#[test]
+fn invalid_call_targets_are_refused_before_dispatch() {
+    struct Uncalled;
+    impl DataSource for Uncalled {
+        fn query(&mut self, _: &str, _: &[Value]) -> Result<Value, DataError> {
+            panic!("invalid targets must not reach the source")
+        }
+    }
+    let mut module = Session::new(Uncalled);
+    let prefix = || {
+        let mut w = header(3);
+        w.string("read");
+        Value::list(vec![]).encode(&mut w);
+        w
+    };
+    for tag in [1, 2, 3, 255] {
+        let mut w = prefix();
+        w.u8(tag);
+        let bytes = w.into_vec();
+        assert!(module.dispatch(&bytes).is_err());
+    }
+    let mut w = prefix();
+    w.u8(255);
+    w.u32(0);
+    w.u32(0);
+    w.u8(0);
+    w.u32(0);
+    assert_eq!(
+        module.dispatch(&w.into_vec()),
+        Err("invalid call target tag".into())
+    );
+    if usize::BITS > 32 {
+        for target in [
+            Target::Resource(usize::MAX),
+            Target::Mutation(usize::MAX),
+            Target::Sent(usize::MAX, 1),
+        ] {
+            assert!(call_request(Some(target), &Store::default(), "read", &[], None).is_err());
         }
     }
 }

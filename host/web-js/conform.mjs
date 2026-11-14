@@ -104,7 +104,7 @@ import { fileURLToPath } from 'node:url';
 import { conformArgs } from './conform-args.mjs';
 import { withoutSlots } from './conform-linux.mjs';
 import { WASM_UNBOUND, markUnbound, referenceTapRefused } from './conform-marked.mjs';
-import { clockOnAll, parseStep } from './conform-steps.mjs';
+import { clockOnAll, failedTests, parseStep } from './conform-steps.mjs';
 import { open } from '../../scripts/agent.mjs';
 import { reloadWeb } from '../../scripts/agent-test.mjs';
 import { refuseStale, webChanges } from '../../scripts/agent-launch.mjs';
@@ -207,7 +207,7 @@ function serve(dir) {
 // the same reason, the `Debug` text of the runner's error, a line's prefix being each host's own. Other refusals compare
 // only as refused or not (the steps' state). A refusal repeated by a host's own deliveries counts once: a list's edge
 // is asked again at each report, and the Linux host reports a settling list more often than a page does.
-const BOUND = /Instance\(Trap\((?:IterationLimit|StringTooLong|ValueTooLarge|ValueTooDeep) \{ pc: \d+ \}\)\)|Trap\((?:IterationLimit|StringTooLong|ValueTooLarge|ValueTooDeep) \{ pc: \d+ \}\)|StringTooLong \{ name: "(?:[^"\\]|\\.)*" \}/;
+const BOUND = /Instance\(Trap\((?:IterationLimit|CallLimit|CallDepth|StringTooLong|ValueTooLarge|ValueTooDeep) \{ pc: \d+ \}\)\)|Trap\((?:IterationLimit|CallLimit|CallDepth|StringTooLong|ValueTooLarge|ValueTooDeep) \{ pc: \d+ \}\)|StringTooLong \{ name: "(?:[^"\\]|\\.)*" \}/;
 const boundReasons = lines => lines.flatMap(l => {
   const m = BOUND.exec(l); if (!m) return [];
   const suffix = l.slice(m.index + m[0].length).replace(/; unset$/, '').replace(/ \}$/, '');
@@ -620,21 +620,39 @@ async function drive(t, report, targetFail, dir, ws, js) {
       driveAt = `${step} screenshot`;
       const slug = step.replace(/[^a-z0-9]+/gi, '-');
       const [pw, pj] = [resolve(dir, `${slug}-${reference}.png`), resolve(dir, `${slug}-${other}.png`)];
-      // Chrome picks how a scaled image is filtered per raster (a lower
-      // quality while it judges the layer busy, a higher one later, on its
-      // own clock); nearest-neighbour on both leaves one filter to compare.
-      const still = `document.getElementById('conform-still') || document.head.insertAdjacentHTML('beforeend', '<style id=conform-still>img{image-rendering:pixelated!important}</style>'); new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))`;
-      await pair(() => W.carrier?.evaluate(still).catch(() => {}), () => J.carrier?.evaluate(still).catch(() => {}));
-      // Each picture is the clock's, a transition where it stands, as a film's frame is (a plain
-      // screenshot shows one where it ends, LLP 1116.003 D8, which the wasm target's does not).
-      if (crossBrowser) {
-        // Preserve the other engine's picture even when Chrome's oracle
-        // cannot capture (for example a broken GPU process on Linux).
-        for (const [session, path, label] of [[J, pj, other], [W, pw, reference]]) {
-          try { if (session === W) await screenshot(); else await session.screenshot(path, false, undefined, true); }
-          catch (error) { fail(step, `${label} screenshot: ${error.message.split('\n')[0]}`); st++; }
+      // Chrome picks how an `auto` image is filtered per raster (a lower quality while it judges the layer
+      // busy, a higher one later, on its own clock). Each page reports every image's computed value, which
+      // must agree; the `auto` ones are pinned to nearest-neighbour for the capture and restored after it
+      // (`crisp-edges` and `pixelated` are already one filter).
+      const still = `(() => { const pinned = window.__conformStill = [], modes = [];
+        for (const image of document.images) {
+          const mode = getComputedStyle(image).imageRendering; modes.push(mode);
+          if (mode !== 'auto') continue;
+          pinned.push([image, image.getAttribute('style')]);
+          image.style.setProperty('image-rendering', 'pixelated', 'important');
         }
-      } else await pair(screenshot, () => J.screenshot(pj, false, undefined, true));
+        return new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => r(modes)))); })()`;
+      const unpin = `for (const [image, attribute] of window.__conformStill ?? []) {
+        if (attribute === null) image.removeAttribute('style'); else image.setAttribute('style', attribute);
+      } delete window.__conformStill;`;
+      const [mw, mj] = await pair(() => W.carrier?.evaluate(still).catch(() => null), () => J.carrier?.evaluate(still).catch(() => null));
+      if (Array.isArray(mw) && Array.isArray(mj) && JSON.stringify(mw) !== JSON.stringify(mj)) {
+        differ(step, `image-rendering: ${reference} ${JSON.stringify(mw)} ${other} ${JSON.stringify(mj)}`); st++;
+      }
+      try {
+        // Each picture is the clock's, a transition where it stands, as a film's frame is (a plain
+        // screenshot shows one where it ends, LLP 1116.003 D8, which the wasm target's does not).
+        if (crossBrowser) {
+          // Preserve the other engine's picture even when Chrome's oracle
+          // cannot capture (for example a broken GPU process on Linux).
+          for (const [session, path, label] of [[J, pj, other], [W, pw, reference]]) {
+            try { if (session === W) await screenshot(); else await session.screenshot(path, false, undefined, true); }
+            catch (error) { fail(step, `${label} screenshot: ${error.message.split('\n')[0]}`); st++; }
+          }
+        } else await pair(screenshot, () => J.screenshot(pj, false, undefined, true));
+      } finally {
+        await pair(() => W.carrier?.evaluate(unpin).catch(() => {}), () => J.carrier?.evaluate(unpin).catch(() => {}));
+      }
       // A playing video's frames and controls are the browser's clock, not the runner's.
       if (!crossBrowser) {
         const share = diffPng(pw, pj, resolve(dir, `${slug}-side-by-side.png`), lw.nodes.filter(n => n.type === 'Video'));
@@ -804,15 +822,6 @@ async function drive(t, report, targetFail, dir, ws, js) {
     const [rw, ...results] = await Promise.all([run(w2.url), ...browsers.map(browser => run(j2.url, browser))]);
     w2.close(); j2.close();
     const lines = s => s.split('\n').filter(l => l.startsWith('test '));
-    const failedTests = output => {
-      const all = output.trim().split('\n'), found = [];
-      for (let i = 0; i < all.length; i++) if (/^test .*\bFAIL\b/.test(all[i])) {
-        const detail = [all[i]];
-        while (i + 1 < all.length && !/^test |^\d+ passed,/.test(all[i + 1])) detail.push(all[++i]);
-        found.push(detail.map(line => line.trim()).filter(Boolean).join(' | '));
-      }
-      return found;
-    };
     const lw = lines(rw.output);
     report.targets[t.name].tests = { [reference]: rw.output.trim().split('\n').at(-1) };
     const recordTests = (result, label) => {

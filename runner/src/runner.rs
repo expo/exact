@@ -19,6 +19,8 @@ mod errors;
 mod reply;
 #[cfg(test)]
 mod request_set_tests;
+#[cfg(test)]
+mod shared_plan_tests;
 pub use errors::RunnerError;
 mod event;
 pub mod faults;
@@ -661,7 +663,7 @@ impl<D: DataSource> Runner<D> {
     #[allow(clippy::too_many_arguments)] // the host boot facts
     fn boot_inner(
         links: RunnerLinks,
-        plan: Plan,
+        plan: impl Into<crate::Program>,
         mut data: D,
         mut kernel: Kernel,
         seed: Seed<'_>,
@@ -671,6 +673,8 @@ impl<D: DataSource> Runner<D> {
         mut viewport: crate::Viewport,
         launch: &str,
     ) -> Result<Runner<D>, RunnerError> {
+        let program = plan.into();
+        let plan = &*program;
         viewport.device_pixel_ratio = kernel
             .reported_display_scale()
             .map(f64::from)
@@ -746,13 +750,13 @@ impl<D: DataSource> Runner<D> {
             return Err(RunnerError::RootRegion);
         }
         let same_logic = carried.is_none_or(|c| c.data_revision.as_deref() == data.revision());
-        data.bind(&plan);
+        data.bind(plan);
         // A cold boot forgets the kept answers no resource seeds (`kept::obsolete`); an
         // app granting Health forgets them all, at every boot (LLP 1069.008.000 D7).
         let private = crate::device::keeps_no_answers(data.grants());
         let obsolete_kept = match carried {
             _ if private => kept::all(snapshot.iter().map(|(name, _)| name)),
-            None => kept::obsolete(&plan, snapshot.iter().map(|(name, _)| name)),
+            None => kept::obsolete(plan, snapshot.iter().map(|(name, _)| name)),
             Some(_) => Vec::new(),
         };
         let mut store = Store::new_linked(data.grants(), snapshot, links.grants);
@@ -809,18 +813,23 @@ impl<D: DataSource> Runner<D> {
             })
             .collect();
         let router = match links.router {
-            Some(routing) => routing(&plan)?,
+            Some(routing) => routing(plan)?,
             None => None,
         };
         let launched_place = crate::time::launch_place();
+        let sites = program.sites(links.keyframes);
+        let strings = program.strings();
+        // Its own buffers before its role overrides, which forget the token
+        // edits keyed on them: a dropped runner's edits may key the same addresses.
+        let plan = program.into_plan();
         // Its own role overrides (LLP 1121 stage 5): bound while it boots, installed once it has.
         let roles = exact_kernel::style::roles::Roles::new(crate::bridge::role_overrides(&plan));
         let booting = exact_kernel::style::roles::bind(&roles);
         root_font::bold_text_facts(&mut kernel, &plan, viewport.preferences.bold_text); // LLP 1115.000 D12.3
         let viewport_geometry = crate::viewport::Geometry::of(&kernel);
         let mut runner = Runner {
-            sites: crate::instance::SiteIndex::linked(&plan, links.keyframes),
-            strings: vm::intern(&plan),
+            sites,
+            strings,
             failed_mut: vec![None; plan.mutations.len()],
             transport: crate::transport::Transport::new(&plan),
             midi: crate::runner::midi::queue(&plan, &data),

@@ -3,21 +3,24 @@
 Put an `ExactModule` in `modules/apple/*.swift`; `let exactModule` names its class.
 No app.json entry.
 
-**Kept answers:** a resource that reads `native.available` or calls `native.call`
-reads device state, so its answer can be kept across launches. Read launch
-configuration in a mount mutation and pass it to fetch resources; keep native
-access out of their sources:
+Declare device access in the activating source's `grants`
+([permissions](permissions.md)). `device.photos-add purpose.savePhoto` derives
+`NSPhotoLibraryAddUsageDescription` from that strings key. Grants derive
+entitlements too. Apple `infoPlist` and `entitlements` dictionaries refuse every
+key; see [bundle metadata](../reference.md#apple-bundle-metadata).
+
+**Kept answers:** a resource reading `native.available` or calling `native.call`
+reads device state; its answer is kept across launches. Keep native access out of
+fetch sources. Read launch configuration in a mount mutation and
+pass it as a resource argument:
 
 ```swift
 import Foundation
 
 final class Launch: ExactModule {
-    override func call(_ request: [String: Any]) -> [String: Any] {
-        return ["url": ProcessInfo.processInfo.environment["API_BASE_URL"]
-            ?? "https://jsonplaceholder.typicode.com"]
-    }
     override func later(_ request: [String: Any], reply: ExactReply) {
-        reply.send(call(request))
+        reply.send(["url": ProcessInfo.processInfo.environment["API_BASE_URL"]
+            ?? "https://jsonplaceholder.typicode.com"])
     }
 }
 let exactModule: ExactModule.Type = Launch.self
@@ -38,16 +41,10 @@ component App
     after(1, configure)
   action configure
     send endpoint = launchEndpoint()
-  action retry
-    refresh feed
   view
     column
       if api == "" or pending(feed)
         progress aria-label="Loading"
-      if failed(endpoint) or failed(feed)
-        text "Couldn't load."
-      button press=retry testId="retry"
-        text "Retry"
       for p in feed.posts key=p
         text p
 ```
@@ -76,16 +73,13 @@ export const answer: Answer = (source, args, store, storage, native) =>
 `ExactReply.send` or `fail` from any thread. The web implements only `later`, in
 `modules/web/index.js`.
 
-Web drives use that module when present, otherwise the fallback; iOS calls Swift.
-Use `clock +1`, then `clock data`.
-Swift edits need `bun exact.mjs ios`. `print` reaches agent `logs`.
+Drive with `clock +1`, then `clock data`. Rebuild Swift with `bun exact.mjs ios`; `print` reaches agent `logs`.
 
-Set the environment read above on an installed simulator build (`id` in app.json):
+Set the environment on the simulator app (`id` in app.json):
 
 ```sh
 SIMCTL_CHILD_API_BASE_URL=https://jsonplaceholder.typicode.com xcrun simctl launch --terminate-running-process <udid> <bundle-id>
 ```
 
-The app receives `API_BASE_URL`. Use the same prefix on
-`bun exact.mjs agent ios "clock +1" "clock data" state`.
-`-API_BASE_URL value` sets `UserDefaults`, which this example does not read.
+Use the same prefix on `bun exact.mjs agent ios "clock +1" "clock data" state`.
+`-API_BASE_URL value` sets `UserDefaults`, not the environment.

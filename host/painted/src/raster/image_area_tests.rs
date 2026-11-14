@@ -39,7 +39,14 @@ fn fractional_image_edges_match_bilinear_coverage() {
                 Transform::from_translate(x, 0.).pre_scale(0.25, 0.25),
                 mask.as_ref(),
             );
-            actual.image(&bitmap, dst, &clips, Transform::identity(), None);
+            actual.image(
+                &bitmap,
+                dst,
+                &clips,
+                Transform::identity(),
+                None,
+                exact_kernel::ImageRendering::Auto,
+            );
             let actual = actual.finish().unwrap();
             alpha.push((
                 actual.pixel(0, 0).unwrap().alpha(),
@@ -162,7 +169,14 @@ fn minified_edges_match_bilinear_under_square_and_rounded_clips_at_device_scales
                             dev,
                             mask.as_ref(),
                         );
-                        actual.image(&bitmap, dst, &clips, ts, None);
+                        actual.image(
+                            &bitmap,
+                            dst,
+                            &clips,
+                            ts,
+                            None,
+                            exact_kernel::ImageRendering::Auto,
+                        );
                         let actual = actual.finish().unwrap();
                         for (i, (a, b)) in actual.pixels().iter().zip(expected.pixels()).enumerate()
                         {
@@ -191,7 +205,14 @@ fn an_identical_rect_clip_preserves_integer_image_edges() {
         }
         actual.push_clip(&Shape::rect(dst), Transform::identity());
         for r in [&mut actual, &mut expected] {
-            r.image(&bitmap, dst, &[], Transform::identity(), None);
+            r.image(
+                &bitmap,
+                dst,
+                &[],
+                Transform::identity(),
+                None,
+                exact_kernel::ImageRendering::Auto,
+            );
         }
         assert_eq!(
             actual.finish().unwrap().data(),
@@ -358,7 +379,14 @@ fn minified_images_average_area_with_fractional_edges_masks_tint_and_parent_clip
                                 );
                             }
                         }
-                        actual.image(&bitmap, dst, &clips, Transform::identity(), tint);
+                        actual.image(
+                            &bitmap,
+                            dst,
+                            &clips,
+                            Transform::identity(),
+                            tint,
+                            exact_kernel::ImageRendering::Auto,
+                        );
                         let mask = expected.mask_with(&clips, Transform::identity());
                         if tint.is_some() {
                             expected.push_opacity(1.);
@@ -435,7 +463,14 @@ fn other_image_scales_and_transforms_keep_the_bilinear_path_byte_exact() {
                 );
                 let mask = actual.active_clip().cloned();
                 let mut expected = actual.target.pixels().unwrap().clone();
-                actual.image(&bitmap, (3.25, 4.5, w, h), &[], ts, None);
+                actual.image(
+                    &bitmap,
+                    (3.25, 4.5, w, h),
+                    &[],
+                    ts,
+                    None,
+                    exact_kernel::ImageRendering::Auto,
+                );
                 expected.draw_pixmap(
                     0,
                     0,

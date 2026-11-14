@@ -184,6 +184,14 @@
         {
           "name": "body",
           "codec": "code"
+        },
+        {
+          "name": "owner",
+          "codec": "opt:arms"
+        },
+        {
+          "name": "unsettled",
+          "codec": "bool"
         }
       ]
     },

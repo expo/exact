@@ -724,6 +724,7 @@ fn literals(e: &Expr) -> Option<Vec<(&str, Span)>> {
         Expr::Str(s, span) => Some(vec![(s.as_str(), *span)]),
         Expr::None(_) => Some(Vec::new()),
         Expr::Ternary(_, yes, no, _) => Some([literals(yes)?, literals(no)?].concat()),
+        Expr::Let { body, .. } => literals(body),
         _ => None,
     }
 }

@@ -985,6 +985,7 @@ impl<D: DataSource> Presenter<D> {
             .map(|op| op.activation)
             .filter(|a| *a > self.fragment_seen)
         {
+            self.fragment_anchor = None;
             self.fragment_seen = activation;
             self.fragment_armed = Some((activation, self.person_scrolls));
         }

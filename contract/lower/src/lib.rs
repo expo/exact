@@ -74,6 +74,7 @@ mod row_look;
 mod scale;
 mod scroll_bounds;
 mod shape_types;
+mod sharing;
 mod shorthands;
 mod sites;
 mod sounds;
@@ -220,6 +221,7 @@ pub(crate) struct Lowerer<'a> {
     sites: Option<Sites>,
     text_styles: Option<&'a mut warnings::TextStyles>,
     pub types: &'a Types,
+    sharing: sharing::Sharing,
     pub root: &'a contract_syntax::Component,
     pub canvas_targets: std::collections::BTreeSet<String>,
     pub ty_ids: BTreeMap<String, TypesId>,
@@ -440,6 +442,7 @@ fn lower_with_sites(
         sites: capture_sites.then(|| Sites::declared(ex)),
         text_styles,
         types,
+        sharing: sharing::Sharing::new(ex),
         root,
         canvas_targets: file
             .components
@@ -686,6 +689,7 @@ fn lower_body(
     }
     // Bodies.
     let scope = types.component_scope(root, root_types);
+    l.sharing.root_scope = scope.clone();
     for (i, s) in root.states.iter().enumerate() {
         if ex.owners[i] == Owner::Root && !(i == 0 && file.routes.is_some()) {
             let code = l.expr_code(&s.expr, &scope, 0)?;
@@ -830,6 +834,7 @@ fn lower_body(
     // instance is created — in its owning arm's scope, now that the arms
     // exist, or, for a use outside every region, at the boot render.
     for (i, owner) in ex.owners.iter().enumerate() {
+        l.sharing.instance = ex.state_instances[i];
         let state = &root.states[i];
         match *owner {
             Owner::Root => {}
@@ -851,7 +856,9 @@ fn lower_body(
                             ),
                             span: state.span,
                         })?;
+                l.sharing.arm = Some(id);
                 let init = l.expr_code(&state.expr, &arm_scope, 0)?;
+                l.sharing.arm = None;
                 l.b.set_slot_init(l.slots[i], init);
                 l.b.set_slot_owner(l.slots[i], id);
             }
@@ -951,27 +958,6 @@ impl<'a> Lowerer<'a> {
     /// Lower sibling nodes under (`parent`, `arm`); `parent_tag` is the
     /// nearest enclosing element's tag (a region does not change it).
     #[allow(clippy::too_many_arguments)]
-    fn nodes(
-        &mut self,
-        nodes: &[Node],
-        parent: Option<NodesId>,
-        arm: Option<ArmsId>,
-        scope: &Scope,
-        locals: u16,
-        parent_tag: Option<&str>,
-    ) -> Result<(), LowerError> {
-        for (order, n) in nodes.iter().enumerate() {
-            if theme::retained::stops_at_refusal() && !self.errors.is_empty() {
-                break;
-            }
-            if let Err(e) = self.node(n, parent, arm, order as u32, scope, locals, parent_tag) {
-                self.errors.push(e);
-            }
-        }
-        Ok(())
-    }
-
-    #[allow(clippy::too_many_arguments)]
     fn node(
         &mut self,
         n: &Node,
@@ -1053,6 +1039,9 @@ impl<'a> Lowerer<'a> {
                 let (_r, arms) =
                     self.b
                         .region(RegionKind::When, parent, arm, order, subject, unit, 2);
+                if let Some(sites) = &mut self.sites {
+                    sites.region(*tag);
+                }
                 let mut inner = scope.clone();
                 inner.push_none();
                 self.arm_scopes.insert((*tag, 0), (arms[0], inner.clone()));
@@ -1076,6 +1065,9 @@ impl<'a> Lowerer<'a> {
                 let (_r, arms) =
                     self.b
                         .region(RegionKind::Each, parent, arm, order, subject, key, 1);
+                if let Some(sites) = &mut self.sites {
+                    sites.region(*tag);
+                }
                 self.arm_scopes.insert((*tag, 0), (arms[0], inner.clone()));
                 self.nodes(body, None, Some(arms[0]), &inner, locals, parent_tag)
             }
@@ -1091,6 +1083,9 @@ impl<'a> Lowerer<'a> {
                 let (_r, arms) =
                     self.b
                         .region(RegionKind::Match, parent, arm, order, code, unit, 2);
+                if let Some(sites) = &mut self.sites {
+                    sites.region(*tag);
+                }
                 let mut some_scope = scope.clone();
                 some_scope.push_some_of(&some.0, subject_ty);
                 self.arm_scopes

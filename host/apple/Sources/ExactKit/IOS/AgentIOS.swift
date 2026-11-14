@@ -405,7 +405,7 @@ extension Agent {
             // A canvas child's overlay is transparent on purpose: the child
             // is painted through the canvas's capture (LLP 1014 D5) and only
             // hit here. That is not hidden; it is named.
-            if let o = s as? PlainView, let c = o.superview as? NodeView, c.overlay === o {
+            if let o = s as? PlainView, let c = o.canvasOverlayOwner {
                 canvas = c
                 above = s.superview
                 continue
@@ -435,7 +435,12 @@ extension Agent {
         var clip: [[String: Any]] = []
         for (n, id, kind) in clippers.reversed() {
             clip.append(["id": Int(id), "kind": kind])
-            if let w = host.window, !host.convert(host.bounds, to: w).intersects(n.convert(n.bounds, to: w)) { clipped = true }
+            if let w = host.window {
+                let intersects = kind == "overflow" && n is NodeView
+                    ? (n as! NodeView).overflowClipIntersects(host.convert(host.bounds, to: n))
+                    : host.convert(host.bounds, to: w).intersects(n.convert(n.bounds, to: w))
+                if !intersects { clipped = true }
+            }
         }
         node["scroll"] = scroll
         node["clip"] = clip

@@ -222,7 +222,7 @@ extension NodeView {
             return v.ascend(p, to: top)
             #endif
         }
-        guard let placed = placedAncestor, let h = placed.placement, let canvas = placed.superview?.superview as? NodeView else {
+        guard let placed = placedAncestor, let h = placed.placement, let canvas = placed.superview?.canvasOverlayOwner else {
             return out(self, p, top)
         }
         return canvas.drawnPoint(NodeView.map(h, out(self, p, placed)), in: top)

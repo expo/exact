@@ -3,13 +3,13 @@ import { rustGrantSet } from './admission-data.js';
 import { boundedHttpBody, longPollRefusal, streamed } from './http-body.js';
 import { rt } from './rt-link.js'; // (rt.js's own, as a lazy chunk takes them)
 import { heldReply } from './held.js';
-// A Rust data module on the JS runtime (LLP 1029.000's seam, ABI 11,
+// A Rust data module on the JS runtime (LLP 1029.000's seam, ABI 12,
 // `logic/abi/src/lib.rs`): the app's importless module wasm and its plan's
 // declarations (`app.bind.plan`, the plan without the bake's answers),
 // fetched after first pixel; once bound and activated, every answer is a
 // synchronous call, as the runner's `DataSource::answer` is. Until then the
 // runtime shows its compiled value or placeholder and asks again at `ready`.
-const ABI = 11, utf8 = new TextEncoder(), text = new TextDecoder(), CALL = Symbol('call');
+const ABI = 12, utf8 = new TextEncoder(), text = new TextDecoder(), CALL = Symbol('call'), TARGET = Symbol('target');
 
 function writer() {
   let buf = new Uint8Array(256), at = 0;
@@ -179,9 +179,12 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
   activate();
   // A Rust source's two-way sockets (LLP 1016.003), each open one's transport under a number for the resource that
   // owns it and its stream's ticket, which the module's handles keep: a handle from an earlier ticket is stale.
-  const sockets = new Set(), ids = new WeakMap();
-  let nextId = 0;
-  const idOf = owner => { if (!ids.has(owner)) ids.set(owner, nextId++); return ids.get(owner); };
+  const sockets = new Set();
+  // List members may share a name. Their owners carry distinct runtime rows;
+  // a parallel send snapshots its sequence before the next send changes it.
+  const targetOf = (mutation, owner) => !owner ? null
+    : [mutation ? owner.parallel ? 3 : 2 : 1, owner.index, owner.sends];
+  const targeted = (out, target) => { if (out.req && target) out.req[TARGET] = target; return out; };
   const live = s => sockets.has(s) && s.transport.readyState === 1 && !s.controller.signal.aborted && s.controller.active?.() !== false;
   // What a call staged (`turn`: a mutation's, or `own` socket's mapper), each operation addressed to its socket now,
   // refused whole if one is not open, as natively. The batch goes once the commit stands, checked whole again, as
@@ -233,17 +236,19 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
     const over = r.u8(), why = r.str();
     return { ops, overload: over === 1 ? why : null };
   };
-  // One call (`call_request`): source, arguments by type, admitted secret names, the store's
+  // One call (`call_request`): source, arguments by type, target, admitted secret names, the store's
   // snapshot, its socket turn; its reply (`call_reply`): a store read, the topics it watched, its draws of randomness,
   // writes, socket operations, the result.
   // Whether the module's last call read the store before it failed: its resource is a store reader (LLP 1146 §2.3);
   // and what it watched: its resource watches it too, as the runner's failed ask does.
   let threwRead = false, threwWatches = null;
-  const callWith = (code, source, args, store, outcome, turn) => {
+  const callWith = (code, source, args, store, outcome, turn, target) => {
     threwRead = false; threwWatches = null;
     const r = op(code, w => {
       w.str(source); w.u8(6); w.u32(args.length);
       const t = (sources[source] ?? '').split('|')[0]; let i = 0; for (const a of args) i = encode(w, a, t, i);
+      w.u8(target?.[0] ?? 0);
+      if (target) { w.u32(target[1]); if (target[0] === 3) w.u64(target[2]); }
       const names = globalThis.__exactRender ? [] : rustGrantSet.entries.filter(([, , grant]) => grant?.[0] === 'secret-keep').map(([, , grant]) => grant[1]);
       w.u32(names.length); for (const name of names) w.str(name);
       const pairs = globalThis.__exactRender ? [] : [...store.map].filter(([k]) => admitsSecret(rustGrantSet, k));
@@ -307,28 +312,31 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
     req[CALL] = call;
     return true;
   };
-  const rust = (source, args, store, target, mutation) => {
-    const out = callWith(3, source, args, store, null, mutation ? { mutation, verb: 'send', name: target } : null), call = {};
+  const rust = (source, args, store, name, mutation, forced, owner) => {
+    const target = targetOf(mutation, owner);
+    const out = targeted(callWith(3, source, args, store, null, mutation ? { mutation, verb: 'send', name } : null, target), target), call = {};
     if (!globalThis.__exactRender && carry(out.req, call)) out.call = call;
     return out;
   };
   const ts = data.ts, tsThrewRead = data.threwRead, tsThrewWatches = data.threwWatches;
   data.threwRead = () => { const read = [threwRead, !!tsThrewRead?.()]; threwRead = false; return read[0] || read[1]; };
   data.threwWatches = () => { const w = threwWatches ?? tsThrewWatches?.() ?? null; threwWatches = null; return w; };
-  data.answer = ts ? (source, args, store, target, mutation, forced) => { try { return rust(source, args, store, target, mutation); } catch (e) { if (e.unknown) return ts(source, args, store, target, mutation, forced); throw e; } } : rust;
+  data.answer = ts ? (source, args, store, target, mutation, forced, owner) => { try { return rust(source, args, store, target, mutation, forced, owner); } catch (e) { if (e.unknown) return ts(source, args, store, target, mutation, forced); throw e; } } : rust;
   // A stream's messages that arrived together (request-send.js): each parsed in order (LLP 1016.000 D4), the last
   // one's answer theirs; one that answers with a request (the stream asked again) ends them there.
   // A two-way socket's `open` or frame is its own mapper's turn (LLP 1016.003 D4): it may send on that socket.
-  data.parse = (source, args, outcome, store) => {
+  data.parse = (source, args, outcome, store, req) => {
+    // Locally refused requests never reach data.fetch; their ticket still carries the target.
+    const target = req?.[TARGET];
     if (!outcome.streamed) {
-      const out = callWith(4, source, args, store, outcome);
+      const out = targeted(callWith(4, source, args, store, outcome, undefined, target), target);
       carry(out.req, outcome[CALL]);
       return out;
     }
     let out, read = false;
     const effects = [];
     for (const m of outcome.streamed) {
-      out = callWith(4, source, args, store, { streamed: m }, m.socket && { own: m.socket, verb: 'mapper', name: m.socket.name });
+      out = targeted(callWith(4, source, args, store, { streamed: m }, m.socket && { own: m.socket, verb: 'mapper', name: m.socket.name }, target), target);
       read ||= !!out.store;
       effects.push(...(out.effects ?? []));
       if (out.req) break;
@@ -369,11 +377,12 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
   // its messages names its socket for `parse`. A mutation's socket has no mapper to send, and only listens.
   const run = createRequestExecutor(data.appId ?? meta[0], rustGrantSet, boundedHttpBody);
   data.fetch = (req, message, controller) => {
+    const failed = error => ({ failed: 1, message: String(error?.message ?? error) });
     if (!req.stream) {
       const call = req[CALL];
-      if (!call) return run(req, controller?.signal, controller);
+      if (!call) return run(req, controller?.signal, controller).catch(failed);
       // A held request's reply, a failure too, is a held reply for `clock held` (the runner's `held_replies`).
-      return run(req, controller?.signal, controller).then(o => {
+      return run(req, controller?.signal, controller).catch(failed).then(o => {
         if (call.held) { call.held = 0; heldReply(call); }
         o[CALL] = call;
         return o;
@@ -381,7 +390,7 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
     }
     let socket = null;
     const protocol = req.socket && controller.resource ? { socket: transport => {
-      socket = { transport, controller, id: idOf(controller.owner), ticket: controller.ticket, name: controller.streamName, unsent: 0 };
+      socket = { transport, controller, id: controller.owner.index, ticket: controller.ticket, name: controller.streamName, unsent: 0 };
       sockets.add(socket); controller.socket = transport;
     } } : undefined;
     // A long poll's reply that is no event (LLP 1016.000 D8) is counted by the reader (`replied`) and lands nothing.
@@ -390,7 +399,7 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
       if (o.close) rt.journal.push(`t=${rt.clock.now} socket close: ${o.close.code} ${o.close.reason} (${controller.streamName})`);
       return o.close ? { closed: o.close } : o.kind ? { failed: o.kind, message: text.decode(o.body) }
         : { status: o.status, headers: o.headers ? o.headers.split('\n').map(l => [l.slice(0, l.indexOf(': ')), l.slice(l.indexOf(': ') + 2)]) : [], body: o.body };
-    });
+    }, failed);
   };
   // What a loaded capability needs of the module (canvas2d.js's draws).
   data.logic = { get exports() { return e; }, get session() { return session; }, writer, reader, encode, ABI };

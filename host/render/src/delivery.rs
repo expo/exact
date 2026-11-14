@@ -68,7 +68,7 @@ component Version
         )
         .unwrap();
         let page = settle_at(
-            &plan,
+            &exact_runner::Program::from(&plan),
             &|| NoData,
             Default::default(),
             "/",

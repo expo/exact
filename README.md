@@ -738,7 +738,10 @@ else here was admitted because a real app needed it.
   renderer, then adopted in place instead of hydrated
   (LLP 1048).
 - **Delivery.** `scripts/deploy.mjs` publishes the web root and signed update bundles,
-  which installed apps fetch after first pixel. Apple apps check every fifteen
+  which installed apps fetch after first pixel. Existing streams use their signed
+  cohort receipts: Linux can publish compatible Contract and TypeScript updates
+  to iOS without an Apple bake. Candidates the cohort cannot run are reported as
+  needing a binary. Apple apps check every fifteen
   minutes while active under every activation policy; `deploy.check.interval`
   overrides the interval in seconds. Checks stage a candidate; `deploy.activate`
   controls when it applies. TypeScript and Rust logic can be

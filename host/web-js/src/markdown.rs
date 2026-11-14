@@ -11,7 +11,7 @@ fn resource_path(plan: &Plan, code: &[u8], depth: u8) -> Option<Vec<usize>> {
     if depth == 32 {
         return None;
     }
-    let mut ins = instructions(code);
+    let mut ins = instructions(plan.read_code(code).0);
     let first = ins.next()?.ok()?;
     let mut path = match first.op {
         Opcode::LoadResource => vec![first.args[0] as usize],

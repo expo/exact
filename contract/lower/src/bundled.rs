@@ -199,6 +199,7 @@ fn literals(e: &Expr, out: &mut Vec<(String, Span)>) {
             literals(a, out);
             literals(b, out);
         }
+        Expr::Let { body, .. } => literals(body, out),
         _ => {}
     }
 }

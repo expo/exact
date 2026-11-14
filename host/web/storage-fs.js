@@ -324,7 +324,10 @@ export function createFileStore(appId) {
         if (below(to, from)) throw failure('cannot move a directory into itself');
         const target = records.get(to);
         if (target) {
-          if (source.kind !== target.kind) throw failure('rename requires matching file kinds');
+          // As rename(2) answers natively: a file onto a folder is EISDIR, a folder onto a file ENOTDIR.
+          if (source.kind !== target.kind) {
+            throw failure('rename requires matching file kinds', target.kind === 'directory' ? 'EISDIR' : 'ENOTDIR');
+          }
           if (target.kind === 'directory' && keys.some(key => below(key, to))) {
             throw failure('destination directory is not empty', 'ENOTEMPTY');
           }

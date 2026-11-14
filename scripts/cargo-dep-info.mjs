@@ -149,6 +149,46 @@ export function buildInputCollector({outputs, nameOf, hashes, replaced}) {
   return {inputs, absent, directories, links, add};
 }
 
+/** The inputs of the SwiftPM targets `product` consumes (`swift package
+ * describe`'s targets), added through a `buildInputCollector`. Each target's
+ * whole directory is added: SwiftPM compiles every source file under it, so
+ * a file added there is a new binary although no recorded file changed. */
+export function swiftTargetInputs(description, packageRoot, product, add) {
+  const pending = [product], seen = new Set();
+  while (pending.length) {
+    const name = pending.pop();
+    if (seen.has(name)) continue;
+    seen.add(name);
+    const unit = description.targets.find(target => target.name === name);
+    if (!unit) throw new Error(`Swift package has no ${name}`);
+    add(resolve(packageRoot, unit.path));
+    for (const resource of unit.resources ?? []) add(resolve(packageRoot, resource.path));
+    pending.push(...(unit.target_dependencies ?? []));
+  }
+}
+
+/** Source-owned binary inputs, relocated by root instead of the builder's
+ * absolute paths. Generated products and registry caches stay with the bake. */
+export function binarySourceInputs({files, directories, absent, links, metadata}, roots, outputs) {
+  const skip = watchOutput(outputs);
+  const located = path => {
+    if (skip(path)) return null;
+    const root = roots.find(root => under(root.contains ?? root.path, path));
+    return root ? { root: root.name, path: relative(root.path, path).split(sep).join('/') } : null;
+  };
+  const capture = (rows, pathOf, rest) => rows.flatMap(row => {
+    const at = located(pathOf(row));
+    return at ? [{ ...at, ...rest(row) }] : [];
+  });
+  // The receipt holds this as JSON: an undefined field is absent there too.
+  return { version: 1, metadata: JSON.parse(JSON.stringify(metadata)),
+    files: capture(files, file => file.path, file => ({ sha256: file.sha256 })),
+    directories: capture([...directories.values()], dir => dir.path, dir => ({ names: dir.names })),
+    absent: capture([...absent.values()], path => path, () => ({})),
+    links: capture([...links.values()], link => link.path, link => ({ sha256: createHash('sha256').update(link.target).digest('hex') })),
+  };
+}
+
 function outputPath(path) {
   try { return realpathSync(path); }
   catch (error) {

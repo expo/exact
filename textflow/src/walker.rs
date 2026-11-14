@@ -74,6 +74,15 @@ impl WhiteSpace {
             WhiteSpace::PreWrap | WhiteSpace::PreLine | WhiteSpace::Pre
         )
     }
+    /// A forced break under this mode: all hard breaks when preserving,
+    /// only a line feed under `pre-line`.
+    pub fn forces_break(self, ch: char) -> bool {
+        match self {
+            WhiteSpace::PreWrap | WhiteSpace::Pre => hard_break(ch),
+            WhiteSpace::PreLine => ch == '\n',
+            WhiteSpace::Normal | WhiteSpace::Nowrap => false,
+        }
+    }
     /// `text-wrap-mode: wrap`: soft wrap opportunities may end a line.
     pub fn wraps(self) -> bool {
         !matches!(self, WhiteSpace::Nowrap | WhiteSpace::Pre)
@@ -196,11 +205,7 @@ impl Prepared {
         // A forced break: every Unicode hard break when preserving, only a line
         // feed under `pre-line`. Of the rest, only a carriage return or a line
         // feed collapses; a form feed, NEL, U+2028 or U+2029 is text.
-        let forced = |ch| match options.white_space {
-            WhiteSpace::PreWrap | WhiteSpace::Pre => hard_break(ch),
-            WhiteSpace::PreLine => ch == '\n',
-            WhiteSpace::Normal | WhiteSpace::Nowrap => false,
-        };
+        let forced = |ch| options.white_space.forces_break(ch);
         let whitespace = |ch| collapsible(ch) && !forced(ch);
         let mut start = 0;
         for end in opportunities(text, words) {

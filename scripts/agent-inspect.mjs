@@ -621,9 +621,11 @@ export async function perfOp(s, args, line, step) {
   const before = await s.perf(target);
   for (const op of ops) await step(op);
   if (target?.startsWith('world:')) {
-    const after = await s.perf(target, {spanSince: before.spanTicks});
+    const after = await s.perf(target, {spanSince: {incarnation: before.incarnation, generation: before.generation, ticks: before.spanTicks}});
+    if (after.incarnation !== before.incarnation) throw Error('perf world: world incarnation changed (remount, restart or restore); no difference is defined');
+    if (after.generation !== before.generation) throw Error('perf world: recording generation changed; no difference is defined');
     if (after.tick < before.tick || after.restarted !== before.restarted) throw Error('perf world: world restarted between reads');
-    return {...after, from:{tick:before.tick}};
+    return {...after, from:{tick:before.tick, incarnation:before.incarnation, generation:before.generation, spanTicks:before.spanTicks}};
   }
   return perfDelta(before, await s.perf(target));
 }
@@ -741,7 +743,7 @@ export function renderPerf(r) {
   if (r.format === 'exact.frame-health.metrics/2') return renderFrameHealthMetrics(r);
   if (r.format === 'exact.frame-health/2') return renderFrameHealthReport(r);
   if (typeof r.capture === 'boolean') return `frame capture ${r.capture ? 'armed' : 'paused'}${r.reason ? `: ${r.reason}` : ''}${r.agentLeaseRemainingMs ? ` · agent lease ${r.agentLeaseRemainingMs} ms` : ''}`;
-  if (r.spans) return [`${r.target} · tick ${r.from ? r.from.tick + '..' : ''}${r.tick} · exclusive ms${r.tickMs ? ` · tick p50 ${r.tickMs.p50} p95 ${r.tickMs.p95} mean ${r.tickMs.mean}` : ''}`,
+  if (r.spans) return [`${r.target} · tick ${r.from ? r.from.tick + '..' : ''}${r.tick} · world incarnation ${r.incarnation} · recording generation ${r.generation} · exclusive ms${r.tickMs ? ` · tick p50 ${r.tickMs.p50} p95 ${r.tickMs.p95} mean ${r.tickMs.mean}` : ''}`,
     ...r.spans.map(s => `  ${s.name} at ${s.at}: p50 ${s.p50} p95 ${s.p95} max ${s.max} perTick ${s.perTick} (${s.count} ticks)`)].join('\n');
   if (r.calls && r.hatches) return renderHatchPerf(r);
   if (r.streamTiming) return renderStreamTiming(r.streamTiming);

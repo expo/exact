@@ -8,10 +8,139 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpath
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve, sep, toNamespacedPath } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { assertCapturedContractSources, canonicalBytes, classify, classifyArtifacts, cohortReceipt, contractCompiler, disposeSnapshot, installedContractPackage, materializeSnapshot, namesNative, nativePlatforms, publishRoot, snapshotOf, sourcePathspec, streamHead, unrelocatableContractDependency } from './deploy.mjs';
+import { assertCapturedContractSources, bake, buildFor, canonicalBytes, classify, classifyArtifacts, cohortReceipt, contractCompiler, copyBake, disposeSnapshot, installedContractPackage, materializeSnapshot, namesNative, nativePlatforms, publishRoot, snapshotOf, sourcePathspec, streamHead, unrelocatableContractDependency } from './deploy.mjs';
+import { bakeOutput, bakeTarget, buildBake } from './app.mjs';
 import * as asyncLane from './async.mjs';
 import { pinned } from './test-workspace.mjs';
 const {changedPaths, failures, owners, retainSkippedFailures} = asyncLane;
+
+test('identical deploy bakes reuse compilation and retain each run receipt', () => {
+  const dir = pinned(realpathSync(mkdtempSync(join(tmpdir(), 'exact-deploy-receipts-'))));
+  const target = bakeTarget('linux'), id = 'com.exact.receipts';
+  const write = (name, bytes) => { mkdirSync(dirname(join(dir, name)), {recursive:true}); writeFileSync(join(dir, name), bytes); };
+  let plan = Buffer.from('captured plan');
+  const inputs = {app:id, platform:'linux', store:{L:'A'}, trust:'production'};
+  const compat = () => ({target, inputs, id:sha256(`exact2 compatibility id v1\n${canonicalBytes(inputs)}`).slice(0,32),
+    embedded:{plan:{sha256:sha256(plan),bytes:plan.length},assets:[]}});
+  try {
+    write('Cargo.toml', '[workspace]\nmembers=["linux"]\nresolver="2"\n');
+    write('linux/Cargo.toml', '[package]\nname="receipts-linux"\nversion="0.1.0"\nedition="2021"\n');
+    write('linux/src/main.rs', 'fn main() { println!("first"); }\n');
+    write('app.contract', plan);
+    const baker = () => write('linux/build.rs', `fn main() {
+      println!("cargo:rerun-if-env-changed=EXACT_BAKE_OUTPUT");
+      println!("cargo:rerun-if-env-changed=EXACT_BAKE_INPUTS");
+      println!("cargo:rerun-if-env-changed=EXACT_UPDATE_TRUST");
+      println!("cargo:rerun-if-changed=../app.contract");
+      let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
+      std::fs::write(out.join("compat.json"), r#"${JSON.stringify(compat())}"#).unwrap();
+      std::fs::write(out.join("artifacts.json"), r#"${JSON.stringify({version:1,artifacts:[{name:'app.plan',sha256:sha256(plan),bytes:plan.length,requires:{}}],sources:{}})}"#).unwrap();
+      std::fs::write(out.join("app.plan"), std::fs::read("../app.contract").unwrap()).unwrap();
+      let count = std::path::Path::new("../bakes");
+      let mut bytes = std::fs::read(count).unwrap_or_default(); bytes.push(b'x');
+      std::fs::write(count, bytes).unwrap();
+    }`);
+    baker();
+    const lock = spawnSync('cargo', ['generate-lockfile', '--offline'], {cwd:dir,encoding:'utf8'});
+    expect(lock.status).toBe(0);
+    const app = {name:'receipts', dir, workspace:dir, target:join(dir,'target'), id, manifest:{rust:false}, crate:kind=>`receipts-${kind}`};
+    const build = run => buildFor(app, 'linux', dir, join(dir, run));
+    const first = build('run-one');
+    expect(readFileSync(join(dir,'bakes'),'utf8')).toBe('x');
+    const second = build('run-two');
+    expect(readFileSync(join(dir,'bakes'),'utf8')).toBe('x');
+    expect(second.binary.sha256).toBe(first.binary.sha256);
+    const stem = `linux-${target}`;
+    for (const run of ['run-one','run-two']) {
+      expect(JSON.parse(readFileSync(join(dir,run,'bake',`${stem}.build.json`)))).toEqual(first);
+      expect(readFileSync(join(dir,run,'bake',`${stem}.plan`))).toEqual(plan);
+    }
+    const cache = bakeOutput(app,{EXACT_UPDATE_TRUST:'production'});
+    expect(existsSync(join(cache,`${stem}.build.json`))).toBe(true);
+    write('linux/src/main.rs','fn main() { println!("edited source"); }\n');
+    plan = Buffer.from('next captured plan');
+    write('app.contract',plan); baker();
+    const edited = build('run-source');
+    expect(edited.binary.sha256).not.toBe(first.binary.sha256);
+    expect(readFileSync(join(dir,'run-source','bake',`${stem}.plan`))).toEqual(plan);
+    expect(readFileSync(join(dir,'run-one','bake',`${stem}.plan`),'utf8')).toBe('captured plan');
+    expect(readFileSync(join(dir,'run-one','bake',`${stem}.build.json`),'utf8')).toBe(JSON.stringify(first)+'\n');
+    buildBake(app,'linux',target,{env:{EXACT_UPDATE_TRUST:'development',CARGO_NET_OFFLINE:'true'}});
+    const trusted = build('run-trust');
+    expect(trusted.trust).toBe('production');
+    expect(readFileSync(join(dir,'bakes'),'utf8')).toBe('xxxx');
+    inputs.cohort = 'changed'; baker();
+    const cohort = build('run-cohort');
+    expect(cohort.compat.id).not.toBe(trusted.compat.id);
+    expect(readFileSync(join(dir,'bakes'),'utf8')).toBe('xxxxx');
+    write('.cargo/config.toml','[build]\nrustflags=["--cfg", "changed_toolchain_flags"]\n');
+    let configured = build('run-toolchain');
+    expect(readFileSync(join(dir,'bakes'),'utf8')).toBe('xxxxxx');
+    const installed = spawnSync('rustup',['toolchain','list'],{encoding:'utf8'});
+    if (!process.env.RUSTUP_TOOLCHAIN && /^stable-\S+/m.test(installed.stdout ?? '')) {
+      const stable = spawnSync('rustc',['+stable','-vV'],{encoding:'utf8'});
+      if (stable.status === 0 && stable.stdout !== configured.binary.configuration.rustc) {
+        write('rust-toolchain.toml','[toolchain]\nchannel="stable"\n');
+        const previous = configured;
+        configured = build('run-compiler');
+        expect(configured.binary.sha256).not.toBe(previous.binary.sha256);
+        expect(readFileSync(join(dir,'bakes'),'utf8')).toBe('xxxxxxx');
+        build('run-compiler-again');
+        expect(readFileSync(join(dir,'bakes'),'utf8')).toBe('xxxxxxx');
+      }
+    }
+    const cachedPlan = join(cache,`${stem}.plan`);
+    writeFileSync(cachedPlan,'incomplete bake');
+    expect(()=>copyBake(app,join(dir,'run-incomplete'),configured,cache)).toThrow('plan or graph');
+    expect(existsSync(join(dir,'run-incomplete','bake',`${stem}.build.json`))).toBe(false);
+    writeFileSync(cachedPlan,plan);
+    writeFileSync(configured.products[0].path,'incomplete product');
+    expect(()=>copyBake(app,join(dir,'run-corrupt'),configured,cache)).toThrow('product changed');
+    expect(existsSync(join(dir,'run-corrupt','bake',`${stem}.build.json`))).toBe(false);
+  } finally { rmSync(dir,{recursive:true,force:true}); }
+}, 60_000);
+
+test('web deploys copy completed receipts and generated entries from a stable cache', () => {
+  const dir=realpathSync(mkdtempSync(join(tmpdir(),'exact-web-receipts-')));
+  const write=(name,bytes)=>{mkdirSync(dirname(join(dir,name)),{recursive:true});writeFileSync(join(dir,name),bytes);};
+  const plan=Buffer.from('web plan'), entry=Buffer.from('widget plan'), target='wasm32-unknown-unknown';
+  const app={name:'receipts',id:'com.exact.web-receipts',dir,workspace:dir,target:join(dir,'target'),crate:kind=>`receipts-${kind}`,manifest:{}};
+  const inputs={app:app.id,platform:'web',store:{L:'0'},trust:'production'};
+  const compat={inputs,target,id:sha256(`exact2 compatibility id v1\n${canonicalBytes(inputs)}`).slice(0,32),
+    embedded:{plan:{sha256:sha256(plan),bytes:plan.length},assets:[{name:'plans/widget.plan',sha256:sha256(entry),bytes:entry.length}]}};
+  const build={version:1,trust:'production',compat,binary:{sha256:sha256('binary')},products:[],graph:{version:1,sources:{},artifacts:[
+    {name:'app.plan',sha256:sha256(plan),bytes:plan.length},...compat.embedded.assets]}};
+  const cache=bakeOutput(app,{EXACT_UPDATE_TRUST:'production'});
+  try {
+    mkdirSync(cache,{recursive:true});
+    const interrupted=join(cache,`linux-${bakeTarget('linux')}.build.json`);
+    writeFileSync(interrupted,'{"version":');
+    write('fixture.json',JSON.stringify(build));
+    // The web producer stands in for host/web/build.mjs; Cargo reuse is exercised above.
+    write('host/web/build.mjs', `import {appendFileSync,readFileSync,mkdirSync,writeFileSync} from 'node:fs';
+      import {resolve} from 'node:path';
+      const build=JSON.parse(readFileSync('fixture.json')), out=process.env.EXACT_BAKE_OUTPUT;
+      const stem='web-${target}';
+      appendFileSync('outputs',out+'\\n');
+      mkdirSync(resolve(out,stem+'.entries/plans'),{recursive:true});
+      for(const [suffix,bytes] of [['.json',JSON.stringify(build.compat)],['.artifacts.json',JSON.stringify(build.graph)],['.plan','web plan'],['.build.json',JSON.stringify(build)],['.entries/plans/widget.plan','widget plan']]) writeFileSync(resolve(out,stem+suffix),bytes);
+      mkdirSync(process.env.EXACT_WEB_DIST,{recursive:true});
+      writeFileSync(resolve(process.env.EXACT_WEB_DIST,'exact.json'),'{}');
+    `);
+    for (const run of ['first','second']) {
+      bake(app,join(dir,run),dir,dir);
+      const output=join(dir,run,'bake',`web-${target}`);
+      expect(JSON.parse(readFileSync(output+'.build.json'))).toEqual(build);
+      expect(readFileSync(output+'.entries/plans/widget.plan')).toEqual(entry);
+      expect(readdirSync(join(dir,run,'bake')).every(name=>name.startsWith(`web-${target}`))).toBe(true);
+    }
+    expect(readFileSync(interrupted,'utf8')).toBe('{"version":');
+    expect(readFileSync(join(dir,'outputs'),'utf8').trim().split('\n')).toEqual([cache,cache]);
+    writeFileSync(join(cache,`web-${target}.entries/plans/widget.plan`),'incomplete entry');
+    expect(()=>copyBake(app,join(dir,'corrupt'),build,cache)).toThrow('not the file');
+    expect(existsSync(join(dir,'corrupt/bake',`web-${target}.build.json`))).toBe(false);
+  } finally {rmSync(dir,{recursive:true,force:true});}
+});
 
 // LLP 1153 D1.1, D1.5: the native platforms a deploy ships are the ones the manifest names, under deploy, else under
 // host, and only a manifest that names none in either is web-only.

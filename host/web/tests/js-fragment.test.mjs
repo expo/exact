@@ -54,9 +54,11 @@ test('a fragment scrolls for a navigation a landed commit assigns the router, on
     expect(asked.slice(2)).toEqual([['arm', 'moves', 2], ['scroll', 'moves', 2]]);
 
     // The app's own scrollIntoView ends a fragment's scroll held or yet to come.
-    (globalThis.exact ??= {}).fragment = { cancel: () => asked.push(['cancel']) };
+    (globalThis.exact ??= {}).fragment = { cancel: (pending = true) => asked.push(['cancel', pending]) };
     rt.Hosts.scrollIntoView('row-1');
-    expect(asked.at(-1)).toEqual(['cancel']);
+    expect(asked.at(-1)).toEqual(['cancel', true]);
+    rt.Hosts.scrollBy('port', 0, 20);
+    expect(asked.at(-1)).toEqual(['cancel', false]);
   } finally { if (page === undefined) delete globalThis.document; else globalThis.document = page; }
 });
 

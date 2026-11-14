@@ -8,6 +8,67 @@ use exact_plan::{Plan, RegionKind};
 use std::fmt::Write as _;
 
 impl Em<'_> {
+    pub(super) fn declare_derives(
+        &mut self,
+        top: &Scope,
+        site_attrs: bool,
+    ) -> Result<String, String> {
+        let plan = self.plan;
+        let mut body = String::new();
+        for (i, r) in plan.derives.iter().enumerate() {
+            if r.unsettled {
+                continue;
+            }
+            let f = code::function(
+                plan,
+                plan.code(r.body),
+                &code::evaluation(top, format!("derive {:?}", plan.str(r.name)), false),
+                0,
+                &mut self.uses,
+            )
+            .map_err(|e| format!("derive {}: {e}", plan.str(r.name)))?;
+            let memo = self.uses.rt("memo");
+            let _ = write!(
+                body,
+                "const d_{i}={memo}({f},{}{});",
+                serde_json::to_string(&type_code(plan, r.ty)).unwrap(),
+                if site_attrs {
+                    format!(",{}", serde_json::to_string(plan.str(r.name)).unwrap())
+                } else {
+                    String::new()
+                }
+            );
+        }
+        body.push_str(&self.unsettled(None, top)?);
+        Ok(body)
+    }
+
+    pub(super) fn unsettled(
+        &mut self,
+        owner: Option<u32>,
+        scope: &Scope,
+    ) -> Result<String, String> {
+        let mut out = String::new();
+        for (i, row) in self.plan.derives.iter().enumerate() {
+            if !row.unsettled || row.owner.map(|a| a.0) != owner {
+                continue;
+            }
+            let mut inner = scope.clone();
+            inner.unsettled = true;
+            inner.evaluation = None;
+            let f = code::function(
+                self.plan,
+                self.plan.code(row.body),
+                &inner,
+                0,
+                &mut self.uses,
+            )?;
+            let enter = self.uses.budget("$enter");
+            write!(out, "const d_{i}=($budget={{s:0,n:0,d:0}},$pc)=>{{{enter}($budget,$pc);try{{return ({f})($budget)}}finally{{$budget.d--}}}};").unwrap();
+        }
+        Ok(out)
+    }
+
     pub(super) fn region(&mut self, r: u32, parent: &str, scope: &Scope) -> Result<(), String> {
         let plan = self.plan;
         let row = &plan.regions[r as usize];
@@ -111,13 +172,17 @@ impl Em<'_> {
     ) -> Result<String, String> {
         let plan = self.plan;
         if self.answers.slots(arm).is_empty() {
-            return Ok(String::new());
+            return self.unsettled(Some(arm), scope);
         }
         let mut decl = match &scope.rows {
             Some(outer) => format!("const {name}={{...{outer}}};"),
             None => format!("const {name}={{}};"),
         };
         scope.rows = Some(name.to_string());
+        scope
+            .row_slots
+            .extend(self.answers.slots(arm).iter().copied());
+        decl.push_str(&self.unsettled(Some(arm), scope)?);
         for &k in self.answers.slots(arm) {
             scope.row_slots.insert(k);
             let slot = &plan.slots[k];

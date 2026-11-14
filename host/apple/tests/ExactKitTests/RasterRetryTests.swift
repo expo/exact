@@ -136,6 +136,7 @@ final class RasterRetryTests: XCTestCase {
         pump(1)
         XCTAssertEqual(server.times.count, asked, "nothing is asked while it is off screen")
         XCTAssertEqual(images(loader).first?["held"] as? Bool, true, "and no error yet")
+        XCTAssertFalse(loader.loading(inside: node), "a retry waiting for the screen cannot hold a fragment's alignment")
         node.frame = shown; loader.resized(node)
         // (Between retries it is neither held nor failed: a download is under way.)
         settle { images(loader).first?["held"] as? Bool == false && images(loader).first?["failure"] as? String == "HTTP 503" }

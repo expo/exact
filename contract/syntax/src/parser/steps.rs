@@ -592,12 +592,14 @@ impl Parser {
                     };
                     let (mut press, mut over, mut hold) = (None, None, None);
                     let (mut from, mut mouse) = (None, false);
+                    let mut into = None;
                     // Quoted reads or `clock`, last, while the finger is down (drums R8).
                     let mut during = Vec::new();
                     while let TokenKind::Ident(w) = self.peek_kind().clone() {
                         let twice = match w.as_str() {
                             "from" => from.is_some(),
                             "mouse" => mouse,
+                            "into" => into.is_some(),
                             _ => false,
                         };
                         if twice {
@@ -609,6 +611,12 @@ impl Parser {
                         if w == "mouse" {
                             self.next();
                             mouse = true;
+                            continue;
+                        }
+                        if w == "into" {
+                            self.next();
+                            self.expect_word("keyboard")?;
+                            into = Some("keyboard".to_string());
                             continue;
                         }
                         if w == "from" {
@@ -667,6 +675,7 @@ impl Parser {
                         to,
                         from,
                         mouse,
+                        into,
                         press,
                         over,
                         hold,

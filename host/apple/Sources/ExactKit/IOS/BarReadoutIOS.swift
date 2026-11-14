@@ -122,11 +122,10 @@ final class ReadoutView: UIView {
             return dot
         case .symbol(let name, let points, let tint):
             let image = UIImageView(image: FaceSymbol.image(name, points: points, configuration: UIImage.SymbolConfiguration(pointSize: points)))
-            // The tint, which UIKit draws and dims, a share of it as a palette's colour (a view's own
-            // tint made from the one above it is not followed); a colour of its own, which UIKit leaves as it is
+            // A share of the tint stays dynamic; explicit ink belongs to the image, not its view's tint.
             if let share {
                 if share < 1 { image.preferredSymbolConfiguration = UIImage.SymbolConfiguration(paletteColors: [SystemColor.tint(share)]) }
-            } else { image.tintColor = ink(tint); image.tintAdjustmentMode = .normal }
+            } else { image.image = image.image?.withTintColor(ink(tint), renderingMode: .alwaysOriginal) }
             return image
         case .text(let text, let font, let color):
             let label = UILabel()

@@ -535,7 +535,7 @@ impl<'a> Update<'a> {
         code: exact_plan::Code,
         frames: &[Frame],
     ) -> Result<Value, Trap> {
-        self.sites.projections[binding.0 as usize].eval(
+        self.sites.data.projections[binding.0 as usize].eval(
             self.env.plan.code(code),
             &self.env,
             frames,
@@ -610,98 +610,9 @@ impl<'a> Update<'a> {
     }
 }
 
-type SiteParent = (Option<NodesId>, Option<ArmsId>);
-
-/// Ordered child sites, built once from the runner's immutable plan.
-#[derive(Debug)]
-pub struct SiteIndex {
-    groups: Vec<(SiteParent, std::ops::Range<usize>)>,
-    sites: Vec<(u32, Site)>,
-    /// What every binding and site reads.
-    deps: Deps,
-    /// The plan's `@keyframes`, parsed once (LLP 1055 D5).
-    keyframes: bridge::KeyframesTable,
-    /// How an `animation` list's names resolve, when linked.
-    resolve_keyframes: bridge::KeyframesLink,
-    /// A binding that reads nothing (a literal style row in a list row's
-    /// template) has one value for the plan's life: evaluated once, by
-    /// binding index, instead of once per instance; kept for the bindings
-    /// evaluated (a plan has thousands, a screen evaluates hundreds).
-    constants: RefCell<BTreeMap<u32, Value>>,
-    projections: Vec<vm::Prepared>,
-}
-
-impl SiteIndex {
-    /// Index the exact parent/arm pair, preserving authored order and rank
-    /// ties, with every capability linked.
-    pub fn new(plan: &Plan) -> Self {
-        Self::linked(plan, crate::RunnerLinks::ALL.keyframes)
-    }
-
-    /// [`SiteIndex::new`], resolving keyframes as `keyframes` links.
-    pub fn linked(plan: &Plan, keyframes: bridge::KeyframesLink) -> Self {
-        let mut entries = Vec::with_capacity(plan.nodes.len() + plan.regions.len());
-        for (i, n) in plan.nodes.iter().enumerate() {
-            entries.push(((n.parent, n.arm), n.order, Site::Node(NodesId(i as u32))));
-        }
-        for (i, r) in plan.regions.iter().enumerate() {
-            entries.push((
-                (r.parent, r.arm),
-                r.order,
-                Site::Region(RegionsId(i as u32)),
-            ));
-        }
-        let key = |i: usize| (entries[i].0, entries[i].1, entries[i].2.rank());
-        let order = stable_order(entries.len(), &|i, j| key(i) < key(j));
-        let mut groups: Vec<(SiteParent, std::ops::Range<usize>)> = Vec::new();
-        let mut sites = Vec::with_capacity(entries.len());
-        for (parent, order, site) in order.into_iter().map(|i| entries[i]) {
-            let end = sites.len() + 1;
-            if let Some((previous, range)) = groups
-                .last_mut()
-                .filter(|(previous, _)| *previous == parent)
-            {
-                debug_assert_eq!(*previous, parent);
-                range.end = end;
-            } else {
-                groups.push((parent, sites.len()..end));
-            }
-            sites.push((order, site));
-        }
-        groups.shrink_to_fit();
-        let mut index = Self {
-            groups,
-            sites,
-            deps: Deps::default(),
-            keyframes: bridge::keyframes(plan),
-            resolve_keyframes: keyframes,
-            constants: RefCell::default(),
-            projections: plan
-                .bindings
-                .iter()
-                .map(|b| vm::Prepared::new(plan.code(b.expr)))
-                .collect(),
-        };
-        index.deps = Deps::new(plan, &index);
-        index
-    }
-
-    /// What every binding, site, derive and resource argument reads.
-    pub(crate) fn deps(&self) -> &Deps {
-        &self.deps
-    }
-
-    /// What a region's row body reads outside its own item and position.
-    pub fn row_dependencies(&self, region: RegionsId) -> RowDependencies {
-        self.deps.row_dependencies(region.0 as usize)
-    }
-
-    fn children(&self, parent: Option<NodesId>, arm: Option<ArmsId>) -> &[(u32, Site)] {
-        self.groups
-            .binary_search_by_key(&(parent, arm), |(key, _)| *key)
-            .map_or(&[], |i| &self.sites[self.groups[i].1.clone()])
-    }
-}
+mod index;
+pub(crate) use index::SiteData;
+pub use index::SiteIndex;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Site {
@@ -821,7 +732,7 @@ fn update_all(
     children: &mut [Child],
     frames: &[Frame],
 ) -> Result<bool, InstanceError> {
-    let deps = &u.sites.deps;
+    let deps = &u.sites.data.deps;
     let mut roots = false;
     for c in children.iter_mut() {
         match c {
@@ -931,7 +842,7 @@ impl NodeInst {
         let plan = u.env.plan;
         let row = plan.node(self.node);
         let mut patch: Option<Box<StyleProps>> = None;
-        let deps = &u.sites.deps;
+        let deps = &u.sites.data.deps;
         // A pin is read first: the node's other rows are in the tuple it
         // makes (LLP 1121 D5). Without a theme, nothing here runs.
         let themed_plan = !plan.theme.is_empty();
@@ -1319,7 +1230,7 @@ impl Tree {
             has_collections: u.env.plan.bindings.iter().any(|b| {
                 b.kind == BindingKind::Prop
                     && b.id == exact_kernel::PropId::Virtualized as u16
-                    && u.env.plan.code(b.expr)
+                    && u.env.plan.read_code(u.env.plan.code(b.expr)).0
                         != [
                             exact_plan::Opcode::Bool as u8,
                             0,
@@ -1341,7 +1252,7 @@ impl Tree {
     pub fn update(&mut self, u: &mut Update<'_>) -> Result<(), InstanceError> {
         // New views cannot change the typography of already measured rows.
         let last_existing_view = u.ids.next;
-        u.changed = Some(u.sites.deps.changed(&self.seen, &u.env));
+        u.changed = Some(u.sites.data.deps.changed(&self.seen, &u.env));
         let roots = update_all(u, &mut self.children, &[]);
         u.changed = None;
         if roots? {

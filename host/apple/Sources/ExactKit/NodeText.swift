@@ -163,7 +163,11 @@ extension NodeView {
             runs = inlineText.filter(\.paints).map { $0.run(dark: night, contrast: contrast, elevated: elevated, tint: tint) }
             let decorates = inlineText.contains(where: { !$0.paints && !$0.lightRun.decoration.isEmpty })
             let backs = inlineText.contains(where: { !$0.paints && $0.run(dark: night, contrast: contrast, elevated: elevated, tint: tint).background != nil })
-            let byId = decorates || backs ? Dictionary(inlineText.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a }) : [:]
+            let byId = Dictionary(inlineText.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+            for (i, leaf) in inlineText.filter(\.paints).enumerated() {
+                runs[i].opacity = leaf.opacityGroups(in: byId)
+                runs[i].backgroundOpacity = runs[i].opacity
+            }
             // An inline container's lines reach its descendants' text, as the
             // paragraph's own do below, whatever the box's own visibility:
             // a hidden run paints neither its glyphs nor their lines.
@@ -193,9 +197,10 @@ extension NodeView {
                             runs[i].background = color
                             (runs[i].backgroundBox, runs[i].backgroundRadii) = (paint.backgroundBox, paint.backgroundRadii)
                             (runs[i].backgroundBefore, runs[i].backgroundAfter) = (paint.backgroundBefore, paint.backgroundAfter)
+                            runs[i].backgroundOpacity = run.opacityGroups(in: byId)
                         } else if paint.backgroundBox != 0 {
                             runs[i].outerBackgrounds.append(OuterBackground(color: color, box: paint.backgroundBox, radii: paint.backgroundRadii,
-                                                                            before: paint.backgroundBefore, after: paint.backgroundAfter))
+                                                                            before: paint.backgroundBefore, after: paint.backgroundAfter, opacity: run.opacityGroups(in: byId)))
                         }
                     }
                 }
@@ -229,7 +234,6 @@ extension NodeView {
             guard props["markup"] == "markdown", let text else { return runs }
             return text.atomIcons(runs, node: self)
         }
-        // One shadow over the paragraph when its runs agree (LLP 1077 D3).
         spec.gatherShadows()
         cachedTextSpec = spec
         return spec

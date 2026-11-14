@@ -254,11 +254,13 @@ pub fn clone_case(c: &leanrun::LeanCase) -> leanrun::LeanCase {
     }
 }
 
-/// The runner's refusals for passing an evaluation bound: its list steps,
+/// The runner's refusals for passing an evaluation bound: its list steps and derive calls,
 /// a string's or a value's size, a value's depth (`runner/src/vm.rs`), and
 /// an action argument's or a write's string length.
-const BOUNDS: [&str; 4] = [
+const BOUNDS: [&str; 6] = [
     "IterationLimit",
+    "CallLimit",
+    "CallDepth",
     "StringTooLong",
     "ValueTooLarge",
     "ValueTooDeep",
@@ -760,6 +762,8 @@ mod tests {
         let lean = lines(&["== boot", "outcome ok", "== tap \"go\"", "outcome ok"]);
         for (reason, outside) in [
             ("# Trap(IterationLimit { pc: 17 }) in derive \"visible\": past the 65,536 list steps one evaluation may take", true),
+            ("# Trap(CallLimit { pc: 19 }): past the 65,536 derive calls one evaluation may take", true),
+            ("# Trap(CallDepth { pc: 0 }): past 64 derive call levels", true),
             ("# StringTooLong { name: \"text\" }", true),
             ("# Instance(Trap(ValueTooLarge { pc: 3 })) in view 3 (site 1) each subject: past the 16,777,216 nodes or 64 MiB a value may hold", true),
             ("# HandlerArguments { action: \"go\", error: Instance(Trap(ValueTooDeep { pc: 4 })) in view 3 (site 1) press argument 1: past the 32 levels a value may nest }", true),

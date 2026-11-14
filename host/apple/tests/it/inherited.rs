@@ -1228,3 +1228,35 @@ fn a_cleared_pressed_paint_sends_no_row() {
     );
     assert!(!cleared.contains("\"press_opacity\":"), "{cleared}");
 }
+
+#[test]
+fn image_rendering_reaches_images_when_their_ancestor_changes() {
+    let plan = contract::compile(
+        r#"component App
+  state mode = "pixelated"
+  action change
+    mode = "crisp-edges"
+  view
+    column image-rendering=mode
+      button "Change" press=change testId="change"
+      image "sprite.png" testId="inherited"
+      image "sprite.png" image-rendering="auto" testId="own"
+"#,
+    )
+    .unwrap();
+    let (mut host, first) = Host::boot(
+        &plan.encode(),
+        NoData,
+        Box::new(MonospaceMeasurer::default()),
+        320.,
+        200.,
+    )
+    .unwrap();
+    let image = view(&host, "inherited");
+    let own = view(&host, "own");
+    assert!(op(&first, image).contains("\"image_rendering\":\"pixelated\""));
+    assert!(op(&first, own).contains("\"image_rendering\":\"auto\""));
+    let batch = host.dispatch(view(&host, "change"), Event::Press);
+    assert!(op(&batch, image).contains("\"image_rendering\":\"crisp-edges\""));
+    assert!(!batch.contains(&format!("\"op\":\"style\",\"id\":{own},")));
+}

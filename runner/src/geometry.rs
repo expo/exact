@@ -1450,7 +1450,7 @@ fn measure_ahead(
 ) -> Measured {
     let mut answers: Measured = Vec::new();
     let mut literal = None;
-    for instruction in crate::vm::instructions(code).map_while(Result::ok) {
+    for instruction in crate::vm::instructions(plan.read_code(code).0).map_while(Result::ok) {
         match instruction.op {
             Opcode::Str => literal = Some(instruction.args[0] as u32),
             Opcode::Call

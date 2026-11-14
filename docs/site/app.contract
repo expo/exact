@@ -134,10 +134,14 @@ routes nav
   referenceContractGrammarSemanticRestrictions "/reference/contract-grammar/semantic-restrictions" render=build activate=idle
   reference "/reference/developer" render=build activate=idle
   referenceDeveloperRuntimeFontFamiliesAndAriaDisabled "/reference/developer/runtime-font-families-and-aria-disabled" render=build activate=idle
+  referenceDeveloperGroupedSectionShadows "/reference/developer/grouped-section-shadows" render=build activate=idle
   referenceDeveloperServeRealworld "/reference/developer/serve-realworld" render=build activate=idle
   referenceDeveloperInspectAndFormatContract "/reference/developer/inspect-and-format-contract" render=build activate=idle
+  referenceDeveloperContractEvaluationLimits "/reference/developer/contract-evaluation-limits" render=build activate=idle
   referenceDeveloperRunATerminalApp "/reference/developer/run-a-terminal-app" render=build activate=idle
   referenceDeveloperRunAnAppFromATerminalOnMacos "/reference/developer/run-an-app-from-a-terminal-on-macos" render=build activate=idle
+  referenceDeveloperAppleBundleMetadata "/reference/developer/apple-bundle-metadata" render=build activate=idle
+  referenceDeveloperApplePrivacyManifests "/reference/developer/apple-privacy-manifests" render=build activate=idle
   referenceDeveloperOpenTheSameDevelopmentUrlOnAppleHosts "/reference/developer/open-the-same-development-url-on-apple-hosts" render=build activate=idle
   referenceDeveloperGenerateTypescriptDataSourceTypes "/reference/developer/generate-typescript-data-source-types" render=build activate=idle
   referenceDeveloperAccessHatches "/reference/developer/access-hatches" render=build activate=idle
@@ -149,6 +153,7 @@ routes nav
   referenceDeveloperTimerOptions "/reference/developer/timer-options" render=build activate=idle
   referenceDeveloperLiveTimeAndProgress "/reference/developer/live-time-and-progress" render=build activate=idle
   agentPitfalls "/reference/pitfalls" render=build activate=idle
+  referencePitfallsComponentCalculations "/reference/pitfalls/component-calculations" render=build activate=idle
   referencePitfallsLayout "/reference/pitfalls/layout" render=build activate=idle
   referencePitfallsListsAndScrolling "/reference/pitfalls/lists-and-scrolling" render=build activate=idle
   referencePitfallsNativePresentationAndNavigationIos "/reference/pitfalls/native-presentation-and-navigation-ios" render=build activate=idle
@@ -305,7 +310,7 @@ component App
   view
     view navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow width="100%" height="100%" background-color="var(--color-background-screen)" font-family="var(--font-sans)" color="var(--color-text-default)"
       for e in stack(nav).slice(-1) key=e.id
-        column navigationKey=`${e.id}` navigationScroll=`page-${e.id}` navigationBar="none" position="absolute" inset=0
+        column navigationKey=`${e.id}` navigationScroll=`page-${e.id}` navigationBar="none" position="absolute" inset=0 overflow-x="clip"
           padding-top="clamp(0px, (960px - 100vw) * 1000, 57px)" padding-left=(sidebar ? "calc(234px - clamp(0px, (960px - 100vw) * 1000, 234px))" : "calc(48px - clamp(0px, (960px - 100vw) * 1000, 48px))") -exact-layout-transition="220ms ease"
           if e.name == "notfound"
             head title=page.title description=page.description status=404

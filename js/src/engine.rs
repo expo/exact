@@ -92,6 +92,7 @@ mod real {
             delivered: *mut bool,
             out: *mut *mut c_char,
         ) -> i32;
+        fn exact_js_storage_image_task(h: *mut c_void, id: *mut u64, out: *mut *mut c_char) -> i32;
         fn exact_js_drain(h: *mut c_void, out: *mut *mut c_char) -> i32;
         fn exact_js_interrupt(h: *mut c_void);
         fn exact_js_take_log(
@@ -240,6 +241,23 @@ mod real {
             let text = take(out);
             if status == 0 {
                 Ok(())
+            } else {
+                Err(text)
+            }
+        }
+
+        /// Retain the queue head's image work before pumping can retire its mapping.
+        pub fn storage_image_work(
+            &mut self,
+            context: &ibex2::bindings::Context,
+        ) -> Result<Option<ibex2::stdlib::fs_image::WorkHandle>, String> {
+            let mut id = 0;
+            let mut out = std::ptr::null_mut();
+            // SAFETY: the engine is live; both output pointers outlive the call.
+            let status = unsafe { exact_js_storage_image_task(self.0, &mut id, &mut out) };
+            let text = take(out);
+            if status == 0 {
+                Ok(context.image_work_handle(id))
             } else {
                 Err(text)
             }
@@ -518,6 +536,12 @@ mod real {
             Err(NONE.into())
         }
         pub fn deliver_storage_one(&mut self) -> Result<bool, String> {
+            Err(NONE.into())
+        }
+        pub fn storage_image_work(
+            &mut self,
+            _context: &ibex2::bindings::Context,
+        ) -> Result<Option<ibex2::stdlib::fs_image::WorkHandle>, String> {
             Err(NONE.into())
         }
         pub fn drain(&mut self) -> Result<(), String> {

@@ -9,8 +9,9 @@ import XCTest
 import SwiftUI
 import ImageIO
 import UniformTypeIdentifiers
+import CoreText
 import ExactCore
-import ExactSnapshot
+@testable import ExactSnapshot
 #if canImport(WidgetKit)
 import WidgetKit
 #endif
@@ -19,6 +20,68 @@ import WidgetKit
 @MainActor
 @available(iOS 17.0, macOS 14.0, visionOS 26.0, *)
 final class SnapshotDriverTests: XCTestCase {
+    func testAWrappedSnapshotRunCompositesItsOverlappingLinesTogether() throws {
+        let size = CGSize(width: 300, height: 900)
+        let session = try HeadlessSession(plan: fixturePlan("HEADLESS"), size: size, facts: SessionFacts(displayScale: 1, preferences: [], clock: 0))
+        defer { session.close() }
+        let tree = try session.snapshot()
+        let node = try XCTUnwrap(tree.nodes.values.first { $0.props["testId"] == "opacity-wrap" })
+        XCTAssertGreaterThan(node.lines.count, 1)
+        let environment = SnapshotEnvironment(family: .systemSmall, entryDate: Date(timeIntervalSince1970: 0))
+        let image = try XCTUnwrap(render(SnapshotTextView(node: node, environment: environment), size: node.frame.size, scale: 1))
+        let px = try pixels(image)
+        let alpha = stride(from: 3, to: px.data.count, by: 4).map { px.data[$0] }.max() ?? 0
+        XCTAssertEqual(Double(alpha), 127.5, accuracy: 2, "overlapping wrapped lines belong to one opacity group")
+    }
+
+    /// Each opacity group lays out the whole line, its other runs unpainted:
+    /// a faded run's tracking still moves the runs after it.
+    func testAFadedTrackedRunKeepsTheNextRunInPlace() throws {
+        let font = CTFontCreateWithName("Helvetica" as CFString, 32, nil)
+        func rightmostOpaqueInk(_ alpha: Double) throws -> Int {
+            let faded = HeadlessSession.Run(text: "AAAA", size: 32, weight: 400, family: 0, italic: false, letterSpacing: 4,
+                                            opacityGroups: alpha < 1 ? [InlineOpacity(box: 2, alpha: alpha)] : [], font: font)
+            let next = HeadlessSession.Run(text: "BBBB", size: 32, weight: 400, family: 0, italic: false, font: font)
+            let line = HeadlessSession.Line(text: "AAAABBBB", range: NSRange(location: 0, length: 8), origin: CGPoint(x: 0, y: 32),
+                                            width: 260, ascent: 32, descent: 8,
+                                            segments: [HeadlessSession.Segment(run: 0, text: "AAAA"), HeadlessSession.Segment(run: 1, text: "BBBB")])
+            let node = HeadlessSession.Node(id: 1, kind: "text", frame: CGRect(x: 0, y: 0, width: 300, height: 60), lines: [line], runs: [faded, next])
+            let environment = SnapshotEnvironment(family: .systemSmall, entryDate: Date(timeIntervalSince1970: 0))
+            let image = try XCTUnwrap(render(SnapshotTextView(node: node, environment: environment).environment(\.colorScheme, .light),
+                                             size: node.frame.size, scale: 1))
+            let px = try pixels(image)
+            // The faded run is at most half alpha; only the next run is opaque.
+            var right = -1
+            for y in 0..<px.height { for x in 0..<px.width where px.data[(y * px.width + x) * 4 + 3] > 200 { right = max(right, x) } }
+            return right
+        }
+        let solid = try rightmostOpaqueInk(1)
+        XCTAssertGreaterThan(solid, 100)
+        XCTAssertEqual(try rightmostOpaqueInk(0.5), solid, accuracy: 1)
+    }
+
+    func testNestedRunOpacityFadesSnapshotGlyphsAndLinesOnce() throws {
+        let size = CGSize(width: 300, height: 900)
+        let session = try HeadlessSession(plan: fixturePlan("HEADLESS"), size: size,
+                                          facts: SessionFacts(displayScale: 1, preferences: []))
+        defer { session.close() }
+        let tree = try session.snapshot()
+        let environment = SnapshotEnvironment(family: .systemSmall, entryDate: Date(timeIntervalSince1970: 0))
+        let image = try XCTUnwrap(render(SnapshotDriver.view(tree, environment: environment).background(Color.white)
+            .environment(\.colorScheme, .light), size: size, scale: 1))
+        let px = try pixels(image)
+        let root = try XCTUnwrap(tree.roots.first.flatMap { tree.nodes[$0] })
+        for (name, opacity) in [("zero", 0.0), ("partial", 0.25), ("full", 1.0)] {
+            let node = try XCTUnwrap(tree.nodes.values.first { $0.props["testId"] == "opacity-\(name)" })
+            let rect = node.frame.offsetBy(dx: root.frame.minX, dy: root.frame.minY)
+            var darkness = 0
+            for y in Int(rect.minY)..<Int(rect.maxY) { for x in Int(rect.minX)..<Int(rect.maxX) {
+                darkness = max(darkness, 255 - Int(px.data[(y * px.width + x) * 4]))
+            } }
+            XCTAssertEqual(Double(darkness), 255 * 0.5 * 0.5 * opacity, accuracy: 3, name)
+        }
+    }
+
     #if os(macOS)
     func testMacExtensionFindsTheContainingAppsCatalogAndImage() throws {
         let path = try XCTUnwrap(ProcessInfo.processInfo.environment["EXACT_SNAPSHOT_ASSETS_EXTENSION"])
@@ -569,16 +632,17 @@ final class SnapshotDriverTests: XCTestCase {
         try Data([0]).write(to: roots["tmp"]!.appending(path: "picked.png"))
         try Data([0]).write(to: group.appending(path: "secret.png"))
         try Data([0]).write(to: group.appending(path: "data.png"))
-        XCTAssertEqual(SnapshotRasters.resolve("app:/data/photo.jpg", roots: [], appGroup: group, appID: id)?.path, roots["data"]!.appending(path: "photo.jpg").standardizedFileURL.resolvingSymlinksInPath().path, "the file the app wrote")
-        XCTAssertEqual(SnapshotRasters.resolve("app:/cache/avatar.png", roots: [], appGroup: group, appID: id)?.lastPathComponent, "avatar.png")
-        XCTAssertEqual(SnapshotRasters.resolve("app:/tmp/picked.png", roots: [], appGroup: group, appID: id)?.path, roots["tmp"]!.appending(path: "picked.png").standardizedFileURL.resolvingSymlinksInPath().path, "app:/tmp is the host's temporary directory")
-        XCTAssertNil(SnapshotRasters.resolve("app:/cache/../secret.png", roots: [], appGroup: group, appID: id))
-        XCTAssertNil(SnapshotRasters.resolve("app:/data/../../../../../data.png", roots: [], appGroup: group, appID: id))
-        XCTAssertNil(SnapshotRasters.resolve("app:/cache/avatar.png", roots: [], appGroup: nil, appID: id), "no group, no app:/")
-        XCTAssertNil(SnapshotRasters.resolve("app:/cache/avatar.png", roots: [], appGroup: group, appID: nil), "no app id, no app:/")
-        XCTAssertNil(SnapshotRasters.resolve("app:/other/avatar.png", roots: [], appGroup: group, appID: id))
-        XCTAssertNil(SnapshotRasters.resolve("app:/cache", roots: [], appGroup: group, appID: id), "a root alone")
-        XCTAssertNil(SnapshotRasters.resolve("../group/secret.png", roots: [Self.out.appending(path: "assets")], appGroup: nil, appID: nil))
+        for path in ["app:/data/photo.jpg", "app:/cache/avatar.png", "app:/tmp/picked.png"] {
+            let file = try XCTUnwrap(SnapshotRasters.open(path, roots: [], appGroup: group, appID: id))
+            XCTAssertEqual(try file.readToEnd(), Data([0]), "the file the app wrote at \(path)")
+        }
+        XCTAssertNil(SnapshotRasters.open("app:/cache/../secret.png", roots: [], appGroup: group, appID: id))
+        XCTAssertNil(SnapshotRasters.open("app:/data/../../../../../data.png", roots: [], appGroup: group, appID: id))
+        XCTAssertNil(SnapshotRasters.open("app:/cache/avatar.png", roots: [], appGroup: nil, appID: id), "no group, no app:/")
+        XCTAssertNil(SnapshotRasters.open("app:/cache/avatar.png", roots: [], appGroup: group, appID: nil), "no app id, no app:/")
+        XCTAssertNil(SnapshotRasters.open("app:/other/avatar.png", roots: [], appGroup: group, appID: id))
+        XCTAssertNil(SnapshotRasters.open("app:/cache", roots: [], appGroup: group, appID: id), "a root alone")
+        XCTAssertNil(SnapshotRasters.open("../group/secret.png", roots: [Self.out.appending(path: "assets")], appGroup: nil, appID: nil))
     }
 
     /// The invocation's raster cache keeps decoded bytes under its budget,

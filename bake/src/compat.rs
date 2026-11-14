@@ -219,7 +219,7 @@ impl Compat {
 /// The compatibility id of the app at `app_dir` built for `platform`
 /// (`ios`, `macos`, `linux`, `web`) and `target` (the triple), with the
 /// data crate's grants when the caller has a `DataSource` to ask (the bake
-/// does; `exact-bake compat` on the command line does not).
+/// does; command-line callers can supply the declarations from its receipt).
 pub fn compatibility_id(
     app_dir: &Path,
     platform: &str,

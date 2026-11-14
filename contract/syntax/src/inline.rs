@@ -74,19 +74,21 @@ pub fn inline(file: &File) -> Result<Vec<Node>, SyntaxError> {
     Ok(expand(file)?.root.view)
 }
 
-/// The root as the plan sees it (LLP 1017 P4c): its view inlined, plus the
+/// The expanded root (LLP 1017 P4c): its view inlined, plus the
 /// `state`s and `action`s of every stateful child use, renamed apart with
 /// the use's number, each owned by the instance it belongs to ([`Owner`]);
-/// a child's `derive` is an expression substituted at each read.
+/// a child's `derive` is substituted at each read in this view. Lowering may
+/// replace those reads with loads of one executable row per use.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Expanded {
     /// The root, with the children's declarations appended.
     pub root: Component,
+    /// At-read instance expressions available for sharing during lowering.
+    pub thunks: Vec<Thunk>,
     /// For each of `root.states`, what owns it.
     pub owners: Vec<Owner>,
     /// Every component instantiation, in the order the inliner expanded
-    /// them; entry 0 is the root (LLP 1035.005 D3). Empty unless source
-    /// provenance was requested with `expand_mapped`. An element's
+    /// them; entry 0 is the root (LLP 1035.005 D3). An element's
     /// `instance` and the two vectors below index it.
     pub instances: Vec<Instance>,
     /// For each of `root.states`, the instance whose component declared it
@@ -94,6 +96,24 @@ pub struct Expanded {
     pub state_instances: Vec<u32>,
     /// For each of `root.actions`, the same.
     pub action_instances: Vec<u32>,
+    /// Each region tag's declaring instance, for compile-time cost reports.
+    pub region_instances: BTreeMap<u32, u32>,
+}
+
+/// One instance expression. Source expansion keeps substitution; lowering
+/// may replace its occurrences with a load of one executable row.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Thunk {
+    /// A name outside the authored namespace.
+    pub name: String,
+    /// The resolved expression in the use site's scope.
+    pub expr: Expr,
+    /// The instance frame in which the expression is evaluated.
+    pub owner: Owner,
+    /// The declaring component use in the source map.
+    pub instance: u32,
+    /// The declaration or argument's source span.
+    pub span: crate::Span,
 }
 
 /// What owns a slot of the expanded root, and so when its initializer runs.
@@ -224,7 +244,7 @@ fn absent(span: crate::Span) -> Expr {
 
 fn expand_with_sites(
     file: &File,
-    capture_sites: bool,
+    _capture_sites: bool,
     typed_props: bool,
 ) -> (Expanded, Vec<SyntaxError>) {
     // Same-component calls first, each in its own component's scope (LLP
@@ -306,21 +326,19 @@ fn expand_with_sites(
         arms: Vec::new(),
         tabs: false,
         next_tag: 1,
+        region_instances: BTreeMap::new(),
+        thunks: Vec::new(),
         extra_states: Vec::new(),
         extra_actions: Vec::new(),
         instance: 0,
-        capture_sites,
+        capture_sites: true,
         typed_props,
         errors: Vec::new(),
-        instances: if capture_sites {
-            vec![Instance {
-                component: file.components[0].name.clone(),
-                parent: None,
-                span: file.components[0].span,
-            }]
-        } else {
-            Vec::new()
-        },
+        instances: vec![Instance {
+            component: file.components[0].name.clone(),
+            parent: None,
+            span: file.components[0].span,
+        }],
     };
     let none = BTreeMap::new();
     let mut subst = Subst::new(&none, &records);
@@ -348,36 +366,26 @@ fn expand_with_sites(
     let view = inline_nodes(&renamed, &mut subst, &mut ctx).unwrap_or_default();
     root.view = view;
     let mut owners = vec![Owner::Root; root.states.len()];
-    let mut state_instances = if capture_sites {
-        vec![0; root.states.len()]
-    } else {
-        Vec::new()
-    };
+    let mut state_instances = vec![0; root.states.len()];
     for (b, owner, instance) in ctx.extra_states {
         root.states.push(b);
         owners.push(owner);
-        if capture_sites {
-            state_instances.push(instance);
-        }
+        state_instances.push(instance);
     }
-    let mut action_instances = if capture_sites {
-        vec![0; root.actions.len()]
-    } else {
-        Vec::new()
-    };
+    let mut action_instances = vec![0; root.actions.len()];
     for (a, instance) in ctx.extra_actions {
         root.actions.push(a);
-        if capture_sites {
-            action_instances.push(instance);
-        }
+        action_instances.push(instance);
     }
     calls::resolve(&mut root.actions, &records, &mut ctx.errors);
     let mut errors = called_errors;
     errors.append(&mut ctx.errors);
     let expanded = Expanded {
         root,
+        thunks: ctx.thunks,
         owners,
         instances: ctx.instances,
+        region_instances: ctx.region_instances,
         state_instances,
         action_instances,
     };
@@ -412,9 +420,11 @@ struct Ctx<'a> {
     tabs: bool,
     /// The next region tag.
     next_tag: u32,
+    region_instances: BTreeMap<u32, u32>,
     /// The children's `state`s lifted into the root, with their owners and
     /// the instance that declared them.
     extra_states: Vec<(Binding, Owner, u32)>,
+    thunks: Vec<Thunk>,
     /// The children's `action`s lifted into the root, with their instance.
     extra_actions: Vec<(Action, u32)>,
     /// The instantiation whose view is being inlined: 0 at the root.
@@ -449,6 +459,9 @@ impl Ctx<'_> {
     /// A fresh region tag.
     fn tag(&mut self) -> u32 {
         let tag = self.next_tag;
+        if self.capture_sites {
+            self.region_instances.insert(tag, self.instance);
+        }
         self.next_tag += 1;
         tag
     }

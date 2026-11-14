@@ -344,7 +344,7 @@ impl Collection {
         fresh: bool,
         remount: bool,
     ) -> Result<(), InstanceError> {
-        let deps = &u.sites.deps;
+        let deps = &u.sites.data.deps;
         let index = self.region.0 as usize;
         let keys_stale = fresh || u.stale_outside(&deps.keys[index], 1);
         let data_changed = keys_stale || u.stale(&deps.subjects[index]);
@@ -725,7 +725,7 @@ impl Collection {
             let mounted = match old.remove(&text) {
                 Some(mut mounted) => {
                     mounted.held = false;
-                    let body = &u.sites.deps.bodies[self.region.0 as usize];
+                    let body = &u.sites.data.deps.bodies[self.region.0 as usize];
                     let dirty = self.reposition(&mut mounted, position, body.reads_position());
                     if update {
                         update_row(u, &mut mounted.row, frames, dirty, body)?;

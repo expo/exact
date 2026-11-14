@@ -269,6 +269,10 @@ impl NodeArena {
                             Some(symbol) => face.symbol = Some(symbol.to_owned()),
                             None => {
                                 face.raster = source.is_some_and(|s| !s.is_empty());
+                                face.fits &= self
+                                    .computed_source(child, StyleId::ImageRendering)
+                                    .image_rendering
+                                    == crate::ImageRendering::Auto;
                                 face.image = source.filter(|s| !s.is_empty()).map(|s| {
                                     crate::control::ButtonRasterImage {
                                         view: self.local_id(child),

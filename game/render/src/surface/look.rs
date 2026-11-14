@@ -524,8 +524,8 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
         let labels = renderer.probe_labels(&feed.shape_names());
         let readback = renderer.probe_copies(&mut encoder, &texture, &facts);
         queue.submit([encoder.finish()]);
-        renderer.end_look();
         renderer.submitted();
+        renderer.end_look();
         readback.map();
         Ok((readback, facts, records, labels))
     }

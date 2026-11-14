@@ -369,10 +369,16 @@ extension Presenter {
 }
 
 extension NavigationHost {
-    /// The primary controller keeps its native bounds while route content avoids the keyboard.
+    /// The primary controller keeps its allocation while route content avoids the keyboard.
     func ownerFrame(_ owner: UIViewController, in root: UIView) -> CGRect {
         let viewport = presenter.viewport
-        var frame = !ExactEnv.authoredChrome && presenter.inDocument(root) ? viewport.convert(viewport.pageBounds, to: root) : root.bounds
+        var frame: CGRect
+        if let node = container, node.scroll != nil {
+            // Content coordinates stay fixed when the authored scroller moves.
+            frame = CGRect(origin: .zero, size: node.bounds.size)
+        } else {
+            frame = !ExactEnv.authoredChrome && presenter.inDocument(root) ? viewport.convert(viewport.pageBounds, to: root) : root.bounds
+        }
         frame.size.height += ownerKeyboardExtension(owner)
         // The authored tablist the agent paints takes its own place in the
         // root, as on the web; the routes end at its edge, not under it.

@@ -57,6 +57,7 @@ final class PresentedText: TextPresentation {
     func attributes(_ r: Run, color: [Double], scale: CGFloat, attributes a: inout [NSAttributedString.Key: Any]) {
         a[.foregroundColor] = r.color.map(TextEngine.color) ?? TextEngine.color(color)
         if r.hidden { a[.exactHidden] = true }
+        if !r.opacity.isEmpty { a[.exactOpacity] = r.opacity }
         if let icon = r.atomIcon { a[.exactAtomIcon] = TextAtomIcon(icon) }
         if r.fixedInk, r.color != nil { a[.exactFixedInk] = true }
         // A centred stroke over the fill: Core Text's negative width,
@@ -81,11 +82,11 @@ final class PresentedText: TextPresentation {
             let f = a[.font] as! PlatformFont
             let (ascent, descent) = CSSLineBox.content(f as CTFont, scale: scale)
             let outer = r.outerBackgrounds.map {
-                InlineBackground(color: TextEngine.color($0.color).cgColor, ascent: ascent, descent: descent, box: $0.box, radii: $0.radii, reach: ($0.before, $0.after))
+                InlineBackground(color: TextEngine.color($0.color).cgColor, ascent: ascent, descent: descent, box: $0.box, radii: $0.radii, reach: ($0.before, $0.after), opacity: $0.opacity)
             }
             a[.exactBackground] = InlineBackground(color: fill.cgColor, ascent: ascent, descent: descent,
                                                    box: r.backgroundBox, radii: r.backgroundRadii,
-                                                   reach: (r.backgroundBefore, r.backgroundAfter), outer: outer)
+                                                   reach: (r.backgroundBefore, r.backgroundAfter), outer: outer, opacity: r.backgroundOpacity)
         }
     }
     /// Every inline box's extent in the paragraph, once its runs are set,
@@ -112,7 +113,7 @@ final class PresentedText: TextPresentation {
                 } else {
                     at[fill.box] = boxes.count
                     boxes.append(InlineBoxes.Box(extent: range, radii: fill.radii, color: fill.color, depth: depth,
-                                                 before: fill.reach.before, after: fill.reach.after))
+                                                 before: fill.reach.before, after: fill.reach.after, opacity: fill.opacity))
                 }
             }
         }
@@ -190,7 +191,7 @@ extension TextEngine {
     /// Paint a paragraph into a y-down context (a flipped NSView's, a
     /// UIView's): one CTLineDraw per line, on device-pixel baselines
     /// (`paintedBaseline`), flush by alignment.
-    static func draw(_ p: Paragraph, spec: Spec, in bounds: CGRect, context ctx: CGContext, dirty: CGRect? = nil, pass: TextLinePaint.Pass = .all, lines: Range<Int>? = nil) {
+    static func draw(_ p: Paragraph, spec: Spec, in bounds: CGRect, context ctx: CGContext, dirty: CGRect? = nil, pass: TextLinePaint.Pass = .all, lines: Range<Int>? = nil, background: (([CTRun], CGPoint) -> Void)? = nil) {
         // Font smoothing is graphics state (LLP 1019 D12).
         ctx.saveGState()
         defer { ctx.restoreGState() }
@@ -205,12 +206,21 @@ extension TextEngine {
             ctx.beginTransparencyLayer(auxiliaryInfo: nil)
         }
         defer { if shadow != nil { ctx.endTransparencyLayer(); ctx.restoreGState() } }
-        func paint(_ index: Int) {
-            if let lines, !lines.contains(index) { return }
+        func placed(_ index: Int) -> (CTLine, CGPoint) {
             let line = spec.ellipsis ? p.ellipsized(index, spec: spec, width: bounds.width) : p.lines[index]
             let baseline = p.baselines[index]
             let x = p.origin(index, align: spec.align, width: bounds.width)
-            TextLinePaint.draw(line, at: CGPoint(x: bounds.minX + x, y: Self.paintedLine(baseline, top: bounds.minY, scale: deviceScale(ctx), lineScale: p.lineScale)), in: ctx, pass: pass)
+            return (line, CGPoint(x: bounds.minX + x, y: Self.paintedLine(baseline, top: bounds.minY, scale: deviceScale(ctx), lineScale: p.lineScale)))
+        }
+        if spec.runs.contains(where: { !$0.opacity.isEmpty }) {
+            let shown = p.lines.indices.filter { lines?.contains($0) != false }.map(placed)
+            if TextLinePaint.drawOpacity(shown.map(\.0), at: shown.map(\.1), in: ctx, scale: 1, pass: pass, background: background) { return }
+        }
+        func paint(_ index: Int) {
+            if let lines, !lines.contains(index) { return }
+            let (line, origin) = placed(index)
+            background?(CTLineGetGlyphRuns(line) as! [CTRun], origin)
+            TextLinePaint.draw(line, at: origin, in: ctx, pass: pass)
         }
         if let dirty {
             p.inkBounds().forEachLine(from: dirty.minY - bounds.minY,
@@ -247,18 +257,20 @@ final class InlineBackground: NSObject, @unchecked Sendable {
     let reach: (before: CGFloat, after: CGFloat)
     let outer: [InlineBackground]
     let boxes: InlineBoxes?
+    let opacity: [InlineOpacity]
     init(color: CGColor, ascent: CGFloat, descent: CGFloat, box: UInt32 = 0, radii: [InlineRadius] = [],
-         reach: (before: CGFloat, after: CGFloat) = (0, 0), outer: [InlineBackground] = [], boxes: InlineBoxes? = nil) {
+         reach: (before: CGFloat, after: CGFloat) = (0, 0), outer: [InlineBackground] = [], boxes: InlineBoxes? = nil, opacity: [InlineOpacity] = []) {
+        self.opacity = opacity
         self.color = color; self.ascent = ascent; self.descent = descent
         self.box = box; self.radii = radii.contains { !$0.isZero } ? radii : []; self.reach = reach; self.outer = outer; self.boxes = boxes
     }
     func sharing(_ boxes: InlineBoxes?) -> InlineBackground {
-        InlineBackground(color: color, ascent: ascent, descent: descent, boxes: boxes)
+        InlineBackground(color: color, ascent: ascent, descent: descent, boxes: boxes, opacity: opacity)
     }
     override func isEqual(_ object: Any?) -> Bool {
         guard let other = object as? InlineBackground else { return false }
         return color == other.color && ascent == other.ascent && descent == other.descent && box == other.box
-            && radii == other.radii && reach == other.reach && outer == other.outer && boxes == other.boxes
+            && opacity == other.opacity && radii == other.radii && reach == other.reach && outer == other.outer && boxes == other.boxes
     }
     override var hash: Int { color.hashValue ^ ascent.hashValue ^ descent.hashValue ^ box.hashValue }
 }
@@ -272,6 +284,7 @@ final class InlineBoxes: NSObject {
     struct Box: Equatable {
         var extent: NSRange; let radii: [InlineRadius]; let color: CGColor; let depth: Int
         var before: CGFloat = 0, after: CGFloat = 0
+        var opacity: [InlineOpacity] = []
     }
     let boxes: [Box]
     let rtl: Bool
@@ -284,6 +297,7 @@ final class InlineBoxes: NSObject {
 }
 
 extension NSAttributedString.Key {
+    static let exactOpacity = NSAttributedString.Key("ExactInlineOpacity")
     static let exactBackground = NSAttributedString.Key("ExactInlineBackground")
 }
 
@@ -296,6 +310,7 @@ enum TextLinePaint {
     /// `scale`: base-space units per point, for a run's own shadow (1 in a
     /// view's context, the pixel scale in a bitmap the host made).
     static func draw(_ line: CTLine, at origin: CGPoint, in ctx: CGContext, scale: CGFloat = 1, pass: Pass = .all) {
+        if drawOpacity(line, at: origin, in: ctx, scale: scale, pass: pass) { return }
         ctx.saveGState()
         for fill in backgrounds(line, at: origin) where pass.paintsBackgrounds {
             ctx.setFillColor(fill.color)
@@ -318,7 +333,7 @@ enum TextLinePaint {
 
     /// One background fragment: its rect, its outline where a corner is
     /// rounded, and its colour.
-    struct Fill { let rect: CGRect; let path: CGPath?; let color: CGColor }
+    struct Fill { let rect: CGRect; let path: CGPath?; let color: CGColor; var opacity: [InlineOpacity] = [] }
 
     /// CSS: an inline box's background covers each of its line fragments,
     /// its glyphs' advance across and its font's content area down, and its
@@ -430,12 +445,12 @@ enum TextLinePaint {
         return merged.indices.map { i in
             let piece = merged[i], fill = piece.fill
             let rect = CGRect(x: origin.x + piece.lo, y: origin.y - fill.ascent, width: piece.hi - piece.lo, height: fill.ascent + fill.descent)
-            guard let b = piece.box, let radii = fill.boxes?.boxes[b].radii, !radii.isEmpty else { return Fill(rect: rect, path: nil, color: piece.color) }
+            guard let b = piece.box, let radii = fill.boxes?.boxes[b].radii, !radii.isEmpty else { return Fill(rect: rect, path: nil, color: piece.color, opacity: piece.box.flatMap { fill.boxes?.boxes[$0].opacity } ?? fill.opacity) }
             let corners = zip(radii, kept[i]).map { radius, kept in
                 kept ? CGSize(width: radius.length(basis: rect.width), height: radius.length(basis: rect.height)) : .zero
             }
-            guard corners.contains(where: { $0 != .zero }) else { return Fill(rect: rect, path: nil, color: piece.color) }
-            return Fill(rect: rect, path: BorderPaint.roundedRect(rect, BorderPaint.reduced(corners, in: rect)), color: piece.color)
+            guard corners.contains(where: { $0 != .zero }) else { return Fill(rect: rect, path: nil, color: piece.color, opacity: piece.box.flatMap { fill.boxes?.boxes[$0].opacity } ?? fill.opacity) }
+            return Fill(rect: rect, path: BorderPaint.roundedRect(rect, BorderPaint.reduced(corners, in: rect)), color: piece.color, opacity: fill.boxes?.boxes[b].opacity ?? fill.opacity)
         }
     }
 }

@@ -936,6 +936,7 @@ function apply(batch) {
       // once; the agent's clock cannot seek that animation, so under it the scroll lands at once.
       for (const [name, offset] of Object.entries(offsets)) {
         if (el[name] !== offset) {
+          globalThis.exact?.fragment?.cancel(false);
           if ((name === "scrollTop" || name === "scrollLeft") && lists.has(el)) {
             jumps.push([
               Number(el.dataset.view),

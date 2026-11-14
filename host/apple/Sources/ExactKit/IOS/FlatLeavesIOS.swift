@@ -573,6 +573,7 @@ final class FlatLeaves {
                 i = j
             }
             if !made.isEmpty { runs[parentID] = made }
+            parent?.overflowClipGeometryChanged()
             if let host = drawing(parentID), let c = host.canvasAbove { c.needsCapture = true; host.canvases?.scheduleCapture() }
         }
     }

@@ -231,7 +231,7 @@ export function router(slot, history) {
   // An author's own `scrollIntoView` wins over a fragment's scroll not yet made, or held while pictures load; its
   // `scrollBy` over one held.
   const own = Hosts.scrollIntoView; Hosts.scrollIntoView = (...a) => { const d = Due ?? Scheduled; if (d) { say(`fragment #${d.fragment}: the app's own scrollIntoView took its place`); Due = Scheduled = null; } globalThis.exact?.fragment?.cancel(); return own(...a); };
-  const by = Hosts.scrollBy; Hosts.scrollBy = (...a) => { globalThis.exact?.fragment?.cancel(); return by(...a); };
+  const by = Hosts.scrollBy; Hosts.scrollBy = (...a) => { globalThis.exact?.fragment?.cancel(false); return by(...a); };
   // @ref LLP 1038 §7 — a plain click on a same-origin link to a declared
   // route stays in this document, as input-glue.js's rule for the wasm host:
   // a link with its own `press` navigates by it; any other goes to the

@@ -29,12 +29,12 @@ The verified install lives under `~/.cargo/hermes-lean-sys/`. Exact sets
 `HERMES_LEAN_SYS_OFFLINE=1` in `.cargo/config.toml`, so an ordinary build
 neither downloads a bundle nor compiles Hermes; a missing install fails with
 the one-time command. `HERMES_LEAN_SYS_DIR` remains a development override.
-The v4 set supports macOS, Linux, Windows, iOS devices and the universal iOS
-Simulator, plus tvOS devices and the arm64 tvOS Simulator. Exact selects
-Ibex's English `intl` data tier on Linux, not `intl-all-locales`; Windows
-uses OS ICU and Apple keeps Hermes's OS-backed Intl. Android's published v5
-bundle builds without Intl. A bundle whose receipt enables Intl and binds the
-English ICU tier selects that tier and Ibex's Intl group. A Rust-only app needs no engine at run time.
+The v6 set supports macOS, Linux, Windows, Android arm64, iOS devices and the
+universal iOS Simulator, plus tvOS devices and the arm64 tvOS Simulator. Exact
+selects Ibex's English `intl` data tier on Linux and Android, not
+`intl-all-locales`; Windows uses OS ICU and Apple keeps Hermes's OS-backed Intl.
+Android's receipt enables Intl and binds the English ICU tier. A Rust-only app
+needs no engine at run time.
 `exact setup` installs the host bundle and, on macOS, the iOS and tvOS Simulator
 bundles, and the iOS device bundle where Xcode's iphoneos SDK is installed.
 `exact setup --check` runs Ibex's own offline resolver validation over that
@@ -1076,7 +1076,10 @@ its baked assets. Keep the tree in a dedicated directory beside `app.json`:
 `mac --bundle` copies it to `Contents/Resources/server`, preserving file modes,
 names such as `node_modules/@scope`, and relative symlinks within the tree.
 These files have no bake size cap and are excluded from TypeScript capture and
-web assets. `from` cannot overlap source, asset or output roots; `to` must name
+web assets. `from` cannot overlap source, asset or output roots: it is refused
+under `assets/`, `deck/`, `gpu/`, `fonts/`, `strings/`, `web/`, `apple/`, `linux/`,
+`src/`, `data/`, `modules/`, `node_modules/`, `target/` or `dist/` (a JSON file the
+app ships goes in a directory of its own, such as `data-files/`); `to` must name
 a private subtree of `Resources/`, `Helpers/` or `Frameworks/`. Mach-O helpers
 and libraries are signed before the outer bundle; `exact release` signs them
 with its release identity. Resource changes require a new binary, not an asset
@@ -1444,6 +1447,17 @@ enters the compatibility id. An older bake without the fields answers `""`.
 The web JS build uses these variables at build time and answers `""` for each
 unset variable. No `app.json` version key is defined.
 
+## Apple bundle metadata
+
+Exact writes Info.plist keys and entitlements from grants, named manifest fields,
+packages and build inputs. Entitlements remain derived (LLP 1069.008 D4).
+The `host.ios` and `host.macos` dictionaries `infoPlist` and `entitlements` refuse
+all supplied keys together; their values never enter a bundle. Diagnostics give
+specific grant advice only where tests apply those lines, including companion
+grants, through the bake and platform writer. Other derived keys cannot be set
+there. For a key Exact never writes, record a `bun exact.mjs feedback note` from
+the app directory naming the key and what the native module needs.
+
 ## Apple privacy manifests
 
 Apple builds write `PrivacyInfo.xcprivacy` before signing each app, App Clip,
@@ -1709,7 +1723,7 @@ The globals beyond the language are the browser's on the web and these on Hermes
 | `setTimeout`, `clearTimeout` | Inside an answer, on the app's clock (below) |
 | `queueMicrotask`, `Promise` | |
 | `scheduler.yield()` | Ends the answer's turn; it goes on in a new one with a budget of its own (below). Outside an answer's turn it resolves at once; for an answer let go it rejects with an `AbortError`. `scheduler.postTask` refuses |
-| `Intl.NumberFormat`, `Intl.DateTimeFormat`, `Intl.Collator`, `localeCompare`, `toLocaleString` | Android's published v5 bundle has no Intl. With an Intl-enabled bundle carrying receipt-bound English ICU data, Hermes's ICU backend supplies `Collator` and Ibex supplies `NumberFormat` and `DateTimeFormat`. Date formatting needs an explicit timestamp. No `Intl.PluralRules`, `RelativeTimeFormat`, `ListFormat`, `Segmenter` or `DisplayNames` (Apple's engine; Linux's is built `--intl`). `Intl.Locale` is the prelude's on every Hermes host (the engine has none): a tag parsed and canonicalized as Chrome does, its options and getters, and `getWeekInfo()` with Chrome's `{firstDay, weekend}` from CLDR's week data, by the tag's region, its `-u-rg-`, or its language's likely region (two-letter languages and a few others; another reads Monday and a Saturday-Sunday weekend), and `-u-fw-`. It has no `maximize`, `minimize` or other `get…()` list, does not canonicalize aliases (`iw` stays `iw`, `en-840` keeps `840`, and its week is then the default, Monday, where Chrome's is `en-US`'s), a formatter given a `Locale` object rather than its string uses the default locale, and `structuredClone` copies a `Locale` as `{}` where Chrome refuses it. Apple's `ja-JP` long date puts a space before the weekday (`10月6日 火曜日`, Chrome `10月6日火曜日`). Apple's engine has no `notation: "compact"`: the prelude formats its short display as Chrome does for a decimal in en, en-GB, en-IN, de, fr, fr-CA, es, es-MX, it, pt, pt-PT, nl, sv, da, nb, fi, pl, ru, uk, cs, tr, ja, zh, zh-TW, ko, hi, he, id, th and vi (and their regions); `compactDisplay: "long"`, another locale or a compact currency is printed in full and said once in the logs. Apple's engine rounds a tie to even and ignores `roundingMode` (`$0.82` for 0.825 dollars, Chrome `$0.83`); the prelude rounds the number first, as Chrome does: from its shortest digits, by the formatter's `roundingMode` (half away from zero unless it names another), which `resolvedOptions()` then reports; a compact it prints in full rounds so too, to its style's digits (`$0.83` for a compact 0.825 dollars). A `unit` keeps the engine's rounding, since that engine converts it to the locale's unit (`0.622mi` for 1 kilometer). Apple's engine has no `formatToParts` |
+| `Intl.NumberFormat`, `Intl.DateTimeFormat`, `Intl.Collator`, `localeCompare`, `toLocaleString` | On Android, the pinned v6 bundle carries receipt-bound English ICU data: Hermes's ICU backend supplies `Collator` and Ibex supplies `NumberFormat` and `DateTimeFormat`. Date formatting needs an explicit timestamp. No `Intl.PluralRules`, `RelativeTimeFormat`, `ListFormat`, `Segmenter` or `DisplayNames` (Apple's engine; Linux's is built `--intl`). `Intl.Locale` is the prelude's on every Hermes host (the engine has none): a tag parsed and canonicalized as Chrome does, its options and getters, and `getWeekInfo()` with Chrome's `{firstDay, weekend}` from CLDR's week data, by the tag's region, its `-u-rg-`, or its language's likely region (two-letter languages and a few others; another reads Monday and a Saturday-Sunday weekend), and `-u-fw-`. It has no `maximize`, `minimize` or other `get…()` list, does not canonicalize aliases (`iw` stays `iw`, `en-840` keeps `840`, and its week is then the default, Monday, where Chrome's is `en-US`'s), a formatter given a `Locale` object rather than its string uses the default locale, and `structuredClone` copies a `Locale` as `{}` where Chrome refuses it. Apple's `ja-JP` long date puts a space before the weekday (`10月6日 火曜日`, Chrome `10月6日火曜日`). Apple's engine has no `notation: "compact"`: the prelude formats its short display as Chrome does for a decimal in en, en-GB, en-IN, de, fr, fr-CA, es, es-MX, it, pt, pt-PT, nl, sv, da, nb, fi, pl, ru, uk, cs, tr, ja, zh, zh-TW, ko, hi, he, id, th and vi (and their regions); `compactDisplay: "long"`, another locale or a compact currency is printed in full and said once in the logs. Apple's engine rounds a tie to even and ignores `roundingMode` (`$0.82` for 0.825 dollars, Chrome `$0.83`); the prelude rounds the number first, as Chrome does: from its shortest digits, by the formatter's `roundingMode` (half away from zero unless it names another), which `resolvedOptions()` then reports; a compact it prints in full rounds so too, to its style's digits (`$0.83` for a compact 0.825 dollars). A `unit` keeps the engine's rounding, since that engine converts it to the locale's unit (`0.622mi` for 1 kilometer). Apple's engine has no `formatToParts` |
 | `console` | To the runner's logs after each answer and reply, including refused calls; available through the agent's `logs` on native hosts. Outside a drive the web writes it to the browser's console too, and an Android development build to logcat under the tag `exact-app` (`adb logcat -s exact-app`). An Android release build and the other native hosts keep it for `logs` alone |
 
 A `net.fetch` line names one origin (`https://api.example.com`), every host
@@ -1812,17 +1826,15 @@ an independent reply settles as it arrives. Leave writes, and any read whose
 parse depends on an earlier reply, in the queue. Storage steps and native
 continuations cannot opt out of it.
 
-A Hermes data module has a 64 MiB heap limit by default. With an
-exception-on-OOM engine bundle (v6 or later), terminal heap exhaustion fails
-its outstanding requests and tool invocations with
+A Hermes data module has a 64 MiB heap limit by default. Terminal heap exhaustion
+fails its outstanding requests and tool invocations with
 `held more than the 64 MiB a data module's heap may hold`. The executor
 destroys that runtime, including its timers, streams and queued storage
 work. The next new request or canvas call loads a fresh runtime; failed
 requests are not retried automatically. Other modules keep running. A native
 storage write already submitted may finish, so an OOM does not establish
 whether it committed. Its completion is discarded, and queued JavaScript
-writes never start. The pinned v5 engine still aborts on heap exhaustion;
-this recovery requires the v6 pin.
+writes never start.
 
 On Hermes each turn of an answer has 100 ms of its own time: its call, or its
 resumption after a `fetch`, storage step or yield it awaited, until it awaits
@@ -2101,6 +2113,15 @@ async calls do on the web: writes that must stay together go in one
 `transaction` (SQLite) or one operation. `clock settle` and a test's `reload`
 wait for the module's storage; `clock +N` names what is left (`background`,
 beside `inflight`), and `state.background` counts what landed and failed.
+If a native storage wait times out, its answer fails: its unsent operations
+are rejected, and so is any it issues afterwards except a lock's `unlock()`,
+which runs once the operation in flight completes. That operation, which can
+still write, keeps its place in the queue until it completes, delivered as
+background work; other answers' operations, let go or not, stay queued behind
+it. A worker placement, which has no background delivery, keeps waiting for
+that completion. Image work whose right to write was revoked releases its place
+immediately. Retiring a worker stops its wait and drops its unsent work;
+storage already submitted to the host may still complete.
 Every failed storage operation, every unhandled rejection and every `console`
 line of the module reaches `logs` (`storage failed: …`, `data: unhandled
 rejection: …`, `console: …`). Storage is refused, with its line, during module
@@ -3845,13 +3866,13 @@ replacement app.
 
 Linux uses the same installer command at the top of this reference with its
 Rust target triple. Exact selects Ibex's `intl` feature and `INTL` group on Linux
-and Android (Android requires a rebuilt bundle, as above):
+and Android:
 `en`/`en-US` and complete currency data are present, and unsupported locales
 fall back to `en-US`; it does not select `intl-all-locales`. The verified
 bundle supplies both VM archives, all three ICU data tiers and the matching
 compiler, while the feature links the English tier. Apple does not install
 Ibex's `INTL` group because Hermes retains OS-backed Intl there. iOS, tvOS and
-Windows use their pinned v4 bundles and must not fall back to the former
+Windows use their pinned v6 bundles and must not fall back to the former
 sibling-Ibex/private-cache recipes. tvOS builds set a 17.0 deployment target,
 above the bundle's 15.0 minimum. The normal native
 build captures bundle inputs under the `hermes-lean-sys/` bake receipt root.
@@ -4055,21 +4076,36 @@ A data crate answers the view's sources in Rust instead of `app.ts`: an app's
 | `app_id()` | The app's identity, which names its storage: `com.example.my-app-3f9a2c` (`exact new` writes the name and six random hex digits), or for a game `com.exact.<Game::ID>` unless its app.json names one. A source that names none takes app.json's `app.id` in the app's build, so its storage (`app:/data`, kept answers, `persist` states, an agent drive's `--storage`) is the app's; one that names its own keeps it, so write the same id as app.json or leave it out. |
 | `grants()` | One grant per line, the lines `app.ts`'s `grants` takes (`net.fetch …`, `sqlite.open …`, `fs.read …`). |
 
-An app `exact new` made outside this checkout that answers in Rust writes its own Cargo workspace
-(LLP 1153 D1.4). Read its crates from [Sparkline](../apps/sparkline)'s `data/`, `web/` and `apple/`:
-each `Cargo.toml`, `build.rs` and `src/lib.rs`, not the TypeScript ones `.exact/shells/` holds. Sparkline's
-paths into Exact are relative to this checkout: in the copies, write each as `<exact2>/…` before running
-`bun exact.mjs update`, `contract` as `<exact2>/contract/cli` too. `update` points `exact-*` crates at this
-checkout by name, and any other path only through that placeholder. The web build copies the source
-`web/build.rs` passes to `contract::bake(plan, …)` into a module of its own, where build.rs's `use`s and
-locals are not: write it as a path from the data crate (`my_app_data::MyApp`), or that path's `::default()`
-or `::new()` with no arguments, with no comma after it (rustfmt adds one when it breaks the call across
-lines). For a mixed app, the build copies the third argument to
-`exact_js_bake::build_mixed_with`: a reference to the same data-crate value or constructor,
-with no constructor arguments. TypeScript answers the other sources. A declared
-`rust.module.package` supplies the module instead of a generated one.
-A source built with arguments is exported by a crate of the app's own
-instead, named in app.json's `rust.module.package` (Update Lab's `logic/`).
+An app outside this checkout that answers in Rust has its own Cargo workspace beside app.json (LLP 1153
+D1.4). `exact new <path> --rust` writes one: `data/`, whose type answers the starter's source (the view's
+shapes are generated into it by `contract rust`), and the host crates `apple/` and `web/`, shaped as
+[Sparkline](../apps/sparkline)'s are, with a resolved `Cargo.lock`. Another host's crate (`linux/`) is
+copied from Sparkline. To give an existing app a data crate instead:
+
+1. Run a native verb once (`bun exact.mjs ios --no-install`), which writes the generated workspace to
+   `.exact/shells/`, then copy it up: `cp -R .exact/shells/. . && rm -rf .exact/shells .stamp.json`.
+2. Write `data/` and replace the copied `apple/` and `web/` crates with Sparkline's: each `Cargo.toml`,
+   `build.rs` and `src/lib.rs`, and `web/src/bin/sparkline-dev.rs` (the dev loop's driver, renamed with the
+   crate's `[[bin]]`), not the TypeScript ones the shells hold. Rename `sparkline` in them, and
+   write each path into Exact as `<exact2>/…` (`contract` as `<exact2>/contract/cli` too), and each
+   `build.rs`'s `../../../Cargo.lock` as `../Cargo.lock`. An app with an update store
+   (`deploy.store.ios` or `deploy.store.macos` other than `"0"`) adds `exact-apple-update = { path =
+   "<exact2>/host/apple-update" }` to `apple/`'s dependencies, which Sparkline's lacks. Add `"data"` to
+   the root `Cargo.toml`'s `members`, and delete `app.ts`.
+3. Run `bun exact.mjs update`, which resolves `<exact2>` and points `exact-*` crates at this checkout,
+   then `bun exact.mjs lock`.
+
+A build script binds the source before asking its grants (`let source = my_app_data::MyApp::default();
+let grants = source.grants();`): `my_app_data::MyApp::default().grants()` borrows a temporary (E0716).
+The web build copies the source `web/build.rs` passes to `contract::bake(plan, …)` into a module of its
+own, where build.rs's `use`s and locals are not: write it as a path from the data crate
+(`my_app_data::MyApp`), or its `::default()` or `::new(…)` whose arguments are literals
+(`my_app_data::MyApp::new(true)`), across lines as rustfmt writes it or not: what it copies is the source
+the app runs, so a constructor for the bake alone is not one. For a mixed app, the build
+copies the third argument to `exact_js_bake::build_mixed_with`, a reference to the same kind of source.
+TypeScript answers the other sources. A source built from anything else (a local, a path read at build
+time) is exported by a crate of the app's own instead, named in app.json's `rust.module.package`
+(Update Lab's `logic/`), which supplies the module instead of a generated one.
 
 A source that wraps another implements `exact_runner::DataSourceWrapper`.
 Every method is required, so adding a data-source method cannot silently use

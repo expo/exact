@@ -59,7 +59,7 @@ import Foundation
 `);
     const binary = join(dir, 'attachments');
     run('xcrun', ['swiftc', '-parse-as-library', '-I', dir, '-L', dir, '-lExactPackage',
-      'host/apple/Sources/ExactKit/AppFileWalk.swift', 'packages/compose/apple/Compose.swift', source, '-o', binary]);
+      'host/apple/Sources/ExactCore/AppFileWalk.swift', 'packages/compose/apple/Compose.swift', source, '-o', binary]);
     run(binary, [dir]);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }, 60000);

@@ -15,7 +15,7 @@ import { resolve, dirname } from 'node:path';
 import vm from 'node:vm';
 import { brotliCompressSync, createBrotliCompress, constants } from 'node:zlib';
 import { createDocument } from './dom.js';
-import { cachingFetch, FRESH } from './http-cache.mjs';
+import { cachingFetch, directives, FRESH } from './http-cache.mjs';
 import { canonical } from './route-pattern.js';
 import { select, tokens } from './page-style.mjs';
 import { buildPageFiles, writeCrawlerFiles } from '../web/crawl.mjs';
@@ -218,10 +218,27 @@ export function renderer(dist, { closed = false, read = path => readFileSync(res
     const location = { pathname: '/', search: '', href: 'http://render.invalid/', origin: 'http://render.invalid' };
     // What the render read that another render may not read alike: how long its answers stay fresh for any reader
     // (http-cache.mjs `FRESH`), and whether a source drew a random number (its only other reading the clock and
-    // `Math.random` refuse, ts-fetch.js) — so how long its page may be given again (`keep`).
+    // `Math.random` refuse, ts-fetch.js) — so how long its page may be given again (`keep`), and whether it may be
+    // shared at all (`drew`).
     const read = { fresh: Infinity, random: false }, prefers = new Set();
     const noted = response => { read.fresh = Math.min(read.fresh, response?.[FRESH] ?? 0); return response; };
-    const drew = f => (...args) => { read.random = true; return f(...args); };
+    // A call the platform refuses drew nothing
+    const drew = f => (...args) => { const drawn = f(...args); read.random = true; return drawn; };
+    // The `crypto.subtle` calls that draw nothing (LLP 1069.005 D2): hashing; reading, writing, checking, decrypting and
+    // deriving; and the signatures, encryptions and key wraps of algorithms that take no random input. Every other call
+    // that succeeds drew, an algorithm a newer platform adds included.
+    const pure = ['digest', 'importKey', 'exportKey', 'getPublicKey', 'verify', 'decrypt', 'unwrapKey', 'deriveBits', 'deriveKey', 'decapsulateBits', 'decapsulateKey'];
+    const encrypts = ['AES-CTR', 'AES-CBC', 'AES-GCM', 'AES-OCB', 'CHACHA20-POLY1305'];
+    const deterministic = { sign: ['HMAC', 'RSASSA-PKCS1-V1_5', 'ED25519', 'ED448'], encrypt: encrypts, wrapKey: [...encrypts, 'AES-KW'] };
+    const salted = (name, a) => {
+      if (pure.includes(name)) return false;
+      const given = a[name === 'wrapKey' ? 3 : 0], algorithm = String(typeof given === 'string' ? given : given?.name).toUpperCase();
+      // A PSS signature with no salt takes no random input (RFC 8017 §9.1.1); its length truncates, as WebIDL converts it
+      if (name === 'sign' && algorithm === 'RSA-PSS' && Math.trunc(Number(given?.saltLength)) === 0) return false;
+      return !(Object.hasOwn(deterministic, name) && deterministic[name].includes(algorithm));
+    };
+    // `SubtleCrypto`'s own operations, the calls `salted` judges; what it inherits, such as `toString`, passes through
+    const operations = new Set(Object.getOwnPropertyNames(SubtleCrypto.prototype).filter(name => name !== 'constructor'));
     const owner = new AbortController(), timers = new Set(), errors = [];
     let disposed = false;
     const dispose = () => { disposed = true; owner.abort(); for (const timer of timers) clearTimeout(timer); timers.clear(); };
@@ -264,7 +281,11 @@ export function renderer(dist, { closed = false, read = path => readFileSync(res
       performance, console, Request, Response, Headers, URL, URLSearchParams, TextEncoder, TextDecoder, AbortController, AbortSignal,
       ReadableStream, WritableStream, TransformStream, CountQueuingStrategy, ByteLengthQueuingStrategy, CompressionStream, DecompressionStream,
       fetch: fetchOwned,
-      crypto: { subtle: crypto.subtle, getRandomValues: drew(a => crypto.getRandomValues(a)), randomUUID: drew(() => crypto.randomUUID()) },
+      crypto: { subtle: new Proxy(crypto.subtle, { get: (subtle, name) => !operations.has(name) ? Reflect.get(subtle, name) : (...a) => {
+        const made = subtle[name](...a);
+        return salted(name, a) ? made.then(result => { read.random = true; return result; }) : made;
+      } }), getRandomValues: view => { const filled = crypto.getRandomValues(view); if (filled.byteLength > 0) read.random = true; return filled; },
+      randomUUID: drew(() => crypto.randomUUID()) },
       WebAssembly, atob, btoa, Event: class {}, CustomEvent: class {}, __exactRender: true, __files: files,
       ...(closed ? { __exactMarkdown: new Map() } : {}),
       __exactMarkdownBuilt: JSON.parse(builtMarkdown(shell, seen)),
@@ -341,7 +362,7 @@ export function renderer(dist, { closed = false, read = path => readFileSync(res
         // another render would make until the first of those answers goes stale: it may be given again until then, for
         // at most 60 s (LLP 1048.007 D8).
         const keep = status === 200 && settled && !out.failed?.length && out.activation?.kept === false && !out.rust && !read.random && read.fresh > 0 && read.fresh < Infinity ? Math.min(read.fresh, 60000) : 0;
-        return { html: markedHead + body(''), rest: marked + body(late), status, settled, failed: out.failed ?? [], refused, render: out.render, location, policy: info.policy, activate, keep, robots: out.robots, origin: out.origin };
+        return { html: markedHead + body(''), rest: marked + body(late), status, settled, failed: out.failed ?? [], refused, render: out.render, location, policy: info.policy, activate, keep, drew: read.random, robots: out.robots, origin: out.origin };
       } finally { made.dispose(); }
     } };
   }
@@ -428,18 +449,22 @@ export function pageServer(dist, render = renderer(dist), log = console.log) {
     headers['content-encoding'] = 'br';
     return { status, headers, body: brotliCompressSync(html, { params: { [constants.BROTLI_PARAM_QUALITY]: 5 } }) };
   };
+  const shared = page => page.policy === 'cached' && !page.drew;
   return async function page(location, header) {
     // Laid out for the reader's viewport (LLP 1048.006), and kept per viewport.
     const viewport = viewportOf(header), key = `${location} ${JSON.stringify(viewport)}`;
     const t = performance.now(), hit = cache.get(key);
-    const revalidate = /no-cache|no-store|max-age=0/.test(header('cache-control') ?? '');
+    const asked = directives(header('cache-control')), revalidate = asked.has('no-cache') || asked.has('no-store') || Number(asked.get('max-age')) === 0;
     if (hit && hit.until > Date.now() && !revalidate) return send(header, hit.html, hit.status, hit.cacheControl);
     const begun = await render.begin(location, viewport);
     reads = !!begun.readsViewport;
     const keep = page => {
-      // A `cached` route's page is kept 60 s; a `request` route's, as long as what it was made of (`keep`).
-      const ms = page.status !== 200 ? 0 : page.policy === 'cached' ? 60000 : page.policy === 'request' ? page.keep : 0;
-      if (ms > 0) { if (cache.size >= 64) cache.delete(cache.keys().next().value); cache.set(key, { html: page.html, status: page.status, until: Date.now() + ms, cacheControl: page.policy === 'cached' ? 'public, max-age=0, s-maxage=60' : 'no-store' }); }
+      // Keep a `cached` route's page 60 s and share it, unless its render drew randomness: a draw is the device's (LLP
+      // 1069.005 D2), and a shared page gives every reader the same one. Keep a `request` route's page as long as what
+      // it was made of (`keep`). Keep nothing for a request that asks no cache to store its response (RFC 9111
+      // §5.2.1.5), as the render host does.
+      const ms = page.status !== 200 || asked.has('no-store') ? 0 : shared(page) ? 60000 : page.policy === 'request' ? page.keep : 0;
+      if (ms > 0) { if (cache.size >= 64) cache.delete(cache.keys().next().value); cache.set(key, { html: page.html, status: page.status, until: Date.now() + ms, cacheControl: shared(page) ? 'public, max-age=0, s-maxage=60' : 'no-store' }); }
       log(`render ${page.location} ${page.status} ${(performance.now() - t).toFixed(1)}ms bytes=${page.html.length}${page.flushed ? ' flushed' : ''}`);
       for (const failure of page.failed) log(`  ${page.location}: resource ${failure}`);
       for (const refused of page.refused) log(`  ${page.location}: ${refusedLine(refused)}`);
@@ -468,7 +493,7 @@ export function pageServer(dist, render = renderer(dist), log = console.log) {
     }
     const page = await begun.finish();
     keep(page);
-    return send(header, page.html, page.status, page.policy === 'cached' && page.status === 200 ? 'public, max-age=0, s-maxage=60' : 'no-store');
+    return send(header, page.html, page.status, shared(page) && page.status === 200 ? 'public, max-age=0, s-maxage=60' : 'no-store');
   };
 }
 

@@ -5,7 +5,7 @@ use super::each::{PageAnswer, PageAnswers};
 use super::{DataSource, ResourceState, Runner, RunnerError, Target};
 use crate::delivery::Delivery;
 use exact_kernel::Kernel;
-use exact_plan::{Plan, Value};
+use exact_plan::Value;
 use std::collections::HashSet;
 
 /// The state a document was projected from. Never a store.
@@ -54,7 +54,7 @@ impl<D: DataSource> Runner<D> {
     /// joins later asks, as any element that joins does.
     #[allow(clippy::too_many_arguments)] // the host boot facts
     pub fn boot_checkpoint(
-        plan: Plan,
+        plan: impl Into<crate::Program>,
         data: D,
         kernel: Kernel,
         checkpoint: &Checkpoint,
@@ -81,7 +81,7 @@ impl<D: DataSource> Runner<D> {
     #[allow(clippy::too_many_arguments)] // the host boot facts
     pub fn boot_checkpoint_linked(
         links: super::RunnerLinks,
-        plan: Plan,
+        plan: impl Into<crate::Program>,
         data: D,
         kernel: Kernel,
         checkpoint: &Checkpoint,

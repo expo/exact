@@ -82,11 +82,11 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     private var playingCopy: Map<Int, android.graphics.drawable.AnimatedImageDrawable>? = null
     private var heldCopy: Map<Int, android.graphics.RenderNode>? = null
     /** Nodes exact2's reader animates, sampled every frame while any plays. */
-    private val layers: Layers = Layers({ node, ops, ox, oy, memo ->
-        // A layer whose dash phase moved: only its path is recorded again, read once.
+    private val layers: Layers = Layers({ node, ops, ox, oy, memo, scale ->
+        // A layer recorded again (a dash phase, a colour, a pixelated image's scale): its paths are read once.
         val c = node.beginRecording()
-        main.memo = memo
-        try { main.replayAt(c, IntBuffer.wrap(ops), 0, ops.size, ox, oy) } finally { main.memo = null }
+        main.memo = memo; main.layerScale = scale
+        try { main.replayAt(c, IntBuffer.wrap(ops), 0, ops.size, ox, oy) } finally { main.memo = null; main.layerScale = 1f }
         node.endRecording()
     }) { fonts[it] }.also { if (skipOffscreen) it.rowShows = Layers.RowShows { row -> rowShows(row) } }
     /** layerbounds=0: layers' nodes cover everything, unclipped (each move or fade damages the window), to compare. */

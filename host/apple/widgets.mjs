@@ -78,6 +78,19 @@ export function macWidgetSigning(app, identity, { distribution = false, log = co
   }
   return { team, profiles: macWidgetProfiles({ app, team, distribution, log, ...profiles }) };
 }
+/** Shared widget metadata on the owning app; signing supplies the group's and Keychain's identities. */
+export function widgetAppKeys(app, platform, { group, keychain, generation }) {
+  return { ExactAppGroup: group, ExactAppIdentifier: app.id,
+    ExactWidgetKinds: platformWidgetEntries(app, platform).map(entry => entry.kind),
+    ExactWidgetTypeScript: existsSync(resolve(app.dir, 'app.ts')), ExactWidgetGeneration: generation,
+    ...(platform === 'macos' ? { ExactWidgetRequiresSecrets: platformWidgetEntries(app, 'macos').filter(entry => entry.requiresSecrets).map(entry => entry.kind) } : {}),
+    ...(keychain ? { ExactKeychainAccessGroup: keychain } : {}) };
+}
+
+/** ExactWidgetSecretsAvailable is extension-only; ExactWidgetRequiresSecrets is copied from the app. */
+export const widgetExtensionKeys = appInfo => ({ ExactWidgetSecretsAvailable: !!appInfo.ExactKeychainAccessGroup,
+  ExactWidgetRequiresSecrets: appInfo.ExactWidgetRequiresSecrets ?? [] });
+
 /** `extra`: the app's own profile entitlements (presence.mjs `macProvisioning`), signed under the same profile. */
 export function macWidgetEntitlements({ app, team, profiles = null, extension = false, extra = {} }) {
   const id = extension ? widgetId(app) : app.id;
@@ -413,7 +426,7 @@ export function packageWidgets({ app, bundle, shared, directory, sdk, triple, de
   const entitlementPath = resolve(directory, 'widget-entitlements.plist');
   writeFileSync(entitlementPath, entitlements);
   writeFileSync(resolve(extensionContents, 'Info.plist'), plistFile({ CFBundleIdentifier: widgetId(app), CFBundleName: 'ExactWidgets', CFBundleDisplayName: app.displayName, CFBundleExecutable: 'ExactWidgets', CFBundlePackageType: 'XPC!', ...versions, ...(!mac ? { UIDeviceFamily: appInfo.UIDeviceFamily } : {}), ...capabilities,
-    CFBundleSupportedPlatforms: mac ? ['MacOSX'] : appInfo.CFBundleSupportedPlatforms, ...(appInfo.DTPlatformName ? { DTPlatformName: appInfo.DTPlatformName } : {}), ...(appInfo.NSAppTransportSecurity ? { NSAppTransportSecurity: appInfo.NSAppTransportSecurity } : {}), ExactAppGroup: appInfo.ExactAppGroup ?? widgetGroup(app), ExactAppIdentifier: appInfo.ExactAppIdentifier ?? app.id, ExactWidgetTypeScript: platform !== 'watchos' && existsSync(resolve(app.dir, 'app.ts')), ...(appInfo.ExactKeychainAccessGroup ? { ExactKeychainAccessGroup: appInfo.ExactKeychainAccessGroup } : {}), ...(mac ? { ExactWidgetSecretsAvailable: !!appInfo.ExactKeychainAccessGroup, ExactWidgetRequiresSecrets: appInfo.ExactWidgetRequiresSecrets ?? [] } : {}), ExactWidgetGeneration: appInfo.ExactWidgetGeneration, ...(typeof app.origin === 'string' ? { ExactLinkBase: app.origin } : {}),
+    CFBundleSupportedPlatforms: mac ? ['MacOSX'] : appInfo.CFBundleSupportedPlatforms, ...(appInfo.DTPlatformName ? { DTPlatformName: appInfo.DTPlatformName } : {}), ...(appInfo.NSAppTransportSecurity ? { NSAppTransportSecurity: appInfo.NSAppTransportSecurity } : {}), ExactAppGroup: appInfo.ExactAppGroup ?? widgetGroup(app), ExactAppIdentifier: appInfo.ExactAppIdentifier ?? app.id, ExactWidgetTypeScript: platform !== 'watchos' && existsSync(resolve(app.dir, 'app.ts')), ...(appInfo.ExactKeychainAccessGroup ? { ExactKeychainAccessGroup: appInfo.ExactKeychainAccessGroup } : {}), ...(mac ? widgetExtensionKeys(appInfo) : {}), ExactWidgetGeneration: appInfo.ExactWidgetGeneration, ...(typeof app.origin === 'string' ? { ExactLinkBase: app.origin } : {}),
     NSExtension: { NSExtensionPointIdentifier: 'com.apple.widgetkit-extension' } }));
   // A configured entry's intent reaches the Edit Widget sheet through the extension's App Intents metadata, which
   // Xcode's pass extracts from the module's constant values (`intents.mjs`).

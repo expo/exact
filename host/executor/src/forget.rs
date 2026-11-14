@@ -268,7 +268,7 @@ impl Core {
                     kept.push_back(place);
                     continue;
                 }
-                if let Fenced::Held(r, work, _, forgotten) = &mut place {
+                if let Fenced::Held(r, work, _, forgotten, _) = &mut place {
                     if !explicit.contains(&r.ticket)
                         && (reads::effect_read(r, work.is_some())
                             || matches!(r.class, RequestClass::Parallel(_)))

@@ -229,6 +229,8 @@ extension NodeView {
         ease.timingFunction = PressFeedback.timing
         layer.add(ease, forKey: "press")
         press.easedAbout = CGPoint(x: o.x - bounds.midX, y: o.y - bounds.midY)
+        // A one-axis clip above fits the ease's extent, not the model's.
+        overflowClipGeometryChanged()
     }
     /// No ease of the press on the render server: a view taken for another
     /// node, or one a flight carries, shows its own transform alone.
@@ -294,6 +296,9 @@ extension NodeView {
 
     #if os(iOS) || os(tvOS)
     package func applyTransform() {
+        defer { overflowClipGeometryChanged() }
+        let before = layer.transform
+        defer { if !CATransform3DEqualToTransform(before, layer.transform) { refreshPixelatedImages() } }
         // Flying scaled whole in its clip (LLP 1013.000 D4.4): the
         // flight's scale only.
         if flightLook != nil { stopPressEase() }
@@ -350,6 +355,9 @@ extension NodeView {
     }
     #else
     package func applyTransform() {
+        defer { overflowClipGeometryChanged() }
+        let before = layer?.transform ?? CATransform3DIdentity
+        defer { if !CATransform3DEqualToTransform(before, layer?.transform ?? CATransform3DIdentity) { refreshPixelatedImages() } }
         // A backdrop mirrors its box as the transform moves and scales it.
         defer { if !backdropOperations.isEmpty { applyBackdrop() } }
         // A frame's web view takes its scale by geometry (`FrameScaleMac.swift`).

@@ -753,7 +753,7 @@ step          = "tap" "midi" STRING ( HEX { HEX } | "clock" NUMBER NUMBER ) NL
               | "tap" STRING "drag" ( "to" STRING [ "at" NUMBER NUMBER ]
                   | [ "-" ] NUMBER [ "-" ] NUMBER )
                   { ( "press" | "over" | "hold" ) NUMBER
-                  | "from" NUMBER NUMBER | "mouse" }
+                  | "from" NUMBER NUMBER | "mouse" | "into" "keyboard" }
                   [ "during" { STRING } ] NL
               | "type" STRING ( STRING [ "append" ]
                   | "key" STRING [ "down" | "up" | "for" NUMBER ]

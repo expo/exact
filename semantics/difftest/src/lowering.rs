@@ -45,7 +45,7 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 /// The plan as a `LowerCheck.PlanInfo` term.
-fn plan_info(plan: &Plan) -> String {
+fn plan_info(plan: &Plan, shared: &[(String, String)]) -> String {
     let strings: Vec<String> = plan.strings.iter().map(string).collect();
     let types: Vec<String> = plan
         .types
@@ -82,8 +82,24 @@ fn plan_info(plan: &Plan) -> String {
             w.join(", ")
         )
     };
+    let mut executables = Vec::new();
     for d in &plan.derives {
-        bodies.push(body(".derive", plan.str(d.name), plan.code(d.body), &[]));
+        let mut declaration = body(".derive", plan.str(d.name), plan.code(d.body), &[]);
+        if d.unsettled {
+            let owner = d.owner.map_or(".none".into(), |a| {
+                format!(".some {}", plan.arm(a).region.0)
+            });
+            executables.push(format!("some (\"{}\", {owner})", hex(plan.code(d.body))));
+            if let Some((_, source)) = shared.iter().find(|(n, _)| n == plan.str(d.name)) {
+                declaration.pop();
+                declaration.push_str(&format!(
+                    ", source := some {source}, executable := true, owner := {owner} }}"
+                ));
+            }
+        } else {
+            executables.push(".none".into());
+        }
+        bodies.push(declaration);
     }
     for (i, s) in plan.slots.iter().enumerate() {
         let id = exact_plan::SlotsId(i as u32);
@@ -123,11 +139,12 @@ fn plan_info(plan: &Plan) -> String {
         ));
     }
     format!(
-        "{{ strings := #[{}],\n    types := #[{}],\n    slots := [{}],\n    derives := [{}],\n    resources := [{}],\n    mutations := [{}],\n    bodies := [{}] }}",
+        "{{ strings := #[{}],\n    types := #[{}],\n    slots := [{}],\n    derives := [{}],\n    executables := [{}],\n    resources := [{}],\n    mutations := [{}],\n    bodies := [{}] }}",
         strings.join(", "),
         types.join(", "),
         slots.join(", "),
         derives.join(", "),
+        executables.join(", "),
         resources.join(", "),
         mutations.join(", "),
         bodies.join(",\n      ")
@@ -287,9 +304,11 @@ pub fn run(cases: Vec<Case>, batch: usize, tag: &str) -> Result<bool, String> {
         match prepare(&case, index) {
             Ok(p) => {
                 let plan = compile(&case).map_err(|e| format!("{}: {e}", case.name))?;
+                let shared = contract::lean::shared_expressions(&case.source, case.path.as_deref())
+                    .map_err(|e| format!("{}: sharing expressions: {e}", case.name))?;
                 let ready = Ready {
                     lean: clone_case(&p.lean),
-                    plan: plan_info(&plan),
+                    plan: plan_info(&plan, &shared),
                 };
                 prepared.push((case, Some(ready), None));
             }
@@ -416,6 +435,38 @@ mod tests {
 
     #[test]
     #[ignore = "async lane: needs the Lean toolchain"]
+    fn executable_rows_are_checked_against_their_substituted_source() {
+        leanrun::build().unwrap();
+        let source = "component App\n  state n = 1\n  view\n    Child(n=n)\ncomponent Child\n  props\n    n: number\n  derive expensive = n + 1\n  derive value = expensive + expensive\n  view\n    text `${value}`\ntest \"row\"\n  expect state n == 1\n";
+        let case = script::scripted("lowering-shared", source, None)
+            .unwrap()
+            .remove(0)
+            .case;
+        let plan = compile(&case).unwrap();
+        let shared = contract::lean::shared_expressions(source, None).unwrap();
+        let row = plan.derives.iter().position(|d| d.unsettled).unwrap();
+        let mut broken = PlanBuilder::from_plan(plan.clone());
+        let wrong = broken.constant(&Value::Number(7.0));
+        broken.set_derive_body(DerivesId(row as u32), wrong);
+        let broken = broken.finish().unwrap();
+        let cases = [&plan, &broken]
+            .iter()
+            .enumerate()
+            .map(|(i, p)| Ready {
+                lean: prepare(&case, i).unwrap().lean,
+                plan: plan_info(p, &shared),
+            })
+            .collect::<Vec<_>>();
+        let (head, reports) = run_batch(&cases, &work_dir(), "lowering-shared-test").unwrap();
+        assert!(head.is_empty(), "{head:?}");
+        assert!(reports[0].sum[0] >= 3, "{:?}", reports[0].lines);
+        assert_eq!(reports[0].sum[2], 0, "{:?}", reports[0].lines);
+        assert_eq!(reports[0].sum[5], 0, "{:?}", reports[0].lines);
+        assert!(reports[1].sum[2] > 0, "{:?}", reports[1].lines);
+    }
+
+    #[test]
+    #[ignore = "async lane: needs the Lean toolchain"]
     fn landings_check_the_configuration_after_queued_continuations() {
         leanrun::build().unwrap();
         let source = include_str!("../../corpus/trace/queue.contract")
@@ -438,7 +489,7 @@ mod tests {
             for plan in [&plan, &broken] {
                 cases.push(Ready {
                     lean: prepare(&case, cases.len()).unwrap().lean,
-                    plan: plan_info(plan),
+                    plan: plan_info(plan, &[]),
                 });
             }
         }

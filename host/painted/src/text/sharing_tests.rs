@@ -343,7 +343,7 @@ mod face_metrics {
     #[test]
     fn fallback_weights_sizes_and_metadata_are_kept_per_glyph() {
         let engine = engine();
-        engine.catalog.borrow_mut().families[0] = FamilyChoice::Declared("Inter".into());
+        engine.catalog.borrow_mut().families[0] = vec![FamilyChoice::Declared("Inter".into())];
         let mut s = crate::paint::text_spec(
             &exact_kernel::StyleProps::default(),
             "café العربية abc abc ",

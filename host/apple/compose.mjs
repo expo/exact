@@ -2,9 +2,9 @@
 // host/apple/build.mjs writes beside the module's sources and never commits.
 
 /** The module side's fixed Swift, in `root`: the table, its view entries, the hatch bindings, extensions and service query,
- * and ExactKit's walk to an app file through no link, which an extension's `file` takes too. */
+ * and ExactCore's walk to an app file through no link, which an extension's `file` takes too. */
 export const moduleSeam = (resolve, root) => ['ExactNativeModule.swift', 'ExactNativeViews.swift', 'ExactTamber.swift', 'ExactExtensions.swift', 'ExactServices.swift']
-  .map(f => resolve(root, 'host/apple/modules', f)).concat(resolve(root, 'host/apple/Sources/ExactKit/AppFileWalk.swift'));
+  .map(f => resolve(root, 'host/apple/modules', f)).concat(resolve(root, 'host/apple/Sources/ExactCore/AppFileWalk.swift'));
 
 /** Link declared system frameworks even when only an Objective-C category uses them. Frameworks introduced
  * above the app's minimum OS are weak-linked; the package checks `#available` before using them (LLP 1133.016 D15). */
@@ -74,6 +74,8 @@ export function composedModule(packages, ownModule) {
     '}');
   lines.push(`let exactAuthenticator: String? = ${authenticator ? JSON.stringify(authenticator.extension) : 'nil'}`);
   lines.push(`let exactStartAtLoad: [String] = [${packages.filter(p => p.start).map(p => JSON.stringify(p.extension)).join(', ')}]`);
+  const members = packages.flatMap(p => (p.credentialMembers ?? []).map(name => `${JSON.stringify(name)}: ${JSON.stringify(p.extension)}`));
+  lines.push(`let exactCredentialMembers: [String: String] = [${members.join(', ') || ':'}]`);
   lines.push(`let exactExtensions: [String: (ExactModule, String) -> ExactExtensionAdapter] = [${packages.map(p => `${JSON.stringify(p.extension)}: { ExactAdapter_${p.module}($0, session: $1) }`).join(', ') || ':'}]`);
   const views = packages.flatMap(p => (p.views ?? []).map(tag => `${JSON.stringify(tag)}: ExactNativeFactory(package: { try ExactExtensions.view($0, ${JSON.stringify(p.extension)}, ${JSON.stringify(tag)}, id: $1, props: $2, events: $3) })`));
   lines.push(`let exactPackageViews: [String: ExactNativeFactory] = [${views.join(', ') || ':'}]`);

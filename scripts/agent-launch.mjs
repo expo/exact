@@ -41,7 +41,7 @@ export async function pollUntil(read, ready, { bound = 60_000, interval = 50, no
 
 // The compiler's warnings in a build's output, and the lines a drive says for them: app-cli.mjs, which runs a
 // drive's build first, has them; verify, the dev loop and agent-build.mjs read them from here.
-export { compilerWarnings, warningLines } from './app-cli.mjs';
+export { compilerWarnings, oneScheme, warningLines } from './app-cli.mjs';
 
 /** Preserve the original operation failure and any owned cleanup handle. */
 export function retainCleanupError(error, failure) {

@@ -53,6 +53,7 @@ fn a_web_boot_reads_the_base_scale_in_the_neutral_column() {
 /// the neutral column's px, which the batch's `box-shadow` writes.
 #[test]
 fn a_web_boot_folds_a_shadow_over_base_names_in_the_neutral_column() {
+    exact_web::link(exact_web_capabilities::linked!(shadows));
     let dir = std::env::temp_dir().join(format!("exact-web-shadow-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();

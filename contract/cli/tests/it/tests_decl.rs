@@ -186,6 +186,19 @@ fn a_test_drags_a_card_to_another_list() {
 }
 
 #[test]
+fn a_test_opts_into_dragging_to_the_keyboard() {
+    let tests = contract::tests("test \"keyboard\"\n  tap \"transcript\" drag 0 300 hold 1000 into keyboard during \"state\"\n").unwrap();
+    let json = contract::tests_json(&tests);
+    assert!(json.contains("\"into\":\"keyboard\""), "{json}");
+    assert!(json.contains("\"during\":[\"state\"]"), "{json}");
+    for option in ["into screen", "into", "into keyboard into keyboard"] {
+        assert!(
+            contract::tests(&format!("test \"t\"\n  tap \"a\" drag 0 300 {option}\n")).is_err()
+        );
+    }
+}
+
+#[test]
 fn a_test_drags_and_opens_at_its_size() {
     // kanban F18, paint F5: a drag, as the driver's `tap … drag`, and the
     // viewport a test's session opens at, as its `--size`.

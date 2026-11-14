@@ -4,6 +4,9 @@ import QuartzCore
 import XCTest
 #if os(macOS)
 import AppKit
+#else
+import UIKit
+import UIKit.UIGestureRecognizerSubclass
 #endif
 @testable import ExactKit
 import ExactCore
@@ -436,3 +439,33 @@ extension SessionClockTimerTests {
         XCTAssertEqual(batch.nativeTimers?.first?.generation, UInt64.max)
     }
 }
+
+#if canImport(UIKit)
+extension SessionClockTimerTests {
+    private final class ScrollTouch: TimerScrollTouch {
+        // uikit receives no system touch sequence in a unit test; retain the requested state.
+        private var phase = UIGestureRecognizer.State.possible
+        override var state: UIGestureRecognizer.State { get { phase } set { phase = newValue } }
+    }
+
+    func testScrollTouchObservationFinishesAfterEndingOrCancellingTheLastFinger() {
+        for cancelled in [false, true] {
+            let observer = ScrollTouch(changed: {})
+            let pan = UIPanGestureRecognizer()
+            let first = UITouch(), second = UITouch(), event = UIEvent()
+            observer.touchesBegan([first, second], with: event)
+            XCTAssertTrue(observer.held)
+            observer.touchesEnded([first], with: event)
+            XCTAssertEqual(observer.state, .possible, "the remaining finger still holds timer admission")
+            XCTAssertTrue(observer.held)
+            if cancelled { observer.touchesCancelled([second], with: event) }
+            else { observer.touchesEnded([second], with: event) }
+            XCTAssertEqual(observer.state, .failed, "an observer must finish so UIKit can reset the scroll and system gestures after a Home cancellation")
+            XCTAssertFalse(observer.held)
+            XCTAssertFalse(observer.cancelsTouchesInView)
+            XCTAssertFalse(observer.canPrevent(pan))
+            XCTAssertFalse(observer.canBePrevented(by: pan))
+        }
+    }
+}
+#endif

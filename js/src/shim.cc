@@ -81,6 +81,7 @@ struct State {
   void *ctx;
   // Destroy the adapter (and its JSI roots) before the runtime.
   std::unique_ptr<ibex2::jsi_adapter::Adapter> adapter;
+  std::unique_ptr<jsi::Function> storage_promise;
   const void *grants;
   size_t capture_limit;
   size_t capture_bytes = 0;
@@ -307,7 +308,7 @@ void *exact_js_create(uint32_t max_heap_bytes, HostFn host, BytesFn bytes, void 
     auto rt = facebook::hermes::makeHermesRuntimeNoThrow(config);
     if (!rt) return nullptr;
     auto state = std::unique_ptr<State>(new State{std::move(rt), {}, host, bytes, ctx, nullptr,
-                                               grants, max_heap_bytes, 0, {}});
+                                               nullptr, grants, max_heap_bytes, 0, {}});
     install_console(state.get());
     state->rt->evaluateJavaScript(kept_bytecode(console, console_len), "console.hbc");
     install_host(state.get());
@@ -385,6 +386,14 @@ int exact_js_harden(void *h, const uint8_t *harden, size_t harden_len, char **ou
   auto *state = static_cast<State *>(h);
   if (state->oom) return out_of_memory(state, out);
   try {
+    auto &rt = *state->rt;
+    // Keep the queue's Promise identity private to the native waiter.
+    state->storage_promise = std::make_unique<jsi::Function>(
+        rt.global().getPropertyAsFunction(rt, "__exact_storage_promise"));
+    auto reflect = rt.global().getPropertyAsObject(rt, "Reflect");
+    if (!reflect.getPropertyAsFunction(rt, "deleteProperty")
+             .call(rt, rt.global(), jsi::String::createFromUtf8(rt, "__exact_storage_promise")).getBool())
+      return fail(out, "storage initialization could not remove its promise getter", 1);
     state->adapter->capture_intrinsics();
     // Hermes' young generation is one heap segment that keeps every page it
     // has touched, so its footprint is the furthest point allocation reaches
@@ -400,6 +409,26 @@ int exact_js_harden(void *h, const uint8_t *harden, size_t harden_len, char **ou
     ibex2::jsi_adapter::CompiledScript script{"harden", harden, harden_len};
     state->adapter->harden(script);
     collect_garbage(state, "hardened");
+    return 0;
+#ifdef EXACT_JS_OOM
+  } catch (const ::hermes::vm::JSOutOfMemoryError &) {
+    return out_of_memory(state, out);
+#endif
+  } catch (const jsi::JSError &e) {
+    return fail(out, e.getMessage(), 1);
+  } catch (const std::exception &e) {
+    return fail(out, e.what(), 2);
+  }
+}
+
+// Read the head's native identity before any settlement can retire it.
+int exact_js_storage_image_task(void *h, uint64_t *id, char **out) {
+  auto *state = static_cast<State *>(h);
+  if (state->oom) return out_of_memory(state, out);
+  auto &rt = *state->rt;
+  try {
+    auto promise = state->storage_promise->call(rt);
+    *id = state->adapter->image_task_id(rt, promise);
     return 0;
 #ifdef EXACT_JS_OOM
   } catch (const ::hermes::vm::JSOutOfMemoryError &) {

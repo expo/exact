@@ -235,7 +235,11 @@ impl DataSource for Module {
 
     fn continuation(&mut self, token: u64) -> Option<Box<dyn FnOnce() -> Outcome + Send>> {
         if token == exact_runner::BACKGROUND {
-            return Some(self.storage.as_ref()?.continuation());
+            return Some(
+                self.storage
+                    .as_ref()?
+                    .background_continuation(self.engine.as_mut()?),
+            );
         }
         // A worker's owner thread resumes a yield at once, as a host settles
         // `Dispatch::Again`, and a timer when the runner hands it out.
@@ -261,10 +265,11 @@ impl DataSource for Module {
             .iter_mut()
             .find(|(_, p)| p.call == token && p.ticket == 0 && !p.work_taken)?;
         let retired = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let work = self
-            .storage
-            .as_ref()?
-            .continuation_for(Some(retired.clone()));
+        let work = self.storage.as_ref()?.continuation_for(
+            Some(retired.clone()),
+            self.main_thread,
+            self.engine.as_mut()?,
+        );
         parked.work_taken = true;
         self.retired.insert(token, retired);
         Some(work)

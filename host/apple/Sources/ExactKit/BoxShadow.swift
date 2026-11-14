@@ -233,6 +233,7 @@ extension NodeView {
     /// The casters onto the layer: the outer ones at its bottom, cast from
     /// the border box; the inset ones over the box's paint; or gone.
     func applyShadow(outline: CGPath) {
+        defer { overflowClipGeometryChanged() }
         if let card = groupedShadowCard {
             card.syncShadowClip()
             #if os(macOS)
@@ -394,13 +395,36 @@ extension NodeView {
     #endif
 
     /// Whether the overflow clips one axis and leaves the other visible
-    /// (`clip` beside `visible`, CSS Overflow 3 §3.1). The children's clip
-    /// box then reaches `ClipReach.far` past the node on the visible axis; a
-    /// node that can have no clip box (an overlay, a material) clips both.
+    /// (`clip` beside `visible`, CSS Overflow 3 §3.1).
     var clipsOneAxis: Bool {
         guard kind != "text" else { return false }
         let pair = [style["overflow_x"]?.string ?? "visible", style["overflow_y"]?.string ?? "visible"]
         return pair == ["clip", "visible"] || pair == ["visible", "clip"]
+    }
+
+    /// Overflow clips at the padding edge; a one-axis clip has square corners.
+    var overflowPaddingBox: CGRect {
+        let box = surface?.frame ?? bounds
+        let width = number("border_width")
+        let top = number("border_width_top", width), right = number("border_width_right", width)
+        let bottom = number("border_width_bottom", width), left = number("border_width_left", width)
+        return CGRect(x: box.minX + left, y: box.minY + top,
+                      width: max(0, box.width - left - right), height: max(0, box.height - top - bottom))
+    }
+
+    func oneAxisClipContains(_ point: CGPoint) -> Bool {
+        let edge = overflowPaddingBox
+        return style["overflow_x"]?.string == "clip"
+            ? point.x >= edge.minX && point.x < edge.maxX
+            : point.y >= edge.minY && point.y < edge.maxY
+    }
+
+    func overflowClipIntersects(_ rect: CGRect) -> Bool {
+        guard clipsOneAxis else { return bounds.intersects(rect) }
+        let edge = overflowPaddingBox
+        return style["overflow_x"]?.string == "clip"
+            ? rect.maxX > edge.minX && rect.minX < edge.maxX
+            : rect.maxY > edge.minY && rect.minY < edge.maxY
     }
 
     /// Keep overflow clipped on the children while an outer shadow reaches past the card.
@@ -410,8 +434,8 @@ extension NodeView {
         #else
         let canHoldChildren = materialKind != "glass"
         #endif
-        syncClipBox(overflowClips && kind != "text" && (shadowColor != nil || clipsOneAxis)
-                    && scroll == nil && overlay == nil && canHoldChildren)
+        syncClipBox(overflowClips && kind != "text" && scroll == nil
+                    && (clipsOneAxis || shadowColor != nil && overlay == nil && canHoldChildren))
         let clipped = overflowClips && clipBox == nil
         if clipsToBounds != clipped { clipsToBounds = clipped }
     }
@@ -440,17 +464,23 @@ extension NodeView {
             box.wantsLayer = true
             #endif
             box.clipsToBounds = true
+            box.autoresizesSubviews = !clipsOneAxis
             GlassGroups.moving(in: self) {
                 // The box is in the window before the children move into it,
                 // so they never leave it: UIKit cancels the touches of a
                 // view that does, and AppKit its first responder.
-                let children = subviews.filter {
+                #if os(macOS)
+                let holders = [self, clipsOneAxis ? materialContent : nil].compactMap { $0 }
+                #else
+                let holders = [self, clipsOneAxis ? materialView?.contentView : nil].compactMap { $0 }
+                #endif
+                let children = holders.flatMap(\.subviews).filter {
                     #if os(iOS)
-                    $0 is NodeView || $0 === glassGroupView || $0 === textArea || $0 === symbolView || $0 === field || $0 === searchChrome || $0 === stepper
+                    $0 is NodeView || $0 === overlay || $0 === glassGroupView || $0 === textArea || $0 === symbolView || $0 === field || $0 === searchChrome || $0 === stepper
                     #elseif os(tvOS)
-                    $0 is NodeView || $0 === glassGroupView || $0 === textArea || $0 === symbolView || $0 === field
+                    $0 is NodeView || $0 === overlay || $0 === glassGroupView || $0 === textArea || $0 === symbolView || $0 === field
                     #else
-                    $0 is NodeView || $0 === glassGroupView || $0 === textAreaScroll || $0 === symbolClip || $0 === field || $0 === stepper
+                    $0 is NodeView || $0 === overlay || $0 === glassGroupView || $0 === textAreaScroll || $0 === symbolClip || $0 === field || $0 === stepper
                     #endif
                 }
                 addSubview(box)
@@ -459,38 +489,83 @@ extension NodeView {
             clipBox = box
         } else if !wanted, let box = clipBox {
             GlassGroups.moving(in: self) {
-                for child in box.subviews { addSubview(child) }
+                #if os(macOS)
+                let target = overlay ?? materialContent ?? self
+                #else
+                let target = overlay ?? (Materials.glass(materialKind) || blurHostsChildren ? materialView?.contentView : nil) ?? self
+                #endif
+                for child in box.subviews {
+                    if child === overlay { addSubview(child) } else { target.addSubview(child) }
+                }
                 box.removeFromSuperview()
             }
             clipBox = nil
         }
     }
 
-    /// The clip box over the node's bounds, or for a one-axis clip that far
-    /// past them on the visible axis, with its bounds' origin where its
-    /// frame's is so the children keep the node's coordinates. Autoresizing
-    /// keeps the margins as the node resizes.
+    /// Descendant geometry can extend the visible axis without changing this
+    /// node's size. Refit each enclosing one-axis clip in the same transaction.
+    func overflowClipGeometryChanged() {
+        var view = superview
+        if clipBox != nil, clipsOneAxis { placeClipBox() }
+        while let current = view {
+            if let node = current as? NodeView, node.clipBox != nil, node.clipsOneAxis { node.placeClipBox() }
+            view = current.superview
+        }
+    }
+
+    /// The visible axis spans the children's actual paint, including nested
+    /// overflow, transforms and shadow layers. No constant limits its reach.
     private func placeClipBox() {
         guard let box = clipBox else { return }
-        let far = clipsOneAxis ? ClipReach.far : 0
-        let x = (style["overflow_x"]?.string ?? "visible") == "visible" ? far : 0
-        let y = (style["overflow_y"]?.string ?? "visible") == "visible" ? far : 0
-        let reach = bounds.insetBy(dx: -x, dy: -y)
-        guard box.frame != reach || box.bounds.origin != reach.origin else { return }
+        box.autoresizesSubviews = !clipsOneAxis
+        if let overlay, overlay.superview === box, overlay.frame != bounds { overlay.frame = bounds }
+        var reach = bounds
+        if clipsOneAxis {
+            #if os(macOS)
+            typealias View = NSView
+            let host = layer
+            #else
+            typealias View = UIView
+            let host: CALayer? = layer
+            #endif
+            func include(_ rect: CGRect) {
+                guard OverflowPaint.finite(rect) else { return }
+                reach = reach.union(rect)
+            }
+            func layers(_ layer: CALayer) {
+                if let host, let parent = layer.superlayer {
+                    include(parent.convert(OverflowPaint.inParent(OverflowPaint.bounds(layer), of: layer), to: host))
+                }
+            }
+            func views(_ view: View) {
+                include(view.convert(view.bounds, to: self))
+                for child in view.subviews { views(child) }
+            }
+            // AppKit may not have attached backing layers yet; views still
+            // supply their geometry. Non-view layers supply shadows and flat leaves.
+            for child in box.subviews { views(child) }
+            #if os(macOS)
+            for child in box.layer?.sublayers ?? [] { layers(child) }
+            #else
+            for child in box.layer.sublayers ?? [] { layers(child) }
+            #endif
+            if (style["overflow_x"]?.string ?? "visible") == "clip" {
+                reach.origin.x = overflowPaddingBox.minX; reach.size.width = overflowPaddingBox.width
+            } else {
+                reach.origin.y = overflowPaddingBox.minY; reach.size.height = overflowPaddingBox.height
+            }
+        }
+        guard box.frame != reach || box.bounds != reach else { return }
+        // Moving the clip edge must not resize its children or change their
+        // coordinates, even when the visible-axis origin is negative.
         box.frame = reach
         #if os(iOS) || os(tvOS)
-        box.bounds.origin = reach.origin
+        box.bounds = reach
         #else
         box.setBoundsOrigin(reach.origin)
         #endif
     }
-}
-
-/// How far a one-axis clip's box reaches past the node on its visible axis;
-/// overflow beyond it is clipped. A power of two, so that positions in the
-/// box stay exact in single precision.
-enum ClipReach {
-    static let far: CGFloat = 65_536
 }
 
 #if os(macOS)

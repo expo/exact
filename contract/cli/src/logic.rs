@@ -467,6 +467,11 @@ pub fn web_linked(plan: &exact_plan::Plan, inputs: &serde_json::Value) -> String
             | Capability::Animations
             | Capability::Gradients
             | Capability::Grid
+            | Capability::Shadows
+            | Capability::Corners
+            | Capability::Rotate
+            | Capability::TextStroke
+            | Capability::SymbolPalette
             | Capability::Geometry
             | Capability::Segments
             | Capability::Dataset

@@ -561,8 +561,8 @@ extension NavigationHost {
     /// with it in one batch (a cold launch's) take the same. Written on
     /// change, so a hatch's own value stands till then. The root itself
     /// follows too (LLP 1075.003 §3.7, amended 2026-10-05): its tablist
-    /// hidden hides the bar, shown shows it, both with UIKit's own animated
-    /// `setTabBarHidden` (iOS 18), as Signal hides its tab bar for the chat
+    /// hidden hides the bar, shown shows it, with UIKit's `setTabBarHidden`
+    /// (iOS 18), as Signal hides its tab bar for the chat
     /// list's multi-select.
     func followTablist(_ routes: [RouteController], in stack: UIViewController) {
         guard !ExactEnv.authoredChrome, let key = selectedKey,
@@ -590,7 +590,7 @@ extension NavigationHost {
             let wish = floatingStackHides(nav) ?? hidden
             if !wish, Self.underHides(nav, c) { continue }
             if #available(iOS 18.0, tvOS 18.0, *), tabs.isTabBarHidden != wish {
-                tabs.setTabBarHidden(wish, animated: nav.view.window != nil)
+                setTabBarHidden(wish, in: tabs, animated: nav.view.window != nil)
                 tablistHidBar = wish
             }
         }
@@ -602,18 +602,18 @@ extension NavigationHost {
         // (Not while a route above the root still hides it, on a phone by UIKit's flag, on an iPad by Exact's.)
         if !hidden, !nav.viewControllers.dropFirst().contains(where: Self.hidesBar),
            tablistHidBar, nav.transitionCoordinator == nil, tabBarShows, let tabs = tabController, nav.tabBarController === tabs {
-            if #available(iOS 18.0, tvOS 18.0, *), tabs.isTabBarHidden { tabs.setTabBarHidden(false, animated: nav.view.window != nil) }
+            if #available(iOS 18.0, tvOS 18.0, *), tabs.isTabBarHidden { setTabBarHidden(false, in: tabs, animated: nav.view.window != nil) }
             tablistHidBar = false
         }
     }
 
     /// The root on top (LLP 1075.003 §3.7, amended 2026-10-05). Its wish is
     /// recorded whenever it is the selected route or a transition settles on
-    /// it (`tablistHidden`), and the bar moves, animated
-    /// once the stack is on screen, when the wish changes or the root has
+    /// it (`tablistHidden`), and the bar moves when the wish changes or the root has
     /// just arrived on top: a transition settled on it (`settleTablist`, from
     /// `didShow`, after a pop UIKit may have brought the bar back for) or
-    /// another tab's root was selected. A hidden tablist hides the bar; a
+    /// another tab's root was selected. On screen it animates unless it swaps
+    /// with an authored row. A hidden tablist hides the bar; a
     /// shown one shows it only if Exact hid it (`tablistHidBar`), so a hatch's
     /// own hide stands, and between those moments nothing is written, so a
     /// hatch's own show stands too. Never mid-transition: a change made then
@@ -639,9 +639,9 @@ extension NavigationHost {
         let animated = stack.viewIfLoaded?.window != nil
         if hidden {
             // Exact owns the hide only if it made it: a hatch's own stands.
-            if !tabs.isTabBarHidden { tabs.setTabBarHidden(true, animated: animated); tablistHidBar = true }
+            if !tabs.isTabBarHidden { setTabBarHidden(true, in: tabs, animated: animated); tablistHidBar = true }
         } else if tablistHidBar {
-            if tabs.isTabBarHidden { tabs.setTabBarHidden(false, animated: animated) }
+            if tabs.isTabBarHidden { setTabBarHidden(false, in: tabs, animated: animated) }
             tablistHidBar = false
         }
     }
@@ -671,10 +671,10 @@ extension NavigationHost {
         }
         guard let at = stack.firstIndex(where: { $0 === c }), at > 0, let hidden = floatingStackHides(nav, through: Array(stack[...at])) else { return }
         if hidden, !tabs.isTabBarHidden {
-            tabs.setTabBarHidden(true, animated: animated)
+            setTabBarHidden(true, in: tabs, animated: animated)
             tablistHidBar = true
         } else if !hidden, tablistHidBar {
-            if tabs.isTabBarHidden { tabs.setTabBarHidden(false, animated: animated) }
+            if tabs.isTabBarHidden { setTabBarHidden(false, in: tabs, animated: animated) }
             tablistHidBar = false
         }
         #endif

@@ -186,3 +186,69 @@ fn lean_carries_the_gate_and_current() {
         "{emitted}"
     );
 }
+
+/// `profile()` answers the store's `token`, or a number outside its shape for
+/// `bad`; `signIn()` writes the token.
+struct Profile;
+
+impl DataSource for Profile {
+    fn query(&mut self, _: &str, _: &[Value]) -> Result<Value, DataError> {
+        unreachable!()
+    }
+    fn answer(
+        &mut self,
+        store: &mut Store,
+        source: &str,
+        _: &[Value],
+    ) -> Result<Answer, DataError> {
+        if source == "signIn" {
+            store.set("token", "ada").unwrap();
+        }
+        Ok(Answer::Now(match store.get("token") {
+            Some("bad") => Value::Number(1.0),
+            token => Value::str(token.unwrap_or("guest")),
+        }))
+    }
+    fn grants(&self) -> &str {
+        "secret.keep token\n"
+    }
+}
+
+/// A store reader asleep behind a closed gate asks nothing, so a store write,
+/// the app's own or a peer's, settles without it and is not remembered:
+/// waking asks as with no write before, reads the store as it is then, and an
+/// answer outside its shape refuses the action that opens the gate.
+#[test]
+fn a_store_write_settles_while_a_store_reader_sleeps() {
+    let src = "component App
+  state open = true
+  resource me = profile() when open as shape string else empty()
+  mutation signedIn as shape string
+  action show
+    open = true
+  action hide
+    open = false
+  action signIn
+    send signedIn = signIn()
+  view
+    text me
+";
+    let mut r = Runner::boot(
+        contract::compile(src).unwrap(),
+        Profile,
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    let peer = |token: &str| vec![("token".to_string(), token.as_bytes().to_vec())];
+    r.act("hide", vec![]).unwrap();
+    r.act("signIn", vec![]).unwrap();
+    r.store_changed(peer("bob")).unwrap();
+    assert_eq!(r.resource("me"), Some(&Value::str("guest")));
+    r.act("show", vec![]).unwrap();
+    assert_eq!(r.resource("me"), Some(&Value::str("bob")));
+    r.act("hide", vec![]).unwrap();
+    r.store_changed(peer("bad")).unwrap();
+    assert!(r.act("show", vec![]).is_err());
+}

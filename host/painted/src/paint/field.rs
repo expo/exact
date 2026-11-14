@@ -560,10 +560,15 @@ impl Painter {
             let painted = material::FieldText::painted(&paragraph, (ox, oy), ts);
             self.labels.value(node.id, painted);
         }
-        let decorations = field
-            .decorations
-            .as_ref()
-            .map(|_| self.text_decorations(walk.scene.kernel, &paragraph, &palette, walk.reveal));
+        let decorations = field.decorations.as_ref().map(|_| {
+            self.text_decorations(
+                walk.scene.kernel,
+                &paragraph,
+                &palette,
+                walk.reveal,
+                0..palette.len(),
+            )
+        });
         if let Some(decorations) = &decorations {
             decorations.paint(
                 self.backend.as_mut(),

@@ -142,7 +142,7 @@ package enum SystemColor {
     }
 
     /// The colour's sRGB channels under an appearance and contrast.
-    private static func rgba(_ color: Native, dark: Bool, contrast: Bool, elevated: Bool = false) -> [Double]? {
+    private static func rgba(_ color: Native, dark: Bool, contrast: Bool, elevated: Bool = false, extended: Bool = false) -> [Double]? {
         #if os(iOS) || os(tvOS)
         var traits = [UITraitCollection(userInterfaceStyle: dark ? .dark : .light),
                       UITraitCollection(accessibilityContrast: contrast ? .high : .normal)]
@@ -150,6 +150,11 @@ package enum SystemColor {
         traits.append(UITraitCollection(userInterfaceLevel: elevated ? .elevated : .base))
         #endif
         let c = color.resolvedColor(with: UITraitCollection(traitsFrom: traits))
+        if extended {
+            guard let space = CGColorSpace(name: CGColorSpace.extendedSRGB),
+                  let e = c.cgColor.converted(to: space, intent: .defaultIntent, options: nil)?.components, e.count == 4 else { return nil }
+            return e.map { Double($0) * 255 }
+        }
         var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
         guard c.getRed(&r, green: &g, blue: &b, alpha: &a) else { return nil }
         return [r, g, b, a].map { Double(min(max($0, 0), 1)) * 255 }
@@ -159,8 +164,8 @@ package enum SystemColor {
             : (contrast ? .accessibilityHighContrastAqua : .aqua)
         var out: [Double]?
         NSAppearance(named: name)?.performAsCurrentDrawingAppearance {
-            guard let c = color.usingColorSpace(.sRGB) else { return }
-            out = [c.redComponent, c.greenComponent, c.blueComponent, c.alphaComponent].map { Double(min(max($0, 0), 1)) * 255 }
+            guard let c = color.usingColorSpace(extended ? .extendedSRGB : .sRGB) else { return }
+            out = [c.redComponent, c.greenComponent, c.blueComponent, c.alphaComponent].map { Double(extended ? $0 : min(max($0, 0), 1)) * 255 }
         }
         return out
         #endif
@@ -214,8 +219,9 @@ package enum SystemColor {
     /// A tint's opaque channels, light then dark under the system's
     /// contrast, for `channels(tint:)` (LLP 1095 D9): read here, on main
     /// (`appTint` for the report), since the owner thread that reports
-    /// colours can read no window.
-    static func tintPair(_ color: PlatformColor?) -> [[Double]]? {
+    /// colours can read no window. `extended`: in extended sRGB, unclipped,
+    /// so a Display P3 tint keeps its colour.
+    static func tintPair(_ color: PlatformColor?, extended: Bool = false) -> [[Double]]? {
         let color = color ?? {
             #if os(iOS) || os(tvOS)
             return defaultTint
@@ -223,7 +229,7 @@ package enum SystemColor {
             return .controlAccentColor
             #endif
         }()
-        let pair = [false, true].compactMap { rgba(color, dark: $0, contrast: highContrast) }
+        let pair = [false, true].compactMap { rgba(color, dark: $0, contrast: highContrast, extended: extended) }
         return pair.count == 2 ? pair : nil
     }
 }
@@ -320,6 +326,7 @@ extension NodeView {
     package override func tintColorDidChange() {
         super.tintColorDidChange()
         tintPadBar()
+        presenter?.controls.tintChanged(self)
         // An `svg`'s paints are resolved into its scene's layers.
         if kind == "svg" { presenter?.svg.reappear(id, dark: drawsDark, clock: presenter?.session?.clock, tint: viewTint) }
         guard style.values.contains(where: \.namesTint) || inlineText.contains(where: \.namesTint) else { return }
@@ -329,7 +336,6 @@ extension NodeView {
         presenter?.boxFilters.changed(self)
         // The canvas, which shows the first root's background
         if superview === presenter?.root { presenter?.paintCanvas() }
-        presenter?.controls.tintChanged(self)
     }
 
     /// The node's tint rows, applied where they changed from `old`: its accent (`applyAccentTint`) and

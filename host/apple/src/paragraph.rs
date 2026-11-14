@@ -679,6 +679,11 @@ impl<D: DataSource> Host<D> {
         node: &NodeRef<'_>,
     ) -> exact_kernel::SortedMap<&'static str, String> {
         let mut props = props_for(node);
+        if self.native_mode() && self.runner.kernel().is_top_layer(node.id) {
+            if let Some(parent) = node.parent.filter(|p| self.native_protected_id(*p)) {
+                props.insert("popoverParent", parent.to_string());
+            }
+        }
         if let Some(line) = super::layout::separator::json(self.runner.kernel(), node.id) {
             props.insert(super::layout::separator::PROP, line);
         }

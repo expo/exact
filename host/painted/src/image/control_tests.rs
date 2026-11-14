@@ -985,3 +985,158 @@ fn a_box_that_changes_size_gets_the_whole_picture() {
         "back at the first size, still the whole"
     );
 }
+
+#[test]
+fn sampling_modes_keep_large_photos_within_the_decode_budget() {
+    use exact_kernel::ImageRendering;
+    let mut k = kernel(1);
+    boxed(&mut k, 1, 320., 240., exact_kernel::ObjectFit::Fill);
+    let mut images = Images::with_assets(assets());
+    images.sync_visible(&k, &k.roots(), 1., |_| true);
+    let view = images.views.get_mut(&1).unwrap();
+    for (width, height, available) in [(4032, 3024, SESSION_BYTES), (512, 512, SESSION_BYTES / 16)]
+    {
+        let data = encoded(width, height, [40, 100, 200, 255]);
+        let header =
+            png_decode::inspect(&mut std::io::Cursor::new(&data), data.len() as u64).unwrap();
+        view.rendering = ImageRendering::Auto;
+        let fallback = plan_view(header, view, 1., available).unwrap();
+        for mode in [ImageRendering::CrispEdges, ImageRendering::Pixelated] {
+            view.rendering = mode;
+            let decode = plan_view(header, view, 1., available).unwrap();
+            assert_eq!(decode.pixels, fallback.pixels, "{mode:?}");
+            assert!(decode.peak_bytes() <= available);
+        }
+    }
+}
+
+#[test]
+fn crisp_edges_replaces_a_smoothed_thumbnail_with_source_pixels() {
+    use exact_kernel::{ImageRendering, StyleId, StyleProps};
+    let mut k = kernel(1);
+    boxed(&mut k, 1, 32., 32., exact_kernel::ObjectFit::Fill);
+    let mut images = Images::with_assets(Assets::selected(
+        PathBuf::new(),
+        Arc::new(|_| Ok(Some(encoded(512, 512, [40, 100, 200, 255])))),
+    ));
+    images.sync_visible(&k, &k.roots(), 1., |_| true);
+    images.wait(SETTLED);
+    assert_eq!(images.bitmaps[&1].width(), 128);
+    let mut style = StyleProps {
+        image_rendering: ImageRendering::CrispEdges,
+        ..Default::default()
+    };
+    style.mask.set(StyleId::ImageRendering);
+    k.apply(
+        0,
+        k.epoch() + 1,
+        &[Op::SetStyle {
+            id: 1,
+            patch: Box::new(style),
+        }],
+    )
+    .unwrap();
+    images.sync_visible(&k, &k.roots(), 1., |_| true);
+    images.wait(SETTLED);
+    assert_eq!(images.bitmaps[&1].width(), 512);
+    assert_eq!(images.bitmaps[&1].height(), 512);
+}
+
+#[test]
+fn pixelated_enlargement_decodes_and_repeats_original_samples() {
+    use crate::paint::Backend;
+    use exact_kernel::{ImageRendering, ObjectFit, StyleId, StyleProps};
+    let mut stripe = tiny_skia::Pixmap::new(4096, 1).unwrap();
+    for (i, pixel) in stripe.data_mut().chunks_exact_mut(4).enumerate() {
+        let value = if i.is_multiple_of(2) { 0 } else { 255 };
+        pixel.copy_from_slice(&[value, value, value, 255]);
+    }
+    let bytes: Arc<[u8]> = stripe.encode_png().unwrap().into();
+    let mut images = Images::with_assets(Assets::selected(
+        PathBuf::new(),
+        Arc::new(move |_| Ok(Some(bytes.clone()))),
+    ));
+    let mut k = kernel(1);
+    boxed(&mut k, 1, 8192., 2., ObjectFit::Fill);
+    images.sync_visible(&k, &k.roots(), 1., |_| true);
+    images.wait(SETTLED);
+    assert_eq!(images.bitmaps[&1].width(), 2048, "auto uses a thumbnail");
+    for mode in [ImageRendering::Pixelated, ImageRendering::CrispEdges] {
+        let mut style = StyleProps {
+            image_rendering: mode,
+            ..Default::default()
+        };
+        style.mask.set(StyleId::ImageRendering);
+        k.apply(
+            0,
+            k.epoch() + 1,
+            &[Op::SetStyle {
+                id: 1,
+                patch: Box::new(style),
+            }],
+        )
+        .unwrap();
+        images.sync_visible(&k, &k.roots(), 1., |_| true);
+        images.wait(SETTLED);
+        let bitmap = &images.bitmaps[&1];
+        assert_eq!(bitmap.pixels(), stripe.as_ref(), "{mode:?}: source samples");
+        let mut painter = crate::raster::Raster::new();
+        painter.begin(8192., 2., 1.);
+        painter.image(
+            bitmap,
+            (0., 0., 8192., 2.),
+            &[],
+            tiny_skia::Transform::identity(),
+            None,
+            mode,
+        );
+        let result = painter.finish().unwrap();
+        for y in 0..2 {
+            for x in 0..8192 {
+                assert_eq!(
+                    result.pixel(x, y),
+                    stripe.pixel(x / 2, 0),
+                    "{mode:?}: {x},{y}"
+                );
+            }
+        }
+    }
+}
+
+/// A source too large for the budget shows a thumbnail under every mode; the
+/// thumbnail follows the box as it would under `auto`.
+#[test]
+fn a_budget_thumbnail_follows_an_enlarged_box() {
+    use exact_kernel::{ImageRendering, ObjectFit, StyleId, StyleProps};
+    let mut k = kernel(1);
+    boxed(&mut k, 1, 32., 32., ObjectFit::Fill);
+    let mut style = StyleProps {
+        image_rendering: ImageRendering::Pixelated,
+        ..Default::default()
+    };
+    style.mask.set(StyleId::ImageRendering);
+    k.apply(
+        0,
+        k.epoch() + 1,
+        &[Op::SetStyle {
+            id: 1,
+            patch: Box::new(style),
+        }],
+    )
+    .unwrap();
+    let mut images = Images::with_assets(Assets::selected(
+        PathBuf::new(),
+        Arc::new(|_| Ok(Some(encoded(4096, 4096, [40, 100, 200, 255])))),
+    ));
+    images.sync_visible(&k, &k.roots(), 1., |_| true);
+    images.wait(SETTLED);
+    assert_eq!(
+        images.bitmaps[&1].width(),
+        128,
+        "the source exceeds the budget"
+    );
+    boxed(&mut k, 1, 1024., 1024., ObjectFit::Fill);
+    images.sync_visible(&k, &k.roots(), 1., |_| true);
+    images.wait(SETTLED);
+    assert_eq!(images.bitmaps[&1].width(), 1024);
+}

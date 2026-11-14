@@ -626,8 +626,10 @@ async function propertyFailure(p, line, state, previous, s, file, test, step, in
  * `end.keep` keeps the test's store for a later launch (the result's `store`), which the caller then removes.
  * `atStep(s, { name, line, op })` runs on the session after each input step (and `reload`) lands; returning 'stop' ends
  * that test there, 'done' every test from there (verify's tour of the screens the tests pass through).
+ * `atLine({ name, index, line, last, op })` runs before each step of a test, `atResult(result)` as each test's result
+ * lands: a run's caller says where a long test is and what each test did as it goes, not only at the run's end.
  */
-export async function runTests({ host, browser, file, plan, app, size, env, webDist, device = false, phone, reader, url, seed, locale, formatLocale, timeZone, epoch, failFetch, storage = 'test', touch = 'agent', chrome: bars = 'agent', scale, atEnd, atStep, port } = {}) {
+export async function runTests({ host, browser, file, plan, app, size, env, webDist, device = false, phone, reader, url, seed, locale, formatLocale, timeZone, epoch, failFetch, storage = 'test', touch = 'agent', chrome: bars = 'agent', scale, atEnd, atStep, atLine, atResult, port } = {}) {
   const root = resolve(fileURLToPath(new URL('..', import.meta.url))), selected = resolveApp(app);
   webDist ??= defaultWebDist(selected);
   if (host === 'web' && !url) await backendPreflight(selected, resolve(webDist));
@@ -655,7 +657,7 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
   const tests = backendFetchPrefixes(authored.tests, granted.length ? granted : appOrigins);
   const reseeded = tests.filter(t => t.steps.some(s => s.op === 'fresh')).length;
   if (reseeded) console.error(`fresh: reseeding before each of ${reseeded} tests`);
-  const results = [];
+  const results = [], landed = (result) => { results.push(result); atResult?.(result); };
   // Where the host keeps its stores, as it will see its environment (a drive's env overrides the driver's).
   const launched = { ...process.env, ...(env ?? {}) };
   const id = selected.id, chrome = host === 'web' && (browser ?? launched.EXACT_WEB_BROWSER ?? 'chrome') === 'chrome';
@@ -673,8 +675,8 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
   const scope = testScope(host), timing = launched.EXACT_AGENT_TIMING;
   for (const [n, t] of tests.entries()) {
     if (done) break;
-    if (t.hosts && !t.hosts.includes(scope)) { results.push({ name: t.name, failures: [], notes: [], skipped: `on ${t.hosts.join(', ')}` }); continue; }
-    const failures = [], expectedRefusals = [];
+    if (t.hosts && !t.hosts.includes(scope)) { landed({ name: t.name, failures: [], notes: [], skipped: `on ${t.hosts.join(', ')}` }); continue; }
+    const failures = [], expectedRefusals = [], index = n;
     const refusalCursors = new Map();
     let end = null;
     // The app's server is the auth fixture: a sign-in held for its origin shows its whole URL, for `authorize` (LLP 1146 D4).
@@ -709,7 +711,7 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
     // a test, so a `reload` relaunches from the same date on every host. `facts.epoch` is the date at the clock's zero
     // of the launch now running: a `reload` moves it on by the virtual time that launch reached (LLP 1116.009 D1).
     try { facts.epoch = launchFacts({ ...facts, env: env ?? {} }).epoch; } catch (e) {
-      results.push({ name: t.name, failures: [`${t.name}: ${lines.length ? `line ${lines.join(', ')}` : "the drive's launch flags"}: ${e.message}`] });
+      landed({ name: t.name, failures: [`${t.name}: ${lines.length ? `line ${lines.join(', ')}` : "the drive's launch flags"}: ${e.message}`] });
       continue;
     }
     for (const [i, origin] of shared.entries()) {
@@ -718,7 +720,7 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
     }
     // `fresh`: the backend emptied (and seeded) before the app opens; a refusal fails this test at its line.
     if (reset) try { await resetBackends(backends, freshRows(file, reset.seed), 10000, selected); } catch (e) {
-      results.push({ name: t.name, failures: [`${t.name}: line ${reset.line}: ${e.message}`], notes });
+      landed({ name: t.name, failures: [`${t.name}: line ${reset.line}: ${e.message}`], notes });
       continue;
     }
     const heads = await Promise.all(shared.map((o) => backendHead(o)));
@@ -850,7 +852,10 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
       let measured = null, mark = NO_FAILURES;
       const refusals = t.steps.filter((x) => x.op === 'expect-refusal').map((x) => x.target);
       // One step: an input, a read, an expect, or a `perf` block, whose steps run here in turn (LLP 1146 D3).
+      // The test's last line, a `perf` block's steps included.
+      const last = Math.max(...t.steps.flatMap((x) => [x.line, ...(x.steps ?? []).map((y) => y.line)]));
       const runStep = async (st, n, at) => {
+        atLine?.({ name: t.name, index, line: st.line, last, op: st.op });
         if (INPUTS.has(st.op)) await settleFired();
         if (st.op === 'type') { typed.add(st.target); touched.add(st.target); } else if (INPUTS.has(st.op) || st.op === 'reload') typed.clear();
         switch (st.op) {
@@ -884,6 +889,7 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
           case 'tap-midi': delivered(await s.tap(null, { midi: st.clock ? { input: st.input, clock: st.clock } : { input: st.input, data: st.data } })); input = st.line; break;
           case 'drag': {
             const drag = { ...(st.to != null ? { to: st.to, ...(st.at ? { at: st.at } : {}) } : { dx: st.dx, dy: st.dy }), ...(st.from ? { from: st.from } : {}), ...(st.mouse ? { mouse: true } : {}), ...(st.press != null ? { press: st.press } : {}), ...(st.over != null ? { over: st.over } : {}), ...(st.hold != null ? { hold: st.hold } : {}) };
+            if (st.into != null) drag.into = st.into;
             if (st.during?.length) drag.during = st.during.map((op) => () => duringOp(s, op));
             delivered(await s.tap(st.target, { drag })); input = st.line; break;
           }
@@ -1114,7 +1120,7 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
       await s.close().catch((e) => { if (closedAt == null) throw e; });
     }
     if (failures.length && !reset) shared.forEach((o, i) => { if (heads[i] > 0 && atStart[i] != null) notes.push(sharedBackendNote(o, atStart[i], heads[i] - atStart[i])); });
-    results.push({ name: t.name, failures, notes, ...(shots.length ? { shots } : {}), ...(end ? { end } : {}), ...(end?.keep ? { store } : {}) });
+    landed({ name: t.name, failures, notes, ...(shots.length ? { shots } : {}), ...(end ? { end } : {}), ...(end?.keep ? { store } : {}) });
     if (base && !end?.keep) rmSync(resolve(base, store), { recursive: true, force: true });
   }
   const failed = results.filter((r) => r.failures.length).length, skipped = results.filter((r) => r.skipped).length;
