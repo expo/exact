@@ -16,6 +16,9 @@ use exact_plan::Value;
 pub(crate) struct Waiting {
     pub(super) args: Vec<Value>,
     pub(super) digest: u64,
+    /// The seed slept while idle: admitted, it is no answer until a fresh
+    /// one after the wake (LLP 1161.001 D1).
+    pub(super) slept: bool,
 }
 
 pub(super) fn digest(bytes: &[u8]) -> u64 {
@@ -73,7 +76,12 @@ impl<D: DataSource> Runner<D> {
             .filter(|s| s.kept_seed)
             .map(|s| s.args.clone());
         if let Some(kept) = seed {
-            let matched = self.kept_match(i, &kept, now, valid, states);
+            let mut matched = self.kept_match(i, &kept, now, valid, states);
+            // An admitted seed that departs its identity is consumed, not
+            // readmitted when the identity returns (D3).
+            if matched == Match::Wait && self.resources[i].kept_admitted {
+                matched = Match::Mismatch;
+            }
             if super::kept::kept_surface(&self.plan, i) {
                 out.kept_seed = matched == Match::Admit && self.surface_seed_waiting(i);
                 if !ready && !out.kept_seed {
@@ -81,10 +89,13 @@ impl<D: DataSource> Runner<D> {
                 }
             } else if !ready {
                 match matched {
-                    Match::Admit => out.kept_seed = true,
+                    Match::Admit => {
+                        out.kept_seed = true;
+                        self.resources[i].kept_admitted = true;
+                    }
                     Match::Wait => {
                         out.hold = true;
-                        self.start_waiting(i, kept);
+                        self.start_waiting(i, kept, false);
                     }
                     Match::Mismatch => self.refuse_kept(i, &kept, now, states),
                 }
@@ -94,9 +105,9 @@ impl<D: DataSource> Runner<D> {
                 // ask is pending; otherwise the fallback shows.
                 out.hold = true;
                 match matched {
-                    Match::Admit => {}
+                    Match::Admit => self.resources[i].kept_admitted = true,
                     Match::Wait => {
-                        self.start_waiting(i, kept);
+                        self.start_waiting(i, kept, true);
                         states[i] = None;
                     }
                     Match::Mismatch => {
@@ -113,7 +124,7 @@ impl<D: DataSource> Runner<D> {
                     if let Some(value) = self.waiting_entry(i, &waiting) {
                         // Provisional, as a boot seed is (D4), and keeping
                         // its sleep history (LLP 1161.001 D1).
-                        let slept = states[i].as_ref().is_some_and(|s| s.slept);
+                        let slept = waiting.slept || states[i].as_ref().is_some_and(|s| s.slept);
                         states[i] = Some(ResourceState {
                             inspection_generation: 0,
                             args: waiting.args.clone(),
@@ -127,6 +138,7 @@ impl<D: DataSource> Runner<D> {
                             origin: 0,
                         });
                         self.resources[i].stale = true;
+                        self.resources[i].kept_admitted = true;
                         out.kept_seed = !ready;
                         out.hold = ready;
                         out.admitted_early = !ready;
@@ -184,8 +196,10 @@ impl<D: DataSource> Runner<D> {
     }
 
     /// Whether resource `i`'s identifying argument `k` reads, directly or
-    /// through derives, a store reader still on its compiled answer or
-    /// placeholder: its value is not yet this launch's. An account resource
+    /// through derives, a store reader still on its placeholder, or on its
+    /// compiled answer while it waits for its source (`stale`): its value is
+    /// not yet this launch's. A fresh answer equal to the compiled one keeps
+    /// the compiled object (settlement) but is known. An account resource
     /// with no kept answer of its own shows its placeholder (`did: ""`),
     /// and that empty id would match whatever a signed-out launch kept
     /// (LLP 1027.005 D3, 2026-10-10). Kept seeds, carried and checkpoint
@@ -198,9 +212,9 @@ impl<D: DataSource> Runner<D> {
             |input| match input {
                 Input::Resource(r) | Input::PendingResource(r) | Input::FailedResource(r) => {
                     self.resources[r].store_reader
-                        && states[r]
-                            .as_ref()
-                            .is_some_and(|s| s.placeholder || s.value.is_compiled())
+                        && states[r].as_ref().is_some_and(|s| {
+                            s.placeholder || s.value.is_compiled() && self.resources[r].stale
+                        })
                 }
                 _ => false,
             },
@@ -208,8 +222,8 @@ impl<D: DataSource> Runner<D> {
     }
 
     /// Resource `i`'s boot seed, kept for `kept`, waits for its identity;
-    /// its fallback shows meanwhile.
-    fn start_waiting(&mut self, i: usize, kept: Vec<Value>) {
+    /// its fallback shows meanwhile. `slept`: the seed slept while idle.
+    fn start_waiting(&mut self, i: usize, kept: Vec<Value>, slept: bool) {
         let name = self.plan.str(self.resource_row(i).name);
         let Some(entry) = self.store.kept(&super::kept::kept_name(name)) else {
             return;
@@ -217,7 +231,11 @@ impl<D: DataSource> Runner<D> {
         let digest = digest(entry);
         let line = super::lines::kept_waiting(name);
         self.keeping.refused.push((i, line));
-        self.resources[i].waiting = Some(Waiting { args: kept, digest });
+        self.resources[i].waiting = Some(Waiting {
+            args: kept,
+            digest,
+            slept,
+        });
     }
 
     /// The value of resource `i`'s waiting entry, when the store still holds
@@ -292,6 +310,7 @@ impl<D: DataSource> Runner<D> {
                 self.resources[i].waiting = Some(Waiting {
                     args: args.clone(),
                     digest: *digest,
+                    slept: false,
                 });
             }
         }

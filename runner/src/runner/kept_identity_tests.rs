@@ -591,3 +591,54 @@ fn a_kept_answer_idle_through_readiness_is_compared_when_its_gate_opens() {
     r.act("key", vec![Value::str("alice")]).unwrap();
     shows(&r, "feeds", "kept feeds of alice");
 }
+
+#[test]
+fn a_fresh_answer_equal_to_the_build_time_one_is_a_known_identity() {
+    // The account's compiled answer is "nobody"; the signed-out store
+    // answers "nobody" too, freshly, and the entry kept for it is this
+    // launch's.
+    let mut r = launch(
+        false,
+        vec![feeds_kept(
+            &[Value::Number(0.), Value::str("nobody")],
+            "feeds of nobody, kept",
+        )],
+    );
+    shows(&r, "feeds", "loading");
+    r.store.set("token", "nobody").unwrap();
+    r.data.ready = true;
+    r.data_ready().unwrap();
+    shows(&r, "account", "nobody");
+    shows(&r, "feeds", "feeds of nobody, kept");
+    let asked = r.take_requests();
+    assert_eq!(asked.len(), 1);
+    assert_eq!(asked[0].request.url, "https://example.test/nobody");
+}
+
+#[test]
+fn a_kept_answer_admitted_after_its_gate_wakes_is_not_current_until_it_answers() {
+    // Idle through readiness, then woken with no id: it waits, and the id's
+    // arrival admits a value that slept, which is no answer yet.
+    let mut r = opened_after_readiness("");
+    assert_eq!(r.take_requests().len(), 1);
+    r.act("key", vec![Value::str("alice")]).unwrap();
+    shows(&r, "feeds", "kept feeds of alice");
+    assert!(!r.resources[0].current, "a value kept across idleness");
+    let asked = r.take_requests();
+    assert_eq!(asked.len(), 1);
+    r.fulfill(asked[0].ticket, Outcome::Storage(vec![]))
+        .unwrap();
+    assert!(r.resources[0].current);
+}
+
+#[test]
+fn an_admitted_kept_answer_that_leaves_its_identity_does_not_wait_again() {
+    let mut r = launch_keyed();
+    r.act("key", vec![Value::str("alice")]).unwrap();
+    shows(&r, "feeds", "kept feeds of alice");
+    r.act("key", vec![Value::str("")]).unwrap();
+    shows(&r, "feeds", "loading");
+    r.act("key", vec![Value::str("alice")]).unwrap();
+    shows(&r, "feeds", "loading");
+    assert_eq!(lines_with(&r, WAITING).len(), 1, "it waited once, at boot");
+}
