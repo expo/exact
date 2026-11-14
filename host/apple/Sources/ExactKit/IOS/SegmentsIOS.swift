@@ -82,6 +82,8 @@ private final class ExactSegmentedControl: LabelledSegmentedControl {
     /// before the change is reported (on iOS 26 after the lift, as the
     /// selection settles); until then the control keeps the newer choice.
     var settled = UISegmentedControl.noSegment
+    /// Whether the control holds a choice it has not reported: a finger is on it or its selection is not `settled`.
+    var pending: Bool { isTracking || selectedSegmentIndex != settled }
     init(ownerID: UInt32) {
         self.ownerID = ownerID
         super.init(items: [])
@@ -548,13 +550,17 @@ final class SegmentHost: NSObject, UIGestureRecognizerDelegate, UITabBarDelegate
             decide(owner, "projected to UISegmentedControl (\(tabs.count) segments)")
             for tab in tabs { tab.rejectNativeActiveProperties(on: "UISegmentedControl") }
             adopt(owner, tabs)
-            // Finish native layout in the same unanimated update as selection: UIKit can defer
-            // positioning its selection indicator until the control receives its final frame
+            // Content and choice are set unanimated; UIKit moves its selection to a new choice in its own animation
+            // at its next layout. The control's box and its segments' layout follow the tablist's (`moveOrPlace`): a
+            // control new under it takes its place at once, and one that showed moves and lays its segments out in
+            // the animation UIKit has open, as UIKit's own control resized in one does.
+            let new = controls[owner.id]?.superview !== owner
             UIView.performWithoutAnimation { segment(owner, tabs) }
+            owner.moveOrPlace(new: new) { place(owner) }
         }
     }
 
-    /// `owner`'s segmented control, made if it has none, for `tabs`: its segments, its state and its place.
+    /// `owner`'s segmented control, made if it has none, for `tabs`: its segments and its state (`place` puts it in its box).
     private func segment(_ owner: NodeView, _ tabs: [NodeView]) {
         let control = controls[owner.id] ?? {
             let value = ExactSegmentedControl(ownerID: owner.id)
@@ -592,14 +598,18 @@ final class SegmentHost: NSObject, UIGestureRecognizerDelegate, UITabBarDelegate
         let selected = tabs.firstIndex(where: Self.chosen) ?? UISegmentedControl.noSegment
         // A choice the finger made and the control has not reported yet
         // stays; resetting it would make the report name the old segment.
-        let pending = control.isTracking || control.selectedSegmentIndex != control.settled
-        if control.selectedSegmentIndex != selected, !pending {
+        if control.selectedSegmentIndex != selected, !control.pending {
             control.selectedSegmentIndex = selected
         }
         if control.selectedSegmentIndex == selected { control.settled = selected }
         // Joins its owner holding its segments and choice: UIKit animates a choice made in a window, so a control
         // given its first choice there would slide to it as it first shows
         if control.superview !== owner { owner.addSubview(control) }
+    }
+
+    /// `owner`'s control in its box, and its segments laid out there.
+    private func place(_ owner: NodeView) {
+        guard let control = controls[owner.id] else { return }
         // As wide as the content box and its own height, centred in it
         // (LLP 1116.019 D1): a taller box (an authored height, a stretch)
         // does not stretch UIKit's control, as a hand-built screen's
@@ -614,7 +624,7 @@ final class SegmentHost: NSObject, UIGestureRecognizerDelegate, UITabBarDelegate
         // each segment its content's share, so "Temperature" keeps its
         // letters beside "Length" (LLP 1116.004 D2).
         assign(control, \.apportionsSegmentWidthsByContent, frame.width + 0.5 < natural(owner.id, control).width)
-        if !pending { control.layoutIfNeeded() }
+        if !control.pending { control.layoutIfNeeded() }
     }
 
     /// A title segment's accessibility label: its tab's name where that is

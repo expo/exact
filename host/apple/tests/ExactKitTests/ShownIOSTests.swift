@@ -464,6 +464,42 @@ final class ShownIOSTests: XCTestCase {
         XCTAssertEqual(group.layer.animationKeys() ?? [], [], "the container where it goes at once")
     }
 
+    /// A segmented control over a tablist that showed moves with the tablist in an animation and lays its segments and
+    /// their titles out in it, as UIKit's own control resized in one does (a column as the device folds): each starts
+    /// where it was, not where it ends.
+    func testAShownSegmentedControlLaysItsSegmentsOutInTheAnimationThatMovesItsTablist() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "what the last frame showed is read in a scene's window") }
+        let p = presenter("shown-segments", in: scene)
+        p.buttonFace = { id in var face = ButtonFace(); face.title = ["Day", "Week", "Month"][Int(id) - 11]; return face }
+        var ops: [[String: Any]] = [["op": "create", "id": 10, "kind": "view", "props": ["accessibilityRole": "tablist"], "style": ["text_color": [0, 0, 0, 255]]]]
+        for (i, id) in [11, 12, 13].enumerated() {
+            ops += [["op": "create", "id": id, "kind": "control", "handlers": ["press"],
+                     "props": ["type": "button", "accessibilityRole": "tab", "accessibilitySelected": i == 0 ? "true" : "false"],
+                     "style": ["appearance": "auto", "text_color": [0, 0, 0, 255]]],
+                    ["op": "frame", "id": id, "x": Double(i) * 100, "y": 0.0, "w": 100.0, "h": 40.0]]
+        }
+        p.apply(wireBatch(ops + [
+            ["op": "children", "id": 10, "ids": [11, 12, 13]],
+            ["op": "roots", "ids": [10]],
+            ["op": "frame", "id": 10, "x": 0.0, "y": 100.0, "w": 300.0, "h": 40.0],
+        ]))
+        waitForFrame(p, showing: 10)
+        let control = try XCTUnwrap(p.segments.control(of: 10))
+        animating { p.apply(wireBatch([["op": "frame", "id": 10, "x": 0.0, "y": 100.0, "w": 200.0, "h": 40.0]])) }
+        XCTAssertNotNil(control.layer.animation(forKey: "bounds.size"), "the control moves with its tablist")
+        let segments = control.segmentViews
+        XCTAssertEqual(segments.count, 3)
+        for (index, segment) in segments.enumerated() {
+            let title = try XCTUnwrap(segment.subviews.first { $0 is UILabel }, "segment \(index)'s title")
+            for (name, layer) in [("segment", segment.layer), ("title", title.layer)] {
+                let move = layer.animation(forKey: "position") as? CABasicAnimation
+                let from = (move?.fromValue as? NSValue)?.cgPointValue
+                XCTAssertTrue(from.map { move?.isAdditive == true ? $0 != .zero : $0 != layer.position } ?? false,
+                              "segment \(index)'s \(name) moves from where it was: \(moving(control.layer))")
+            }
+        }
+    }
+
     /// A virtualized list's row view lent to a new row inside an animation,
     /// which the batch gives no frame (`NodePool.end`): the fresh view's
     /// frame, at once, as the view is another node's.

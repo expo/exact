@@ -270,6 +270,9 @@ final class NativeContextsIOSTests: XCTestCase {
         XCTAssertFalse(control.isEnabled, "authored inert still disables the control")
     }
 
+    /// A choice and a new box that a tablist no frame has shown yet takes in an animation UIKit has open take effect
+    /// at once, with no animation left on its control (`Presenter.moveOrPlace`); a tablist that showed moves with the
+    /// animation (`ShownIOSTests`).
     func testModelSelectionAndFinalSegmentLayoutDoNotInheritRouteAnimations() throws {
         guard hostedWindowScene() != nil else {
             throw missing("scene", "UIKit's rendered selection needs an app's window")
