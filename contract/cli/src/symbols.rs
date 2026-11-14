@@ -14,7 +14,10 @@ use std::{
     path::Path,
 };
 
+mod elements;
 mod partial;
+mod types;
+use elements::Element;
 
 /// A component's members, in the namespace its expressions read.
 const MEMBERS: [&str; 7] = [
@@ -30,6 +33,8 @@ struct Definition {
     /// An action's inferred effects, in its component's slot order
     /// (LLP 1035.005.000 D1): what `writes` used to restate.
     writes: Option<Vec<String>>,
+    /// Its type as TypeScript, when the checker gives it one.
+    ty: Option<String>,
 }
 struct Reference {
     span: Span,
@@ -37,10 +42,13 @@ struct Reference {
 }
 type Names = BTreeMap<String, usize>;
 type Owners = BTreeMap<String, Names>;
+/// A shape's body, by its name and the source read alone that declares it.
+type Shapes = BTreeMap<(Option<u32>, String), String>;
 #[derive(Default)]
 struct Graph {
     definitions: Vec<Definition>,
     references: Vec<Reference>,
+    elements: Vec<Element>,
     // Nested namespace keys let queries borrow names instead of allocating
     // temporary component/owner/name Strings for every lookup.
     index: BTreeMap<&'static str, BTreeMap<String, Owners>>,
@@ -51,6 +59,14 @@ struct Graph {
     /// What the syntax refused: a reference spelled as one in its scope may
     /// mean it, so it gets no edge.
     hidden: Vec<partial::Shadow>,
+    /// Whether to gather what only an editor reads (`symbols --editor`):
+    /// each definition's `type`, the `shapes` those name, and `elements`.
+    editor: bool,
+    /// Each shape a definition's type names, with its body.
+    shapes: Shapes,
+    /// The one source being read, when each is read on its own: two of them
+    /// may declare different shapes of one name.
+    alone: Option<u32>,
 }
 impl Graph {
     fn define(
@@ -82,6 +98,7 @@ impl Graph {
             component: component.map(str::to_owned),
             owner: owner.map(str::to_owned),
             writes: None,
+            ty: None,
         });
         if kind == "id" {
             self.ids.entry(name.into()).or_default().push(index);
@@ -162,6 +179,11 @@ impl Graph {
             write_symbol(&mut out, sources, definition, definition.span, None);
             count += 1;
         }
+        // Elements name no declaration, so a `name` query has none.
+        if self.editor && name.is_none() {
+            out.extend_from_slice(b"],\"elements\":[");
+            elements::write(&mut out, sources, &self.elements);
+        }
         out.extend_from_slice(b"],\"references\":[");
         count = 0;
         for reference in &self.references {
@@ -185,6 +207,9 @@ impl Graph {
             count += 1;
         }
         out.push(b']');
+        if self.editor {
+            types::write(&mut out, sources, &self.shapes);
+        }
         close(out, errors)
     }
 }
@@ -232,6 +257,10 @@ fn write_symbol(
         out.extend_from_slice(b",\"owner\":");
         quote(out, owner);
     }
+    if let (None, Some(ty)) = (to, &definition.ty) {
+        out.extend_from_slice(b",\"type\":");
+        quote(out, ty);
+    }
     if let (None, Some(writes)) = (to, &definition.writes) {
         out.extend_from_slice(b",\"writes\":[");
         for (i, name) in writes.iter().enumerate() {
@@ -274,8 +303,28 @@ pub struct PartialSymbols {
 /// value called) has no edge, nor does one to a shape or function the check
 /// refused. When loading stops, each file that parsed is read on its own.
 pub fn symbols_json(path: &Path, name: Option<&str>) -> Result<String, PartialSymbols> {
+    symbols(path, name, false)
+}
+
+/// [`symbols_json`] with what an editor reads (`symbols --editor`): each
+/// definition's `type`, the `shapes` those name and, without `name`, each
+/// view element (`elements`).
+pub fn editor_symbols_json(path: &Path, name: Option<&str>) -> Result<String, PartialSymbols> {
+    symbols(path, name, true)
+}
+
+fn symbols(path: &Path, name: Option<&str>, editor: bool) -> Result<String, PartialSymbols> {
     let nothing = |errors: Vec<CompileError>| PartialSymbols {
-        json: close(b"{\"definitions\":[],\"references\":[]".to_vec(), &errors),
+        json: close(
+            match (editor, name) {
+                (false, _) => b"{\"definitions\":[],\"references\":[]".to_vec(),
+                (true, Some(_)) => b"{\"definitions\":[],\"references\":[],\"shapes\":[]".to_vec(),
+                (true, None) => {
+                    b"{\"definitions\":[],\"elements\":[],\"references\":[],\"shapes\":[]".to_vec()
+                }
+            },
+            &errors,
+        ),
         errors,
     };
     let unreadable = |e: std::io::Error| {
@@ -309,7 +358,8 @@ pub fn symbols_json(path: &Path, name: Option<&str>) -> Result<String, PartialSy
         Err(all) => {
             let errors = refused.join::<()>(Err(all)).unwrap_err();
             let sources = sources::read_all(path, &src, &root);
-            let json = partial::file_by_file(&sources, &tables).json(&sources, name, &errors);
+            let json =
+                partial::file_by_file(&sources, &tables, editor).json(&sources, name, &errors);
             return Err(PartialSymbols { json, errors });
         }
     };
@@ -329,23 +379,30 @@ pub fn symbols_json(path: &Path, name: Option<&str>) -> Result<String, PartialSy
         }
     });
     let typed = checked.is_ok();
+    let mut left_out = Vec::new();
     let ((shapes, components, expanded), errors) = match checked {
         Ok(checked) => (checked, refused.join(Ok(())).err().unwrap_or_default()),
         // A refused check's inferences may be wrong where it refused; its
         // declarations' types are checked before anything is inferred.
-        Err(all) => (
-            (partial::declared(&file, &tables), Vec::new(), None),
-            refused.join::<()>(Err(all)).unwrap_err(),
-        ),
+        Err(all) => {
+            let (shapes, out) = partial::declared(&file, &tables);
+            left_out = out;
+            (
+                (shapes, Vec::new(), None),
+                refused.join::<()>(Err(all)).unwrap_err(),
+            )
+        }
     };
     let types = Types { shapes, components };
     let mut r = Resolver {
         file: &file,
         types: &types,
         typed,
+        left_out,
         whole: errors.is_empty(),
         graph: Graph {
             hidden: partial::shadows(&file, &refused.hidden),
+            editor,
             ..Graph::default()
         },
         members: None,
@@ -383,6 +440,9 @@ struct Resolver<'a> {
     /// Whether the type check accepted the program: `types` holds only its
     /// declarations' otherwise.
     typed: bool,
+    /// Where each shape or function the check left out is declared: `types`
+    /// holds another declaration of its name, or none.
+    left_out: Vec<Span>,
     /// Whether nothing was refused.
     whole: bool,
     /// The component that is a members file's block, read on its own.
@@ -406,11 +466,19 @@ impl<'a> Resolver<'a> {
                 .define("font", &font.name, names.name(font.span), None, None);
         }
         for shape in &self.file.shapes {
-            self.graph
+            let at = self
+                .graph
                 .define("shape", &shape.name, names.name(shape.span), None, None);
+            let checked = !self.left_out.contains(&shape.span);
+            if checked {
+                self.graph.definitions[at].ty = self.shape_typescript(&shape.name);
+            }
             for field in &shape.fields {
-                self.graph
-                    .define("field", &field.name, field.span, None, Some(&shape.name));
+                let at =
+                    (self.graph).define("field", &field.name, field.span, None, Some(&shape.name));
+                let types = self.types;
+                let ty = (types.shapes.field(&shape.name, &field.name)).filter(|_| checked);
+                self.graph.definitions[at].ty = ty.and_then(|(_, ty)| self.typescript(ty, None));
             }
         }
         for style in &self.file.styles {
@@ -440,8 +508,12 @@ impl<'a> Resolver<'a> {
             );
         }
         for f in &self.file.fns {
-            self.graph
+            let at = self
+                .graph
                 .define("fn", &f.name, names.name(f.span), None, None);
+            if !self.left_out.contains(&f.span) {
+                self.graph.definitions[at].ty = self.fn_typescript(&f.name, &f.params);
+            }
         }
         for (ci, c) in self.file.components.iter().enumerate() {
             if self.members != Some(ci) {
@@ -594,6 +666,7 @@ impl<'a> Resolver<'a> {
             self.component.map(|c| c.name.as_str()),
             self.owner.as_deref(),
         );
+        self.graph.definitions[to].ty = self.typescript(&ty, None);
         self.locals.push((name.into(), to));
         self.scope.push(vec![(name.into(), Ref::Local(0), ty)]);
     }
@@ -661,6 +734,9 @@ impl<'a> Resolver<'a> {
                 ),
                 false => Scope::default(),
             };
+            if self.typed && self.graph.editor {
+                self.member_types(c, ci == 0);
+            }
             for p in c.props.iter().chain(&c.injects) {
                 if let Some(ty) = &p.ty {
                     self.ty(ty);
@@ -827,11 +903,14 @@ impl<'a> Resolver<'a> {
         for node in nodes {
             match node {
                 Node::Element {
+                    tag,
                     positional,
                     attrs,
                     children,
+                    span,
                     ..
                 } => {
+                    self.element(tag, *span, attrs);
                     for p in positional {
                         self.expr(p);
                     }

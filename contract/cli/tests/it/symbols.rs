@@ -23,6 +23,13 @@ impl Fixture {
         )
         .unwrap()
     }
+    /// [`Fixture::query`] as `symbols --editor` answers it.
+    fn editor_query(&self, source: &str) -> Value {
+        serde_json::from_str(
+            &contract::editor_symbols_json(&self.write("app.contract", source), None).unwrap(),
+        )
+        .unwrap()
+    }
 }
 impl Drop for Fixture {
     fn drop(&mut self) {
@@ -553,6 +560,216 @@ fn route_paths_and_router_slot_offsets_follow_the_type_checker() {
 }
 
 #[test]
+fn each_definition_has_its_type_as_typescript_and_the_shapes_its_types_name() {
+    let f = Fixture::new("types");
+    let graph = f.editor_query(
+        r#"routes nav
+  home "/"
+shape Tag
+  name: string
+shape Item
+  id: string
+  tags: string[]
+  parent: option<Tag>
+fn label(value: Item): string = value.id
+component App
+  state count = 0
+  derive doubled = count * 2
+  derive ids = items.map((i) => i.id)
+  resource items = loadItems() as shape Item[]
+  mutation saved as shape Item
+  action save(item: Item, note: string)
+    let next = count + 1
+    count = next
+    send saved = saveItem(item, note)
+  view
+    column
+      for item, at in items key=item.id
+        Row(item=item, pick=save)
+component Row
+  props
+    item: Item
+    pick: action
+  view
+    button press=pick(item, "") testId="row"
+      text label(item)
+"#,
+    );
+    let ty = |kind: &str, name: &str, owner: Option<&str>| {
+        definition(&graph, kind, name, owner)["type"]
+            .as_str()
+            .map(str::to_owned)
+    };
+    let local = |name: &str, line: u64| {
+        let d = defs(&graph)
+            .iter()
+            .find(|d| d["kind"] == "local" && d["name"] == name && d["line"] == line)
+            .unwrap_or_else(|| panic!("missing local {name}: {graph}"));
+        d["type"].as_str().map(str::to_owned)
+    };
+    let item = "{ id: string; tags: string[]; parent: Tag | null }";
+    for (got, expected) in [
+        (ty("shape", "Item", None), Some(item)),
+        (ty("field", "tags", Some("Item")), Some("string[]")),
+        (ty("field", "parent", Some("Item")), Some("Tag | null")),
+        (ty("fn", "label", None), Some("(value: Item) => string")),
+        (ty("parameter", "value", Some("label")), Some("Item")),
+        (ty("state", "count", None), Some("number")),
+        (ty("state", "nav", None), Some("Router")),
+        (ty("derive", "doubled", None), Some("number")),
+        (ty("derive", "ids", None), Some("string[]")),
+        (ty("resource", "items", None), Some("Item[]")),
+        (ty("mutation", "saved", None), Some("Item | null")),
+        (
+            ty("action", "save", None),
+            Some("(item: Item, note: string) => void"),
+        ),
+        (ty("parameter", "note", Some("save")), Some("string")),
+        // A bare `action` prop is called with two arguments here: its arity is not declared.
+        (ty("prop", "pick", None), None),
+        (local("next", 17), Some("number")),
+        (local("i", 13), Some("Item")),
+        (local("item", 22), Some("Item")),
+        (local("at", 22), Some("number")),
+        // A route, a component and a source have no type in the checker.
+        (ty("route", "home", None), None),
+        (ty("component", "App", None), None),
+        (ty("source", "loadItems", None), None),
+    ] {
+        assert_eq!(got.as_deref(), expected, "{graph}");
+    }
+    let shape = |name: &str| {
+        let shapes = graph["shapes"].as_array().unwrap();
+        let found: Vec<_> = shapes.iter().filter(|s| s["name"] == name).collect();
+        assert_eq!(found.len(), 1, "{name}: {graph}");
+        // A program that loaded is one scope: no shape names a file.
+        assert!(found[0].get("file").is_none(), "{graph}");
+        found[0]["type"].as_str().unwrap().to_owned()
+    };
+    assert_eq!(shape("Item"), item);
+    assert_eq!(shape("Tag"), "{ name: string }");
+    // The router's shapes, which no file declares, are named by the router state's type.
+    assert_eq!(
+        shape("Router"),
+        "{ tab: string; tabs: Tab[]; next: number }"
+    );
+    for name in ["Tab", "Entry", "Params"] {
+        shape(name);
+    }
+}
+
+/// When loading stops, each file is read on its own, and two of them may
+/// declare different shapes of one name: each keeps its own.
+#[test]
+fn files_read_on_their_own_keep_their_own_shapes_of_one_name() {
+    let f = Fixture::new("alone-shapes");
+    let other = f.write(
+        "other.contract",
+        "shape Item\n  title: string\nfn name(value: Item): string = value.title\n",
+    );
+    let app = f.write(
+        "app.contract",
+        r#"use Gone from "./gone.contract"
+use name from "./other.contract"
+shape Item
+  id: number
+fn key(value: Item): number = value.id
+component App
+  view
+    text "x"
+"#,
+    );
+    let partial = contract::editor_symbols_json(&app, None).unwrap_err();
+    let graph: Value = serde_json::from_str(&partial.json).unwrap();
+    let of = |file: &std::path::Path| {
+        let file = file.canonicalize().unwrap();
+        let found: Vec<_> = (graph["shapes"].as_array().unwrap().iter())
+            .filter(|s| {
+                s["name"] == "Item"
+                    && s["file"]
+                        .as_str()
+                        .is_some_and(|at| std::path::Path::new(at).canonicalize().unwrap() == file)
+            })
+            .map(|s| s["type"].as_str().unwrap().to_owned())
+            .collect();
+        assert_eq!(found.len(), 1, "{graph}");
+        found[0].clone()
+    };
+    assert_eq!(of(&app), "{ id: number }");
+    assert_eq!(of(&other), "{ title: string }");
+}
+
+#[test]
+fn a_declaration_the_check_leaves_out_has_no_type_of_its_namesake() {
+    let f = Fixture::new("types-duplicate");
+    let path = f.write(
+        "app.contract",
+        r#"shape Item
+  id: string
+shape Item
+  id: number
+fn key(value: Item): string = value.id
+fn key(value: Item): number = 1
+component App
+  view
+    text "x"
+"#,
+    );
+    let graph: Value =
+        serde_json::from_str(&contract::editor_symbols_json(&path, None).unwrap_err().json)
+            .unwrap();
+    let types = |kind: &str, name: &str| -> Vec<(u64, Option<String>)> {
+        let mut found: Vec<_> = (defs(&graph).iter())
+            .filter(|d| d["kind"] == kind && d["name"] == name)
+            .map(|d| {
+                let line = d["line"].as_u64().unwrap();
+                (
+                    line,
+                    d.get("type").and_then(Value::as_str).map(str::to_owned),
+                )
+            })
+            .collect();
+        found.sort();
+        found
+    };
+    assert_eq!(
+        types("shape", "Item"),
+        [(1, Some("{ id: string }".into())), (3, None)]
+    );
+    assert_eq!(
+        types("field", "id"),
+        [(2, Some("string".into())), (4, None)]
+    );
+    assert_eq!(
+        types("fn", "key"),
+        [(5, Some("(value: Item) => string".into())), (6, None)]
+    );
+}
+
+#[test]
+fn a_refused_check_keeps_the_declared_types_of_shapes_and_fields_only() {
+    let f = Fixture::new("types-refused");
+    let path = f.write(
+        "app.contract",
+        "shape Item\n  id: string\ncomponent App\n  state count = 0\n  view\n    text count.foo\n",
+    );
+    let graph: Value =
+        serde_json::from_str(&contract::editor_symbols_json(&path, None).unwrap_err().json)
+            .unwrap();
+    assert_eq!(
+        definition(&graph, "shape", "Item", None)["type"],
+        "{ id: string }"
+    );
+    assert_eq!(
+        definition(&graph, "field", "id", Some("Item"))["type"],
+        "string"
+    );
+    assert!(definition(&graph, "state", "count", None)
+        .get("type")
+        .is_none());
+}
+
+#[test]
 fn a_let_is_a_local_for_its_block_and_a_record_names_its_shape_and_fields() {
     // LLP 1035.005.000 D2 and D3.
     let fixture = Fixture::new("let-records");
@@ -928,10 +1145,39 @@ fn a_program_with_no_refusal_prints_exactly_its_definitions_and_references() {
     assert_eq!((code, stderr.as_str()), (Some(0), ""));
     let keys: Vec<_> = graph.as_object().unwrap().keys().collect();
     assert_eq!(keys, ["definitions", "references"]);
+    assert!(defs(&graph).iter().all(|d| d.get("type").is_none()));
     assert_eq!(
         serde_json::to_string(&graph).unwrap(),
         contract::symbols_json(&root, None).unwrap()
     );
+}
+
+#[test]
+fn editor_adds_types_shapes_and_elements_and_changes_nothing_else() {
+    let f = Fixture::new("editor-cli");
+    let root = f.write("app.contract", SOURCE);
+    let out = Command::new(env!("CARGO_BIN_EXE_contract"))
+        .args(["symbols", "--editor", root.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let mut editor: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let keys: Vec<_> = editor.as_object().unwrap().keys().collect();
+    assert_eq!(keys, ["definitions", "elements", "references", "shapes"]);
+    assert!(defs(&editor).iter().any(|d| d.get("type").is_some()));
+    // Without its additions, the editor's graph is the plain one.
+    let editor = editor.as_object_mut().unwrap();
+    editor.remove("elements");
+    editor.remove("shapes");
+    for d in editor["definitions"].as_array_mut().unwrap() {
+        d.as_object_mut().unwrap().remove("type");
+    }
+    let (_, plain, _) = cli(&root);
+    assert_eq!(Value::Object(editor.clone()), plain);
 }
 
 #[test]
@@ -1025,4 +1271,71 @@ fn a_refused_name_is_hidden_in_its_own_file_and_component() {
         .iter()
         .filter(|r| r["name"] == "count" && r["file"] == row.to_string_lossy().as_ref());
     assert_eq!(in_row.count(), 0, "{graph}");
+}
+
+#[test]
+fn elements_report_their_tag_attribute_names_string_values_and_open_line_ends() {
+    let f = Fixture::new("elements");
+    let source = "component App\n  state liked = false\n  action like\n    liked = not liked\n  view\n    main\n      button press=like aria-label=(liked ? \"Unlike\" : \"Like\") testId=\"like\"  \n        text (liked ? \"on\" : \"off\")\n      h2 \"Title\"\n      button \"Save\" press=like\n      box padding=8\n        -exact-fit=\"shrink\" // why\n";
+    let graph = f.editor_query(source);
+    let elements = graph["elements"].as_array().unwrap();
+    let tags: Vec<_> = elements
+        .iter()
+        .map(|e| (spelling(e), e["tag"].as_str().unwrap()))
+        .collect();
+    // A heading is a `text` written as its level; a button's one argument is
+    // its `text` child, at the button's tag, and no element of its own.
+    assert_eq!(
+        tags,
+        [
+            ("main", "main"),
+            ("button", "button"),
+            ("text", "text"),
+            ("h2", "text"),
+            ("button", "button"),
+            ("box", "box")
+        ]
+        .map(|(s, t)| (s.to_owned(), t))
+    );
+    assert!(elements.iter().all(|e| e["component"] == "App"));
+    let button = &elements[1];
+    let attrs = button["attrs"].as_array().unwrap();
+    assert_eq!(
+        attrs
+            .iter()
+            .map(|a| spelling(&json_at(button, a)))
+            .collect::<Vec<_>>(),
+        ["press", "aria-label", "testId"]
+    );
+    assert_eq!(
+        attrs
+            .iter()
+            .map(|a| a["name"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["press", "aria-label", "testId"]
+    );
+    assert!(attrs[..2].iter().all(|a| a.get("string").is_none()));
+    let id = &attrs[2]["string"];
+    assert_eq!(id["value"], "like");
+    assert_eq!(spelling(&json_at(button, id)), "\"like\"");
+    assert!(
+        elements[3]["attrs"].as_array().unwrap().is_empty(),
+        "{graph}"
+    );
+    let box_ = &elements[5];
+    assert_eq!(box_["attrs"][1]["name"], "-exact-fit");
+    assert_eq!(spelling(&json_at(box_, &box_["attrs"][1])), "-exact-fit");
+    // A name query has no elements.
+    let named: Value = serde_json::from_str(
+        &contract::editor_symbols_json(&f.0.join("app.contract"), Some("like")).unwrap(),
+    )
+    .unwrap();
+    assert!(named.get("elements").is_none());
+}
+
+/// A place inside `element`, with the element's file.
+fn json_at(element: &Value, place: &Value) -> Value {
+    let mut at = place.clone();
+    at["file"] = element["file"].clone();
+    at
 }

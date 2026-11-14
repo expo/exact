@@ -343,9 +343,9 @@ fn summary(plan: &Plan, rust_sources: &[String], out: &mut String) {
     for row in &sources {
         let args: Vec<_> = params(row)
             .into_iter()
-            .map(|ty| inline(plan, ty, &mut shapes))
+            .map(|ty| inline(plan, &ty, &mut shapes).unwrap_or_default())
             .collect();
-        let answer = inline(plan, row.ty, &mut shapes);
+        let answer = inline(plan, &row.ty, &mut shapes).unwrap_or_default();
         writeln!(
             out,
             "//   {}: (args: [{}]) => {answer}",
@@ -362,7 +362,7 @@ fn summary(plan: &Plan, rust_sources: &[String], out: &mut String) {
     let mut i = 0;
     while i < shapes.order.len() {
         let ty = shapes.order[i];
-        let body = record(plan, ty, &mut shapes);
+        let body = record(plan, &ty, &mut shapes).unwrap_or_default();
         lines.push((
             ty.0,
             format!("//   {} = {body}", plan.str(plan.types[ty.0 as usize].name)),
@@ -403,15 +403,70 @@ fn summary(plan: &Plan, rust_sources: &[String], out: &mut String) {
     }
 }
 
+/// A type as [`inline`] reads it: a plan's row, or a checked type before
+/// there is a plan (`symbols`).
+pub(crate) enum Node<'a, Id> {
+    Number,
+    Bool,
+    /// The strings it is one of; any string when there are none.
+    String(Vec<&'a str>),
+    Unit,
+    Option(Id),
+    List(Id),
+    /// A shape's name, empty for a record that has none, and its fields.
+    Record(&'a str, Vec<(&'a str, Id)>),
+}
+
+/// Where [`inline`] reads types.
+pub(crate) trait Table {
+    type Id: Clone;
+    /// `None` for a type TypeScript cannot be told.
+    fn node<'a>(&'a self, ty: &'a Self::Id) -> Option<Node<'a, Self::Id>>;
+}
+
+impl Table for Plan {
+    type Id = TypesId;
+    fn node<'a>(&'a self, ty: &'a TypesId) -> Option<Node<'a, TypesId>> {
+        let row = &self.types[ty.0 as usize];
+        Some(match row.kind {
+            TypeKind::Number => Node::Number,
+            TypeKind::Bool => Node::Bool,
+            TypeKind::String => Node::String(
+                (row.fields.iter())
+                    .map(|f| self.str(self.field(f).name))
+                    .collect(),
+            ),
+            TypeKind::Unit => Node::Unit,
+            TypeKind::Option => Node::Option(row.elem?),
+            TypeKind::List => Node::List(row.elem?),
+            TypeKind::Record => Node::Record(
+                self.str(row.name),
+                self.fields[row.fields.start as usize
+                    ..row.fields.start as usize + row.fields.len as usize]
+                    .iter()
+                    .map(|field| (self.str(field.name), field.ty))
+                    .collect(),
+            ),
+        })
+    }
+}
+
 fn string_type(plan: &Plan, row: &TypesRow) -> String {
-    if row.fields.is_empty() {
+    let values: Vec<_> = (row.fields.iter())
+        .map(|f| plan.str(plan.field(f).name))
+        .collect();
+    string_union(&values)
+}
+
+fn string_union(values: &[&str]) -> String {
+    if values.is_empty() {
         "string".into()
     } else {
-        row.fields
+        values
             .iter()
-            .map(|f| {
+            .map(|value| {
                 // JSON leaves these literal, but they terminate the summary's line comments.
-                serde_json::to_string(plan.str(plan.field(f).name))
+                serde_json::to_string(value)
                     .expect("a string is JSON")
                     .replace('\u{2028}', "\\u2028")
                     .replace('\u{2029}', "\\u2029")
@@ -422,72 +477,124 @@ fn string_type(plan: &Plan, row: &TypesRow) -> String {
 }
 
 /// Keep first-reference order while deduplicating shapes by their printed name.
-#[derive(Default)]
-struct Noted {
-    order: Vec<TypesId>,
+pub(crate) struct Noted<Id> {
+    pub(crate) order: Vec<Id>,
     names: HashSet<String>,
 }
 
+impl<Id> Default for Noted<Id> {
+    fn default() -> Self {
+        Noted {
+            order: Vec::new(),
+            names: HashSet::new(),
+        }
+    }
+}
+
 /// A type as the summary writes it: a named shape by its name (noted in `shapes` once).
-fn inline(plan: &Plan, ty: TypesId, shapes: &mut Noted) -> String {
-    let row = &plan.types[ty.0 as usize];
-    let mut elem = || row.elem.map(|e| inline(plan, e, shapes));
-    match row.kind {
-        TypeKind::Number => "number".into(),
-        TypeKind::Bool => "boolean".into(),
-        TypeKind::String => string_type(plan, row),
-        TypeKind::Unit => "null".into(),
-        TypeKind::Option => format!("{} | null", elem().unwrap_or_default()),
-        TypeKind::List => {
-            let union = row.elem.is_some_and(|e| {
-                let elem = &plan.types[e.0 as usize];
-                elem.kind == TypeKind::Option
-                    || (elem.kind == TypeKind::String && elem.fields.len > 1)
-            });
-            let elem = elem().unwrap_or_default();
+pub(crate) fn inline<T: Table>(types: &T, ty: &T::Id, shapes: &mut Noted<T::Id>) -> Option<String> {
+    Some(match types.node(ty)? {
+        Node::Number => "number".into(),
+        Node::Bool => "boolean".into(),
+        Node::String(values) => string_union(&values),
+        Node::Unit => "null".into(),
+        Node::Option(elem) => format!("{} | null", inline(types, &elem, shapes)?),
+        Node::List(elem) => {
+            let union = match types.node(&elem) {
+                Some(Node::Option(_)) => true,
+                Some(Node::String(values)) => values.len() > 1,
+                _ => false,
+            };
+            let elem = inline(types, &elem, shapes)?;
             if union {
                 format!("({elem})[]")
             } else {
                 format!("{elem}[]")
             }
         }
-        TypeKind::Record => {
-            let name = plan.str(row.name);
-            if name.is_empty() {
-                return record(plan, ty, shapes);
-            }
+        Node::Record("", _) => return record(types, ty, shapes),
+        Node::Record(name, _) => {
             // The plan may hold a shape more than once: one line per name.
             if shapes.names.insert(name.to_string()) {
-                shapes.order.push(ty);
+                shapes.order.push(ty.clone());
             }
             name.to_string()
         }
-    }
+    })
 }
 
 /// A record's fields on one line, `{ id: string; done: boolean }`.
-fn record(plan: &Plan, ty: TypesId, shapes: &mut Noted) -> String {
-    let row = &plan.types[ty.0 as usize];
-    let fields: Vec<_> = plan.fields
-        [row.fields.start as usize..row.fields.start as usize + row.fields.len as usize]
+pub(crate) fn record<T: Table>(types: &T, ty: &T::Id, shapes: &mut Noted<T::Id>) -> Option<String> {
+    let Some(Node::Record(_, fields)) = types.node(ty) else {
+        return None;
+    };
+    let fields = fields
         .iter()
-        .map(|field| {
-            format!(
-                "{}: {}",
-                key(plan.str(field.name)),
-                inline(plan, field.ty, shapes)
-            )
-        })
-        .collect();
-    if fields.is_empty() {
+        .map(|(name, ty)| Some(format!("{}: {}", key(name), inline(types, ty, shapes)?)))
+        .collect::<Option<Vec<_>>>()?;
+    Some(if fields.is_empty() {
         "{}".into()
     } else {
         format!("{{ {} }}", fields.join("; "))
-    }
+    })
+}
+
+/// A parameter's name, when TypeScript can take it as one.
+pub(crate) fn parameter(name: &str) -> Option<String> {
+    // ECMAScript's reserved words, and the strict mode ones a declaration file is read in.
+    const RESERVED: [&str; 46] = [
+        "await",
+        "break",
+        "case",
+        "catch",
+        "class",
+        "const",
+        "continue",
+        "debugger",
+        "default",
+        "delete",
+        "do",
+        "else",
+        "enum",
+        "export",
+        "extends",
+        "false",
+        "finally",
+        "for",
+        "function",
+        "if",
+        "implements",
+        "import",
+        "in",
+        "instanceof",
+        "interface",
+        "let",
+        "new",
+        "null",
+        "package",
+        "private",
+        "protected",
+        "public",
+        "return",
+        "static",
+        "super",
+        "switch",
+        "this",
+        "throw",
+        "true",
+        "try",
+        "typeof",
+        "var",
+        "void",
+        "while",
+        "with",
+        "yield",
+    ];
+    (key(name) == name && !RESERVED.contains(&name)).then(|| name.into())
 }
 
 /// A property name, quoted unless it is an identifier.
-fn key(name: &str) -> String {
+pub(crate) fn key(name: &str) -> String {
     let identifier = name
         .chars()
         .next()

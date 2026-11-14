@@ -1047,6 +1047,14 @@ fn attr_json(name: &str, a: &AttrTarget) -> Value {
             doc["event"] = (*event).into();
             if let Some(calls) = contract_types::handler_signature(name) {
                 doc["calls"] = calls.into();
+                // The same signature as data: what its action declares, then optionally its record.
+                doc["params"] = contract_types::handler_parameters(name, None)
+                    .iter()
+                    .map(|(name, ty)| json!({ "name": name, "type": ty }))
+                    .collect();
+                if let Some(record) = contract_types::event_record(name) {
+                    doc["record"] = record.into();
+                }
             }
             if name == "contextmenu" {
                 doc["note"] = CONTEXTMENU.into();

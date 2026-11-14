@@ -203,6 +203,28 @@ An action's definition carries `writes`: the states and mutations its body
 assigns or sends, inferred (an action declares none), in slot order: router
 state, states, then mutations, each as declared.
 
+`symbols --editor` adds what an editor integration reads
+(LLP 1035.005.003); nothing else asks for it, and without the flag none
+of it is computed. A definition the type checker types carries `type`, its type in TypeScript as
+`contract types` writes it in `app.d.ts`'s summary: a state, derive, prop,
+inject, resource, mutation (`T | null`), local or parameter by its value, a shape
+by its fields, a field by its value, an action or `fn` as a function of its
+parameters. An enum is the union of its strings, `"a" | "b"`. A shape inside a type is written by its name,
+and `shapes` lists each shape used so, its `name` and its fields as `type`,
+`{ id: string }`. When loading stopped and each file was read on its own, a
+shape also has the `file` it was read in: two files may declare different
+shapes of one name. A bare `action` prop or inject has no `type`: its arity is
+what it is called with.
+A route, component, source, style, task or ID has no `type`. When the type
+check refused, only what is declared keeps one: shapes, fields, and `fn`s and
+their parameters.
+`elements` lists each view element as written, for an editor's hover and
+completion: its `tag` (the compiler's name for it; an `h2` is a `text`), its
+place and `component`, and `attrs`, each attribute written on it with the place
+of its name and, for a string literal value, `string` with the value and its
+place, quotes included. A button's one argument, which becomes its `text` child, is no element
+of its own. A `--name` query has no `elements`.
+
 When the program is refused, `symbols` still prints what it found, adds an
 `errors` array of the refusals in `build --json`'s form, writes them to stderr
 and exits 1. A declaration or member the syntax refused is absent, and so is
@@ -257,6 +279,15 @@ Only the named file's text is replaced. Unsaved text writes no file but
 it regenerated it), and `bun exact.mjs contract build app.contract --stdin`
 neither refreshes the types `app.ts` imports nor type-checks `app.ts`.
 `--stdin` takes no `--entry`.
+
+`build --stdin-as <used.contract>` reads stdin as the text of a file the named
+one uses, for the unsaved buffer of a file that is built with its app:
+
+```sh
+contract build app.contract --json --errors-only --stdin-as lib/row.contract < buffer
+```
+
+It is `--stdin` in every other way, and the two are not given together.
 
 `build --map -o <file.plan>` also writes `<file.plan>.map.json`, keyed by
 SHA-256 of the plan bytes. Each plan node has its original file and range,
