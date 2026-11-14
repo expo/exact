@@ -310,7 +310,8 @@ a shaped domain refusal for its action to handle
 ([fetch with loading, error and retry](recipes/fetch-loading-error.md)). The clock and
 randomness are refused there; time comes as an argument. A date from a value
 works (`new Date(ms)`, `Intl.DateTimeFormat`). `console.log` appears in the agent’s
-`logs` and its last lines in a failed test’s notes. It imports its own `.ts`/`.js` and pure-JS npm
+`logs`, its last lines in a failed test’s notes, and the device’s log, in a release build too
+(Android: a development build only), where anyone with the device can read it: keep tokens and personal data out of it. It imports its own `.ts`/`.js` and pure-JS npm
 packages (ESM or CommonJS, a `browser` build first); one needing Node (`fs`, `Buffer`), the DOM or a native
 addon is refused by name. Type an untyped one with `@types/<name>` or `declare module '<name>';` in a `.d.ts`.
 

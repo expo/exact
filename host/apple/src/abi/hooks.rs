@@ -24,7 +24,15 @@ pub struct Hooks {
     pub symbol: Option<crate::measure::SymbolFn>,
     /// Platform time formatting on the runner clock.
     pub time_format: Option<crate::time::TimeFormatFn>,
+    /// Writes the app's `console` lines to the unified log (LLP 1027.009 D1).
+    pub console: Option<ConsoleFn>,
 }
+
+/// One `console` line for the platform's log, on the runtime's thread: the
+/// method that wrote it (0 log, 1 info, 2 warn, 3 error, 4 debug) and its
+/// UTF-8 bytes, borrowed for the call.
+pub type ConsoleFn = extern "C" fn(method: u8, line: *const u8, len: usize);
+
 impl Hooks {
     /// No callbacks: the reference measurer, and replies on `pump` only.
     pub const fn none() -> Hooks {
@@ -38,6 +46,31 @@ impl Hooks {
             canvas_text: None,
             symbol: None,
             time_format: None,
+            console: None,
         }
     }
+
+    /// The app's `console` lines into the callback from now on, the ones
+    /// `runner` holds first (LLP 1027.009 D2): when its host becomes the one
+    /// presented, so a candidate never committed writes nothing.
+    pub(super) fn console_into<D: DataSource>(&self, runner: &mut exact_runner::Runner<D>) {
+        let Some(console) = self.console else {
+            return;
+        };
+        runner.set_console(move |method, line| {
+            use exact_runner::Console;
+            let method = match method {
+                Console::Log => 0,
+                Console::Info => 1,
+                Console::Warn => 2,
+                Console::Error => 3,
+                Console::Debug => 4,
+            };
+            console(method, line.as_ptr(), line.len());
+        });
+    }
 }
+
+#[cfg(test)]
+#[path = "console_tests.rs"]
+mod console_tests;

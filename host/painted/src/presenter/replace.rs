@@ -216,6 +216,7 @@ impl<D: DataSource> Presenter<D> {
         self.holds_changed();
         self.back_changed();
         self.hosts += 1;
+        self.host.runner_mut().set_console(console_line);
         self.measure();
     }
 }

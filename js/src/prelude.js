@@ -35,6 +35,14 @@
   delete global.__exact_time;
   var tracker = global.HermesInternal;
   time.refuseClock(tracker);
+  // What the runtime itself says through `console`: natively a line that is
+  // not the app's, so no host writes it to the platform's log
+  // (js/src/console.js, LLP 1027.009 D1); in a browser realm, its console.
+  var runtimeLine =
+    global.__exact_runtime_line ||
+    function (line) {
+      if (global.console) global.console.error(line);
+    };
   // The runtime's own journal line (LLP 1097 D8): a failed storage
   // operation, an unhandled rejection. Natively it is the runner's journal
   // (`logs`) as it is; a realm without that door writes it to its console.
@@ -45,7 +53,7 @@
     } catch (e) {
       written = undefined;
     }
-    if (written !== "1" && global.console) global.console.error(String(line));
+    if (written !== "1") runtimeLine(String(line));
   }
   // The bake answers on an engine without some of Intl's constructors, where `new Intl.Collator()` says only
   // "undefined cannot be used as a constructor" (expo/exact#447). At bake such an error names the ones missing.
@@ -380,6 +388,7 @@
     host: host,
     binary: binary,
     journal: journal,
+    runtimeLine: runtimeLine,
     pending: pending,
     work: work,
     background: background,

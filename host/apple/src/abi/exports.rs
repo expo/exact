@@ -172,6 +172,14 @@ macro_rules! host {
             $crate::abi::with_entry(&EXACT_RUNTIMES, rt, |e| { e.hooks.time_format = f; });
         }
 
+        /// Where the app's `console` lines go (LLP 1027.009 D1): called on
+        /// this thread with each line as the runner journals it, once its
+        /// host is the one presented.
+        #[no_mangle]
+        pub extern "C" fn exact_set_console(rt: u32, console: Option<extern "C" fn(u8, *const u8, usize)>) {
+            $crate::abi::with_entry(&EXACT_RUNTIMES, rt, |e| { e.hooks.console = console; });
+        }
+
         /// The Canvas 2D text measurer (LLP 1056 D8): called on the runtime's
         /// thread with the context `exact_set_measure` was given.
         #[no_mangle]

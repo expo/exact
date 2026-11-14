@@ -2,8 +2,9 @@
 // host runs under the app's grants, recorded through the one host door, and
 // a Promise for its reply; its options checked here (binary.js words most),
 // its signal watched, and `exactListen`, a local listener. prelude.js takes
-// `__exact_fetch` and deletes it. `env` is the prelude's door, journal and
-// turn (the answer running, a socket's mapper, the overlay's refusal), its
+// `__exact_fetch` and deletes it. `env` is the prelude's door, journal, the
+// runtime's own console line (`runtimeLine`, js/src/console.js) and turn
+// (the answer running, a socket's mapper, the overlay's refusal), its
 // pending fetches by ticket and the answer timers' deadlines.
 (function (global) {
   "use strict";
@@ -11,6 +12,7 @@
     var host = env.host,
       binary = env.binary,
       journal = env.journal,
+      runtimeLine = env.runtimeLine,
       pending = env.pending,
       work = env.work;
     var background = env.background,
@@ -119,7 +121,7 @@
             ? "fetch() called from a plain .then callback a let-go answer's request settled: it was never run. Await that result in an async function, which resumes in its own answer's turn"
             : "fetch() called outside an answer: it was never run. Start a fetch inside an answer"
         );
-        if (global.console) global.console.error(refused.message);
+        runtimeLine(refused.message);
         return Promise.reject(refused);
       }
       // No fetch from background work (LLP 1097 D2; a background fetch is

@@ -31,8 +31,9 @@ impl Module {
         self.watch.take();
         self.retirement.reload = true;
         self.host.storage_changed = self.directories.is_some();
-        self.logs.push(format!(
-            "data module retired: {message}; a new request starts a fresh runtime"
+        self.logs.push((
+            None,
+            format!("data module retired: {message}; a new request starts a fresh runtime"),
         ));
         Some(DataError::Failed(
             FailureCode::Error,

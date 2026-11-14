@@ -136,11 +136,12 @@ impl<D: DataSource> Runner<D> {
         }
     }
 
-    /// The module's journal lines (LLP 1097 D8), into the journal.
+    /// The module's journal lines (LLP 1097 D8), into the journal; its
+    /// `console` lines also queued for the host (LLP 1027.009 D2).
     pub(super) fn take_data_logs(&mut self) {
         self.hear_aborted();
         for line in self.data.take_logs() {
-            self.log(line);
+            self.journal_module_line(line);
         }
     }
 
