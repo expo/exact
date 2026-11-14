@@ -711,7 +711,7 @@ component Row
 
 Children may hold state, derives, and actions. They cannot declare resources,
 mutations, or tasks. Lift shared data requests to the root and pass values and
-actions. A child used under `for` owns row state keyed to that row's identity.
+actions ([A feature's requests](#a-features-requests)). A child used under `for` owns row state keyed to that row's identity.
 Stable keys matter when content is inserted, removed, filtered, or reordered.
 A child's derive is compiled once per component use and evaluated at each read
 in that instance's frame. Non-atomic prop and inject arguments share that
@@ -817,6 +817,46 @@ render-function props.
 Imports resolve local `.contract` declarations, with cycle and app-boundary
 checks. Paths begin with `./` and cannot contain `..` segments. They do not load app logic or expand the available built-in function
 roster. Compiler-owned router names exist only with a `routes` declaration.
+
+### A feature's requests
+
+A feature written as a child (a canvas with its feed, a tab's screen) keeps its
+resources, mutations and tasks in the root, which passes it their values and the
+actions that send them as props. Name them with the feature's prefix
+(`historyDays`), since the root and its members files share one set of names; a
+members file per feature keeps a feature's declarations together. A root
+resource asks at launch unless it is gated, so gate one that only one tab or
+screen reads on that tab or screen showing.
+
+```contract
+routes nav
+  tab today "/"
+  tab history "/history"
+
+component App
+  resource historyDays = days() when nav.tab == "history" as shape string[] else empty()
+  view
+    main
+      for t in nav.tabs key=t.name
+        column role="tabpanel" display=(nav.tab == t.name ? "flex" : "none")
+          if t.name == "history"
+            History(days=historyDays)
+          else
+            text "Nothing logged yet."
+
+component History
+  props
+    days: string[]
+  view
+    column
+      for d in days key=d
+        text d
+```
+
+`historyDays` asks nothing until the History tab first shows. While the tab is
+hidden it is idle and keeps its last answer; when the tab shows again it is asked
+again, and that answer shows until the new one lands (`current(historyDays)` is
+false until then). A screen of a stack gates on `top(nav).name == "day"`.
 
 ### Tabular numbers
 
