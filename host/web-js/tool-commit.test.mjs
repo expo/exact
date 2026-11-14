@@ -202,7 +202,7 @@ test('topic re-asks keep their last ask origin without joining its invocation', 
     expect(result).toEqual({ before: 'running', owner: 0, reaskedOwner: 0, completed: 'ok',
       requests: [['wait', 'tool'], ['count', 'tool'], ['count', 'tool'], ['count', 'tool'], ['count', 'tool'], ['count', 'app']],
       parses: [['count', 'tool', 1], ['wait', 'tool', 1], ['count', 'tool', 0], ['count', 'tool', 0], ['count', 'tool', 0], ['count', 'app', 0]],
-      guarded: [...Array(4).fill('guard.read: NotAllowedError'), 'allowed'] });
+      guarded: [...Array(4).fill('guard.read: NotAllowedError: person-required'), 'allowed'] });
   } finally { await browser.close(); server.stop(true); }
 }, 60000);
 

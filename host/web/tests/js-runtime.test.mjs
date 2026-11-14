@@ -10,7 +10,7 @@ import { test, expect, describe, beforeAll, afterAll } from 'bun:test';
 import { suiteBrowser } from '../../../scripts/agent-launch.mjs';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { dir, webJs, freshRuntime } from './js-runtime-harness.mjs';
+import { root, dir, webJs, freshRuntime } from './js-runtime-harness.mjs';
 import { fileURLToPath } from 'node:url';
 
 // ts-data.js over a scripted store (the storage test below), written before
@@ -951,6 +951,58 @@ test.each(['device.geolocation-approximate', 'device.geolocation'])('a precision
     expect(await call()).toEqual({ error: 'NotSupportedError' });
     expect(api.holds()).toEqual([]);
   } finally { data.grants = previous.grants; clock.agent = previous.agent; }
+});
+
+// The motion package on the JS target as its declaration says and the runner answers (`modules.rs`): while the
+// permission is `prompt` a sensor read answers `whilePrompt`, an error naming the request that asks, and asking while
+// it is denied answers the status (`deniedAnswers`; both LLP 1133.013 D11).
+test('a module read while its permission is prompt answers whilePrompt; asking while denied answers the status', async () => {
+  const { clock, data } = await freshRuntime('while-prompt');
+  const { modules } = await import(resolve(root, 'web-js-while-prompt', 'modules.js'));
+  const declaration = JSON.parse(readFileSync(new URL('../../../packages/motion/exact.json', import.meta.url), 'utf8'));
+  const rows = Object.fromEntries(declaration.names.filter(n => ['accelerometer', 'motionStatus', 'requestMotionPermission'].includes(n.source ?? n.send)).map(n => {
+    const name = n.source ?? n.send;
+    return [name, [`motion.${name}`, !!n.send, { ...n.substitute, permission: declaration.permission }, 'u', n.request ? 'always' : 'never', null, !!n.live]];
+  }));
+  // modules.js installs the agent's door on the shared global: put back what was there
+  const exact = globalThis.exact, kept = exact && { extensions: exact.extensions, foreground: exact.foreground };
+  try {
+    clock.agent = true;
+    modules(rows);
+    const api = globalThis.exact.extensions, read = () => api.call({ extension: 'motion', source: 'accelerometer', args: {} });
+    expect(api.prefer({ permission: { motion: 'prompt' } }).error).toBeUndefined();
+    expect(await read()).toEqual(declaration.permission.whilePrompt);
+    // A Contract resource's failure carries the request it names, as the runner's
+    const contract = await Promise.resolve().then(() => data.reserved.accelerometer(null, [{}], 'contract')).then(() => 'answered', e => e.message);
+    expect(contract).toBe('motion.accelerometer: NotAllowedError: requestMotionPermission');
+    expect(api.prefer({ permission: { motion: 'denied' } }).error).toBeUndefined();
+    const asked = await api.call({ extension: 'motion', send: 'requestMotionPermission', args: {} });
+    expect([await read(), asked.state]).toEqual([{ error: 'NotAllowedError' }, 'denied']);
+    expect(asked).toEqual(await api.call({ extension: 'motion', source: 'motionStatus', args: {} }));
+  } finally { if (kept) Object.assign(globalThis.exact, kept); else delete globalThis.exact; }
+});
+
+// `whilePrompt` is the selected permission's, as the runner reads it: a row whose permission requires one another
+// interface declares selects none and answers as it would, and under the agent a read of the app's own item (`owned`)
+// goes to the implementation before any permission (`owned_call`).
+test('whilePrompt answers only for the permission a call selects, and not for a read of the app\'s own item', async () => {
+  const { clock, data } = await freshRuntime('while-prompt-selected');
+  const { modules } = await import(resolve(root, 'web-js-while-prompt-selected', 'modules.js'));
+  const asks = { error: 'NotAllowedError', message: 'ask' }, permission = (name, more) => ({ name, field: 'state', denied: 'NotAllowedError', ...more });
+  const rows = {
+    read: ['a.read', false, { default: 7, permission: permission('p', { requires: { web: ['q'] }, whilePrompt: asks }) }, 'u', 'never', null, false],
+    other: ['b.other', false, { default: 0, permission: permission('q') }, 'u', 'never', null, false],
+    own: ['c.own', false, { implementation: true, owned: { web: 'device.photos-add' }, permission: permission('r', { whilePrompt: asks }) }, 'u', 'never', null, false],
+  };
+  const exact = globalThis.exact, kept = exact && { extensions: exact.extensions, foreground: exact.foreground }, grants = data.grants;
+  try {
+    clock.agent = true;
+    data.grants = 'device.photos-add';
+    modules(rows, { c: () => Promise.resolve({ implementation: () => ({ own: async () => 'the implementation\'s' }) }) });
+    const api = globalThis.exact.extensions;
+    expect(api.prefer({ permission: { p: 'granted', q: 'prompt', r: 'prompt' } }).error).toBeUndefined();
+    expect([await api.call({ extension: 'a', source: 'read', args: {} }), await api.call({ extension: 'c', source: 'own', args: {} })]).toEqual([7, 'the implementation\'s']);
+  } finally { data.grants = grants; if (kept) Object.assign(globalThis.exact, kept); else delete globalThis.exact; }
 });
 
 // LLP 1133.004 D6, LLP 1133.002 D12: a module event's origin on the JS target.

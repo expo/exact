@@ -146,6 +146,14 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
   };
   // A denied permission may gate only an option (`continues`: Face ID denied still leaves the passcode, D12).
   const denialFails = (permission, args) => typeof permission?.continues !== "string" || args?.[permission.continues] === true;
+  // A read of the app's own item under the agent: no dialog, the implementation opens it as the app's own or fails. On a
+  // target its `owned` names, where the app declares that line and the permission is not granted (LLP 1133.019 D11
+  // item 4, the runner's `owned_call`).
+  const ownedCall = row => {
+    const line = row.sub.owned?.web;
+    return typeof line === "string" && (data.grants ?? "").split("\n").some(l => l.trim().split(/\s+/)[0] === line)
+      && stateOf(row.sub.permission?.name ?? "") !== "granted";
+  };
   const statusOf = (row, permission = row.sub.permission) => {
     const status = sibling(row, permission?.status);
     return status ? valueOf(status) ?? {} : {};
@@ -156,15 +164,24 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
   };
   // A name admitted with no permission is never held or refused, and a request answers the status in every state but
   // `prompt` (`admission`, LLP 1133.004 §7).
-  const decidePermission = (row, send, p = row.sub.permission, args = {}) => {
+  // `p` is the permission `permissionOf` selected: none when a permission it requires is not this row's, as in the runner
+  const decidePermission = (row, send, p, args = {}) => {
     if (!p || row.sub.admission === "none") return null;
     const state = stateOf(p.name);
     // A target that makes the module absent keeps its own answer (`unknown`), as the runner's.
     if (!send && isStatus(row)) return { now: row.sub.targets?.web?.available === false ? valueOf(row) : statusValue(row, valueOf(row)) };
     // A source that reads a value of its own until the permission is granted (`ungranted`), as the runner's.
     if (!send && "ungranted" in row.sub && state !== "granted") return { now: structuredClone(row.sub.ungranted) };
-    if (state === "denied" && row.sub.admission !== "request" && denialFails(p, args)) return { now: { error: p.denied } };
-    return state === "prompt" && asks(row, send) && statusAsks(row, p) ? { hold: "permission" } : null;
+    // A request that answers the status answers it denied too (`deniedAnswers`: WebKit's `requestPermission` resolves
+    // `denied`, LLP 1133.013 D11)
+    const answersDenied = send && row.sub.deniedAnswers === true;
+    if (state === "denied" && row.sub.admission !== "request" && denialFails(p, args) && !answersDenied) return { now: { error: p.denied } };
+    if (state !== "prompt") return null;
+    if (asks(row, send)) return statusAsks(row, p) ? { hold: "permission" } : null;
+    // A name that is no request answers the permission's `whilePrompt` while the state is `prompt`, where it has one: an
+    // error naming the request that asks (LLP 1133.013 D11), as in the runner
+    const { whilePrompt } = p;
+    return whilePrompt && typeof whilePrompt === "object" && !Array.isArray(whilePrompt) ? { now: structuredClone(whilePrompt) } : null;
   };
   const decide = (row, send, args = {}) => {
     // A target's own restriction holds under the agent too (§6): the web has no precision request.
@@ -207,7 +224,8 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
   };
   const answer = (row, json) => {
     const code = errorCode(json);
-    if (code) throw new Failed(`${row.key}: ${code}`, "error", code);
+    // The answer's message follows its code, as the runner's `answer_json` writes it: `whilePrompt`'s names the request
+    if (code) throw new Failed(typeof json.message === "string" ? `${row.key}: ${code}: ${json.message}` : `${row.key}: ${code}`, "error", code);
     return value(json, row.type, row.key);
   };
   const capability = h => h.waits === "permission" ? "permission" : h.waits === "raise" ? h.row.sub.raise.ticket : h.waits === "ceremony" ? h.row.sub.ceremony.ticket
@@ -904,6 +922,7 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
     // Under the agent: the web's own restriction, then the permission's ticket, a sheet's or the raise's (LLP 1133.018
     // D13 item 4); else the implementation.
     const agentDecision = () => unsupported(row, send) ? { now: { error: "NotSupportedError" } }
+      : ownedCall(row) ? { forward: true }
       : decidePermission(row, send, p, args) ?? (send && row.sub.choose ? { hold: "choose" } : null) ?? (send && row.sub.raise ? decide(row, send, args) : null) ?? { forward: true };
     const deviceDecision = () => unsupported(row, send) ? { now: { error: "NotSupportedError" } } : decidePermission(row, send, p, args) ?? dv.decide(row, args);
     let d = r === "agent" ? agentDecision() : dv.role(row) ? deviceDecision() : decideTimed(row, send, timeout, args);
