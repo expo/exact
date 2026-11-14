@@ -2,7 +2,7 @@
 // tools/gen.ts turns ../*.md into content/<route>.ts and content/nav.ts from constants/navigation.ts;
 // app.ts imports one page's module per route, so a reader downloads only the page it reads.
 // Each route waits for the reader before its runtime loads.
-use Page, Nav, Moved, Markdown, Viewport, SearchHit, SearchPart, Hit, Key from "./components/shapes.contract"
+use Page, Nav, Moved, Markdown, Address, Viewport, SearchHit, SearchPart, Hit, Key from "./components/shapes.contract"
 use Sidebar, Tabs from "./components/sidebar.contract"
 use Article from "./components/article.contract"
 
@@ -191,6 +191,7 @@ component App
   derive roomy = viewport.width >= 1280
   resource moved = resolveMoved(top(nav).name == "notfound" ? top(nav).url : "") as shape Moved else empty()
   mutation markdown as shape Markdown then copyFetched
+  mutation address as shape Address then copyAddress
   state query = ""
   state term = ""
   state chosen = 0
@@ -202,6 +203,7 @@ component App
   state opened: string[] = []
   state navToggled: string[] = []
   state copied = false
+  state linked = false
   state voted = ""
   state active = ""
   state visible: string[] = []
@@ -211,6 +213,7 @@ component App
   action follow(url: string)
     menu = false
     copied = false
+    linked = false
     voted = ""
     visible = []
     active = ""
@@ -235,6 +238,15 @@ component App
     opened = opened.filter(x => not x.startsWith(`${set}|`)).concat([id])
   action copyMarkdown
     send markdown = fetchMarkdown(top(nav).name)
+  action copyLink
+    send address = pageAddress(page.path)
+  action copyAddress
+    match address
+      case some(a)
+        copyText(a.url)
+        linked = true
+      case none
+        linked = false
   action seen(id: string, entry: IntersectionObserverEntry)
     let now = entry.isIntersecting ? (visible.includes(id) ? visible : visible.concat([id])) : visible.filter(x => x != id)
     visible = now
@@ -309,7 +321,7 @@ component App
             head title=page.title description=page.description
           scroll id=`page-${e.id}` flex=1 min-width=0 -exact-layout-transition="220ms ease" background-color="var(--color-background-default)"
             margin="calc(8px - clamp(0px, (960px - 100vw) * 1000, 9px))" border="1px solid var(--color-border-secondary)" border-radius="var(--radius-xl)"
-            Article(page=page, nav=site, missing=(e.name == "notfound"), failed=failed(page), retry=retryPage, url=top(nav).url, moved=moved.to, suggestions=moved.suggestions, from=from, opened=opened, toggle=toggle, pick=pick, seen=seen, active=active, copyMarkdown=copyMarkdown, copied=copied, voted=voted, vote=vote, roomy=roomy, year=site.year, theme=theme, chooseTheme=chooseTheme)
+            Article(page=page, nav=site, missing=(e.name == "notfound"), failed=failed(page), retry=retryPage, url=top(nav).url, moved=moved.to, suggestions=moved.suggestions, from=from, opened=opened, toggle=toggle, pick=pick, seen=seen, active=active, copyMarkdown=copyMarkdown, copied=copied, copyLink=copyLink, linked=linked, voted=voted, vote=vote, roomy=roomy, year=site.year, theme=theme, chooseTheme=chooseTheme)
       header appearance="none" inert=wide display="flex" align-items="center" justify-content="space-between" flex-shrink=0 overflow="hidden" position="absolute" top=0 left=0 right=0
         height="clamp(0px, (960px - 100vw) * 1000, 57px)" padding="0 16px" border-bottom="1px solid var(--color-border-secondary)" background-color="var(--color-background-default)"
         link href="/" class=Hit testId="home-bar"

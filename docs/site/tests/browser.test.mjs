@@ -116,11 +116,13 @@ test('copying delivers the onboarding prompt and the current article after navig
   expect(prompt).toContain('https://github.com/expo/exact/blob/main/docs/start-here.md');
   expect(prompt).not.toContain('docs.exact.example');
 
+  await page.getByTestId('actions').click();
   await page.getByTestId('copy-markdown').click();
   await page.waitForFunction(() => window.clipboardWrites.length === 2);
   expect(await page.evaluate(() => window.clipboardWrites[1])).toStartWith('# Start here: building an app with Exact');
   await page.getByTestId('nav-recipeWebsite').click();
   await page.getByTestId('h-a-deep-link').waitFor();
+  await page.getByTestId('actions').click();
   await page.getByTestId('copy-markdown').click();
   await page.waitForFunction(() => window.clipboardWrites.length === 3);
   const markdown = await page.evaluate(() => window.clipboardWrites[2]);
@@ -220,8 +222,8 @@ test('a known moved page keeps its redirect banner', () => withPage({}, async pa
 
 test('Open in AI uses the public page or its repository source', () => withPage({}, async page => {
   await visit(page, '/recipes/website');
-  await page.getByTestId('ai-openai').click();
-  const href = await page.getByTestId('ai-openai-choices').getByRole('link').getAttribute('href');
+  await page.getByTestId('actions').click();
+  const href = await page.getByTestId('open-chatgpt').getAttribute('href');
   const prompt = new URL(href).searchParams.get('q');
   if (site.origin) expect(prompt).toContain(site.origin + '/recipes/website.md');
   else {
