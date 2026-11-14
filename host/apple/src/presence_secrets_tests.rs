@@ -1,4 +1,4 @@
-//! The keychain vault over the hook ExactKit installs (LLP 1133.010 D6): a
+//! The keychain vault over the hook ExactPresence installs (LLP 1133.010 D6): a
 //! keychain in memory stands for it, as `Presence.swift` answers each op.
 
 use super::*;

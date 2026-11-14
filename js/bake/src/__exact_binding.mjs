@@ -4,6 +4,205 @@
 // item 1). typescript.mjs writes one per declaration into the stage; the bake
 // writes this file beside typescript.mjs in its stage, under this name.
 
+import { readdirSync, readFileSync } from 'node:fs';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { bare, propertyName, walkRuntime } from './__exact_portable.mjs';
+
+const OWN_CODE=/\.[cm]?[jt]sx?$/;
+
+/** Whether any of the app's captured code names the package. Data code declares a tool only in a file that
+ * imports it, so without one no graph is walked and a bake pays only for reading the files. */
+function namesLanguageModel(dir) {
+  return readdirSync(dir,{withFileTypes:true}).some(entry=>{
+    const path=join(dir,entry.name);
+    if (entry.name==='node_modules' || entry.name.startsWith('__exact_')) return false;
+    if (entry.isDirectory()) return namesLanguageModel(path);
+    return entry.isFile() && OWN_CODE.test(entry.name) && readFileSync(path,'utf8').includes('@exact/language-model');
+  });
+}
+
+/** Collect the app's own code in the bundler's runtime graph, whatever declarations the checker read for it;
+ * erased imports introduce no tools. */
+export async function languageModelToolSources(stage, options) {
+  if (!namesLanguageModel(stage)) return [];
+  const { rolldown } = await import('rolldown');
+  const own=id=>{
+    const at=relative(stage,id), path=at.split(sep);
+    return !isAbsolute(at) && path[0]!=='..' && !path.includes('node_modules') && !path.at(-1).startsWith('__exact_')
+      && OWN_CODE.test(id) && !/\.d\.[cm]?ts$/.test(id);
+  };
+  const sources=[];
+  const bundle=await rolldown({...options, cwd:stage, input:resolve(stage,'app.ts'),
+    tsconfig:resolve(stage,'__exact_tsconfig.json'), logLevel:'silent', treeshake:false,
+    external:(id,_importer,resolved)=>resolved && !own(id),
+    plugins:[{name:'language-model-tools', transform(code,id) {
+      if (own(id)) sources.push([id,code]);
+      return null;
+    }}]});
+  try { await bundle.generate({format:'esm'}); } finally { await bundle.close(); }
+  return sources;
+}
+
+/** The tools the runtimes would not find: they take only the `tools` export's own properties (`Object.hasOwn`).
+ * The export's initializer is the value when there is one; a class's methods and accessors are its prototype's,
+ * and a name its type lacks is absent. An index signature or `any` leaves the runtime to decide. */
+export async function unownedTools(checker, module, names, { SymbolFlags, TypeFlags }) {
+  const exported=names.length ? await checker.getPropertyOfType(module,'tools') : undefined;
+  if (!exported) return [];
+  const declaration=await exported.valueDeclaration?.resolve();
+  const type=declaration?.initializer ? await checker.getTypeAtLocation(declaration.initializer) : await checker.getTypeOfSymbol(exported);
+  if (!type || type.flags & (TypeFlags.Any | TypeFlags.Unknown)) return [];
+  const indexed=(await checker.getIndexInfosOfType(type)).length>0, unowned=[];
+  for (const name of names) {
+    const property=await checker.getPropertyOfType(type,name);
+    if (property ? property.flags & (SymbolFlags.Method | SymbolFlags.Accessor) && (await property.getParent())?.flags & SymbolFlags.Class : !indexed)
+      unowned.push(name);
+  }
+  return unowned;
+}
+
+/** Literal model tools in reachable data code; unresolved expressions retain the runtime check. */
+function literalModelTools(file, code, parse) {
+  const ast=parse(file,code,{sourceType:'module'}), program=ast.program ?? ast;
+  const imports=new Map(), constants=new Map(), exported=new Set(), tools=[];
+  for (let node of program.body ?? []) {
+    if (node.type==='ImportDeclaration' && node.importKind!=='type' && /^@exact\/language-model(?:\/|$)/.test(node.source.value)) {
+      for (const spec of node.specifiers) {
+        if (spec.importKind!=='type' && (spec.type==='ImportNamespaceSpecifier' || (spec.imported?.name ?? spec.imported?.value)==='createLanguageModel'))
+          imports.set(spec.local.name,spec.type==='ImportNamespaceSpecifier' ? 'namespace' : 'create');
+      }
+    }
+    const exporting=node.type==='ExportNamedDeclaration';
+    if (exporting) node=node.declaration;
+    if (node?.type==='VariableDeclaration' && node.kind==='const')
+      for (const d of node.declarations) if (d.id.type==='Identifier') {
+        constants.set(d.id.name,d.init);
+        if (exporting) exported.add(d.id.name);
+      }
+  }
+  if (!imports.size) return tools;
+  let root;
+  const modelCall=(node,local)=>{
+    if (node.type!=='CallExpression') return false;
+    const callee=bare(node.callee), object=callee?.type==='MemberExpression' ? bare(callee.object) : callee;
+    if (object?.type!=='Identifier' || local.scope(object.name)!==root) return false;
+    const kind=imports.get(object.name);
+    return kind==='create' && callee===object || kind==='namespace' && propertyName(callee)==='createLanguageModel';
+  };
+  const parents=new WeakMap(), calls=new Map(), references=[];
+  walkRuntime(ast,(node,local,parent)=>{
+    if (parent) parents.set(node,parent);
+    if (node.type==='Program') root=local.scope([...imports.keys()][0]);
+    if (modelCall(node,local)) calls.set(node,new Set([...constants.keys()].filter(name=>local.scope(name)===root)));
+    if (node.type==='Identifier' && constants.has(node.name) && local.scope(node.name)===root) references.push(node);
+  });
+  const primitive=(node,seen=new Set())=>{
+    node=bare(node);
+    if (node?.type==='Identifier' && constants.has(node.name) && !seen.has(node.name))
+      return primitive(constants.get(node.name),new Set([...seen,node.name]));
+    return node?.type==='Literal' || node?.type==='TemplateLiteral' && !node.expressions.length
+      || node?.type==='UnaryExpression' && primitive(node.argument,seen);
+  };
+  // A const binding does not freeze its object. Follow it only while every use stays
+  // inside literal declarations or the model call; aliases share that restriction.
+  const unsafe=new Set([...exported].filter(name=>!primitive(constants.get(name)))), aliases=new Map();
+  for (const ref of references) {
+    if (primitive(constants.get(ref.name))) continue;
+    let node=ref, parent=parents.get(node);
+    if (parent?.type==='VariableDeclarator' && parent.id===node
+      || parent?.type==='Property' && !parent.computed && parent.key===node && parent.value!==node
+      || parent?.type==='MemberExpression' && !parent.computed && parent.property===node) continue;
+    while (parent && (bare(parent)===node
+      || parent.type==='Property' && parent.kind==='init' && !parent.method && parent.value===node
+      || parent.type==='ObjectExpression' || parent.type==='ArrayExpression'
+      || parent.type==='ConditionalExpression' && (parent.consequent===node || parent.alternate===node))) {
+      node=parent; parent=parents.get(node);
+    }
+    if (parent?.type==='VariableDeclarator' && parent.init===node && constants.get(parent.id.name)===node) {
+      const name=parent.id.name;
+      for (const [a,b] of [[ref.name,name],[name,ref.name]]) {
+        if (!aliases.has(a)) aliases.set(a,new Set());
+        aliases.get(a).add(b);
+      }
+    }
+    else if (!(calls.has(parent) && parent.arguments[0]===node)) unsafe.add(ref.name);
+  }
+  for (const name of unsafe) for (const alias of aliases.get(name) ?? []) unsafe.add(alias);
+  const resolved=(node,scope,seen=new Set())=>{
+    node=bare(node);
+    if (node?.type!=='Identifier') return node;
+    if (scope(node.name)!==root || !constants.has(node.name) || seen.has(node.name) || unsafe.has(node.name)) return null;
+    return resolved(constants.get(node.name),()=>root,new Set([...seen,node.name]));
+  };
+  const field=(node,key,scope)=>{
+    node=resolved(node,scope);
+    if (node?.type!=='ObjectExpression' || node.properties.some(p=>p.type!=='Property' || p.computed && propertyName(p)===null)) return null;
+    return node.properties.findLast(p=>propertyName(p)===key)?.value;
+  };
+  const literal=(node,scope,seen=new Set())=>{
+    node=resolved(node,scope);
+    if (!node || seen.has(node)) throw new Error('computed');
+    seen=new Set([...seen,node]);
+    if (node.type==='Literal' && (node.value===null || ['string','number','boolean'].includes(typeof node.value))) return node.value;
+    if (node.type==='UnaryExpression' && ['+','-'].includes(node.operator)) {
+      const value=literal(node.argument,scope,seen);
+      if (typeof value==='number') return node.operator==='-' ? -value : value;
+    }
+    if (node.type==='TemplateLiteral' && !node.expressions.length) return node.quasis[0].value.cooked;
+    if (node.type==='ArrayExpression') return node.elements.map(n=>literal(n,scope,seen));
+    if (node.type==='ObjectExpression' && node.properties.every(p=>p.type==='Property' && p.kind==='init' && !p.method && propertyName(p)!==null))
+      return Object.fromEntries(node.properties.map(p=>[propertyName(p),literal(p.value,scope,seen)]));
+    throw new Error('computed');
+  };
+  const list=(node,scope,seen=new Set())=>{
+    node=resolved(node,scope);
+    if (!node || seen.has(node)) return [];
+    seen=new Set([...seen,node]);
+    if (node.type==='ConditionalExpression') return [...list(node.consequent,scope,seen),...list(node.alternate,scope,seen)];
+    return node?.type==='ArrayExpression' ? node.elements.filter(n=>n?.type!=='SpreadElement') : [];
+  };
+  for (const [node,names] of calls) {
+    const scope=name=>names.has(name) ? root : null;
+    for (const tool of list(field(node.arguments[0],'tools',scope),scope)) {
+      let name, schema=null;
+      try { name=literal(field(tool,'name',scope),scope); } catch { continue; }
+      if (typeof name!=='string') continue;
+      try { schema=literal(field(tool,'inputSchema',scope),scope); } catch { /* only the name is known */ }
+      tools.push({name,inputSchema:schema});
+    }
+  }
+  return tools;
+}
+
+export const TOOL_CHECK='\n// language-model-tool-handler\n';
+
+/** The literal tools of the Contract declarations and of the data code. */
+export function languageModelTools(declarations, sources, parse) {
+  const contract=declarations.match(/^export type LanguageModelToolSchemas = (\[[^\n]*\]);$/m);
+  const tools=contract ? JSON.parse(contract[1]) : [];
+  for (const [file,code] of sources) tools.push(...literalModelTools(file,code,parse));
+  return tools;
+}
+
+/** The generated entry checks the exported namespace, including re-exports and CommonJS; an unowned name checks
+ * as absent. */
+export function languageModelToolCheck(tools, unowned=[]) {
+  if (!tools.length) return '';
+  return TOOL_CHECK+"import * as __modelApp from './app';\n"
+    +"import type { LanguageModelToolHandlers } from './app.contract.d.ts';\n"
+    +"type __ModelTools = typeof __modelApp extends {tools: infer T} ? T : {};\n"
+    +`type __ModelUnowned = ${unowned.length ? unowned.map(n=>JSON.stringify(n)).join(' | ') : 'never'};\n`
+    +`type __ModelExpected = LanguageModelToolHandlers<${JSON.stringify(tools)}>;\n`
+    +"const __languageModelToolHandlers: __ModelExpected = {} as { [N in keyof __ModelExpected]: N extends __ModelUnowned ? undefined : N extends keyof __ModelTools ? __ModelTools[N] : undefined };\n";
+}
+
+/** Give a generated handler assertion its bake diagnostic's name. */
+export function languageModelToolNote(entry, diagnostics) {
+  const line=entry.split('\n').findIndex(line=>line.startsWith('const __languageModelToolHandlers:'))+1;
+  return line && diagnostics.includes(`__exact_entry.ts(${line},`)
+    ? '\nlanguage-model-tool-handler: each literal model tool needs a compatible function in the data module\'s tools export\n' : '';
+}
+
 const JSON_HOLDS='a shape or DOM dictionary by name, `any`, `number`, `string`, `bool` or `enum<a|b>`, or `option<T>` or `T[]` of one';
 
 /** Whether `json<t>` is a JSON value's type, as {@link JSON_HOLDS} says. */

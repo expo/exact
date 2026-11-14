@@ -322,10 +322,7 @@ impl<D: DataSource> Runner<D> {
             self.store.take_sockets();
         }
         self.stage_answer(p.target);
-        self.hear_aborted();
-        for line in self.data.take_logs() {
-            self.log(line);
-        }
+        self.take_data_logs();
         // What this reply's turn watched joins the resource's topics whatever
         // the reply says: a turn that yields another request (a long native
         // call) watched them as much as the one that answers.
@@ -333,8 +330,8 @@ impl<D: DataSource> Runner<D> {
             // A read in a later turn (after an `await`) makes a store reader
             // as one in the first does (LLP 1146 §2.3).
             if self.store.reads() > reads_before {
-                self.note_reads(i, reads_before, draws_before);
-                self.module_work.reply_reader = Some(i);
+                let contents = self.note_reads(i, reads_before, draws_before);
+                self.module_work.reply_reader = Some((i, contents));
             }
             // A module's source that data code read: the answer is asked
             // again when that source's answer changes (LLP 1133.002 D14).

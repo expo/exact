@@ -7,6 +7,7 @@ import { capturedLockDrift, gameDefaults, gameShells, prepareGame, sdkFetch } fr
 import { cargoEnvironment, lockedMetadata, pathFrom, patchLines } from '../scripts/app.mjs';
 import { PLATFORMS, SDK_CRATES, appCrateName, authoredCrate, copiedBuildScripts, namePlatform, withoutPlatformKeys } from '../scripts/app-shells.mjs';
 import { updateManifests } from './update-manifests.mjs';
+import { RUST_PLATFORMS, rustListing, writeRustApp } from '../scripts/app-rust.mjs';
 export { exact2Placeholders } from './update-manifests.mjs';
 import { APP_CRATES, NO_WORKSPACE } from '../scripts/cargo-check.mjs';
 import { APPLE_BUILD_SCRIPT, EARLIER_APPLE_BUILD_SCRIPT } from '../scripts/linked-plan.mjs';
@@ -209,6 +210,12 @@ export function createApp(destination, options = {}) {
   if (options.title !== undefined && (!options.title.trim() || /[\x00-\x1f\x7f]/.test(options.title))) throw new Error('exact new --name: give the name people see, on one line, as --name "Field Log"');
   if (existsSync(dir) && readdirSync(dir).length) throw new Error(`${dir} already exists and is not empty`);
   const crateName = appCrateName(dir, name, options.title ?? null);
+  if (options.rust) {
+    if (options.snapback) throw new Error('exact new: --rust and --snapback are separate starters; Snapback\'s client is TypeScript');
+    checkPlatforms('exact new', options.with ?? []);
+    const other = (options.with ?? []).find(p => !RUST_PLATFORMS.includes(p));
+    if (other) throw new Error(`exact new --rust: its scaffold has host crates for ios and mac; for ${other}, make the app, then copy apps/sparkline's crate for it`);
+  }
   // Refused before anything is written: wiring is the last step, after the app and the backend's schema above it.
   if (options.snapback && !snapbackDevice) throw new Error(NO_SNAPBACK);
   const port = options.snapback ? snapbackPort(options.snapback.port) : null;
@@ -227,6 +234,12 @@ export function createApp(destination, options = {}) {
     checkPlatforms('exact new', options.with ?? []);
     created = writeApp(dir, crateName, { ...options, title: options.title ?? titleOf(name) });
     for (const platform of options.with ?? []) namePlatform(dir, platform);
+    if (options.rust) {
+      writeRustApp(dir, crateName, options.title ?? titleOf(name));
+      // What update says beyond its one line (a path it could not resolve) is said here too.
+      const updated = updateApp(dir, crateName).split('\n').slice(1).filter(line => !/bun exact\.mjs lock/.test(line)).join('\n');
+      return `${rustListing(created)}${updated && `\n${updated}`}`;
+    }
     if (!options.snapback) return created;
     if (!existingBackend) snapbackStarter(dir, crateName, port, JSON.parse(readFileSync(resolve(dir, 'app.json'), 'utf8')).app);
     else {
@@ -919,16 +932,16 @@ function agentNotes(dir, name, {game = false} = {}) {
   const doc = file => pathFrom(from, resolve(ROOT, 'docs', file));
   const sdk = file => pathFrom(from, resolve(ROOT, file));
   if (game) return gameNotes(name, doc, sdk, from);
-  const snapback = snapbackNotes(dir, from);
+  const snapback = snapbackNotes(dir, from), rust = rustApp(dir);
   return `${BEGIN}
 # ${name}: an Exact app
 
-\`app.contract\` is the view, \`app.ts\` the data module, \`app.test.contract\` the tests, \`app.json\`
+\`app.contract\` is the view, ${rust ? '\`data/src/lib.rs\` the data module (Rust; \`apple/\` and \`web/\` link it)' : '\`app.ts\` the data module'}, \`app.test.contract\` the tests, \`app.json\`
 the manifest: set \`app.name\` and \`app.id\` before building. The app uses Exact at
 \`${pathFrom(from, ROOT)}\` by path (\`EXACT\` overrides it).
 
-This file is already in your instructions. Start from the nearest pattern: \`bun exact.mjs
-pattern\` lists them and \`pattern <name>\` writes one, tested. ${doc('start-here-site.md')} (a site) or
+This file is already in your instructions. ${rust ? `Its data module's guide is ${doc('reference.md')}, "Rust data sources".` : `Start from the nearest pattern: \`bun exact.mjs
+pattern\` lists them and \`pattern <name>\` writes one, tested.`} ${doc('start-here-site.md')} (a site) or
 ${doc('start-here.md')} is the only required reading. \`bun exact.mjs contract vocab <name>\` answers a
 name (none: the card); \`bun exact.mjs docs <heading words>\` a guide's
 section. Run \`bun exact.mjs verify\` when the features work, and \`verify ios|android\` at the end for a
@@ -951,6 +964,9 @@ ${END}
 
 /** Whether the app authored its host crates (an app `exact new` made before LLP 1153, or one that needs Rust of its
  * own): a workspace manifest or a crate beside app.json. Otherwise its native workspace is generated (scripts/app-shells.mjs). */
+/** Whether the app's data module is a Rust crate (`exact new --rust`): a data crate and no app.ts. */
+export const rustApp = dir => existsSync(resolve(dir, 'data/Cargo.toml')) && !existsSync(resolve(dir, 'app.ts'));
+
 export const authoredApp = dir => existsSync(resolve(dir, 'Cargo.toml')) || APP_CRATES.some(kind => existsSync(resolve(dir, kind, 'Cargo.toml')));
 
 /** Feedback, required of every agent (Charlie, 2026-11-01): the triggers and the one-line note

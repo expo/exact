@@ -17,7 +17,7 @@ import { createServer, request } from 'node:http';
 import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, utimesSync, watch, writeFileSync } from 'node:fs';
 import { basename, dirname, relative, resolve } from 'node:path';
 import { acceptsHTML, appDocumentPath, webRequestURL } from '../../scripts/origin.mjs';
-import { compilerWarnings, INPUT_TREE, OUTPUT, listenOn } from '../../scripts/agent-launch.mjs';
+import { compilerWarnings, INPUT_TREE, OUTPUT, listenOn, oneScheme } from '../../scripts/agent-launch.mjs';
 import { builtSettings } from '../../js/bake/src/__exact_env.mjs';
 import { alsoOnIPv6Loopback, appManifestDigest, appSources, buildFileCards, listenDelay, replaceBuild, saveTrace, sendStaticBody, watchLauncher, webContentType } from '../web/serve.mjs';
 import { generationFile, generationPath, servedFile } from '../web/generations.mjs';
@@ -274,7 +274,7 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
   let warned = '';
   const warn = (warnings) => {
     if (!warnings || warnings.join('\n') === warned) return;
-    if (warnings.length) console.log(warnings.join('\n'));
+    if (warnings.length) console.log(oneScheme(warnings).join('\n'));
     else console.log('the compiler warns of nothing now');
     warned = warnings.join('\n');
   };

@@ -13,6 +13,7 @@ semantics' own syntax is compared with the decoded one, instruction for
 instruction.
 -/
 import Contract.Lower
+import Contract.VmRows
 import Contract.Observe
 import Contract.OracleText
 
@@ -41,6 +42,10 @@ structure Body where
   bytes : String
   /-- An action's `writes`. -/
   writes : List Nat := []
+  /-- The checked substitution behind an executable instance row. -/
+  source : Option Expr := none
+  executable : Bool := false
+  owner : Option Nat := none
   deriving Inhabited
 
 /-- What the difftest reads from the plan. -/
@@ -50,6 +55,8 @@ structure PlanInfo where
   /-- Every slot: its name and whether a region instance owns it. -/
   slots : List (String × Bool) := []
   derives : List String := []
+  /-- Executable body bytes and owning region, indexed by the derive table. -/
+  executables : List (Option (String × Option Nat)) := []
   resources : List String := []
   /-- Every mutation: its name and slot. -/
   mutations : List (String × Nat) := []
@@ -194,7 +201,7 @@ def structural (rust lean : Code) : Option String :=
 /-- The semantics' expression a body compiles. -/
 def exprOf (p : Program) (b : Body) : Option Expr :=
   match b.kind with
-  | .derive => (p.derives.find? (·.name == b.name)).map (·.body)
+  | .derive => if b.executable then b.source else (p.derives.find? (·.name == b.name)).map (·.body)
   | .slot => (p.states.find? (·.name == b.name)).map (·.init)
   | .resource k => (p.resources.find? (·.name == b.name)).bind (·.args[k]?)
   | .action => .none
@@ -203,6 +210,10 @@ def check (p : Program) (o : Oracle) (events : List Observe.ScriptEvent) (pi : P
     (roster : Array (String × Nat)) : List String := Id.run do
   let pool : Pool := { strings := pi.strings, types := pi.types, roster }
   let L := layout p pi
+  let executableRows : List (Option VmRows.Row) := pi.executables.map fun row => do
+    let (bytes, owner) ← row
+    let code ← (decode pool (unhex bytes)).toOption
+    pure { code, owner }
   let mut t : Tally := {}
   let mut out : Array String := #[]
   -- The configurations to check in: boot, and after each event that is not
@@ -231,6 +242,10 @@ def check (p : Program) (o : Oracle) (events : List Observe.ScriptEvent) (pi : P
       t := { t with undecoded := t.undecoded + 1 }
       out := out.push s!"UNDECODED {what}: {why}"
     | .ok code =>
+      if b.executable && b.owner.isSome then
+        t := { t with refused := t.refused + 1 }
+        out := out.push s!"REFUSED {what}: owner region {b.owner.getD 0} needs an instance environment"
+        continue
       -- The compiler of `Contract.Lower` against the Rust compiler's code.
       let lean : Except String Code := match b.kind with
         | .action =>
@@ -269,7 +284,7 @@ def check (p : Program) (o : Oracle) (events : List Observe.ScriptEvent) (pi : P
               let slots := (pi.slots.zip venv.slots).map fun ((n, owned), v) =>
                 if owned then lookup n rows else v
               let venv := { venv with slots }
-              let vm := run code venv
+              let vm := VmRows.run executableRows code venv
               let ls : Locals := ((a.params.map (·.1)).zip args).reverse
               let sem := (exec Contract.fuel { env with rows } ls a.body {}).map fun fx => (Value.unit, lowerFx L fx)
               let (t', ls') := judge s!"{what} cfg{k} args{s}" vm sem t
@@ -279,7 +294,7 @@ def check (p : Program) (o : Oracle) (events : List Observe.ScriptEvent) (pi : P
           match exprOf p b with
           | .none => pure ()
           | .some e =>
-            let vm := run code (vmEnv p pi cfg [] [])
+            let vm := VmRows.run executableRows code (vmEnv p pi cfg [] [])
             let sem := (eval Contract.fuel env false [] e).map fun v => (v, ({} : Vm.Effects))
             let (t', ls') := judge s!"{what} cfg{k}" vm sem t
             t := t'

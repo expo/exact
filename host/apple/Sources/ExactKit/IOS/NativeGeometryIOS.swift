@@ -13,11 +13,12 @@ final class NativeGeometry {
     }
     private var boxes: [Box] = []
     private var modal: Int?
+    private var backdrop: Box?
     init(_ presenter: Presenter) { self.presenter = presenter }
 
     func reset() {
         FrameClock.shared.drop(self)
-        pending = false; fresh = true; boxes = []; modal = nil
+        pending = false; fresh = true; boxes = []; modal = nil; backdrop = nil
     }
 
     /// Native containers animate above authored nodes. Their presentation layers
@@ -37,6 +38,27 @@ final class NativeGeometry {
             return source.convert(source.bounds, to: destination)
         }
         return from.convert(from.bounds, to: to)
+    }
+
+    /// A native modal surface accepts input only within its visible,
+    /// enabled ancestors. Dialog CSS does not gate its sibling backdrop.
+    static func hitRegion(of source: UIView, in destination: UIView) -> CGRect? {
+        guard source.window != nil else { return nil }
+        var rect = bounds(of: source, in: destination), at: UIView? = source
+        while let view = at {
+            guard !view.isHidden, view.isUserInteractionEnabled, view.alpha > 0.01 else { return nil }
+            rect = rect.intersection(bounds(of: view, in: destination))
+            at = view.superview
+        }
+        return rect.isNull || rect.isEmpty ? nil : rect
+    }
+
+    /// UIKit's backdrop gestures exclude the presented view's hit bounds,
+    /// even when the content's animated clip is smaller than that view.
+    static func sheetBackdrop(of presentation: UIPresentationController, in destination: UIView) -> (bounds: CGRect, excluding: CGRect?)? {
+        guard let container = presentation.containerView, let presented = presentation.presentedView,
+              let bounds = hitRegion(of: container, in: destination) else { return nil }
+        return (bounds, presented.convert(presented.bounds, to: destination))
     }
 
     private static func animates(_ layer: CALayer) -> Bool {
@@ -77,8 +99,9 @@ final class NativeGeometry {
                 followAnimations()
                 let shown = presenter.openTopLayer
                 let now = shown.frames.map { Box(id: $0.0, frame: $0.1, clip: $0.2) }
-                guard fresh || boxes != now || modal != shown.modal else { return }
-                fresh = false; boxes = now; modal = shown.modal
+                let region = shown.backdrop.map { Box(id: $0.0, frame: $0.1, clip: $0.2) }
+                guard fresh || boxes != now || modal != shown.modal || backdrop != region else { return }
+                fresh = false; boxes = now; modal = shown.modal; backdrop = region
                 // Runtime.on samples the top layer before the pump; its emit wakes intersections.
                 session.applyUnlessEmpty(session.runtime.pump(now: session.now()))
             }, cancelled: { [weak self] in self?.pending = false })

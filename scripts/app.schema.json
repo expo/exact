@@ -301,9 +301,9 @@
     },
     "link": {
       "type": "array",
-      "items": { "enum": ["markdown", "motion", "collections", "drag", "surfaces", "router", "format", "materials", "backdrop", "share", "documents", "picker", "timelines", "text_transform", "effects", "animations", "gradients", "grid", "geometry", "segments", "dataset", "tabs", "grouped_lists", "io", "transitions", "media_picker", "auth_session", "numerals", "dates", "sqlite", "tips"] },
+      "items": { "enum": ["markdown", "motion", "collections", "drag", "surfaces", "router", "format", "materials", "backdrop", "share", "documents", "picker", "timelines", "text_transform", "effects", "animations", "gradients", "grid", "geometry", "segments", "dataset", "tabs", "grouped_lists", "io", "transitions", "media_picker", "auth_session", "numerals", "dates", "sqlite", "tips", "shadows", "corners", "rotate", "text_stroke", "symbol_palette", "presence"] },
       "uniqueItems": true,
-      "description": "Capabilities a native production build links before any plan uses them (LLP 1047 D8; LLP 1047.001), so a later bundle may: an archive otherwise links what its plan uses (plus `auth_session` from `auth.session` grants and `sqlite` from `sqlite.open` grants) and nothing else, and a bundle that needs more is a new binary. Linking sqlite without sqlite.open only adds unused code: an update that adds the grant changes the compatibility identity and requires a new binary even when sqlite was linked. Development links every capability but `media_picker` and `auth_session`, which it links as production would (LLP 1047.001.000 F). Names are the runner's (`exact_runner::Capability::name`)."
+      "description": "Capabilities a native production build links ahead of use (LLP 1047 D8; LLP 1047.001). Otherwise the composition contains what the plan and grants use: auth.session selects auth_session, sqlite.open selects sqlite, and secret.keep with a presence policy selects presence. Adding a grant changes compatibility and requires a new binary even if its capability was linked ahead. Development links every capability except media_picker, auth_session, numerals and tips, which follow use. Names are the runner's (exact_runner::Capability::name)."
     },
     "icons": {
       "description": "The app's icons, as the web manifest spells them: PNG, SVG or ICO files under assets/. Each host picks the file a slot takes by purpose, then shape and size (LLP 1163 D5): iOS and macOS a square maskable, else any, of at least 1024 px, unless host.ios.icon or host.macos.icon selects an Icon Composer project; iOS's tinted icon a square monochrome PNG; the web's favicons the smallest square raster of at least 32 px and an SVG, and its Apple touch icon the smallest opaque square PNG of at least 180 px, else the largest. An iOS distribution build requires the iOS icon.",
@@ -743,8 +743,18 @@
           "description": "iOS: `minimumOS` (default 17.0), `deviceFamily` (iphone, ipad), and the keys below.",
           "type": "object",
           "properties": {
+            "infoPlist": {
+              "description": "No keys are admitted. Each refusal gives tested grant advice, points to the bundle metadata reference for a derived key, or asks for a feedback note naming a key Exact does not write.",
+              "type": "object",
+              "additionalProperties": false
+            },
+            "entitlements": {
+              "description": "No keys are admitted. Each refusal gives tested grant advice, points to the bundle metadata reference for a derived key, or asks for a feedback note naming a key Exact does not write.",
+              "type": "object",
+              "additionalProperties": false
+            },
             "resources": {
-              "description": "Resource trees a data module reads through `bundle:/` (LLP 1133.007 D6), on iOS, iPadOS and tvOS: copied, modes kept, into the bundle's `ExactResources/` folder before it is signed, which then holds them and nothing else. Read only, through `fs.read bundle:/<to>` (`fs.read bundle:/Resources/data-files`), the line the Mac's `host.macos.resources` takes for the same `to`. A tree holds no links and no Mach-O code; changing it requires a new binary, never an update.",
+              "description": "Resource trees a data module reads through `bundle:/` (LLP 1133.007 D6), on iOS, iPadOS and tvOS: copied, modes kept, into the bundle's `ExactResources/` folder before it is signed, which then holds them and nothing else. Read only, through `fs.read bundle:/<to>` (`fs.read bundle:/Resources/data-files`), the line the Mac's `host.macos.resources` takes for the same `to`. A tree holds no links and no Mach-O code; changing it requires a new binary, never an update. A `from` is a directory of its own, such as `data-files/`: one under `assets/`, `deck/`, `gpu/`, `fonts/`, `strings/`, `web/`, `apple/`, `linux/`, `src/`, `data/`, `modules/`, `node_modules/`, `target/` and `dist/` (directories Exact owns) is refused, naming them (LLP 1168.000 D7.1).",
               "type": "array",
               "items": {
                 "type": "object",
@@ -788,8 +798,8 @@
               }
             },
             "optimize": {
-              "enum": ["speed", "size"],
-              "description": "What a production build optimizes the Rust archive and ExactKit for (LLP 1047.001 D9): \"speed\" (opt-level 3, Swift -O) or \"size\" (opt-level z, Swift -Osize -internalize-at-link; on 2026-10-06 a one-text app's 9.8 MB was 6.2). Absent: size for an iOS or tvOS app and for an embed (`build.mjs --embed`); a game keeps speed. Games refuse size because their generated Cargo workspace has no size profile. tvOS shares this iOS setting. `build.mjs --optimize` overrides it."
+              "enum": ["speed", "size", "balanced"],
+              "description": "What a production build optimizes the Rust archive and ExactKit for (LLP 1047.001 D9): \"speed\" (opt-level 3, Swift -O), \"size\" (opt-level z, Swift -Osize -internalize-at-link; on 2026-10-06 a one-text app's 9.8 MB was 6.2) or \"balanced\" (size, with the crates a scrolling list spends its time in at opt-level 3, and Swift -O; on a 10,000-message chat 21.1 MB against speed's 24.3 and size's 16.5, scrolling within noise of speed). Absent: balanced for an iOS or tvOS app, size for an embed (`build.mjs --embed`); a game keeps speed. Games refuse size and balanced because their generated Cargo workspace has neither profile. tvOS shares this iOS setting. `build.mjs --optimize` overrides it."
             },
             "designRequiresCompatibility": {
               "type": "boolean",
@@ -905,6 +915,16 @@
           "description": "macOS: `minimumOS` (default 14.0), the first window's size, and the keys below.",
           "type": "object",
           "properties": {
+            "infoPlist": {
+              "description": "No keys are admitted. Each refusal gives tested grant advice, points to the bundle metadata reference for a derived key, or asks for a feedback note naming a key Exact does not write.",
+              "type": "object",
+              "additionalProperties": false
+            },
+            "entitlements": {
+              "description": "No keys are admitted. Each refusal gives tested grant advice, points to the bundle metadata reference for a derived key, or asks for a feedback note naming a key Exact does not write.",
+              "type": "object",
+              "additionalProperties": false
+            },
             "presenter": {
               "enum": ["native", "painted"],
               "description": "Absent: native. Painted builds the app’s <macos-crate>-painted binary as a benchmark carrier; distribution is refused until LLP 1149’s accessibility gate."
@@ -915,7 +935,7 @@
               "description": "Primary Icon Composer .icon directory, relative to app.json and inside the app. Compiled with the app's catalogs; conflicts with an .appiconset in those catalogs are refused. Absent: use icons."
             },
             "resources": {
-              "description": "Native-only resource trees, copied under Contents with modes and internal relative symlinks preserved, before the bundle is sealed (a build stamp placed here is inside the seal). Excluded from plan assets and TypeScript capture; changing them requires a new binary. Mach-O code is signed with the bundle; a helper executable needing a hardened-runtime exception names it in the source's grants, as `runtime.allow-jit Helpers/node/bin/node`; the app's own executable takes none (LLP 1069.008 D9).",
+              "description": "Native-only resource trees, copied under Contents with modes and internal relative symlinks preserved, before the bundle is sealed (a build stamp placed here is inside the seal). Excluded from plan assets and TypeScript capture; changing them requires a new binary. A `from` under a directory Exact owns is refused, as `host.ios.resources`' is. Mach-O code is signed with the bundle; a helper executable needing a hardened-runtime exception names it in the source's grants, as `runtime.allow-jit Helpers/node/bin/node`; the app's own executable takes none (LLP 1069.008 D9).",
               "type": "array",
               "items": {
                 "type": "object", "required": ["from", "to"], "additionalProperties": false,
@@ -934,8 +954,8 @@
               "description": "\"accessory\": a menu-bar app (LLP 1133.025 D6), written as LSUIElement: no Dock tile and no menu bar of its own, and every launch opens no window; a `-exact-menu=\"status\"` button is how the person reaches it, and `focus()` shows its window. Absent: regular."
             },
             "optimize": {
-              "enum": ["speed", "size"],
-              "description": "What a production build optimizes the Rust archive and ExactKit for (LLP 1047.001 D9): \"speed\" (opt-level 3, Swift -O) or \"size\" (opt-level z, Swift -Osize -internalize-at-link; on 2026-10-06 a one-text app's 9.8 MB was 6.2). Absent: speed for a Mac app, size for an embed (`build.mjs --embed`); a game keeps speed. Games refuse size because their generated Cargo workspace has no size profile. `build.mjs --optimize` overrides it."
+              "enum": ["speed", "size", "balanced"],
+              "description": "What a production build optimizes the Rust archive and ExactKit for (LLP 1047.001 D9): \"speed\" (opt-level 3, Swift -O), \"size\" (opt-level z, Swift -Osize -internalize-at-link; on 2026-10-06 a one-text app's 9.8 MB was 6.2) or \"balanced\" (size, with the crates a scrolling list spends its time in at opt-level 3, and Swift -O). Absent: speed for a Mac app, size for an embed (`build.mjs --embed`); a game keeps speed. Games refuse size and balanced because their generated Cargo workspace has neither profile. `build.mjs --optimize` overrides it."
             },
             "gameMode": {
               "type": "boolean",
@@ -1404,13 +1424,13 @@
       "properties": {
         "accept": {
           "type": "array",
-          "description": "Findings of `verify`'s check that are the app's design (a brand palette's contrast, a reference's small keys): each names the check's finding kind (or `fixed-type`, a font size the app's Contract fixes; `fixed-symbol`, a symbol sized in points beside text; `broken-words`, `overflow-wrap: anywhere` on prose) and a node by its testId (or the testId of the control whose label it is; a trailing * matches a prefix, `mute-*`) and says why. verify prints them as accepted and does not count them.",
+          "description": "Findings of `verify`'s check that are the app's design (a brand palette's contrast, a reference's small keys): each names the check's finding kind (or `fixed-type`, a font size the app's Contract fixes; `fixed-symbol`, a symbol sized in points beside text; `broken-words`, `overflow-wrap: anywhere` on prose; or `tree --ax`'s `unnamed`, `exposed-hidden`, `outside-modal`, by the testId of the view the element joined) and a node by its testId (or the testId of the control whose label it is; a trailing * matches a prefix, `mute-*`) and says why. verify prints them as accepted and does not count them.",
           "items": {
             "type": "object",
             "additionalProperties": false,
             "required": ["finding", "node", "why"],
             "properties": {
-              "finding": { "type": "string", "enum": ["covered", "squeezed", "clipped", "overflow", "overlap", "contrast", "card", "target", "fixed-type", "fixed-symbol", "broken-words"] },
+              "finding": { "type": "string", "enum": ["covered", "squeezed", "clipped", "overflow", "overlap", "contrast", "card", "target", "fixed-type", "fixed-symbol", "broken-words", "unnamed", "exposed-hidden", "outside-modal"] },
               "node": { "type": "string", "pattern": "^[^*]+\\*?$", "description": "A testId, or a non-empty prefix of one and a single trailing *: a bare * would accept the finding on every node." },
               "why": { "type": "string", "minLength": 1 }
             }

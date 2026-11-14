@@ -1354,6 +1354,7 @@ fn perform_absolute_layout_on_absolute_children(
 ) -> Rect<f32> {
     let contains = tree.get_core_container_style(node).position() != Position::Static;
     let pass = AbsolutePass {
+        clearance: tree.get_core_container_style(node).absolute_clearance(),
         area_size: constants.container_size - constants.border.sum_axes() - constants.scrollbar_gutter.into(),
         area_offset: Point {
             x: constants.border.left + if constants.layout_direction.is_rtl() { constants.scrollbar_gutter.x } else { 0.0 },

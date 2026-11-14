@@ -3,6 +3,22 @@ import ExactCore
 import CExact
 
 final class HeadlessSessionTests: XCTestCase {
+    func testInlineOpacityKeepsSemanticColourAtFixedAnimationTimes() throws {
+        let session = try HeadlessSession(plan: fixturePlan("HEADLESS"), size: CGSize(width: 300, height: 900),
+                                          facts: SessionFacts(displayScale: 1, preferences: [], clock: 0))
+        defer { session.close() }
+        for time in [0.0, 250.0, 1000.0] {
+            let tree = try session.advance(at: time)
+            let node = try XCTUnwrap(tree.nodes.values.first { $0.props["testId"] == "opacity-animated" })
+            let run = try XCTUnwrap(node.runs.first)
+            XCTAssertEqual(run.opacity, 0.5 * time / 1000, accuracy: 0.0001)
+            XCTAssertEqual(run.opacityGroups.count, time == 1000 ? 1 : 2)
+            XCTAssertEqual(run.opacityGroups.first?.alpha, 0.5)
+            XCTAssertEqual(run.color?.isSystemColor, true, "the renderer still resolves the platform colour")
+            XCTAssertEqual(node.style["opacity"]?.number, 0.5, "the node keeps its own layer opacity")
+        }
+    }
+
     func testFactsKeepEpochWhileOffsetFollowsTheVirtualInstantAcrossDST() throws {
         let epoch = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-03-08T09:30:00Z"))
         let zone = try XCTUnwrap(TimeZone(identifier: "America/Los_Angeles"))

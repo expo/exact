@@ -38,8 +38,9 @@ pub(super) struct ModuleWork {
     /// a refused commit goes back to here, not to before the reply.
     pub(super) standing: Option<StoreCheckpoint>,
     /// The resource whose reply's turn read the store in the commit being
-    /// made: a refusal keeps that read, as it keeps the reply's failure.
-    pub(super) reply_reader: Option<usize>,
+    /// made, and whether it read what the store holds, not only randomness:
+    /// a refusal keeps that read, as it keeps the reply's failure.
+    pub(super) reply_reader: Option<(usize, bool)>,
     /// Kept tickets the host refused at admission, settled as failures, and
     /// whether each was ordered.
     refused: Vec<(u64, &'static str, bool)>,

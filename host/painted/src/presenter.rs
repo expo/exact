@@ -147,6 +147,8 @@ mod kept_rows_tests;
 #[cfg(test)]
 mod longpoll_tests;
 #[cfg(test)]
+mod module_events_tests;
+#[cfg(test)]
 mod spacing_tests;
 #[cfg(test)]
 mod swipe_left_tests;
@@ -386,6 +388,19 @@ pub struct Presenter<D: DataSource> {
 /// Two decimals, the agent API's precision.
 fn r2(x: f32) -> f64 {
     (x as f64 * 100.0).round() / 100.0
+}
+/// The app's `console` lines (LLP 1027.009 D1), the sink of each runner the
+/// presenter shows: on standard error in every build, and on Android, where
+/// standard error is logcat's `exact` tag, under the app's own tag instead
+/// (`android::console`).
+fn console_line(method: exact_runner::Console, line: &str) {
+    #[cfg(target_os = "android")]
+    crate::android::console(method, line);
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = method;
+        eprintln!("console: {line}");
+    }
 }
 impl<D: DataSource> Presenter<D> {
     /// Boot from entry zero or one selected generation. The selected asset
@@ -650,6 +665,8 @@ impl<D: DataSource> Presenter<D> {
         if let Some(reason) = p.assets.take_refusal() {
             return Err(HostError::Asset(reason));
         }
+        // Past the last refusal: a boot refused writes none of its lines.
+        p.host.runner_mut().set_console(console_line);
         Ok((p, error.or(e)))
     }
 
@@ -983,6 +1000,7 @@ impl<D: DataSource> Presenter<D> {
             .map(|op| op.activation)
             .filter(|a| *a > self.fragment_seen)
         {
+            self.fragment_anchor = None;
             self.fragment_seen = activation;
             self.fragment_armed = Some((activation, self.person_scrolls));
         }

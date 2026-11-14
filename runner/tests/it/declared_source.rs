@@ -499,9 +499,9 @@ fn a_page_answer_asked_again_is_asked_at_boot_when_its_source_can_answer() {
 /// A declared source never waits for the data module, so a launch asks a
 /// declared resource at boot and keeps no answer of it for the next launch
 /// (LLP 1027 D4, LLP 1162.001 D4). Nor does it keep one of a resource whose
-/// identifying arguments read a declared store reader: that reader shows its
-/// placeholder until it answers, so such a kept answer could never show (LLP
-/// 1027.005 D3). A launch whose module loads after the boot forgets what an
+/// identifying arguments read a declared resource: the declared resource
+/// shows its placeholder until it answers, so such a kept answer would not
+/// fit (LLP 1027.005 D3). A launch whose module loads after the boot forgets what an
 /// earlier build kept for both, asks the declared resource at boot, at the
 /// arguments the module's kept answer gives, and not again when the module
 /// loads, and keeps neither reply.

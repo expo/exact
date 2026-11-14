@@ -17,29 +17,35 @@ extension NavigationHost {
     var wantsWholeView: Bool { primaryOwner != nil && !ExactEnv.authoredChrome }
 
     /// @ref LLP 1075.003 §3.7, LLP 1083.000 D4 — the native container stands
-    /// for the routes in the navigation root's paint order, but its box is
-    /// the page's, where the routes' boxes may not be: a column the author
+    /// for the routes in the navigation root's paint order. Its box can extend
+    /// past the routes' authored boxes: a column the author
     /// placed beside routes offset past it shows on the web and would be
     /// covered here. A child of the root that no shown route's box
     /// meets, which the routes therefore paint nothing over, paints over the
     /// container; one a route's box meets keeps CSS's order under it. The
-    /// tab panels and the tablist the bar takes the place of are the
-    /// container's own. Such a child that reaches the container's top edge
-    /// and one side (a column) grows the container's safe area on that side
+    /// tab panels and a tablist replaced by the native bar are the container's
+    /// own. Such a child that reaches the container's top edge and one side
+    /// (a column) grows the container's safe area on that side
     /// by its width, so UIKit lays the bars' contents out clear of it, as a
     /// hand-built screen insets its bars from a view beside them; the routes
     /// clear only the part of that inset their own boxes reach (`reportCovers`).
-    func clearBesideRoutes() {
-        guard let owner = primaryOwner, let root = container, let holder = owner.viewIfLoaded, holder.superview === root else { return }
+    /// With the tab bar hidden, an in-flow row below the panels bounds the
+    /// bottom too, whether the root's child or nested beside them (`rowsBelowTabs`).
+    func clearBesideRoutes(tabBarHidden: Bool? = nil) {
+        guard let owner = primaryOwner, let root = container, let holder = owner.viewIfLoaded,
+              holder.superview === ownerMount(root) else { return }
         let routes = primaryRoutes.filter { $0.viewIfLoaded?.window != nil && presenter.views[$0.node.id] === $0.node }
             .map { $0.node.convert($0.node.bounds, to: root) }.filter { !$0.isEmpty }
-        let owned = Set(tabPanels + [adoptedTablist].compactMap { $0 })
+        let owned = Set(tabPanels + (tablistAppearanceNone ? [] : [adoptedTablist].compactMap { $0 }))
         let area = holder.convert(holder.bounds, to: root)
+        let before = besideOwner === owner ? besideInsets : .zero
         var changed = false, reach = UIEdgeInsets.zero
-        for case let child as NodeView in root.subviews {
+        let (bottom, rows) = rowsBelowTabs(in: area, routes: routes, skipping: owned, hidden: tabBarHidden)
+        for case let child as NodeView in ownerMount(root).subviews {
             let box = child.convert(child.bounds, to: root)
+            let below = rows.contains { $0 === child }
             let clears = !ExactEnv.authoredChrome && !routes.isEmpty && !owned.contains(child.id) && !box.isEmpty
-                && box.intersects(area) && !routes.contains { $0.intersects(box) }
+                && box.intersects(area) && (below || !routes.contains { $0.intersects(box) })
             if child.clearsNavigation != clears {
                 child.clearsNavigation = clears
                 changed = true
@@ -49,14 +55,16 @@ extension NavigationHost {
             if left, !right { reach.left = max(reach.left, box.maxX - area.minX) }
             if right, !left { reach.right = max(reach.right, area.maxX - box.minX) }
         }
-        if changed { PaintOrder.changed(root) }
+        // UIKit already supplies the indicator and any inset inherited from an outer container.
+        reach.bottom = max(0, bottom - max(0, holder.safeAreaInsets.bottom - before.bottom))
+        if changed { PaintOrder.changed(ownerMount(root)) }
         // Exact's part only: what an app's hatch set on its container stays
-        let before = besideOwner === owner ? besideInsets : .zero, now = owner.additionalSafeAreaInsets
+        let now = owner.additionalSafeAreaInsets
         let wanted = UIEdgeInsets(top: now.top - before.top + reach.top, left: now.left - before.left + reach.left,
                                   bottom: now.bottom - before.bottom + reach.bottom, right: now.right - before.right + reach.right)
-        if now != wanted { owner.additionalSafeAreaInsets = wanted }
         besideInsets = reach
         besideOwner = owner
+        if now != wanted { owner.additionalSafeAreaInsets = wanted }
     }
 
     /// What a route's padding clears of its controller's safe area (`safe`),
@@ -299,6 +307,21 @@ extension NavigationHost {
         }
         deliveringCovers = true
         defer { deliveringCovers = false }
+        // A stack change held for a lifted header (`liftHeld`) is given to
+        // UIKit by the sync of the runtime's answer to its cover. The session
+        // applies answers in the order asked, a slice in flight first: the
+        // hold ends just before this answer, and what it did not sync (an
+        // answer that moved nothing) syncs after it. An answer applied here
+        // can lift another header, whose own delivery finds this one running.
+        let idle = { [weak self] (work: @escaping () -> Void) in
+            guard let session = self?.presenter.session else { return work() }
+            session.whenIdle(bound: true, work, cancelled: { self?.liftHeld = false })
+        }
+        let held = liftHeld
+        if held { idle { [weak self] in self?.liftHeld = false } }
+        defer {
+            if held || liftHeld { idle { [weak self] in self?.liftHeld = false; self?.liftAnswered() } }
+        }
         var toldInsets = localInsets.wanted
         for _ in 0..<8 {
             toldInsets = localInsets.wanted

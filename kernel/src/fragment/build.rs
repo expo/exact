@@ -38,8 +38,10 @@ pub(super) struct Atom {
 #[derive(Debug, Clone)]
 pub(super) struct Para {
     pub slot: u32,
-    /// Where line boxes start: the paragraph's content top.
+    /// Where its first line box starts in the flow thread.
     pub content_top: f32,
+    /// Placement of the anonymous text item within its content box.
+    pub line_offset: f32,
     /// Its content width, the offer its lines were measured at.
     pub width: f32,
     pub orphans: u32,
@@ -139,6 +141,7 @@ pub(super) fn text(
         paras: vec![Para {
             slot,
             content_top,
+            line_offset: 0.0,
             width,
             orphans: u32::from(s.orphans.max(1)),
             widows: u32::from(s.widows.max(1)),
@@ -201,10 +204,15 @@ impl Builder<'_> {
                     - l.padding.right
                     - l.border.left
                     - l.border.right;
+                let (width, line_offset) = self.tree.text_item(node).map_or_else(
+                    || (width, crate::layout::text_item::from_layout(arena, slot, l)),
+                    |item| (item.width, item.y),
+                );
                 let para = self.flow.paras.len();
                 self.flow.paras.push(Para {
                     slot,
-                    content_top: top + inset_top,
+                    content_top: top + inset_top + line_offset,
+                    line_offset,
                     width,
                     orphans: u32::from(s.orphans.max(1)),
                     widows: u32::from(s.widows.max(1)),

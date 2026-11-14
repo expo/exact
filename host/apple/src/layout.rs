@@ -5,11 +5,20 @@ use super::*;
 mod advance_tests;
 #[path = "closed.rs"]
 pub(super) mod closed;
+#[cfg(test)]
+#[path = "inert_commit_tests.rs"]
+mod inert_commit_tests;
 #[path = "separator.rs"]
 pub(super) mod separator;
 
 /// The props `emit_layout` derives from a node's layout, not its author's.
-pub(super) const DERIVED_PROPS: [&str; 3] = ["fitScale", "flexGrows", "textOffset"];
+pub(super) const DERIVED_PROPS: [&str; 5] = [
+    "fitScale",
+    "flexGrows",
+    "textOffset",
+    "textLeft",
+    "textWidth",
+];
 
 impl<D: DataSource> Host<D> {
     /// Configure support, admit one batch, or run the frame tasks after admission.
@@ -43,7 +52,7 @@ impl<D: DataSource> Host<D> {
     /// theirs, as nothing would send them again.
     pub(super) fn write(&mut self, mut batch: Batch, error: Option<&str>) -> String {
         if let Some(preloads) = &self.preloads {
-            if self.preload_accepted {
+            if self.preload_accepted && !self.preload_content.is_empty() {
                 preloads.committed(std::mem::take(&mut self.preload_content), self.runner.seq());
             }
             for fact in preloads.journal() {
@@ -412,19 +421,25 @@ impl<D: DataSource> Host<D> {
                     }
                 }
             }
-            // Where a flex text's lines go down its content box (CSS's
-            // anonymous flex item), which its paragraph is laid out from.
+            // The anonymous text item's placement within its content box.
             let offset = kernel.text_line_offset(&node);
-            let offset = (offset > 0.0).then(|| crate::style::num(offset));
-            if m.props.get("textOffset") != offset.as_ref() {
-                match offset {
-                    Some(value) => {
-                        batch.props(id, &[("textOffset", value.clone())], &[]);
-                        m.props.insert("textOffset", value);
-                    }
-                    None => {
-                        batch.props(id, &[], &["textOffset"]);
-                        m.props.remove("textOffset");
+            let item = kernel.text_item_box(&node);
+            for (name, value) in [
+                ("textOffset", (offset != 0.0).then_some(offset)),
+                ("textLeft", item.map(|item| item.x)),
+                ("textWidth", item.map(|item| item.width)),
+            ] {
+                let offset = value.map(crate::style::num);
+                if m.props.get(name) != offset.as_ref() {
+                    match offset {
+                        Some(value) => {
+                            batch.props(id, &[(name, value.clone())], &[]);
+                            m.props.insert(name, value);
+                        }
+                        None => {
+                            batch.props(id, &[], &[name]);
+                            m.props.remove(name);
+                        }
                     }
                 }
             }
@@ -486,6 +501,17 @@ impl<D: DataSource> Host<D> {
         self.layout_withheld = false;
         self.emit_ranks(batch);
         self.emit_collections(batch)
+    }
+
+    /// Commits from an entry where only the commits move the tree
+    /// (`inert_entry`): a list's feedback, an event's action, an advance.
+    /// The flag ends with the commit, even when a panic unwinds through it
+    /// to a caller that keeps the host.
+    pub(super) fn in_inert_entry<T>(&mut self, commit: impl FnOnce(&mut Self) -> T) -> T {
+        self.inert_entry = true;
+        let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| commit(self)));
+        self.inert_entry = false;
+        out.unwrap_or_else(|panic| std::panic::resume_unwind(panic))
     }
 
     /// An advance whose commits changed no node ([`Host::commit_tree`]): no
@@ -822,6 +848,7 @@ mod tests {
         let _ = h.measure_block(
             root,
             exact_kernel::HostBlock {
+                tactic: Default::default(),
                 width: exact_kernel::BlockAxis::Is(300.0),
                 height: exact_kernel::BlockAxis::AtMost(300.0),
             },

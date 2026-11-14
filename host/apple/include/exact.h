@@ -229,9 +229,11 @@ size_t exact_text_collapse(const uint8_t *utf8, size_t len, const size_t *lens, 
 size_t exact_material_platform(const uint8_t *name, size_t len, uint8_t platform, const uint8_t **out);
 
 /* LLP 1066. Resolve length stops/repetition for a painted box. UTF-8 CSS in,
- * JSON out; returns bytes needed, writing nothing when cap is too small. */
+ * JSON out; returns bytes needed, writing nothing when cap is too small.
+ * tint is null or the painting view's effective tint as four floats: extended
+ * sRGB red, green and blue, unclipped, then alpha 0-1. */
 size_t exact_gradient(const uint8_t *css, size_t len, float width, float height,
-                      uint8_t dark, uint8_t *out, size_t cap);
+                      uint8_t dark, const float *tint, uint8_t *out, size_t cap);
 
 /* LLP 1077 D1. A box outline with shaped corners as one closed polygon: `shape` 4 K values
  * (NaN is -exact-continuous), `radii` 8 (top-left first, horizontal then vertical, reduced).
@@ -439,6 +441,12 @@ typedef struct {
 /* Return the UTF-8 byte count, writing at most cap bytes. Zero: fallback children. */
 typedef size_t (*ExactTimeFormatFn)(void *, const ExactTimeRequest *, uint8_t *, size_t);
 void exact_set_time_format(ExactRuntime rt, ExactTimeFormatFn format);
+/* LLP 1027.009 D1: an app's console line for the platform's log, called on the
+ * runtime's thread as the runner journals it, once its host is the one presented:
+ * method 0 log, 1 info, 2 warn, 3 error, 4 debug; the UTF-8 line, borrowed for
+ * the call. NULL (the default): the lines stay in the journal only. */
+typedef void (*ExactConsoleFn)(uint8_t method, const uint8_t *line, size_t len);
+void exact_set_console(ExactRuntime rt, ExactConsoleFn console);
 void exact_set_measure(ExactRuntime rt, ExactMeasureFn measure, void *ctx);   /* NULL: a monospace reference measurer */
 /* LLP 1056 D8: one Canvas 2D run measured with Core Text where the draw
  * runs, with the context exact_set_measure was given. The strings live for
@@ -468,8 +476,9 @@ void exact_set_lines(ExactRuntime rt, ExactLinesFn lines);
  * order. Writes min(2 * count, cap) floats and returns 2 * count, with exact_set_measure's
  * context. NULL (the default) leaves each image at the paragraph's content origin. */
 void exact_set_inline_boxes(ExactRuntime rt, ExactLinesFn boxes);
-/* A system symbol's natural size, measured before layout: an Apple symbol name (UTF-8, not
- * NUL-terminated), its point size and CSS weight. Writes width and height to out and returns 1,
+/* A symbol's natural size, measured before layout: an Apple symbol name or
+ * icon-asset:<SVG source> for a catalog image (UTF-8, not NUL-terminated), its
+ * point size and CSS weight. Writes width and height to out and returns 1,
  * or 0 when it cannot say; called with exact_set_measure's context, and only beside a text
  * measurer it registered: with the reference measurer, as with NULL (the default), a symbol is
  * the size its view reports. */
@@ -668,8 +677,12 @@ const uint8_t *exact_field_decorations(const uint8_t *input, size_t len, size_t 
  * none is open: it and the views after it are live, and the views before it
  * and the page are inert behind it. `clips` is null or four viewport
  * x/y/width/height doubles per id; NaN at x means no clip for that entry.
- * A clip bounds hits and visibility without changing the frame's mapping. */
-void exact_top_layer(ExactRuntime rt, const uint32_t *views, const double *rects, const double *clips, uint32_t count, uint32_t modal);
+ * A clip bounds hits and visibility without changing the frame's mapping.
+ * `backdrop` is null or eight viewport doubles: x/y/width/height bounds of
+ * the front modal's input-accepting backdrop, attributed to `backdrop_view`,
+ * then an excluded rectangle (NaN at x means no exclusion).
+ * Its hit region is independent of the content's clip and pointer events. */
+void exact_top_layer(ExactRuntime rt, const uint32_t *views, const double *rects, const double *clips, uint32_t count, uint32_t modal, uint32_t backdrop_view, const double *backdrop);
 /* Versioned LE collection feedback in exact_in; returns the ordinary batch. */
 uint32_t exact_collection_feedback(ExactRuntime rt, size_t len, double now_ms);
 /* Read a local row-root snap without mounting views; NaN when absent.
@@ -957,12 +970,14 @@ uint32_t exact_screen(ExactRuntime rt, float width, float height);
 /* What changed of the view at once, from the input buffer's first len bytes,
  * little-endian 32-bit words: a mask of what is given (1 the window's size,
  * 2 the safe-area insets, 4 the layout regions, 8 the viewport, 16 the
- * segments' rects, 32 the keyboard), the window's width and height
+ * segments' rects, 32 the keyboard, 64 native blocks), the window's width and height
  * (nonpositive clears it), the insets top, right, bottom, left, the
  * viewport's width and height, the regions' count (20 or 0) and their insets,
  * then, with 16, the rects' count and each rect's x y w h, on the grid
  * exact_segments set, then, with 32, the software keyboard's overlap with the
- * viewport (exactViewport().keyboardHeight): exact_screen, exact_insets,
+ * viewport (exactViewport().keyboardHeight), then, with 64, block and
+ * placement records as exact_host_covers kinds 4, 5, 6, 7 and 13:
+ * exact_screen, exact_insets,
  * exact_regions, exact_resize and a keyboard's segment extents in one batch
  * under one layout. Rects off the grid, or not finite, are refused and change
  * nothing. */
@@ -1002,7 +1017,10 @@ uint32_t exact_intrinsics(ExactRuntime rt, size_t len);
 /* What native containers cover of boxes (LLP 1075.003 §3.5) under one
  * layout: LE records of (uint32 view, uint32 kind — 0 clears, 1 edges,
  * 2 whole — float top, right, bottom, left). Edges add to the box's
- * padding; a whole box is laid out as display: none. Kind 6 places a host
+ * padding; a whole box is laid out as display: none. Kind 4 gives a block:
+ * float width, height, width policy, height policy, then a u32 tactic
+ * (28 bytes): four two-bit side indices, top/right/bottom/left, low first;
+ * identity is 228. Kind 5 takes it back (24 bytes). Kind 6 places a host
  * block: float x, y, width, height, uint32 holding view, then float content
  * scroll offsets x and y (36 bytes including view and kind). Kind 13 uses
  * the same record for a scrollport, including at offset zero; kind 6 ignores
@@ -1017,8 +1035,9 @@ uint32_t exact_host_covers(ExactRuntime rt, size_t len);
  * position-area's region). The used width and height, the border box's
  * width and height, then the margins (top, right, bottom, left) as the layout
  * resolved them, eight LE floats in the output buffer, and 32; 0 when refused.
+ * The tactic uses kind 4's side permutation.
  * Not a batch: nothing is laid out, published or sent. */
-uint32_t exact_measure_block(ExactRuntime rt, uint32_t view, float width, float height, uint32_t width_policy, uint32_t height_policy);
+uint32_t exact_measure_block(ExactRuntime rt, uint32_t view, float width, float height, uint32_t width_policy, uint32_t height_policy, uint32_t tactic);
 /* A number that moves whenever exact_measure_block could answer otherwise
  * (a commit that changed something, a layout, a reset): a host keeps a
  * measure while it stands. Not a batch. */
@@ -1030,6 +1049,19 @@ uint32_t exact_select_options(ExactRuntime rt, uint32_t view);
  * {"group":[view...],"next":view|null,"previous":view|null} — the radios of its
  * name in tree order, and the enabled radio ArrowDown/ArrowUp moves the check to. */
 uint32_t exact_radio_group(ExactRuntime rt, uint32_t view);
+/* A member of a painted radiogroup, tablist or menu (LLP 1166.000 D2), JSON in the
+ * output buffer, not a batch: {"stop":null|{"group":view,"role":name,"held":bool,
+ * "order":[view...]},"step":null|{"group":view,"role":name,"to":[view...],"press":bool}},
+ * or null when both parts are. The key (DOM's `key`) is the input buffer's first
+ * `len` bytes, none when 0; `focused` is the view that has the focus, or 0. Each
+ * list is in the order the kernel tries it. `stop`: the group's Tab stop is the
+ * first of `order` the host can focus (while a member has the focus, `held`: the
+ * first, whatever it can); null for a group that sets none (a menu, whose members
+ * keep the host's own Tab rule) and for a view that is no member. `step`: the key
+ * moves to the first of `to` the host can focus, `press` saying whether to press
+ * it; with none, the key is consumed where it is; null for no key or one that is
+ * not the group's. */
+uint32_t exact_role_keys(ExactRuntime rt, uint32_t view, uint32_t focused, size_t len);
 /* A navigation root's tabs by the kernel's rule (LLP 1115.001 D11), JSON in the
  * output buffer, not a batch: {"tablist":view,"tabs":[view...],"panels":[view...],
  * "unsaid":bool,"covered":bool}, the tabs that name a panel and those panels in tab
@@ -1086,6 +1118,11 @@ uint32_t exact_command(ExactRuntime rt, size_t len);
  * when it should make its GPU filter pipelines now. */
 uint8_t exact_svg_islands(ExactRuntime rt);
 
+/* 1 when the data source's activation evaluates a TypeScript module on the
+ * owner (exact_prepare_data), which the presenter then posts from the first
+ * draw's own callback (LLP 1027.008 D1); 0 otherwise, and before a boot. */
+uint8_t exact_evaluates_from_draw(ExactRuntime rt);
+
 /* An auth session's word (LLP 1069.006), JSON in the input buffer:
  * {"op":"hold","ticket":N} under the agent, or {"op":"done","ticket":N,
  * "url":…} / {"op":"done","ticket":N,"status":N,"message":…}. Returns 0; the
@@ -1099,7 +1136,8 @@ uint32_t exact_auth(ExactRuntime rt, size_t len);
  * "message":…}. Returns 0; the next pump settles the call. Never journaled. */
 uint32_t exact_presence(ExactRuntime rt, size_t len);
 
-/* The keychain the presence backend keeps locked items in (D6). Called on
+/* The keychain the presence backend keeps locked items in (D6), exported
+ * when the composition links presence. Called on
  * the runtime's thread, synchronously; answered with done(reply, status,
  * bytes, len) before it returns: status 0 done, 1 not found or not capable,
  * below 0 failed with a message. op 1 add {"service","account","policy"}

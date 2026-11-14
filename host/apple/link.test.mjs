@@ -1,7 +1,8 @@
 import { capturePrivacyManifest } from './privacy.mjs';
-import { test } from 'bun:test';
+import { test, spyOn } from 'bun:test';
+import * as appleToolchain from './toolchain.mjs';
 import assert from 'node:assert/strict';
-import {copyFileSync, cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync} from 'node:fs';
+import {copyFileSync, cpSync, existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, writeFileSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import { encodePng } from '../../scripts/png.mjs';
@@ -12,6 +13,85 @@ import { resolveApp } from '../../scripts/app.mjs';
 import { appleComposition, assertCapabilityFrameworks, assertLinkedSdk, compiledTargets, deploymentTargets, iosSimulatorTarget, loadedDylibs, recordMinimumOS } from './link.mjs';
 import { composedModule, moduleSeam, systemFrameworks } from './compose.mjs';
 import { writeDataKeys } from './data-keys.mjs';
+import { appleImplementations } from '../../js/bake/src/typescript.mjs';
+
+test.skipIf(process.platform !== 'darwin')('credential members load before their owner and stay in their session', () => {
+  useXcode();
+  const root = resolve(import.meta.dir, '../..'), dir = mkdtempSync(resolve(root, 'target/credential-members-'));
+  const run = args => {
+    const result = spawnSync('xcrun', ['--sdk', 'macosx', 'swiftc', '-swift-version', '5', ...args], { encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+  };
+  const write = (name, text) => { const path = resolve(dir, name); writeFileSync(path, text); return path; };
+  try {
+    const packages = appleImplementations(resolve(root, 'apps/auth-fixture'), 'macos', { passkeys: '@exact/passkeys', 'sign-in': '@exact/sign-in' });
+    assert.deepEqual(packages.find(p => p.extension === 'sign-in').credentialMembers, ['passkeys#get.identity']);
+    run(['-parse-as-library', '-emit-library', '-emit-module', '-module-name', 'ExactPackage',
+      resolve(root, 'host/apple/modules/ExactPackage.swift'), '-o', resolve(dir, 'libExactPackage.dylib')]);
+    const owner = write('Owner.swift', `import Foundation
+import ExactPackage
+public final class Owner: ExactPackage {
+    let context: ExactPackageContext
+    public init(context: ExactPackageContext) { self.context = context }
+    public func later(_ name: String, _ args: [String: Any], preferred: Any?, reply: @escaping ([String: Any]) -> Void) {
+        do { reply(try context.credentials.request("passkeys#get.identity", args: args).answer(NSObject())!) }
+        catch { reply(["error": "missing-member"]) }
+    }
+    public func call(_ name: String, _ args: [String: Any]) throws -> [String: Any] { [:] }
+}`);
+    const member = write('Member.swift', `import Foundation
+import ExactPackage
+public final class Member: ExactPackage, ExactCredentialMember {
+    let context: ExactPackageContext
+    public init(context: ExactPackageContext) {
+        self.context = context
+        context.credentials.register("passkeys#get.identity", member: self)
+    }
+    public func credentialRequest(_ args: [String: Any]) throws -> ExactCredentialRequest {
+        ExactCredentialRequest(requests: [NSObject()]) { [context] _ in ["session": context.session, "identity": args["identity"]!] }
+    }
+    public func later(_ name: String, _ args: [String: Any], preferred: Any?, reply: @escaping ([String: Any]) -> Void) { reply([:]) }
+    public func call(_ name: String, _ args: [String: Any]) throws -> [String: Any] { [:] }
+}`);
+    for (const [name, path] of [['Owner', owner], ['Member', member]]) run(['-parse-as-library', '-emit-library', '-emit-module',
+      '-I', dir, '-L', dir, '-lExactPackage', '-module-name', name, path, '-o', resolve(dir, `lib${name}.dylib`)]);
+    const composed = write('ExactComposed.swift', composedModule([
+      { extension: 'passkeys', module: 'Owner', className: 'Owner' },
+      { extension: 'sign-in', module: 'Member', className: 'Member', credentialMembers: packages.find(p => p.extension === 'sign-in').credentialMembers },
+    ], false));
+    const keys = resolve(dir, 'ExactDataKeys.swift');
+    writeDataKeys(resolveApp(resolve(root, 'apps/native-fixture')), keys, 'macos');
+    const main = write('main.swift', `import Foundation
+var answer: [String: Any] = [:]
+func session() -> ExactModule {
+    ExactComposedModule(context: ExactModuleContext(json: [:], host: nil, changed: { _, _, _ in }, now: { _ in 0 }))
+}
+func ask(_ module: ExactModule, _ value: String) -> String {
+    let reply = ExactReply(ctx: UnsafeMutableRawPointer(bitPattern: 1)) { _, status, bytes, count in
+        precondition(status == 200)
+        answer = try! JSONSerialization.jsonObject(with: Data(bytes: bytes!, count: count)) as! [String: Any]
+    }
+    precondition(ExactExtensions.later(module, ["extension": "passkeys", "send": "get", "args": ["publicKey": [:], "identity": value]], reply: reply))
+    precondition(answer["identity"] as? String == value)
+    return answer["session"] as! String
+}
+let first = session(), second = session()
+let a = ask(first, "first"), b = ask(second, "second")
+precondition(a != b)
+precondition(ask(first, "again") == a)
+ExactExtensions.destroy(first)
+precondition(ask(second, "survives") == b)
+ExactExtensions.destroy(second)
+print("credential member loading and isolation passed")
+`);
+    const binary = resolve(dir, 'members');
+    run(['-I', dir, '-L', dir, '-lExactPackage', '-lOwner', '-lMember', '-Xlinker', '-rpath', '-Xlinker', dir,
+      ...moduleSeam(resolve, root), keys, composed, main, '-o', binary]);
+    const result = spawnSync(binary, [], { encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /credential member loading and isolation passed/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 60_000);
 
 for (const [sdk, ios, tv] of [['appletvsimulator', true, true], ['iphonesimulator', true, false], ['macosx', false, false]]) {
   test.skipIf(process.platform !== 'darwin')(`native-fixture's Apple module typechecks for ${sdk}`, async () => {
@@ -318,21 +398,62 @@ test('package frameworks retain category-only dependencies and weak-link APIs ne
   assert.deepEqual(systemFrameworks(packages, 'macos', '14.0'), ['-Xlinker', '-weak_framework', '-Xlinker', 'FoundationModels']);
 });
 
-test('production links what the plan uses, the manifest names and the grants open; development all but the photo picker and sign-in sheet, which it links as production would (LLP 1047.001.000 E, F)', () => {
+test('production links the baked set; development links costly frameworks by use (LLP 1047.001.000 E, F)', () => {
   const graph = { uses: ['markdown', 'picker'] };
-  assert.deepEqual(appleComposition(graph, true), { link: 'markdown,picker', products: ['ExactMarkdown'] });
-  assert.deepEqual(appleComposition({ uses: [] }, true), { link: 'none', products: [] });
-  assert.deepEqual(appleComposition(graph, true, [], true).products, ['ExactMarkdown', 'ExactAuthSession']);
-  assert.deepEqual(appleComposition(graph, false).products, ['ExactGroupedLists', 'ExactMarkdown', 'ExactSurfaces', 'ExactDrag']);
-  assert.deepEqual(appleComposition({ uses: ['picker', 'media_picker'] }, false, [], true).products,
-    ['ExactGroupedLists', 'ExactMarkdown', 'ExactSurfaces', 'ExactDrag', 'ExactMediaPicker', 'ExactAuthSession']);
-  assert.deepEqual(appleComposition(graph, false, ['auth_session']).products.at(-1), 'ExactAuthSession');
-  assert.deepEqual(appleComposition({ uses: ['numerals'] }, false).products.at(-1), 'ExactNumerals');
+  const baked = linked => ({ inputs: { linked } });
+  const auth = { inputs: { linked: ['auth_session', 'media_picker', 'numerals', 'tips'] }, reach: { auth: { sessions: true } } };
+  assert.deepEqual(appleComposition(graph, true, [], baked(graph.uses)), { link: 'markdown,picker', products: ['ExactMarkdown'] });
+  assert.deepEqual(appleComposition({ uses: [] }, true, [], baked([])), { link: 'none', products: [] });
+  assert.deepEqual(appleComposition(graph, true, [], baked([...graph.uses, 'auth_session'])).products, ['ExactMarkdown', 'ExactAuthSession']);
+  assert.deepEqual(appleComposition(graph, false).products, ['ExactGroupedLists', 'ExactMarkdown', 'ExactSurfaces', 'ExactDrag', 'ExactPresence']);
+  assert.deepEqual(appleComposition(graph, false, [], auth).products,
+    ['ExactGroupedLists', 'ExactMarkdown', 'ExactSurfaces', 'ExactDrag', 'ExactAuthSession', 'ExactPresence']);
+  assert.deepEqual(appleComposition({ uses: ['picker', 'media_picker'] }, false, [], auth).products,
+    ['ExactGroupedLists', 'ExactMarkdown', 'ExactSurfaces', 'ExactDrag', 'ExactMediaPicker', 'ExactAuthSession', 'ExactPresence']);
+  assert.deepEqual(appleComposition(graph, false, ['auth_session']).products.includes('ExactAuthSession'), true);
+  assert.deepEqual(appleComposition({ uses: ['numerals'] }, false).products.includes('ExactNumerals'), true);
   assert.ok(!appleComposition(graph, false).products.includes('ExactNumerals'));
   // TipKit and SwiftUI cost every launch: a tip links them in development too only by use.
-  assert.deepEqual(appleComposition({ uses: ['tips'] }, false).products.at(-1), 'ExactTips');
+  assert.deepEqual(appleComposition({ uses: ['tips'] }, false).products.includes('ExactTips'), true);
   assert.ok(!appleComposition(graph, false).products.includes('ExactTips'));
   assert.equal(appleComposition(undefined, false).link, 'all');
+  assert.equal(appleComposition(graph, true).link, 'all');
+});
+
+// The production hello bake that `metrics.mjs --long` measures (`IOS_HELLO_BYTES`), when one is on disk:
+// `EXACT_UPDATE_TRUST=production EXACT_UPDATE_GENESIS=1 bun host/apple/build.mjs hello-apple --ios`.
+const helloBake = () => {
+  const clients = resolve(import.meta.dir, '../../target/clients');
+  if (!existsSync(clients)) return [];
+  return readdirSync(clients).map((d) => join(clients, d, 'com.exact.hello/ios-simulator/aarch64-apple-ios-sim/embedded/production/standalone/Hello.dSYM/Contents/Resources/DWARF/Hello')).filter(existsSync);
+};
+test('presence links its Swift backend by grants or ahead in production and stays available in development', () => {
+  const baked = linked => ({ inputs: { linked } });
+  assert.deepEqual(appleComposition({ uses: ['io', 'presence'] }, true, [], baked(['io', 'presence'])),
+    { link: 'io,presence', products: ['ExactPresence'] });
+  assert.deepEqual(appleComposition({ uses: ['io'] }, true, [], baked(['io'])).products, []);
+  assert.deepEqual(appleComposition({ uses: [] }, true, ['presence'], baked(['presence'])).products, ['ExactPresence']);
+  assert.ok(appleComposition({ uses: [] }, false).products.includes('ExactPresence'));
+});
+
+test('production Swift follows the baked linked set when the grant ceiling is unknown', () => {
+  const compat = { inputs: { grantCeiling: null, linked: ['io', 'presence', 'auth_session'] } };
+  assert.deepEqual(appleComposition({ uses: [] }, true, [], compat),
+    { link: 'io,presence,auth_session', products: ['ExactAuthSession', 'ExactPresence'] });
+});
+
+test.skipIf(process.platform !== 'darwin' || helloBake().length === 0)('hello links no presence backend without a presence grant', () => {
+  for (const symbols of helloBake()) {
+    const names = spawnSync('nm', [symbols], { encoding: 'utf8', maxBuffer: 1 << 28 }).stdout;
+    assert.deepEqual(names.split('\n').filter(s => /PresenceKeychain|PresenceCheck|presenceKeychainHook|presence_secrets|exact_on_presence_keychain/.test(s)), []);
+  }
+});
+// The executor's cache, which parses URLs and grants, and the process's launch work stay out of it.
+test.skipIf(process.platform !== 'darwin' || helloBake().length === 0)('an app whose plan and grants open no I/O links no launch preloads (LLP 1047.001)', () => {
+  for (const symbols of helloBake()) {
+    const names = spawnSync('nm', [symbols], { encoding: 'utf8', maxBuffer: 1 << 28 }).stdout;
+    assert.deepEqual(names.split('\n').filter((s) => /14exact_executor5cache|15launch_preloads6Launch/.test(s)), []);
+  }
 });
 
 test('the load commands are read from the file, each slice of a universal one; a binary with no capability framework passes the check', () => {
@@ -591,16 +712,39 @@ test.skipIf(process.platform !== 'darwin' || !['clang', 'codesign', 'sips', 'dsy
       const clipBin = resolve(binDir, 'clip', 'Clip');
       mkdirSync(resolve(binDir, 'clip'));
       copyFileSync(bin, clipBin);
-      const result = assembleIOS({ app, library, paths: { bundle, executable: 'ExactClip', capture }, binDir, bin, device,
+      const options = { app, library, paths: { bundle, executable: 'ExactClip', capture }, binDir, bin, device,
         clipBin, production, distribution: archived, ipa, bakedCompat: compat, bakedPlan: plan, buildReceipt: build,
         libDir: capture, gpuArtifacts: [gpu], looseArms: [[true, dylib, ...pairs[0]]],
         modulesBuilt: dylib, modulesLoadName: pairs[1][0], hasSvg: true, svgBuilt: dylib, svgLoadName: pairs[2][0],
         canvasGpuBuilt: dylib, canvasGpuLoadName: pairs[3][0], serviceDylibs: [{ built: service, load: pairs[4][0], framework: pairs[4][1] }],
-        args: [], unsigned: true, sha1: '-', linkRoot: binDir, sdkName: 'iphoneos' }, {
+        args: [], unsigned: true, sha1: '-', linkRoot: binDir, sdkName: 'iphoneos' };
+      const helpers = {
         runApple: run, infoPlist: () => plistFile({ CFBundleIdentifier: app.id, CFBundleExecutable: 'ExactClip', CFBundlePackageType: 'APPL' }),
         copyAppleStaticTrees() {}, writeUsageStrings() {}, assertAppleIdentity() {}, distributionKeys: () => ({}),
         receipt: () => whole, shippedReceipt, copyAppleGpuProducts, entitlements: () => plistFile({}), appClip: () => ({ id: app.id + '.Clip', name: 'Clip', executable: 'Clip' }),
-      });
+      };
+      if (!production) {
+        // Inspect the app after AlarmKit's plist writes, before compiling its separate extension.
+        const { appleMetadataProblem } = await import('./plist.mjs');
+        const metadataWritten = new Error('alarm metadata inspected');
+        const execute = appleToolchain.spawnSync;
+        const probe = spyOn(appleToolchain, 'spawnSync').mockImplementation((command, args, opts) => {
+          const result = execute(command, args, opts);
+          if (command === 'plutil' && args[0] === '-replace' && args[1] === 'ExactAlarmCountdown') {
+            probe.mockRestore();
+            const metadata = JSON.parse(run('plutil', ['-convert', 'json', '-o', '-', resolve(bundle, 'Info.plist')]).stdout);
+            for (const key of ['NSSupportsLiveActivities', 'ExactAlarmCountdown']) {
+              assert.equal(metadata[key], true);
+              assert.match(appleMetadataProblem(`host.ios.infoPlist.${key}: not a known key`), /Exact writes this key itself from its declarations.*cannot be set here/);
+            }
+            throw metadataWritten;
+          }
+          return result;
+        });
+        try { assert.throws(() => assembleIOS({ ...options, alarm: {} }, helpers), error => error === metadataWritten); }
+        finally { probe.mockRestore(); }
+      }
+      const result = assembleIOS(options, helpers);
       for (const owner of [bundle, resolve(bundle, 'AppClips/Clip.app'), ...(production ? [...pairs, [null, 'ExactGpu']].map(([, name]) => resolve(bundle, 'Frameworks', `${name}.framework`)) : [])]) {
         const privacy = resolve(owner, 'PrivacyInfo.xcprivacy'); assert.equal(run('plutil', ['-lint', privacy]).status, 0);
         const usesDisk = diskService && (owner.endsWith('/ExactService.framework') || (!production && owner.endsWith('.app')));

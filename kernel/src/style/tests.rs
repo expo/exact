@@ -943,15 +943,11 @@ fn takes_text_is_what_set_dynamic_reads_on_a_number_row() {
             assert!(takes_text(row), "{row:?}");
         }
     }
-    for row in [
-        StyleId::Opacity,
-        StyleId::FlexGrow,
-        StyleId::ZIndex,
-        StyleId::FontWeight,
-    ] {
+    for row in [StyleId::Opacity, StyleId::FlexGrow, StyleId::FontWeight] {
         assert!(!takes_text(row), "{row:?}");
     }
     for row in [
+        StyleId::ZIndex,
         StyleId::FontSize,
         StyleId::LetterSpacing,
         StyleId::StrokeWidth,
@@ -1017,5 +1013,33 @@ fn scroll_snap_admits_each_axis_strictness_and_alignment() {
         assert!(style
             .set_dynamic(StyleId::ScrollSnapType, &StyleValue::Text(name.into()))
             .is_err());
+    }
+}
+#[test]
+fn native_visual_codecs_parse_and_round_trip_without_registration() {
+    use crate::wire::codec::{Reader, Writer};
+
+    for (id, text) in [
+        (
+            StyleId::BoxShadow,
+            "0 2px 4px #000, inset 1px 2px 3px 4px #fff",
+        ),
+        (StyleId::TextShadow, "1px 2px 3px light-dark(#000, #fff)"),
+        (StyleId::CornerShape, "bevel scoop superellipse(3) round"),
+        (StyleId::Rotate, "0 0 -1 30deg"),
+        (StyleId::RotateAxis, "1 1 0 30deg"),
+        (StyleId::TextStrokeWidth, "1px light-dark(#f00, #00f)"),
+        (StyleId::TextStrokeColor, "1px light-dark(#f00, #00f)"),
+        (StyleId::SymbolPalette, "#f00 light-dark(#000, #fff)"),
+    ] {
+        let mut style = StyleProps::default();
+        style
+            .set_dynamic(id, &StyleValue::Text(text.into()))
+            .unwrap();
+        let mut writer = Writer::new();
+        style.encode_patch(&mut writer);
+        let bytes = writer.into_vec();
+        let decoded = StyleProps::decode_patch(&mut Reader::new(&bytes)).unwrap();
+        assert_eq!(decoded, style, "{}: {text}", id.name());
     }
 }

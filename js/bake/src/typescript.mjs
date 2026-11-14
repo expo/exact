@@ -12,7 +12,7 @@ import { createHash } from 'node:crypto';
 import { builtinModules, createRequire } from 'node:module';
 import { resolve, relative, dirname, basename, join, sep, isAbsolute, toNamespacedPath } from 'node:path';
 // The bake writes the binding's generator beside this file in its stage (js/bake/src/resident.rs `BINDING`).
-import { moduleBinding } from './__exact_binding.mjs';
+import { moduleBinding, languageModelToolCheck, languageModelToolNote, languageModelTools, languageModelToolSources, TOOL_CHECK, unownedTools } from './__exact_binding.mjs';
 // And the settings' reader beside it (resident.rs `ENV`).
 import { envReads, inlineSettings } from './__exact_env.mjs';
 // And the check of what package code may use (resident.rs `PORTABLE`).
@@ -1251,7 +1251,9 @@ export function appleImplementations(app, target, extensions, contractSources = 
     // An interface that declares an authenticator entry (LLP 1133.010 D13): its class serves it in process.
     const authenticator=!!i.declaration?.authenticator?.apple;
     const events=(i.declaration.names ?? []).some(n=>n.event);
-    return [{privacyManifest:resolve(impl.dir,'PrivacyInfo.xcprivacy'),extension,module:'ExactPkg_'+extension.replace(/\W/g,'_'),className:impl.json.class,sources:files.map(f=>resolve(impl.dir,f)),plist,plistKeys:impl.json.plistKeys ?? null,views:packageViewTags(i,impl),authenticator,start:i.declaration?.start==='load',frameworks:impl.json.frameworks??{},activity:impl.json.apple?.activity??null}];
+    const credentialMembers = Object.entries(i.declaration.members ?? {}).flatMap(([owner, members]) =>
+      Object.keys(members).map(option => `${owner.split('/').at(-1)}.${option}`));
+    return [{privacyManifest:resolve(impl.dir,'PrivacyInfo.xcprivacy'),extension,module:'ExactPkg_'+extension.replace(/\W/g,'_'),className:impl.json.class,sources:files.map(f=>resolve(impl.dir,f)),plist,plistKeys:impl.json.plistKeys ?? null,views:packageViewTags(i,impl),authenticator,start:i.declaration?.start==='load',credentialMembers,frameworks:impl.json.frameworks??{},activity:impl.json.apple?.activity??null}];
   });
 }
 
@@ -1353,12 +1355,12 @@ function sourceNames(stage,diagnostics) {
 // (not an RSS cap); explicit user settings always win.
 const checkEnv={GOGC:'300',GOMEMLIMIT:'128MiB',GOMAXPROCS:'4',...process.env};
 
-/** Value exports of the configured module namespace, including CommonJS re-exports. */
-export async function valueExports(stage, libraries) {
+/** Value exports of the configured module namespace, including CommonJS re-exports; or what `inspect`, given the
+ * checker, the namespace's type and the checker API, makes of them. */
+export async function valueExports(stage, libraries, inspect) {
   const module = resolve(stage, 'app.ts');
   const compiler = createRequire(resolve(libraries, 'tsc')).resolve('typescript/unstable/async');
-  const { API } = await import(pathToFileURL(compiler).href);
-  const api = new API({ cwd: stage });
+  const checking = await import(pathToFileURL(compiler).href), api = new checking.API({ cwd: stage });
   try {
     const config = resolve(stage, '__exact_tsconfig.json');
     const snapshot = await api.updateSnapshot({ openProjects: [config] });
@@ -1367,6 +1369,7 @@ export async function valueExports(stage, libraries) {
       checkFiles(stage, libraries, await program.getSourceFileNames());
       const file = await program.getSourceFile(module);
       const type = await checker.getTypeAtLocation(file);
+      if (inspect) return await inspect(checker, type, checking);
       return (await checker.getPropertiesOfType(type)).map(symbol => symbol.name);
     } finally { await snapshot.dispose(); }
   } finally { await api.close(); }
@@ -1428,10 +1431,18 @@ export function nodeNote(diagnostics) {
   if (!modules.length && !names) return '';
   return `\nnote: ${modules.length ? `${modules.map(m=>`'${m}'`).join(', ')} ${modules.length>1 ? "are Node's built-ins" : "is Node's built-in"}` : "Node's globals are"}: a data module runs on Hermes and in the browser, which have no Node modules, so @types/node does not help; import a part of the package that needs none, or another package\n`;
 }
-export function check(stage, tsc, libraries) {
+export async function check(stage, tsc, libraries) {
   // TypeScript expands Windows short paths; compare the same physical names
   // for the capture, libraries and files, including directory junctions.
   stage=realpathSync.native(stage);
+  const entry=resolve(stage,'__exact_entry.ts'), declaration=resolve(stage,'app.contract.d.ts');
+  if (existsSync(declaration) && readFileSync(declaration,'utf8').includes('export type LanguageModelToolSchemas =')) {
+    const before=readFileSync(entry,'utf8').split(TOOL_CHECK)[0];
+    const tools=languageModelTools(readFileSync(declaration,'utf8'),await languageModelToolSources(stage,bundleOptions),(...a)=>createRequire(import.meta.url)('rolldown/utils').parseSync(...a));
+    const unowned=tools.length ? await valueExports(stage,libraries,(checker,type,api)=>unownedTools(checker,type,[...new Set(tools.map(t=>t.name))],api)) : [];
+    const after=before+languageModelToolCheck(tools,unowned);
+    if (readFileSync(entry,'utf8')!==after) writeFileSync(entry,after);
+  }
   // A package's JavaScript entry (`typescript/bin/tsc`, an `EXACT_TSC`
   // override) keeps its Node shebang: run it through Bun, as the one-shot
   // producer runs its tools (js/bake/src/lib.rs `run`).
@@ -1450,7 +1461,7 @@ export function check(stage, tsc, libraries) {
         const mutationFailure=/Type '(?:false|boolean)' is not assignable to type 'true'|SnapbackMutationSuccess/.test(diagnostics)
           && readFileSync(resolve(stage,'app.contract.d.ts'),'utf8').includes('type SnapbackMutationSuccess<');
         const refusal=mutationFailure ? "\nnote: a Snapback mutation returning {ok:false} leaves failure(slot) empty; throw refused({code: 'YOUR_CODE', message: 'Explain the refusal'}) instead. Annotate successful helpers with Result<'source'>, or keep ok:true literal with `as const`.\n" : '';
-        return fail(new Error(diagnostics+sourceNames(stage,diagnostics)+refusal+nodeNote(diagnostics)+String(stderr??'') || String(error.message)));
+        return fail(new Error(diagnostics+languageModelToolNote(readFileSync(entry,'utf8'),diagnostics)+sourceNames(stage,diagnostics)+refusal+nodeNote(diagnostics)+String(stderr??'') || String(error.message)));
       }
       try { checkFiles(stage, libraries, stdout.trim().split(/\r?\n/)); }
       catch (error) { return fail(error); }

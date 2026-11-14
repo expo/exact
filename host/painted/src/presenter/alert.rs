@@ -446,6 +446,7 @@ impl<D: DataSource> Presenter<D> {
                 .set_host_block(
                     id,
                     Some(HostBlock {
+                        tactic: Default::default(),
                         width: BlockAxis::Fit(self.viewport.0),
                         height: BlockAxis::Fit(self.viewport.1),
                     }),

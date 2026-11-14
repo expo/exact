@@ -248,6 +248,16 @@ impl PaintedField {
 }
 
 impl PaintedBox {
+    /// A singular transform can leave a nonempty axis-aligned bound.
+    pub(crate) fn has_area(&self) -> bool {
+        let area = |r: Rect4| r.2 > 0.0 && r.3 > 0.0;
+        area(self.rect)
+            && self
+                .affine
+                .is_none_or(|(ts, rect)| area(rect) && ts.invert().is_some())
+            && self.projective.is_none_or(|(_, rect, ..)| area(rect))
+    }
+
     /// Drawn without a perspective (`space.rs`), a rotation or a skew, so
     /// its box, and any clip round it, is square to the screen.
     pub(crate) fn flat(&self) -> bool {
@@ -352,16 +362,17 @@ impl Painter {
                 .map(Rc::new)
             })
             .flatten();
-        let (spec, inks, backgrounds) = match &decorations {
+        let (spec, inks, backgrounds, shadows) = match &decorations {
             Some(decorations) => {
                 let projected = decorations.project(spec, shown);
                 (
                     projected.spec,
                     Some(projected.inks),
                     Some(projected.backgrounds),
+                    Some(projected.shadows),
                 )
             }
-            None => (spec, None, None),
+            None => (spec, None, None, None),
         };
         let paragraph = self.text.borrow_mut().paragraph_replacing(
             (node.id, 0),
@@ -449,11 +460,13 @@ impl Painter {
         let translation = field.scroll_translation();
         ox += translation.0;
         oy += translation.1;
-        self.backend.push_clip(outer, ts);
+        let padding = inset_sides(outer, computed.border_widths());
+        self.backend.push_clip(&padding, ts);
         let selection = walk.scene.selection.filter(|_| focused);
 
         #[cfg(windows)]
         if exact_ink::device::d3d11::fields::enabled()
+            && field.decorations.is_none()
             && node.props.str(PropId::Markup) != Some("markdown")
             && matches!(
                 node.props.str(PropId::Type),
@@ -545,38 +558,34 @@ impl Painter {
         {
             self.field_highlight(&field, s);
         }
-        self.backend.push_clip(&Shape::rect(content), ts);
         if !placeholder {
             let painted = material::FieldText::painted(&paragraph, (ox, oy), ts);
             self.labels.value(node.id, painted);
         }
-        let decorations = field
-            .decorations
-            .as_ref()
-            .map(|_| self.text_decorations(walk.scene.kernel, &paragraph, &palette, walk.reveal));
-        if let Some(decorations) = &decorations {
-            decorations.paint(
-                self.backend.as_mut(),
-                0..palette.len(),
+        if let Some(shadows) = shadows {
+            let ink = self.capture_field_ink(
+                walk.scene.kernel,
+                &paragraph,
+                &palette,
+                &shadows,
+                walk.reveal,
+            );
+            self.paint_text_ink(
+                &paragraph,
+                &ink,
                 (ox, oy),
                 ts,
-                exact_kernel::TextDecorationLine::Underline,
+                None,
+                Some((content, padding.rect)),
             );
-        }
-        {
+        } else {
+            self.backend.push_clip(&Shape::rect(content), ts);
             let mut engine = self.text.borrow_mut();
             self.backend
                 .text(&mut engine, &paragraph, &palette, (ox, oy), ts);
+            self.backend.pop_clip();
         }
-        if let Some(decorations) = &decorations {
-            decorations.paint(
-                self.backend.as_mut(),
-                0..palette.len(),
-                (ox, oy),
-                ts,
-                exact_kernel::TextDecorationLine::LineThrough,
-            );
-        }
+        self.backend.push_clip(&Shape::rect(content), ts);
         if let Some(composition) = &composition {
             let line = 1. / self.scale.max(1.);
             let mut underline = |start, end, dotted| {

@@ -290,7 +290,8 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
             presenter?.tab(from: self, back: event.modifierFlags.contains(.shift), in: window)
             return
         }
-        if reorderKey(name) || presenter?.controls.radioKey(self, name, held: KeyCodes.held(event.modifierFlags)) == true { return }
+        let held = KeyCodes.held(event.modifierFlags)
+        if reorderKey(name) || presenter?.controls.roleKey(self, name, held: held) == true || presenter?.controls.radioKey(self, name, held: held) == true { return }
         let presses = name == " " || name == "Enter" && pressesOnReturn
         if isButton, !pressable, presses {
             activateNative()
@@ -700,7 +701,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
         var v: NSView? = self
         while let n = v {
             if let node = n as? NodeView, (node.placement != nil || node.placementHidden) { return node }
-            if let s = n.superview as? FlippedView, s.superview is NodeView, (s.superview as? NodeView)?.overlay === s { return nil }
+            if n.superview?.canvasOverlayOwner != nil { return nil }
             v = n.superview
         }
         return nil
@@ -730,7 +731,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
     /// D5) — the canvas reached first the same way, then the child's points.
     package func local(_ windowPoint: NSPoint) -> NSPoint {
         guard let placed = placedAncestor, let h = placed.placement, let inv = NodeView.invert(h),
-              let overlay = placed.superview, let canvas = overlay.superview as? NodeView else {
+              let overlay = placed.superview, let canvas = overlay.canvasOverlayOwner else {
             return descend(windowPoint)
         }
         let inChild = NodeView.map(inv, canvas.local(windowPoint))
@@ -779,7 +780,8 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
         let placed = overlay.subviews.compactMap { $0 as? NodeView }.filter { $0.placement != nil || $0.placementHidden }
         guard !placed.isEmpty else { return ordinary() }
         let inCanvas = convert(point, from: sup)
-        guard !isHidden, hitBounds.contains(inCanvas) else { return nil }
+        if clipsOneAxis, !oneAxisClipContains(inCanvas) { return ordinary() }
+        guard !isHidden, hitBounds.contains(inCanvas) || clipsOneAxis && oneAxisClipContains(inCanvas) else { return nil }
         // Ordinary HUD paints above the captured children, so it hits first.
         let inOverlay = overlay.convert(inCanvas, from: self)
         for child in NodeView.hitOrder(overlay.subviews) where (child as? NodeView)?.placement == nil && (child as? NodeView)?.placementHidden != true {
@@ -796,7 +798,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
         }
         // Missed by every child: the canvas itself, unless it lets the
         // pointer through (`pointer-events: none`, as `ordinary` says).
-        return refusesOwnHit(self, local: inCanvas) ? nil : self
+        return hitBounds.contains(inCanvas) && !refusesOwnHit(self, local: inCanvas) ? self : nil
     }
 
     /// CSS visible overflow is hit where it paints, as on iOS: AppKit
@@ -805,19 +807,22 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
     /// F13, shop F18). Outside this box and unclipped, the children are
     /// asked here (in a one-axis clip's box, which shares the node's space), topmost first.
     private func overflowHit(_ point: NSPoint) -> NSView? {
-        guard !isHidden, scroll == nil, clipBox == nil || clipsOneAxis, !clipsToBounds, !(clipBox ?? self).subviews.isEmpty else { return nil }
+        guard !isHidden, scroll == nil, clipBox == nil || clipsOneAxis, !clipsToBounds, !container.subviews.isEmpty else { return nil }
         let local = convert(point, from: superview)
+        if clipsOneAxis, !oneAxisClipContains(local) { return nil }
         let outsideX = local.x < bounds.minX || local.x > bounds.maxX
         let outsideY = local.y < bounds.minY || local.y > bounds.maxY
         guard outsideX || outsideY else { return nil }
-        if outsideX && (style["overflow_x"]?.string ?? "visible") != "visible" { return nil }
-        if outsideY && (style["overflow_y"]?.string ?? "visible") != "visible" { return nil }
-        let order = (clipBox ?? self).subviews.enumerated().sorted {
+        if !clipsOneAxis {
+            if outsideX && (style["overflow_x"]?.string ?? "visible") != "visible" { return nil }
+            if outsideY && (style["overflow_y"]?.string ?? "visible") != "visible" { return nil }
+        }
+        let order = container.subviews.enumerated().sorted {
             let (a, b) = ($0.element.layer?.zPosition ?? 0, $1.element.layer?.zPosition ?? 0)
             return a != b ? a > b : $0.offset > $1.offset
         }
         for case let child as NodeView in order.map(\.element) {
-            if let hit = child.hitTest(local) { return hit }
+            if let hit = child.hitTest(container.convert(local, from: self)) { return hit }
         }
         return nil
     }
@@ -1102,6 +1107,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
         let origin = style["transform_origin"]
         let old = style
         style = s
+        if kind == "image", old["image_rendering"] != s["image_rendering"] { presenter?.session?.rasters.resized(self) }
         if old["display"] != s["display"] { isHidden = hostHidden }
         if old["zoom"] != s["zoom"], kind == "iframe" { updateEmbedded() } // the guest's page zoom (LLP 1020.002 D6)
         if old["cursor"] != s["cursor"] { window?.invalidateCursorRects(for: self) }
@@ -1248,6 +1254,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
     }
 
     func renderFilter(fresh: Bool = true) {
+        defer { overflowClipGeometryChanged() }
         guard let f = boxFilter, let layer else { return }
         guard superview != nil else { f.remove(); return }
         // The picture renders the layer as it stands: a box that is layer
@@ -1257,13 +1264,14 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
         setPaintPosition(paintZPosition)
         f.render(layer, clip: resolvedClipMask(), scale: pixelScale ?? 2, dark: drawsDark,
                  node: id, fresh: fresh, shown: window == nil || !visibleRect.isEmpty) { [weak self] in
-            if let self { presenter?.boxFilters.landed(self) }
+            if let self { overflowClipGeometryChanged(); presenter?.boxFilters.landed(self) }
         }
     }
 
     package override func viewDidMoveToSuperview() {
         pressMoves &+= 1
         super.viewDidMoveToSuperview()
+        overflowClipGeometryChanged()
         if superview == nil { boxFilter?.remove() } else if boxFilter != nil { renderFilter() }
         paintOrderMoved()
         syncDisabledLook() // a list's row is known by where it is mounted (PressLookMac.swift)
@@ -1281,6 +1289,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
     package override func setFrameOrigin(_ newOrigin: NSPoint) {
         let moved = newOrigin != frame.origin
         super.setFrameOrigin(newOrigin)
+        if moved { overflowClipGeometryChanged() }
         if moved, !backdropOperations.isEmpty { applyBackdrop() }
     }
 
@@ -1290,6 +1299,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
         let changed = newSize != frame.size
         super.setFrameSize(newSize)
         guard changed else { return }
+        overflowClipGeometryChanged()
         if let row = superview as? NodeView, row.style["appearance"] != nil { row.needsLayout = true } // its bezel (FormRowsMac.swift)
         if focusVisible { noteFocusRingMaskChanged() } // the ring follows the box
         layerPaintCache = nil
@@ -1417,13 +1427,13 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
             let fit = style["object_fit"]?.string ?? "fill"
             let content = contentBox()
             guard let ctx = NSGraphicsContext.current?.cgContext else { return }
-            let rect = RasterGeometry.rect(natural: bitmap.naturalSize, content: content, fit: fit)
+            let rect = flightLook?.image ?? RasterGeometry.rect(natural: bitmap.naturalSize, content: content, fit: fit)
             ctx.saveGState()
             path.addClip()
             clipToContentEdge(ctx, content)
             ctx.translateBy(x: rect.minX, y: rect.maxY)
             ctx.scaleBy(x: 1, y: -1)
-            RasterGeometry.draw(ctx, AnimatedRasters.shared.frame(for: self) ?? bitmap.image, in: CGRect(origin: .zero, size: rect.size), tint: channels("tint_color").map { TextEngine.color($0).cgColor })
+            RasterGeometry.draw(ctx, AnimatedRasters.shared.frame(for: self) ?? bitmap.image, in: CGRect(origin: .zero, size: rect.size), tint: channels("tint_color").map { TextEngine.color($0).cgColor }, rendering: style["image_rendering"]?.string)
             ctx.restoreGState()
         }
         let textDirty = Capture.capturing || canvasAbove != nil || textIsSmall ? rect : rect.intersection(presenter?.textVisibleRect(self) ?? visibleRect)

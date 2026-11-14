@@ -75,8 +75,7 @@ final class BarFaceIOSTests: XCTestCase {
         XCTAssertEqual(color?[0], red, "the colour its author wrote, not its grey")
     }
 
-    /// A dot whose fill names the tint takes its node's tint, undimmed while UIKit dims tints: the
-    /// bar item's image is baked once and kept
+    /// The face's source keeps its node's undimmed tint so the bar can bake it in either adjustment mode.
     func testATintDotTakesItsNodesTintUndimmed() throws {
         let tinted: [String: Any] = ["op": "create", "id": 3, "kind": "view", "handlers": [], "props": [:],
                                      "style": ["background_color": ["sys": "@tint", "c": [0, 122, 255, 255]], "width": 14, "height": 6]]
@@ -113,6 +112,10 @@ final class BarFaceIOSTests: XCTestCase {
         withExtendedLifetime(p) {}
         guard case .text(_, _, let color) = face.parts[1] else { return XCTFail("\(face.parts)") }
         XCTAssertNil(color, "inherited: unsaid")
+        if #available(iOS 26.0, *) { XCTAssertNil(face.shares[1], "unwritten ink uses the label colour") }
+        else { XCTAssertEqual(face.shares[1], 1, "unwritten ink uses the tint and follows its dimming") }
+        let readout = try XCTUnwrap(ChipFace(node, engine: TextEngine(resolve: { _ in nil }), readout: true))
+        XCTAssertNil(readout.shares[1], "a readout's unwritten ink is always the label colour")
     }
 
     func testASymbolOnlyUsesColourWrittenInsideTheBarButton() throws {

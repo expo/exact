@@ -526,9 +526,16 @@ pub(crate) fn graph_base(path: &Path, src: &str, app_root: &Path) -> GraphBase {
         .iter()
         .flat_map(|u| contract_lower::params::identities(&u.file))
         .collect();
+    let mut images = Vec::new();
     let errors = match loaded {
         Err(all) => all,
-        Ok(()) if loader.refused.errors.is_empty() => loader.scope().err().unwrap_or_default(),
+        Ok(()) if loader.refused.errors.is_empty() => loader
+            .scope()
+            .map(|(file, _)| {
+                images = contract_lower::image_svg_paths(&file);
+            })
+            .err()
+            .unwrap_or_default(),
         Ok(()) => Vec::new(),
     };
     let errors = std::mem::take(&mut loader.refused.errors)
@@ -555,6 +562,7 @@ pub(crate) fn graph_base(path: &Path, src: &str, app_root: &Path) -> GraphBase {
         root_key,
         sources: loader.sources,
         base,
+        images: images.into_iter().map(|path| app_root.join(path)).collect(),
         params: contract_params,
         loaded_identities,
         identities,

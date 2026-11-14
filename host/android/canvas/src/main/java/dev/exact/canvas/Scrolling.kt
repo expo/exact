@@ -350,8 +350,8 @@ internal class Scrolling(private val view: ExactView) {
             links.add(Link(s, w[i + 1] and 1 != 0, w[i + 1] and 2 != 0))
             i += 11
         }
-        // After the module's eight words, each scroller's snap.
-        var at = 3 + 11 * w[1] + 8
+        // After the module's ten words, each scroller's snap.
+        var at = 3 + 11 * w[1] + 10
         for (link in links) {
             if (at >= w.size) break
             val s = link.s

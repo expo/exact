@@ -184,7 +184,7 @@ extension Presenter {
     /// index of the front modal dialog's, alert's or route's, a
     /// presentation the runner keeps live with what is above it, and the
     /// rest inert (LLP 1123 D2).
-    package var openTopLayer: (frames: [TopLayerFrame], modal: Int?) {
+    package var openTopLayer: TopLayerGeometry {
         navigation.split.samplePlacement()
         let sheets = dialogs.presented, popovers = menus.presented
         func depth(_ view: NodeView) -> Int {
@@ -215,9 +215,9 @@ extension Presenter {
         }
         let modal = ordered.lastIndex { $0 === dialogs.active || dialogs.presentsRoute($0) }
         if let alert = alerts.presented, let node = alert.node {
-            return (painted + [(node.id, CGRect.zero, nil)], alert.popover ? modal : painted.count)
+            return (painted + [(node.id, CGRect.zero, nil)], alert.popover ? modal : painted.count, alert.popover ? dialogs.backdrop : nil)
         }
-        return (painted, modal)
+        return (painted, modal, dialogs.backdrop)
     }
     package var openTopLayerFrames: [(UInt32, CGRect)] { openTopLayer.frames.map { ($0.0, $0.1) } }
 }

@@ -92,12 +92,13 @@ mod real {
             delivered: *mut bool,
             out: *mut *mut c_char,
         ) -> i32;
+        fn exact_js_storage_image_task(h: *mut c_void, id: *mut u64, out: *mut *mut c_char) -> i32;
         fn exact_js_drain(h: *mut c_void, out: *mut *mut c_char) -> i32;
         fn exact_js_interrupt(h: *mut c_void);
         fn exact_js_take_log(
             h: *mut c_void,
             ctx: *mut c_void,
-            record: unsafe extern "C" fn(*mut c_void, *const u8, usize),
+            record: unsafe extern "C" fn(*mut c_void, *const u8, usize, *const u8, usize),
         );
         fn exact_js_free(p: *mut c_char);
         fn exact_js_destroy(h: *mut c_void);
@@ -240,6 +241,23 @@ mod real {
             let text = take(out);
             if status == 0 {
                 Ok(())
+            } else {
+                Err(text)
+            }
+        }
+
+        /// Retain the queue head's image work before pumping can retire its mapping.
+        pub fn storage_image_work(
+            &mut self,
+            context: &ibex2::bindings::Context,
+        ) -> Result<Option<ibex2::stdlib::fs_image::WorkHandle>, String> {
+            let mut id = 0;
+            let mut out = std::ptr::null_mut();
+            // SAFETY: the engine is live; both output pointers outlive the call.
+            let status = unsafe { exact_js_storage_image_task(self.0, &mut id, &mut out) };
+            let text = take(out);
+            if status == 0 {
+                Ok(context.image_work_handle(id))
             } else {
                 Err(text)
             }
@@ -422,25 +440,43 @@ mod real {
             }
         }
 
-        pub fn take_log(&mut self) -> Vec<String> {
-            unsafe extern "C" fn record(ctx: *mut c_void, bytes: *const u8, len: usize) {
-                // SAFETY: the shim borrows each record for this call, even when
-                // empty; `ctx` exclusively borrows the Vec until the drain returns.
-                let (logs, text) = unsafe {
+        /// The console's lines since the last take, each with the method
+        /// that wrote it, or none for the runtime's own (js/src/console.js);
+        /// a record of several lines is one line each.
+        pub fn take_log(&mut self) -> crate::Logs {
+            type Logs = crate::Logs;
+            unsafe extern "C" fn record(
+                ctx: *mut c_void,
+                method: *const u8,
+                method_len: usize,
+                bytes: *const u8,
+                len: usize,
+            ) {
+                // SAFETY: the shim borrows each record and its method for this
+                // call, even when empty; `ctx` exclusively borrows the Vec
+                // until the drain returns.
+                let (logs, method, text) = unsafe {
                     (
-                        &mut *ctx.cast::<Vec<String>>(),
+                        &mut *ctx.cast::<Logs>(),
+                        std::slice::from_raw_parts(method, method_len),
                         String::from_utf8_lossy(std::slice::from_raw_parts(bytes, len)),
                     )
                 };
+                let method = (!method.is_empty()).then(|| {
+                    std::str::from_utf8(method)
+                        .ok()
+                        .and_then(exact_runner::Console::named)
+                        .unwrap_or(exact_runner::Console::Log)
+                });
                 if text.is_empty() {
-                    logs.push(String::new());
+                    logs.push((method, String::new()));
                 } else {
-                    logs.extend(text.lines().map(str::to_string));
+                    logs.extend(text.lines().map(|line| (method, line.to_string())));
                 }
             }
-            let mut logs = Vec::<String>::new();
+            let mut logs = Logs::new();
             // SAFETY: the live engine calls `record` synchronously with this Vec.
-            unsafe { exact_js_take_log(self.0, (&mut logs as *mut Vec<String>).cast(), record) };
+            unsafe { exact_js_take_log(self.0, (&mut logs as *mut Logs).cast(), record) };
             logs
         }
     }
@@ -520,6 +556,12 @@ mod real {
         pub fn deliver_storage_one(&mut self) -> Result<bool, String> {
             Err(NONE.into())
         }
+        pub fn storage_image_work(
+            &mut self,
+            _context: &ibex2::bindings::Context,
+        ) -> Result<Option<ibex2::stdlib::fs_image::WorkHandle>, String> {
+            Err(NONE.into())
+        }
         pub fn drain(&mut self) -> Result<(), String> {
             Err(NONE.into())
         }
@@ -542,7 +584,7 @@ mod real {
         pub fn restore_reply(&mut self, _reply: &mut serde_json::Value) -> Result<(), String> {
             Err(NONE.into())
         }
-        pub fn take_log(&mut self) -> Vec<String> {
+        pub fn take_log(&mut self) -> crate::Logs {
             Vec::new()
         }
     }

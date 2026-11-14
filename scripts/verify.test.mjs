@@ -435,349 +435,57 @@ test('check\'s text splits by scheme, counting what its own cap left out', () =>
   assert.ok(r.lines.includes('  advice   tabs: a bottom tab bar 1280 px wide'));
 });
 
-// LLP 1116.006 D3: the server an app calls, found where the rest pattern and the builders put it.
-// LLP 1116.008 D1: an entry that does not read DB (itself, or in a module it imports) is refused in one line naming it.
-test('the app\'s server: its entry, the URL app.ts calls, and why it cannot be run on an empty database', () => {
-  const dir = mkdtempSync(resolve(tmpdir(), 'exact-server-'));
-  const put = (files) => { rmSync(dir, { recursive: true, force: true }); for (const [path, text] of Object.entries(files)) { mkdirSync(resolve(dir, path, '..'), { recursive: true }); writeFileSync(resolve(dir, path), text); } };
-  const reads = "const db = new Database(process.env.DB ?? 'data.db');\n";
+// The handle spans files and later verify passes; closing a client does not empty a backend.
+test.skipIf(!!chromium().unavailable).each([true, false])('owned servers start each test empty across files, replay and tour (database: %s)', async (database) => {
+  const parent = mkdtempSync(resolve(tmpdir(), 'exact-test-isolation-'));
+  const { startServer } = await import('./verify.mjs');
+  const { runTests } = await import('./agent-test.mjs');
   try {
-    put({ 'app.ts': "const API = 'http://127.0.0.1:6810'; // a phone reaches http://192.168.1.2:6810\n", 'server/index.ts': reads });
-    assert.deepEqual(appServer(dir), { entry: 'server/index.ts', args: [], database: true, url: 'http://127.0.0.1:6810', port: 6810, why: null, refusal: null, settings: {} });
-    put({ 'app.ts': "export const API = 'http://127.0.0.1:8787';\n", 'server.ts': reads, 'srv/main.ts': reads, 'app.json': JSON.stringify({ commands: { server: ['bun', '--watch', 'srv/main.ts'] } }) });
-    assert.equal(appServer(dir).entry, 'srv/main.ts');
-    put({ 'app.ts': "import type { Answer } from './app.contract.d.ts';\nimport { API } from './api';\n", 'api.ts': "export const API = 'http://localhost:3000/v1/';\n", 'server/server.ts': 'const DB = Bun.env.DB;\n' });
-    assert.deepEqual([serverUrl(dir), appServer(dir).port, appServer(dir).refusal], ['http://localhost:3000/v1', 3000, null]);
-    put({ 'app.ts': "const API = 'http://127.0.0.1:8787';\n", 'server.ts': "new Database('data.db');\n" });
-    assert.match(appServer(dir).refusal, /^server\.ts does not read its database's path from DB, so it cannot be run on an empty one: write new Database\(process\.env\.DB \?\? 'data\.db'\) in it .*"commands": \{ "server": \["bun", "server\/index\.ts"\] \}$/);
-    assert.equal(appServer(dir).why, null);
-    // The entry app.json names is the one it looked at, and says so.
-    put({ 'app.ts': "const API = 'http://127.0.0.1:8787';\n", 'server.ts': reads, 'srv/main.ts': 'Bun.serve({});\n', 'app.json': JSON.stringify({ commands: { server: ['bun', 'srv/main.ts'] } }) });
-    assert.match(appServer(dir).refusal, /^srv\/main\.ts \(app\.json's commands\.server\) does not read /);
-    // A server another program runs is run as written, told DB as Bun's is; its file is what the DB check reads (LLP 1156.001 D5).
-    put({ 'app.ts': "const API = 'http://127.0.0.1:8787';\n", 'server.py': 'import os\ndb = sqlite3.connect(os.environ["DB"])\n', 'app.json': JSON.stringify({ commands: { server: ['python3', '-u', 'server.py'] } }) });
-    assert.deepEqual([appServer(dir).entry, appServer(dir).command, appServer(dir).refusal], ['server.py', ['python3', '-u', 'server.py'], null]);
-    put({ 'app.ts': "const API = 'http://127.0.0.1:8787';\n", 'server.py': 'db = sqlite3.connect("data.db")\n', 'app.json': JSON.stringify({ commands: { server: ['python3', 'server.py'] } }) });
-    assert.match(appServer(dir).refusal, /^server\.py \(app\.json's commands\.server\) does not read .*os\.environ\["DB"\] in Python\), or say it keeps none in app\.json: "server": \{ "database": false \}$/);
-    // A command with no file of the app to read (a module path) cannot be told to use the test's database: refused,
-    // unless the app says its server keeps none.
-    put({ 'app.ts': "const API = 'http://127.0.0.1:8787';\n", 'app.json': JSON.stringify({ commands: { server: ['uvicorn', 'api.main:app', '--port', '8787'] } }) });
-    assert.match(appServer(dir).refusal, /^app\.json's commands\.server \(uvicorn api\.main:app --port 8787\) names no file of the app to read/);
-    put({ 'app.ts': "const API = 'http://127.0.0.1:8787';\n", 'app.json': JSON.stringify({ commands: { server: ['uvicorn', 'api.main:app'] }, server: { database: false } }) });
-    assert.deepEqual([appServer(dir).entry, appServer(dir).refusal], ['uvicorn api.main:app', null]);
-    put({ 'app.ts': "const API = 'https://api.example.com';\n", 'server.ts': reads });
-    assert.match(appServer(dir).why, /^server\.ts is left alone: app\.ts calls no local URL/);
-    put({ 'app.ts': "const API = 'http://127.0.0.1:8787';\n" });
-    assert.equal(appServer(dir), null);
-    // A setting app.ts reads (LLP 1153 D4), as the build inlines it: the environment's, else .env.local's, else .env's,
-    // else the default; a value that is no local URL leaves the server alone, though the default it overrides is one.
-    const setting = { 'app.ts': "export const API = import.meta.env.API_BASE_URL ?? 'http://127.0.0.1:8080';\nexport const grants = `net.fetch ${API}`;\n", 'app.json': JSON.stringify({ env: ['API_BASE_URL'], server: { database: false } }), 'server.ts': 'Bun.serve({});\n' };
-    put(setting);
-    assert.equal(serverUrl(dir, {}), 'http://127.0.0.1:8080');
-    // An app whose backend is one socket names its origin alone: the server is there.
-    put({ ...setting, 'app.ts': "const CONVEX = 'ws://127.0.0.1:3210';\nexport const grants = `net.websocket ${CONVEX}`;\n" });
-    assert.equal(serverUrl(dir, {}), 'http://127.0.0.1:3210');
-    // A socket elsewhere does not stand for the server when the app names an http: one, whichever comes first.
-    put({ ...setting, 'app.ts': "const FEED = 'ws://127.0.0.1:4791';\nconst API = 'http://127.0.0.1:8080';\nexport const grants = `net.websocket ${FEED}\\nnet.fetch ${API}`;\n" });
-    assert.equal(serverUrl(dir, {}), 'http://127.0.0.1:8080');
-    // …in a module app.ts imports, too.
-    put({ ...setting, 'app.ts': "import { API } from './api';\nconst FEED = 'ws://127.0.0.1:4791';\nexport const grants = `net.websocket ${FEED}\\nnet.fetch ${API}`;\n", 'api.ts': "export const API = 'http://127.0.0.1:8090';\n" });
-    assert.equal(serverUrl(dir, {}), 'http://127.0.0.1:8090');
-    put({ ...setting, '.env': 'API_BASE_URL=http://127.0.0.1:8787\n' });
-    assert.deepEqual([appServer(dir, {}).url, appServer(dir, {}).refusal], ['http://127.0.0.1:8787', null]);
-    put({ ...setting, '.env': 'API_BASE_URL=http://127.0.0.1:8787\n', '.env.local': 'API_BASE_URL=http://localhost:9000\n' });
-    assert.equal(serverUrl(dir, {}), 'http://localhost:9000');
-    assert.equal(serverUrl(dir, { API_BASE_URL: 'http://127.0.0.1:7000' }), 'http://127.0.0.1:7000');
-    // A comment naming another local URL is not code, and a setting's value wins over a constant before it; the
-    // server's line says which origin it took and why.
-    put({ ...setting, 'app.ts': "// The server listens on http://127.0.0.1:8787 by default.\nconst API = import.meta.env.API_BASE_URL ?? 'http://127.0.0.1:8787';\nexport function load() { return fetch(`${API}/items`); }\n" });
-    assert.deepEqual([serverUrl(dir, { API_BASE_URL: 'http://127.0.0.1:9100' }), appServer(dir, { API_BASE_URL: 'http://127.0.0.1:9100' }).note], ['http://127.0.0.1:9100', undefined]);
-    assert.equal(serverUrl(dir, {}), 'http://127.0.0.1:8787');
-    put({ ...setting, 'app.ts': "const FALLBACK = 'http://127.0.0.1:8787'; /* or http://localhost:1 */\nconst API = import.meta.env.API_BASE_URL ?? 'http://127.0.0.1:8787';\nexport const grants = `net.fetch ${API} ${FALLBACK}`;\n" });
-    assert.deepEqual([serverChoice(dir, { API_BASE_URL: 'http://127.0.0.1:9100' })], [{ url: 'http://127.0.0.1:9100', note: "the app's code names http://127.0.0.1:9100, http://127.0.0.1:8787: the server is started at http://127.0.0.1:9100, the value of API_BASE_URL" }]);
-    put({ ...setting, 'app.ts': "const API = 'http://127.0.0.1:8080'; // not http://localhost:1\nconst OTHER = 'http://localhost:9000';\nexport const grants = `net.fetch ${API} ${OTHER}`;\n" });
-    assert.deepEqual(serverChoice(dir, {}), { url: 'http://127.0.0.1:8080', note: "the app's code names http://127.0.0.1:8080, http://localhost:9000: the server is started at http://127.0.0.1:8080, the first in app.ts's code" });
-    put(setting);
-    assert.equal(appServer(dir, { API_BASE_URL: 'https://api.example.com' }).url, null);
-    assert.match(appServer(dir, { API_BASE_URL: 'https://api.example.com' }).why, /^server\.ts is left alone: app\.ts calls no local URL/);
-    // The spellings of reading DB, and a root shim that only imports the backend that reads it (book-club, polls, event-rsvp).
-    for (const spelling of ['Bun.env.DB', 'process.env["DB"]', "process.env['DB'] ?? 'x.db'", 'env.DB', 'process.env?.DB', "const { DB } = process.env;", "const { DB: path = 'x.db', PORT } = Bun.env;", 'start(process.env.DB)']) {
-      put({ 'app.ts': "const API = 'http://127.0.0.1:8787';\n", 'server.ts': `${spelling}\n` });
-      assert.equal(appServer(dir).refusal, null, spelling);
+    const dir = resolve(parent, database ? 'database' : 'memory');
+    createApp(dir); applyPattern(dir, 'rest');
+    const port = onPort(dir);
+    const test = (name) => `test "${name}"\n  expect state lib.items.length == 0\n  request POST "/items" {"title":"Milk"} as ada\n  clock +4000\n  clock data\n  expect state lib.items.length == 1\n  reload\n  expect state lib.items.length == 1\n`;
+    const file = resolve(dir, 'app.test.contract'), second = resolve(dir, 'other.test.contract');
+    writeFileSync(file, test('first writes') + test('second starts empty'));
+    writeFileSync(second, 'test "another file starts empty"\n  expect state lib.items.length == 0\n');
+    if (!database) {
+      writeFileSync(resolve(dir, 'server.py'), `import http.server, json, os, signal\nitems = []\nclass Handler(http.server.BaseHTTPRequestHandler):\n def log_message(self, *args): pass\n def do_GET(self):\n  self.send_response(200); self.send_header('Access-Control-Allow-Origin', '*'); self.end_headers(); self.wfile.write(json.dumps(items).encode())\n def do_POST(self):\n  self.rfile.read(int(self.headers.get('Content-Length', 0))); items.append(dict(id=len(items)+1,title='Milk',notes='',locked=0)); self.do_GET()\n def do_OPTIONS(self):\n  self.send_response(204); self.send_header('Access-Control-Allow-Origin', '*'); self.send_header('Access-Control-Allow-Headers', '*'); self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS'); self.end_headers()\nhttp.server.HTTPServer.allow_reuse_address = True\n# The launcher exits on TERM; this child proves group-wide escalation still reaches it.\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\nhttp.server.HTTPServer(('127.0.0.1', int(os.environ['PORT'])), Handler).serve_forever()\n`);
+      writeFileSync(resolve(dir, 'launcher.py'), `import os, subprocess, sys\nchild = subprocess.Popen([sys.executable, 'server.py'])\nopen('.exact/child.pid', 'w').write(str(child.pid))\nchild.wait()\n`);
+      const manifest = JSON.parse(readFileSync(resolve(dir, 'app.json'), 'utf8'));
+      writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ ...manifest, server: { database: false }, commands: { server: ['python3', 'launcher.py'] } }));
     }
-    for (const reader of ["process.env.DB_PATH", 'const DB = "data.db"', '// the DB is data.db']) {
-      put({ 'app.ts': "const API = 'http://127.0.0.1:8787';\n", 'server.ts': `${reader}\n` });
-      assert.match(appServer(dir).refusal, /^server\.ts does not read/, reader);
-    }
-    put({ 'app.ts': "const API = 'http://127.0.0.1:8787';\n", 'server.ts': "import './server/index.ts';\n", 'server/index.ts': "import { serve } from './polls';\nserve();\n", 'server/polls.ts': reads });
-    assert.equal(appServer(dir).refusal, null);
-    put({ 'app.ts': "const API = 'http://127.0.0.1:8787';\n", 'server.ts': "export * from './a';\n", 'a.ts': "import('./b');\n", 'b.ts': "import './a';\nconst x = require('./c');\n", 'c.js': 'new Database("data.db");\n' });
-    assert.match(appServer(dir).refusal, /^server\.ts does not read/); // the cycle ends
-  } finally { rmSync(dir, { recursive: true, force: true }); }
-});
-
-// A real child records its arguments and environment. The port lock, HTTP readiness and process listing are stubbed,
-// in a separate process so Bun's module mock cannot replace the lock for other tests.
-function stubServerRun(body) {
-  const dir = mkdtempSync(resolve(tmpdir(), 'exact-server-command-'));
-  const script = `
-    import assert from 'node:assert/strict';
-    import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-    import { resolve } from 'node:path';
-    import { spawnSync } from 'node:child_process';
-    import { mock, spyOn } from 'bun:test';
-    const dir = ${JSON.stringify(dir)}, scripts = ${JSON.stringify(import.meta.dir)};
-    const argv = ['--world', 'transcript', '--label', 'two words', '--reset-on-identify'];
-    const manifest = { name: 'Server test', app: { id: 'dev.exact.server-test', name: 'Server test' }, commands: { server: ['bun', 'server.ts', ...argv] }, server: { database: false } };
-    const save = () => writeFileSync(resolve(dir, 'app.json'), JSON.stringify(manifest));
-    save();
-    writeFileSync(resolve(dir, 'app.contract'), 'component App\\n  view\\n    text "Test"\\n');
-    writeFileSync(resolve(dir, 'app.ts'), 'export const origin = "http://127.0.0.1:4790";');
-    const ready = resolve(dir, 'ready.json');
-    const serving = ${JSON.stringify("import { writeFileSync } from 'node:fs';\nwriteFileSync('ready.json', JSON.stringify({ argv: process.argv.slice(2), db: process.env['D' + 'B'] ?? null, port: process.env.PORT }));\nsetInterval(() => {}, 1000);\n")};
-    writeFileSync(resolve(dir, 'server.ts'), serving);
-    const record = () => JSON.parse(readFileSync(ready, 'utf8'));
-    let taken = 0, given = 0;
-    mock.module(resolve(scripts, 'port-lock.mjs'), () => ({ holderOf: async () => null, takePort: async (port) => {
-      assert.equal(port, 4790); taken++; return () => { given++; };
-    } }));
-    spyOn(globalThis, 'fetch').mockImplementation(async () => {
-      if (!existsSync(ready)) throw new Error('not ready');
-      return new Response('ready');
-    });
-    const children = [], spawn = Bun.spawn;
-    spyOn(Bun, 'spawn').mockImplementation((...args) => { const child = spawn(...args); children.push(child); return child; });
-    const processes = await import('node:child_process'), spawnSyncReal = processes.spawnSync;
-    mock.module('node:child_process', () => ({ ...processes, spawnSync: (command, args, options) => command === 'ps'
-      ? { stdout: children.some((child) => child.pid === Number(args.at(-1))) ? 'bun server.ts' : '' }
-      : spawnSyncReal(command, args, options) }));
-    const { appServer, startServer, withAppServer, driveServer } = await import(resolve(scripts, 'verify.mjs'));
-    process.env.DB = resolve(dir, 'inherited.db');
-    try { ${body} }
-    finally { for (const child of children) { if (child.exitCode == null) child.kill('SIGKILL'); await child.exited; } }
-  `;
-  try {
-    const r = spawnSync(process.execPath, ['-e', script], { encoding: 'utf8', timeout: 20_000 });
-    assert.equal(r.status, 0, r.stdout + r.stderr + (r.error ?? ''));
-  } finally { rmSync(dir, { recursive: true, force: true }); }
-}
-
-test('server command arguments reach the child in order, with DB and PORT for a database server', () => {
-  stubServerRun(`
-    delete manifest.server; save();
-    writeFileSync(resolve(dir, 'server.ts'), "import { writeFileSync as write } from 'node:fs'; write(process.env.DB, 'scratch');\\n" + serving);
-    const server = appServer(dir);
-    assert.equal(server.refusal, null);
-    const running = await startServer(dir, server, 'test');
-    const db = resolve(dir, '.exact/test/db.sqlite');
-    assert.deepEqual(record(), { argv, db, port: '4790' });
-    assert.equal(readFileSync(db, 'utf8'), 'scratch');
-    assert.equal(readFileSync(resolve(dir, '.exact/test/owner'), 'utf8').trim(), String(process.pid));
-    await running.stop();
-    assert.notEqual(await children[0].exited, 0);
-    assert.equal(existsSync(resolve(dir, '.exact/test')), false);
-    assert.deepEqual([taken, given], [1, 1]);
-  `);
-}, 30_000);
-
-// LLP 1153 D4: a server that imports app.ts (the site pattern's) reads its settings as the build has them, though
-// Bun's own .env loading under NODE_ENV=test skips .env.local, so it listens where discovery looks.
-test('the settings app.ts reads reach the server as the build has them', () => {
-  stubServerRun(`
-    manifest.env = ['API_BASE_URL']; save();
-    delete process.env.API_BASE_URL;
-    process.env.NODE_ENV = 'test';
-    writeFileSync(resolve(dir, 'app.ts'), "export const origin = import.meta.env.API_BASE_URL ?? 'http://127.0.0.1:8080';\\n");
-    writeFileSync(resolve(dir, '.env'), 'API_BASE_URL=http://127.0.0.1:8787\\n');
-    writeFileSync(resolve(dir, '.env.local'), 'API_BASE_URL=http://127.0.0.1:4790\\n');
-    // As site's server.ts does: its address is app.ts's, read through Bun's import.meta.env.
-    writeFileSync(resolve(dir, 'server.ts'), "import { writeFileSync } from 'node:fs';\\nimport { origin } from './app.ts';\\nwriteFileSync('ready.json', JSON.stringify({ api: origin, port: process.env.PORT }));\\nsetInterval(() => {}, 1000);\\n");
-    // Discovery read under one environment; the server is given what it read, whatever this process inherited.
-    const server = appServer(dir, { ...process.env });
-    process.env.API_BASE_URL = 'http://127.0.0.1:8080';
-    assert.equal(server.url, 'http://127.0.0.1:4790');
-    const running = await startServer(dir, server, 'test');
-    assert.deepEqual(record(), { api: 'http://127.0.0.1:4790', port: '4790' });
-    await running.stop();
-  `);
-}, 30_000);
-
-test('database: false omits inherited DB, preserves database files, and keeps refusal and cleanup behavior', () => {
-  stubServerRun(`
-    const server = appServer(dir);
-    assert.equal(server.refusal, null);
-    const runDir = resolve(dir, '.exact/test');
-    mkdirSync(runDir, { recursive: true });
-    const files = ['db.sqlite', 'db.sqlite-wal', 'db.sqlite-shm', 'db.sqlite-journal'];
-    for (const file of files) writeFileSync(resolve(runDir, file), 'untouched');
-    await assert.rejects(withAppServer(dir, async () => {
-      assert.deepEqual(record(), { argv, db: null, port: '4790' });
-      throw new Error('test failed');
-    }, { verb: 'test', optional: true }), /test failed/);
-    for (const file of files) assert.equal(readFileSync(resolve(runDir, file), 'utf8'), 'untouched');
-    assert.equal(existsSync(resolve(runDir, 'owner')), false);
-    assert.notEqual(await children[0].exited, 0);
-    assert.deepEqual([taken, given], [1, 1]);
-    assert.equal(await withAppServer(dir, () => assert.fail('an answering server must be refused'), { verb: 'test' }), 1);
-    assert.equal(children.length, 1);
-    assert.deepEqual([taken, given], [2, 2]);
-    rmSync(ready);
-    rmSync(runDir, { recursive: true });
-    const running = await startServer(dir, server, 'test');
-    assert.deepEqual(record(), { argv, db: null, port: '4790' });
-    assert.deepEqual(readdirSync(runDir), ['owner']);
-    await running.stop();
-    assert.equal(existsSync(runDir), false);
-    delete manifest.server; save();
-    assert.match(appServer(dir).refusal, /does not read its database's path from DB/);
-    assert.equal(await withAppServer(dir, () => assert.fail('a database server without DB must be refused'), { optional: true }), 1);
-    assert.equal(children.length, 2);
-  `);
-}, 30_000);
-
-test('agent --test starts and stops the app server on web, ios and macos, and reuses its parent server', () => {
-  stubServerRun(`
-    const { main } = await import(resolve(scripts, 'agent.mjs'));
-    const args = ['--app', dir, '--test', resolve(dir, 'app.test.contract')];
-    for (const host of ['web', 'ios', 'macos']) {
-      const code = await main([host, ...args], { runTests: async (options) => {
-        assert.equal(options.host, host);
-        assert.equal(options.file, args[3]);
-        assert.deepEqual(record(), { argv, db: null, port: '4790' });
-        assert.equal(children.at(-1).exitCode, null);
-        return { results: [], passed: 1, failed: 0 };
-      } });
-      assert.equal(code, 0);
-      assert.notEqual(await children.at(-1).exited, 0);
-      assert.equal(existsSync(resolve(dir, '.exact/test')), false);
-      rmSync(ready);
-    }
-    const result = await withAppServer(dir, async () => {
-      const source = 'const { main } = await import(' + JSON.stringify(resolve(scripts, 'agent.mjs')) + ');' +
-        'process.exit(await main(' + JSON.stringify(['web', ...args]) + ', { runTests: async () => ({ results: [], passed: 1, failed: 0 }) }));';
-      const child = spawnSync(process.execPath, ['-e', source], { encoding: 'utf8', timeout: 10_000 });
-      assert.equal(child.status, 0, child.stdout + child.stderr);
-      assert.equal(children.at(-1).exitCode, null, 'the parent server still runs');
-      return 0;
-    }, { verb: 'test', optional: true });
-    assert.equal(result, 0);
-    assert.notEqual(await children.at(-1).exited, 0);
-    assert.deepEqual([taken, given], [4, 4]);
-    rmSync(ready);
-    rmSync(resolve(dir, 'server.ts'));
-    assert.equal(await main(['web', ...args], { runTests: async () => ({ results: [], passed: 0, failed: 1 }) }), 1);
-    assert.equal(children.length, 4, 'an app with no server still runs its tests');
-  `);
-}, 30_000);
-
-test('an agent drive passes server arguments without DB or a scratch database', () => {
-  stubServerRun(`
-    const lease = resolve(dir, '.exact/agent-server');
-    mkdirSync(lease, { recursive: true });
-    const old = resolve(lease, 'db.sqlite');
-    writeFileSync(old, 'untouched');
-    const running = await driveServer(dir, 'one', () => {}, { fresh: true });
-    assert.deepEqual(record(), { argv, db: null, port: '4790' });
-    assert.equal(existsSync(resolve(dir, '.exact/agent/one')), false);
-    await running.stop();
-    assert.notEqual(await children[0].exited, 0);
-    assert.equal(readFileSync(old, 'utf8'), 'untouched');
-    assert.deepEqual(readdirSync(lease), ['db.sqlite']);
-  `);
-});
-
-test('fixture drives isolate checkouts, refuse foreign servers and clean overlapping ports', async () => {
-  const parent = mkdtempSync(resolve(tmpdir(), 'exact-fixture-checkouts-')), running = [], fixturePids = new Map();
-  const { backendOriginSelection } = await import('../js/bake/src/typescript.mjs');
-  const env = { ...process.env }; delete env.PORT; delete env.EXACT_BACKEND_ORIGIN;
-  const script = `import { driveServer, appServer } from ${JSON.stringify(resolve(import.meta.dir, 'verify.mjs'))};
-let running;
-try {
-  running = await driveServer(process.argv[1], 'fixture', () => {});
-  console.log(JSON.stringify({ origin: appServer(process.argv[1]).url }));
-  for await (const line of console) break;
-} catch (e) { console.log(JSON.stringify({ error: e.message })); }
-finally { await running?.stop(); }
-process.exit(0);`;
-  const drive = async (dir, extra = {}) => {
-    const child = Bun.spawn([process.execPath, '-e', script, dir], { env: { ...env, ...extra }, stdin: 'pipe', stdout: 'pipe', stderr: 'pipe' });
-    running.push(child);
-    const reader = child.stdout.values()[Symbol.asyncIterator](), first = await reader.next();
-    const result = JSON.parse(new TextDecoder().decode(first.value));
-    if (result.origin) for (const file of readdirSync(resolve(dir, '.exact/agent-server')).filter(f => /^server-\d+$/.test(f))) {
-      fixturePids.set(Number(file.slice(7)), realpathSync(dir));
-    }
-    return { ...result, child, stop: async () => { child.stdin.write('\n'); await child.stdin.flush(); await child.exited; } };
-  };
-  const fixtures = [], ports = new Set();
-  try {
-    for (let i = 0; fixtures.length < 2 && i < 100; i++) {
-      const dir = resolve(parent, `checkout-${i}`);
-      mkdirSync(resolve(dir, 'fixture'), { recursive: true });
-      writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ commands: { server: ['bun', 'fixture/server.ts'] }, server: { database: false } }));
-      writeFileSync(resolve(dir, 'app.ts'), 'export const origin = "http://127.0.0.1:4790";\n');
-      const selected = backendOriginSelection(dir, {}), port = Number(new URL(selected.origin).port);
-      assert.equal(backendOriginSelection(dir, {}).origin, selected.origin);
-      if (ports.has(port)) continue;
-      let probe; try { probe = Bun.serve({ hostname: '127.0.0.1', port, fetch: () => new Response('') }); } catch { continue; }
-      probe.stop(true); ports.add(port);
-      writeFileSync(resolve(dir, 'fixture/server.ts'), `Bun.serve({hostname:'127.0.0.1', port:Number(process.env.PORT), fetch:()=>Response.json({world:${JSON.stringify(dir)}})});\n`);
-      fixtures.push(dir);
-    }
-    assert.equal(fixtures.length, 2, 'two unused checkout ports');
-    const [a, b] = await Promise.all(fixtures.map(dir => drive(dir)));
-    assert.notEqual(a.origin, b.origin);
-    assert.deepEqual(await Promise.all([a, b].map(x => fetch(x.origin).then(r => r.json()))), fixtures.map(world => ({ world })));
-    const conflict = await drive(fixtures[1], { EXACT_BACKEND_ORIGIN: a.origin });
-    assert.match(conflict.error, /fixture does not belong.*--backend.*PORT=/);
-    await conflict.child.exited;
-    // A matching command and cwd are insufficient without the launch record.
-    const lease = resolve(fixtures[0], '.exact/agent-server');
-    const record = readdirSync(lease).find(f => /^server-\d+$/.test(f)), path = resolve(lease, record), held = readFileSync(path, 'utf8');
-    await b.stop();
-    const foreignLease = resolve(fixtures[1], '.exact/agent-server');
-    mkdirSync(foreignLease, { recursive: true });
-    const copied = resolve(foreignLease, record);
-    for (const text of [held, JSON.stringify({ ...JSON.parse(held), directory: realpathSync(fixtures[1]), origin: a.origin }), 'null']) {
-      writeFileSync(copied, text);
-      try {
-        const refused = await drive(fixtures[1], { EXACT_BACKEND_ORIGIN: a.origin });
-        assert.match(refused.error, /fixture does not belong/);
-        await refused.child.exited;
-        assert.equal((await fetch(a.origin).then(r => r.json())).world, fixtures[0], 'refusal cleanup leaves the foreign server running');
-        assert.equal(readFileSync(copied, 'utf8'), text, 'an unowned live process record is left alone');
-      } finally { rmSync(copied, { force: true }); }
-    }
-    rmSync(path);
+    let running;
     try {
-      const unknown = await drive(fixtures[0]);
-      assert.match(unknown.error, /fixture does not belong/);
-      await unknown.child.exited;
-      assert.equal((await fetch(a.origin).then(r => r.json())).world, fixtures[0]);
-    } finally { writeFileSync(path, held); }
-    const parallel = await drive(fixtures[0], { EXACT_BACKEND_ORIGIN: b.origin });
-    assert.equal(parallel.origin, b.origin);
-    assert.equal((await fetch(parallel.origin).then(r => r.json())).world, fixtures[0]);
-    const shared = await drive(fixtures[0]);
-    assert.equal(shared.origin, a.origin);
-    await a.stop();
-    assert.equal((await fetch(shared.origin).then(r => r.json())).world, fixtures[0]);
-    await shared.stop();
-    assert.equal((await fetch(a.origin).then(r => r.json())).world, fixtures[0], 'the other port keeps this checkout leased');
-    await parallel.stop();
-    for (const origin of [a.origin, parallel.origin]) {
-      assert.equal(await fetch(origin, { signal: AbortSignal.timeout(1000) }).then(() => true, () => false), false, 'the last drive stops every owned port');
+      const built = spawnSync(process.execPath, [resolve(dir, 'exact.mjs'), 'web-build'], { cwd: dir, encoding: 'utf8', timeout: 240_000 });
+      assert.equal(built.status, 0, built.stdout + built.stderr);
+      running = await startServer(dir, appServer(dir), 'test');
+      const drive = (file, options = {}) => runTests({ host: 'web', app: dir, file, running, ...options });
+      for (const [fileToRun, options] of [[file, {}], [second, {}], [file, { only: 'first writes' }], [second, { atStep: async () => {} }]]) {
+        const r = await drive(fileToRun, options);
+        assert.equal(r.failed, 0, JSON.stringify(r.results));
+        assert.equal(r.passed, options.only || fileToRun === second ? 1 : 2);
+      }
+      await running.stop(); running = null;
+      assert.equal(await fetch(`http://127.0.0.1:${port}`).then(() => true, () => false), false);
+      assert.equal(existsSync(resolve(dir, '.exact/test/owner')), false);
+      for (const verb of ['test', 'verify']) {
+        const r = spawnSync(process.execPath, [resolve(dir, 'exact.mjs'), verb, 'web', ...(verb === 'verify' ? ['--json'] : [])],
+          { cwd: dir, encoding: 'utf8', timeout: 240_000, env: { ...process.env, EXACT_FEEDBACK: '0' } });
+        assert.equal(r.status, 0, r.stdout + r.stderr);
+        if (verb === 'test') assert.match(r.stdout, /2 passed, 0 failed/);
+        else {
+          const verdict = JSON.parse(r.stdout);
+          assert.equal(verdict.tests.passed, 3, r.stdout);
+          assert.equal(verdict.relaunch.test, 'second starts empty');
+          assert.deepEqual(verdict.relaunch.problems, [], r.stdout);
+        }
+      }
+    } finally {
+      await running?.stop();
+      if (!database && existsSync(resolve(dir, '.exact/child.pid'))) try { process.kill(Number(readFileSync(resolve(dir, '.exact/child.pid'), 'utf8')), 'SIGKILL'); } catch {}
     }
-    assert.equal(existsSync(lease), false, 'both server records are removed');
-  } finally {
-    for (const child of running) { if (child.exitCode == null) child.kill('SIGTERM'); await child.exited; }
-    for (const [pid, dir] of fixturePids) {
-      const cwd = spawnSync('lsof', ['-a', '-p', String(pid), '-d', 'cwd', '-Fn'], { encoding: 'utf8' }).stdout?.match(/^n(.+)$/m)?.[1];
-      if (cwd === dir) try { process.kill(pid, 'SIGTERM'); } catch {}
-    }
-    rmSync(parent, { recursive: true, force: true });
-  }
-}, 30000);
+  } finally { rmSync(parent, { recursive: true, force: true }); }
+}, 300_000);
 
 // The rest pattern, verified as a builder would with a data.db of their own: verify runs its server on an empty
 // database and leaves theirs as it was; with their dev server up it refuses in one line and leaves that one running.
@@ -797,8 +505,8 @@ test.skipIf(!!chromium().unavailable)('verify on a server app: its own server on
     const verify = () => { const r = spawnSync(process.execPath, [resolve(dir, 'exact.mjs'), 'verify'], { cwd: dir, encoding: 'utf8', timeout: 240_000, env: { ...process.env, EXACT_FEEDBACK: '0' } }); return { ...r, lines: r.stdout.trim().split('\n') }; };
     const clean = verify();
     assert.equal(clean.status, 0, clean.stdout + clean.stderr);
-    assert.equal(clean.lines[0], `server: bun server.ts at http://127.0.0.1:${port}, on an empty database (.exact/verify/db.sqlite, removed after)`, clean.stdout);
-    assert.ok(clean.lines.includes('tests: 1 passed, 0 failed'), clean.stdout);
+    assert.equal(clean.lines[0], `server: bun server.ts at http://127.0.0.1:${port}, on an empty database for each test (.exact/verify/db.sqlite, removed after)`, clean.stdout);
+    assert.ok(clean.lines.includes('tests: 3 passed, 0 failed'), clean.stdout);
     // The rest pattern's test ends on an empty list as Grace: the relaunch holds its persona, not new rows.
     assert.match(clean.stdout, /^relaunch on .*: its state holds what the test left/m);
     assert.doesNotMatch(clean.stdout, /^ +lost /m);
@@ -809,11 +517,12 @@ test.skipIf(!!chromium().unavailable)('verify on a server app: its own server on
     const plain = (verb = 'test') => spawnSync(process.execPath, [resolve(dir, 'exact.mjs'), verb, 'web'], { cwd: dir, encoding: 'utf8', timeout: 240_000, env: { ...process.env, EXACT_FEEDBACK: '0' } });
     const tested = plain();
     assert.equal(tested.status, 0, tested.stdout + tested.stderr);
-    assert.match(tested.stderr, new RegExp(`^test: bun server\\.ts at http://127\\.0\\.0\\.1:${port}, on an empty database \\(\\.exact/test/db\\.sqlite, removed after\\)$`, 'm'));
-    assert.match(tested.stdout, /^1 passed, 0 failed$/m);
+    assert.match(tested.stderr, new RegExp(`^test: bun server\\.ts at http://127\\.0\\.0\\.1:${port}, on an empty database for each test \\(\\.exact/test/db\\.sqlite, removed after\\)$`, 'm'));
+    assert.match(tested.stdout, /^3 passed, 0 failed$/m);
     assert.ok(readFileSync(resolve(dir, 'data.db')).equals(before), 'test leaves the builder\'s data.db as it was');
     writeFileSync(resolve(dir, 'test.mjs'), "const { withAppServer } = await import(`${process.env.EXACT}/scripts/verify.mjs`);\nprocess.exit(await withAppServer(import.meta.dir, () =>\n  Bun.spawn(['bun', 'exact.mjs', 'test', ...process.argv.slice(2)], { cwd: import.meta.dir, stdio: ['inherit', 'inherit', 'inherit'] }).exited));\n");
     writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ ...JSON.parse(readFileSync(resolve(dir, 'app.json'), 'utf8')), commands: { 'api-test': ['bun', 'test.mjs'] } }, null, 2));
+    writeFileSync(resolve(dir, 'app.test.contract'), 'test "the wrapper’s server"\n  expect tree has "empty-add"\n');
     const old = plain('api-test');
     assert.equal(old.status, 0, old.stdout + old.stderr);
     assert.match(old.stdout, /^1 passed, 0 failed$/m);
@@ -1003,11 +712,12 @@ test.skipIf(!!chromium().unavailable)('verify on a new app: clean, a failing tes
     assert.deepEqual([warned(quiet.stderr), warned(quiet.stdout)], [[], []]);
     const clean = verify('--shots', 'out/shots');
     assert.equal(clean.status, 0, clean.stdout + clean.stderr);
-    assert.ok(clean.lines.length <= 9, clean.stdout);
+    assert.ok(clean.lines.length <= 10, clean.stdout);
     assert.ok(clean.lines.includes("largest text size (root font size 53 px at 390x844, iOS's body at its largest), 5 screens: nothing spills"), clean.stdout); // 4, and 1 the tests pass through
     assert.ok(!clean.lines.some((l) => l.startsWith('compiler:')), clean.stdout);
     assert.ok(clean.lines.includes('tests: 2 passed, 0 failed'), clean.stdout);
     assert.ok(clean.lines.includes('check first screen, 2 test ends, relaunch · 390x844, 1280x900 · light, dark: no findings'), clean.stdout);
+    assert.ok(clean.lines.includes('tree --ax first screen, 2 test ends, relaunch: no findings'), clean.stdout); // LLP 1166.002 D1
     // The starter keeps nothing: the relaunch on the second test's store opens as a fresh launch does, and says so.
     assert.match(clean.stdout, /^relaunch on "the header's button likes it"'s store \(\d+\.\d s of real time\): the first screen is a fresh launch's; that test wrote no storage$/m);
     assert.match(clean.lines.at(-1), /^verify: clean in \d+\.\d s; contract verify: done; 0 findings; properties: 0 held, 0 false, 0 counted only, 0 not exercised; \d+ suggested properties .*; report and receipt: \.exact\/verify\/properties\.txt$/);
@@ -1050,7 +760,7 @@ test.skipIf(!!chromium().unavailable)('verify on a new app: clean, a failing tes
     assert.equal(failing.status, 1, failing.stdout + failing.stderr);
     assert.ok(failing.lines.includes('tests: 1 passed, 1 failed'), failing.stdout);
     assert.match(failing.stdout, /^ {2}FAIL "the header's button likes it": line \d+: /m);
-    assert.match(failing.lines.at(-1), /^verify: 1 problem \(1 failed test\) in /);
+    assert.match(failing.lines.at(-1), /^verify: 1 problem \(1 failed test\) in /, failing.stdout + failing.stderr);
 
     writeFileSync(tests, authored);
     const view = resolve(dir, 'app.contract'), source = readFileSync(view, 'utf8');
@@ -1092,6 +802,9 @@ test.skipIf(!!chromium().unavailable)('verify on a new app: clean, a failing tes
     for (const screen of ['first screen', 'the greeting loads', "the header's button likes it", 'relaunch']) assert.deepEqual(onScreen(screen), ['390x844 light contrast', '390x844 dark ', '1280x900 light contrast', '1280x900 dark '], screen);
     assert.deepEqual([r.relaunch.test, r.relaunch.problems, r.tests.results.map((t) => t.shot.split('/').at(-1))], ["the header's button likes it", [], ['web-t1-the-greeting-loads.png', 'web-t2-the-header-s-button-likes-it.png']]);
     assert.deepEqual(r.reloads.map((x) => [x.ran, x.finding]), [[true, null], [true, null]]); // each end screen reloaded: the same
+    // The accessibility tree, read once a screen whatever its widths and schemes (LLP 1166.002 D1).
+    assert.deepEqual(r.ax.map((a) => [a.screen, a.source, a.findings.length, a.incomplete ?? null]), ['first screen', 'the greeting loads', "the header's button likes it", 'relaunch'].map((s) => [s, 'chrome-cdp', 0, null]));
+    assert.equal(r.axUnread, 0); // every screen's tree read whole, so the closing line is a plain "verify: clean"
 
     // A call the host refuses is the report's first line (LLP 1116.010 D5), and a count kept only in memory is lost by a
     // reload: the page's URL and storage hold nothing of it (D6). The starter's greeting source goes with its view.
@@ -1106,8 +819,17 @@ test.skipIf(!!chromium().unavailable)('verify on a new app: clean, a failing tes
     // LLP 1116.011 D5: the count lived in memory by design, so its reload is a note, shown and not counted.
     assert.match(poked.stdout, /^reload 1 test end: no findings\nreload note: 1 screen reloads into another state \(not counted\)\n {2}note {5}\/ reloads into another state: "Pokes: 2" → "Pokes: 0" \("poking counts[^\n]*\n {2}a saved value must survive a reload; a game or a draft in progress may not\n/m);
     assert.match(poked.lines.at(-1), /^verify: 1 problem \(1 finding; the tests passed\) in /);
+
+    // LLP 1166.002 D1: a field with no name is the accessibility tree's finding at each screen it is on, failing --strict.
+    writeFileSync(view, 'component App\n  state note = ""\n  action setNote(v: string)\n    note = v\n  view\n    column padding=16\n      input value=note input=setNote testId="note"\n      text note testId="echo"\n');
+    writeFileSync(tests, 'test "a note echoes"\n  type "note" "hi"\n  expect text "echo" == "hi"\n');
+    const unnamed = verify('--strict');
+    assert.equal(unnamed.status, 1, unnamed.stdout + unnamed.stderr);
+    assert.ok(unnamed.lines.includes('tree --ax first screen, 1 test end, relaunch: 1 finding'), unnamed.stdout);
+    assert.match(unnamed.stdout, /^ {2}unnamed {2}note: a textbox with no name: a screen reader says only its role; give it aria-label=/m);
+    assert.match(unnamed.lines.at(-1), /^verify: 1 problem \(1 finding; the tests passed\) in /);
   } finally { rmSync(parent, { recursive: true, force: true }); }
-}, 300_000); // A new app's offline Cargo resolution and its first web build, then four runs.
+}, 360_000); // A new app's offline Cargo resolution and its first web build, then four runs.
 
 // The euxy port (friction item 12): a faithful port's palette and keys are its design. app.json `verify.accept` names a
 // finding by its kind and its node's testId (or its control's, for a label; `*` a prefix), and verify says those apart.
@@ -1482,3 +1204,208 @@ test('a server owner two processes up is found on every platform: the parent tab
   assert.deepEqual(ancestors(10, new Map([[10, 11], [11, 10]])), ['10', '11'], 'a reused pid makes no loop');
   assert.ok(ancestors().includes(String(process.ppid)));
 });
+
+// The compiler, test runner and verify orchestration run. Host I/O, build/freshness checks,
+// server lifecycle, semantics checks and evidence writes are substituted; the tour is skipped.
+// The epoch-now case also controls wall time.
+test.each(['moved clock', 'resource date', 'pinned date', 'duplicate names', 'extra replay result', 'end screenshot', 'authored screenshot', 'epoch now', 'first screen writes', 'signal exit', 'first screen crash', 'relaunch crash'])('an owned-server relaunch preserves its evidence: %s', (scenario) => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-verify-replay-')), preload = resolve(dir, 'stub.mjs');
+  const duplicate = scenario === 'duplicate names', extra = scenario === 'extra replay result';
+  const authoredShot = ['authored screenshot', 'extra replay result'].includes(scenario) ? resolve(dir, 'authored.png') : null;
+  const steps = (value) => `  type "field" "${value}"\n  clock +86400000\n${authoredShot ? '  screenshot '+JSON.stringify(authoredShot)+'\n' : ''}`;
+  writeFileSync(resolve(dir, 'app.contract'), 'component App\n  view\n    text "Test"\n');
+  writeFileSync(resolve(dir, 'app.test.contract'), duplicate
+    ? 'test "same" on ios\n  clock data\ntest "same" on web\n' + steps('Saved long value') + 'test "same"\n' + steps('x')
+    : 'test "saved"\n' + (scenario === 'epoch now' ? '  epoch now\n' : scenario === 'pinned date' ? '  epoch "2026-10-01T00:00:00Z"\n' : '') + steps('Saved long value'));
+  if (scenario === 'first screen crash') rmSync(resolve(dir, 'app.test.contract'));
+  if (duplicate) {
+    writeFileSync(resolve(dir, 'other.test.contract'), readFileSync(resolve(dir, 'app.test.contract')));
+    writeFileSync(resolve(dir, 'app.test.contract'), 'test \"same\"\n' + steps('x'));
+  }
+  writeFileSync(preload, `
+    import assert from 'node:assert/strict';
+    import {mock} from 'bun:test';
+    import {writeFileSync} from 'node:fs';
+    const scripts = ${JSON.stringify(import.meta.dir)}, at = p => scripts + '/' + p, dir = ${JSON.stringify(dir)};
+    mock.module(at('verify-semantics.mjs'), () => ({contractVerify:()=>({stop(){},done:Promise.resolve({exit:0,output:'',errors:''})}),semanticsSummary:()=>[]}));
+    const real = async p => ({...await import(at(p))});
+    const launch = await real('agent-launch.mjs'), serve = await real('../host/web/serve.mjs'), web = await real('../host/web-js/module.mjs'), server = await real('app-server.mjs');
+    mock.module(at('../host/web/serve.mjs'),()=>({...serve,builtAppMatches:async()=>true,jsTargetBuild:()=>true}));
+    mock.module(at('../host/web-js/module.mjs'),()=>({...web,fresh:()=>true}));
+    mock.module(at('agent-launch.mjs'),()=>({...launch,webChanges:()=>({all:[],app:[]}),driveStore:()=>({base:dir+'/stores',profile:dir+'/stores'}),removeBrowserProfile:async()=>{}}));
+    let wall=Date.parse('2026-11-13T23:59:59Z');
+    if(${scenario === 'epoch now'})Date.now=()=>wall;
+    let used = false, serverItems = [], died = null, restarts = 0;
+    const reset = async()=>{serverItems=[];used=false;died=null;restarts++;writeFileSync(dir+'/restarts.json',JSON.stringify(restarts));};
+    mock.module(at('app-server.mjs'),()=>({...server,appServer:()=>({entry:'server.ts',args:[],url:'http://127.0.0.1:1',port:1,database:false}),answering:async()=>false,
+      startServer:async()=>({fresh:reset,beforeTest:async()=>{if(used)await reset();used=true;},check(){},stop:async()=>{},exited:()=>${scenario === 'signal exit' ? 143 : 'died'},exits:()=>${scenario === 'signal exit' ? "['server.ts exited (signal SIGTERM) during the run']" : "died == null ? [] : ['server.ts exited (code 23) during the run']"},tail:()=>''})}));
+    mock.module(at('evidence.mjs'),()=>({recordRun(){}}));
+    const captures = {};
+    mock.module(at('agent-check.mjs'),()=>({checkOp:async(s,args,{shots})=>{
+      const vp = {w:s.width,h:844}, path=shots?.(vp,'light');
+      if(path){captures[path]=(captures[path]??0)+1;writeFileSync(path,String(captures[path]));writeFileSync(dir+'/captures.json',JSON.stringify(captures));}
+      if(${scenario === 'first screen crash'} && path?.endsWith('390x844-light.png'))died=23;
+      if(${scenario === 'relaunch crash'} && path?.endsWith('web-relaunch.png'))died=23;
+      return {text:'check web · light: no findings (text fits)',check:[{viewport:vp,scheme:'light',findings:[]}]};
+    }}));
+    mock.module(at('agent.mjs'),()=>({open:async(o)=>{
+      const epoch = o.epoch ?? launch.launchFacts({}).epoch;
+      if(${scenario === 'first screen writes'} && o.epoch == null){assert.deepEqual(serverItems,[],'each width opens an empty server');serverItems.push('opened');}
+      const s = {host:'ios',now:0,width:o.size?.[0]??390,items:o.env?.EXACT_AGENT_STORAGE_FRESH ? [...serverItems] : [],ops:0,
+        screenshot:async(path)=>{captures[path]=(captures[path]??0)+1;writeFileSync(path,String(captures[path]));writeFileSync(dir+'/captures.json',JSON.stringify(captures));return{};},
+        clock:async(arg)=>{if(/^\\+\\d+$/.test(arg))s.now+=Number(arg.slice(1));return{};},
+        type:async(id,value)=>{s.items=[value];serverItems=[value];s.ops++;return{};},
+        state:async()=>({mutationRequests:0,resources:{day:Math.floor((epoch+s.now)/86400000),items:s.items},background:{done:s.ops,failed:0}}),
+        tree:async()=>({nodes:[{id:1,type:'Text',props:{text:${scenario === 'resource date' ? "'Unchanged heading'" : "'Day '+Math.floor((epoch+s.now)/86400000)"}}}]}),
+        op:async()=>({clock:s.now,lines:[]}),logs:async()=>({lines:[]}),close:async()=>{},resize:async(w)=>{s.width=w;},prefer:async()=>({})};
+      // Model a saved value lost by the app on relaunch, with a date still shown on the first screen.
+      return s;
+    }}));
+    const driven = await real('agent-test.mjs');
+    mock.module(at('agent-test.mjs'),()=>({...driven,runTests:async(options)=>{
+      if(options.atStep){if(${scenario === 'relaunch crash'})await options.running.fresh();return {passed:0,failed:0,results:[]};}
+      const replay = options.only != null || options.testIndex != null;
+      if(replay && ${scenario === 'epoch now'})wall+=2000;
+      const r = await driven.runTests(options);
+      if(replay){writeFileSync(dir+'/replayed.json',JSON.stringify({file:options.file.split('/').at(-1),index:options.testIndex,results:r.results.map(t=>({index:t.index,skipped:t.skipped}))}));
+        if(${extra})r.results.push({...r.results[0]});}
+      return r;
+    }}));
+  `);
+  try {
+    const r = spawnSync(process.execPath, ['--preload', preload, resolve(import.meta.dir, 'verify.mjs'), 'web', '--app', dir, '--json', '--shots', resolve(dir, 'shots')],
+      {encoding:'utf8',timeout:30000});
+    const verdict = JSON.parse(r.stdout);
+    if(scenario === 'first screen writes')assert.ok(verdict.checks.every(c=>!c.error),r.stdout+r.stderr);
+    if(scenario === 'signal exit')assert.match(verdict.server.died,/exited \(signal SIGTERM\)/);
+    if(['first screen crash','relaunch crash'].includes(scenario)){
+      assert.match(verdict.server.died ?? '',/exited \(code 23\)/, r.stdout+r.stderr);
+      assert.equal(r.status,1,'a server crash fails verify');
+      assert.ok(JSON.parse(readFileSync(resolve(dir,'restarts.json'),'utf8')) >= 3,'later restarts succeed');
+    }
+    if (extra) assert.match(verdict.relaunch.error, /exactly one.*executed result/, r.stdout + r.stderr);
+    else if (duplicate) {
+      assert.equal(verdict.relaunch.error, undefined, r.stdout + r.stderr);
+      assert.deepEqual(JSON.parse(readFileSync(resolve(dir, 'replayed.json'), 'utf8')), {file:'other.test.contract',index:1,results:[{index:1}]});
+    } else if (!['end screenshot','first screen crash'].includes(scenario)) assert.ok(verdict.relaunch.problems?.some(p=>p.includes('lost')), r.stdout + r.stderr);
+    const captures = JSON.parse(readFileSync(resolve(dir, 'captures.json'), 'utf8'));
+    if (authoredShot) {
+      assert.equal(captures[authoredShot],1,'replay must not overwrite an authored screenshot, even if replay fails');
+      assert.equal(readFileSync(resolve(dir,'shots','web-t1-authored.png'),'utf8'),'1');
+      assert.ok(Object.keys(captures).some(p=>p.includes('/replay/')), 'replay writes its own screenshot');
+    }
+    const originals = Object.entries(captures).filter(([p])=>/web-t\d+-/.test(p));
+    assert.equal(originals.length, scenario === 'first screen crash' ? 0 : duplicate ? 3 : 1);
+    for (const [path,count] of originals) {
+      assert.equal(count,1, 'replay must not overwrite '+path);
+      assert.equal(readFileSync(resolve(dir,'shots',path.split('/').at(-1)),'utf8'),'1');
+    }
+  } finally {rmSync(dir,{recursive:true,force:true});}
+}, 30000);
+
+// These exercise native verify orchestration with host I/O substituted; no Windows or iOS device is used.
+test.each(['ios', 'windows'])('verify %s captures a fresh server after replay', (host) => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-verify-capture-')), preload = resolve(dir, 'stub.mjs');
+  writeFileSync(resolve(dir, 'app.contract'), 'component App\n  view\n    text "Test"\n');
+  writeFileSync(resolve(dir, 'app.test.contract'), 'test "saved"\n');
+  writeFileSync(preload, `
+    import {mock} from 'bun:test';
+    import {writeFileSync} from 'node:fs';
+    const at=p=>${JSON.stringify(import.meta.dir)}+'/'+p, dir=${JSON.stringify(dir)}, host=${JSON.stringify(host)};
+    mock.module(at('verify-semantics.mjs'),()=>({contractVerify:()=>({stop(){},done:Promise.resolve({exit:0,output:'',errors:''})}),semanticsSummary:()=>[]}));
+    const real=async p=>({...await import(at(p))});
+    const build=await real('agent-build.mjs'), server=await real('app-server.mjs'), driven=await real('agent-test.mjs');
+    const cp=await import('node:child_process'), spawn=cp.spawn;
+    mock.module('node:child_process',()=>({...cp,spawn:()=>spawn(process.execPath,['-e','console.log("[]")'])}));
+    mock.module(at('agent-build.mjs'),()=>({...build,buildFirst:async()=>0,windowsBuildFirst:async()=>0,windowsBuild:()=>({bin:'unused'})}));
+    let rows=[],used=false,passes=0;
+    const reset=async()=>{rows=[];used=false;};
+    mock.module(at('app-server.mjs'),()=>({...server,appServer:()=>({entry:'server.ts',args:[],url:'http://127.0.0.1:1',port:1,database:false}),answering:async()=>false,
+      startServer:async()=>({fresh:reset,beforeTest:async()=>{if(used)await reset();used=true;},check(){},stop:async()=>{},exits:()=>[],tail:()=>''})}));
+    mock.module(at('agent-test.mjs'),()=>({...driven,runTests:async(o)=>{
+      await o.running.beforeTest(); rows=['test leftover']; passes++;
+      return {passed:1,failed:0,results:[{name:'saved',index:0,store:'kept',failures:[],end:{ops:1,resources:{}}}]};
+    }}));
+    const capture=()=>writeFileSync(dir+'/capture.json',JSON.stringify({rows,passes}));
+    mock.module(at('../host/windows/build.mjs'),()=>({openOnDesktop:async()=>{capture();return {error:'captured'};}}));
+    mock.module(at('agent-check.mjs'),()=>({checkOp:async()=>({text:'check ios · light: no findings (text fits)',check:[{viewport:{w:390,h:844},scheme:'light',findings:[]}]})}));
+    mock.module(at('agent.mjs'),()=>({open:async(o)=>{
+      if(o.touch){capture();throw new Error('captured');}
+      return {host,clock:async()=>({}),state:async()=>({resources:{},background:{done:0,failed:0}}),tree:async()=>({nodes:[]}),
+        op:async()=>({}),logs:async()=>({lines:[]}),layout:async()=>({}),screenshot:async()=>{},close:async()=>{}};
+    }}));
+    mock.module(at('evidence.mjs'),()=>({recordRun(){}}));
+    if(host==='windows')Object.defineProperty(process,'platform',{value:'win32'});
+  `);
+  try {
+    const r = spawnSync(process.execPath, ['--preload', preload, resolve(import.meta.dir, 'verify.mjs'), host, '--app', dir, '--json'], {encoding:'utf8',timeout:30000});
+    assert.ok(existsSync(resolve(dir, 'capture.json')), r.stdout + r.stderr);
+    assert.deepEqual(JSON.parse(readFileSync(resolve(dir, 'capture.json'), 'utf8')), {rows:[],passes:2}, 'capture sees the empty server after the chosen test was replayed');
+  } finally { rmSync(dir, {recursive:true,force:true}); }
+}, 30000);
+
+
+// The tour and server lifecycle run unchanged; only the host, build and server process I/O are substituted.
+test('verify retains an earlier tour server crash after a later tour test succeeds', () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-verify-tour-')), preload = resolve(dir, 'stub.mjs');
+  writeFileSync(resolve(dir, 'app.contract'), 'component App\n  view\n    text "Test"\n');
+  writeFileSync(resolve(dir, 'app.test.contract'), 'test "early"\n  clock data\ntest "late"\n  clock data\n');
+  writeFileSync(preload, `
+    import assert from 'node:assert/strict';
+    import {mock,spyOn} from 'bun:test';
+    import {writeFileSync} from 'node:fs';
+    const at=p=>${JSON.stringify(import.meta.dir)}+'/'+p, dir=${JSON.stringify(dir)};
+    mock.module(at('verify-semantics.mjs'),()=>({contractVerify:()=>({stop(){},done:Promise.resolve({exit:0,output:'',errors:''})}),semanticsSummary:()=>[]}));
+    const real=async p=>({...await import(at(p))});
+    const launch=await real('agent-launch.mjs'), serve=await real('../host/web/serve.mjs'), web=await real('../host/web-js/module.mjs');
+    mock.module(at('../host/web/serve.mjs'),()=>({...serve,builtAppMatches:async()=>true,jsTargetBuild:()=>true}));
+    mock.module(at('../host/web-js/module.mjs'),()=>({...web,fresh:()=>true}));
+    mock.module(at('agent-launch.mjs'),()=>({...launch,webChanges:()=>({all:[],app:[]}),driveStore:()=>({base:dir+'/stores',profile:dir+'/stores'}),removeBrowserProfile:async()=>{}}));
+    const ports=await real('port-lock.mjs');
+    mock.module(at('port-lock.mjs'),()=>({...ports,holderOf:async()=>null,takePort:async()=>()=>{}}));
+    mock.module('node:net',()=>({createServer:()=>({once(){},listen(o,done){done();},close(done){done();}})}));
+    let child=null, end=null, launches=0, touring=false, tours=0;
+    const spawnServer=Bun.spawn;
+    spyOn(Bun,'spawn').mockImplementation((args,o)=>{
+      if(args[1]!=='server.ts')return spawnServer(args,o);
+      launches++;
+      child={pid:65000,exitCode:null,signalCode:null,stderr:new ReadableStream({start(c){c.close();}}),exited:new Promise(done=>{end=done;})};
+      return child;
+    });
+    spyOn(process,'kill').mockImplementation((pid,signal)=>{
+      assert.equal(pid,-65000);child.signalCode=signal;end(143);return true;
+    });
+    const cp=await import('node:child_process'), spawn=cp.spawnSync;
+    mock.module('node:child_process',()=>({...cp,spawnSync:(cmd,args,o)=>cmd==='ps'
+      ? {status:0,stdout:child?.exitCode==null && !child?.signalCode && child ? '65000 65000 S original' : ''} : spawn(cmd,args,o)}));
+    spyOn(globalThis,'fetch').mockImplementation(async()=>{if(!child)throw new Error('not ready');return new Response('ok');});
+    const server=await real('app-server.mjs');
+    mock.module(at('app-server.mjs'),()=>({...server,appServer:()=>({entry:'server.ts',args:[],url:'http://127.0.0.1:1',port:1,database:false})}));
+    mock.module(at('evidence.mjs'),()=>({recordRun(){}}));
+    mock.module(at('agent-check.mjs'),()=>({judge:()=>[],checkOp:async()=>({text:'check web · light: no findings (text fits)',check:[{viewport:{w:390,h:844},scheme:'light',findings:[]}]})}));
+    mock.module(at('agent.mjs'),()=>({open:async()=>{
+      const tour=touring ? ++tours : 0;
+      if(tour===2)writeFileSync(dir+'/later.json',JSON.stringify({launches,alive:child.exitCode==null && !child.signalCode}));
+      return {host:'web',now:0,carrier:{reset:async()=>{}},
+        clock:async()=>{if(tour===1 && child.exitCode==null){child.exitCode=23;end(23);}return{};},
+        state:async()=>({mutationRequests:0,resources:{},background:{done:0,failed:0}}),tree:async()=>({nodes:[]}),
+        op:async()=>({clock:0,nodes:[],lines:[],viewport:{w:390,h:844}}),logs:async()=>({lines:[]}),prefer:async()=>({}),resize:async()=>{},screenshot:async()=>{},close:async()=>{}};
+    }}));
+    const driven=await real('agent-test.mjs');
+    mock.module(at('agent-test.mjs'),()=>({...driven,runTests:async(o)=>{
+      touring=!!o.atStep;
+      const r=await driven.runTests(o);
+      if(touring){assert.deepEqual([r.passed,r.failed],[1,1]);writeFileSync(dir+'/tour.json',JSON.stringify(r));}
+      touring=false;return r;
+    }}));
+  `);
+  try {
+    const r = spawnSync(process.execPath, ['--preload', preload, resolve(import.meta.dir, 'verify.mjs'), 'web', '--app', dir, '--json'], {encoding:'utf8',timeout:30000});
+    assert.ok(existsSync(resolve(dir, 'tour.json')), r.stdout + r.stderr);
+    const verdict = JSON.parse(r.stdout), later = JSON.parse(readFileSync(resolve(dir, 'later.json'), 'utf8'));
+    assert.deepEqual([verdict.tests.passed,verdict.tests.failed],[2,0],r.stdout+r.stderr);
+    assert.equal(later.alive,true,'the later tour test starts on a healthy replacement');
+    assert.match(verdict.server.died ?? '', /server\.ts exited \(code 23\)/, r.stdout + r.stderr);
+    assert.equal(r.status,1,'a crash in any tour test fails verify');
+  } finally {rmSync(dir,{recursive:true,force:true});}
+}, 30000);

@@ -1,7 +1,7 @@
 // A native module's sources and sends on the JS target (LLP 1133.002 D13,
 // §6; LLP 1124 D7, D9), substituted as the runner's `modules.rs` does
-// natively, by what each name's `exact.json` declares: a permission whose
-// state is `prompt` until `prefer permission.<name>` or a ticket sets it;
+// natively, by what each name's `exact.json` declares: a permission's shared
+// state, set by `prefer permission.<name>` or a ticket, and its required permissions;
 // a source's preferred value (`prefer extension`) or its default; a send
 // answered from its `from` source's preferred value, else held under its
 // `ticket` for the agent (`type @t …`). A held request is a promise the
@@ -36,7 +36,8 @@ import { appGrantSet, coversPath } from "./admission.js";
 import { samples, groupOf } from "./samples.js";
 import { wakes, REFUSED } from "./wakes.js";
 import { reach } from "./reach.js";
-import { updates } from "./update.js";
+import { updates, declaredLists } from "./update.js";
+import { permissions } from "./permissions.js";
 import { spans, fillAll } from "./spans.js";
 import { arrivals } from "./arrival.js";
 import { devices } from "./devices.js";
@@ -105,11 +106,8 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
   };
   const wordFits = (ty, v) => ty === "string" ? typeof v === "string" : ty === "number" ? typeof v === "number" : ty === "bool" ? typeof v === "boolean"
     : ty.endsWith("[]") ? Array.isArray(v) && v.every(x => wordFits(ty.slice(0, -2), x)) : true;
-  const isStatus = row => row.sub.permission?.status === declaredOf(row);
-  // A permission no platform asks starts as its declaration says (`initial`, LLP 1133.017 D14).
-  // By target where it differs (`{"android": "prompt", "*": "granted"}`, LLP 1133.037 D17).
-  const initialOf = i => typeof i === "string" ? i : i?.web ?? i?.["*"];
-  const stateOf = name => permission.get(name) ?? initialOf([...byKey.values()].flatMap(permissionsOf).find(p => p.name === name)?.initial) ?? "prompt";
+  const { stateOf, permissionOf, permissionsOf, permissionNamed, statusesOf, statusValue } = permissions(() => byKey.values(), permission);
+  const isStatus = row => statusesOf(row).length > 0;
   const now = () => reportTime(clock.now)[0] + clock.now; // the agent clock's date, as `exactTime` reads it
   const filled = (row, v) => {
     if (errorCode(v)) return v;
@@ -128,7 +126,7 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
   };
   const valueOf = row => {
     if (row.sub.index === "entries") return rc.value(row);
-    if (row.sub.listed) return wk.listed(row.sub.listed);
+    if (row.sub.listed) return wk.listed(row.sub.listed, row);
     let v = preferredOver(row) ?? restricted(row);
     if (row.sub.web) v = { ...(v ?? {}), ...row.sub.web };
     // The browser keeps no presence secrets (LLP 1133.010 D15), whatever the preferred status says.
@@ -138,18 +136,6 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
     }
     return v;
   };
-  // What the permission decides of a call now: its status's answer, a denial or a ticket; null when it allows it.
-  // The permission a call asks: its declared one, or, where the interface declares several and the name's grants
-  // are a line per argument (`permissionBy`), the one of the arguments it was given that settles the call now: a
-  // denied one, else one still to ask, else the first (LLP 1133.008 D6, LLP 1133.009 D3), as the runner's `admit.rs`.
-  const permissionOf = (row, args) => {
-    const by = row.sub.permissionBy;
-    if (!by) return row.sub.permission;
-    const asked = Object.entries(by).filter(([a]) => given(args, a)).map(([, p]) => p);
-    return asked.find(p => stateOf(p.name) === "denied") ?? asked.find(p => stateOf(p.name) === "prompt") ?? asked[0] ?? row.sub.permission;
-  };
-  const permissionsOf = row => [row.sub.permission, ...Object.values(row.sub.permissionBy ?? {})].filter(Boolean);
-  const permissionNamed = (row, name) => permissionsOf(row).find(p => p.name === name);
   // A denied permission may gate only an option (`continues`: Face ID denied still leaves the passcode, D12).
   const denialFails = (permission, args) => typeof permission?.continues !== "string" || args?.[permission.continues] === true;
   const statusOf = (row, permission = row.sub.permission) => {
@@ -166,7 +152,7 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
     if (!p || row.sub.admission === "none") return null;
     const state = stateOf(p.name);
     // A target that makes the module absent keeps its own answer (`unknown`), as the runner's.
-    if (!send && isStatus(row)) return { now: row.sub.targets?.web?.available === false ? valueOf(row) : { ...(valueOf(row) ?? {}), [p.field]: row.sub.web?.[p.field] ?? state } };
+    if (!send && isStatus(row)) return { now: row.sub.targets?.web?.available === false ? valueOf(row) : statusValue(row, valueOf(row)) };
     // A source that reads a value of its own until the permission is granted (`ungranted`), as the runner's.
     if (!send && "ungranted" in row.sub && state !== "granted") return { now: structuredClone(row.sub.ungranted) };
     if (state === "denied" && row.sub.admission !== "request" && denialFails(p, args)) return { now: { error: p.denied } };
@@ -500,8 +486,9 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
           return row.send ? applyEffect(row, args ?? {}) : valueOf(row);
         },
         listed: (state, seen) => {
-          const tell = () => seen((lists.get(state) ?? []).map(e => ({ ref: e.ref, fields: { ...e.fields } })));
-          watchers.set(state, [...(watchers.get(state) ?? []), tell]);
+          const name = lists.state({ key: `${extension}.` }, state);
+          const tell = () => seen((lists.get(name) ?? []).map(e => ({ ref: e.ref, fields: { ...e.fields } })));
+          watchers.set(name, [...(watchers.get(name) ?? []), tell]);
           tell();
         },
         // A Media Session action (W3C Media Session, `setActionHandler`): the browser calls it only for the person's
@@ -635,11 +622,11 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
     return answered.then(json => { handled(row, args, json); polled(row, args, json); return overlaid(row, json); });
   });
   // ---- a send that answers nothing, and its declared substitute (LLP 1133.004 D5, §7)
-  const lists = new Map(), setValues = new Map(), effects = [];
+  const lists = declaredLists({ rows: () => byKey.values() }), setValues = new Map(), effects = [];
   const up = updates({ lists, rows: () => byKey.values(), say, now, changed: state => listedChanged(state),
     raise: (row, event, tap, fields) => raise(`${extensionOf(row)}.${event}`, entryArgs(tap, fields), "app") });
   const rc = reach({ say, announce: keys => reask(keys), preferred: key => preferred.get(key) });
-  const listOf = row => [...byKey.values()].filter(r => extensionOf(r) === extensionOf(row) && r.sub.list).map(r => r.sub.list.state);
+  const listOf = row => [...byKey.values()].filter(r => extensionOf(r) === extensionOf(row) && r.sub.list).map(r => lists.state(r, r.sub.list.state));
   const applyEffect = (row, args) => {
     if (ar.stops(row)) return null;
     const reached = rc.effect(row, args, [...byKey.values()]);
@@ -648,16 +635,17 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
     if (sub.list) {
       // A registration's kind keys it beside its key (LLP 1133.017 §10).
       const fields = { ...Object.fromEntries(Object.keys(row.options ?? {}).map(k => [k, null])), ...args, ...(sub.list.kind ? { kind: sub.list.kind } : {}) };
-      const refused = up.listing(sub.list, fields);
+      const refused = up.listing(sub.list, fields, row);
       if (refused) { say(`${name}: refused: ${refused}`); return { error: refused }; }
-      const entries = lists.get(sub.list.state) ?? [], value = args[sub.list.key] ?? null, ref = nextTicket(), kind = sub.list.kind;
+      const state = lists.state(row, sub.list.state);
+      const entries = lists.get(state) ?? [], value = args[sub.list.key] ?? null, ref = nextTicket(), kind = sub.list.kind;
       const same = e => e.fields[sub.list.key] === value && e.fields.kind === kind, replaced = value == null ? null : entries.find(same)?.ref;
       const kept = value == null ? entries : entries.filter(e => !same(e));
       kept.push({ ref, row, fields });
-      lists.set(sub.list.state, kept);
+      lists.set(state, kept);
       say(`${name}: listed${typeof value === "string" ? ` (${value})` : ""} @${ref}`);
       if (kind) wk.registered(ref, replaced);
-      listedChanged(sub.list.state);
+      listedChanged(state);
     }
     // `"unlist": key`, or `{key, kind}` for the entries of one kind.
     const unlist = typeof sub.unlist === "object" ? sub.unlist?.key : sub.unlist, unkind = sub.unlist?.kind;
@@ -665,7 +653,7 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
       for (const state of listOf(row)) { lists.set(state, (lists.get(state) ?? []).filter(e => e.fields[unlist] !== args[unlist] || (unkind != null && e.fields.kind !== unkind))); listedChanged(state); }
       say(`${name}: unlisted`);
     }
-    if (sub.update) return up.update(name, sub.update, args);
+    if (sub.update) return up.update(name, sub.update, args, row);
     if (sub.set) {
       const from = sub.set.from, given = from ? args[from] : undefined;
       const value = !from ? (sub.set.value ?? null) : given == null ? (sub.set.absent ?? null) : given === 0 ? (sub.set.zero ?? null) : given;
@@ -675,12 +663,12 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
     return null;
   };
   // The declaration's `checks` every route holds a send to, as the runner's (LLP 1133.030 D2): exactly `one` of some
-  // options, options at least a `min`, options `nonEmpty`; each refused with its `error`. An instant option `after`
-  // now is the runner's alone: this clock is not the epoch's.
+  // options, an instant option `after` now, options at least a `min`, options `nonEmpty`; each refused with its `error`.
   const checked = (row, args) => {
     const given = o => args?.[o] != null;
     for (const c of row.sub.checks ?? []) {
       const fails = Array.isArray(c.one) ? c.one.filter(given).length !== 1
+        : typeof c.after === "string" ? typeof args?.[c.after] === "number" && args[c.after] <= now()
         : c.min ? Object.entries(c.min).some(([o, m]) => typeof args?.[o] === "number" && args[o] < m)
         : Array.isArray(c.nonEmpty) ? c.nonEmpty.some(o => typeof args?.[o] !== "string" || args[o] === "")
         : false;
@@ -710,12 +698,14 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
     sp.resolveOf(row, args);
     const refused = sp.refusal(row, args);
     if (refused) { say(`${name}: refused: ${refused.error}`); return Promise.resolve(refused); }
-    const p = row.sub.permission, state = p && row.sub.admission !== "none" ? stateOf(p.name) : null;
+    const update = row.sub.update && up.refusal(row.sub.update, args, row);
+    if (update) { say(`${name}: refused: ${update.error}`); return Promise.resolve(update); }
+    const p = permissionOf(row, args), state = p && row.sub.admission !== "none" ? stateOf(p.name) : null;
     if (state === "denied") { say(`${name}: refused: ${p.denied}`); return Promise.resolve({ error: p.denied }); }
     if (state === "prompt" && asks(row, true)) {
       // Only a person answers a prompt (LLP 1133.002 D12).
       if (from !== "app") { say(`${row.key}: refused, person-required (${from} origin)`); return Promise.resolve({ error: p.denied }); }
-      return new Promise(resolve => { const h = { ticket: nextTicket(), row, args, resolve }; effects.push(h); say(`device permission ${h.ticket} held (agent)`); });
+      return new Promise(resolve => { const h = { ticket: nextTicket(), row, args, resolve, permission: p.name }; effects.push(h); say(`device permission ${h.ticket} held (agent)`); });
     }
     const device = dv.effect(row, args);
     if (device !== undefined) { if (errorCode(device)) say(`${name}: refused: ${errorCode(device)}`); return Promise.resolve(device); }
@@ -724,20 +714,28 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
     return Promise.resolve(done);
   };
   const settleEffects = (name, state) => {
-    for (const h of effects.filter(h => h.row.sub.permission?.name === name)) {
-      if (state === "prompt") continue;
+    if (state === "prompt") return;
+    for (const h of effects.filter(h => h.permission === name)) {
       effects.splice(effects.indexOf(h), 1);
-      if (state === "granted") h.resolve(applyEffect(h.row, h.args));
-      else { say(`${declaredOf(h.row)}: refused: ${h.row.sub.permission.denied}`); h.resolve({ error: h.row.sub.permission.denied }); }
+      const next = permissionOf(h.row, h.args), nextState = next && stateOf(next.name);
+      if (state === "granted" && nextState === "prompt" && next.name !== name) {
+        h.permission = next.name; h.ticket = nextTicket(); effects.push(h);
+        say(`device permission ${h.ticket} held (agent)`);
+      } else if (state === "granted" && nextState !== "denied") h.resolve(applyEffect(h.row, h.args));
+      else {
+        const p = state === "granted" ? next : permissionNamed(h.row, name);
+        say(`${declaredOf(h.row)}: refused: ${p.denied}`); h.resolve({ error: p.denied });
+      }
     }
   };
   for (const row of byKey.values()) if (row.send && row.sub.effect) Hosts[row.source] = Object.assign((from, record) => { effect(row, object(record, row.options) ?? {}, from); }, { origin: true });
-  const delivered = e => { const at = e.row.sub.list.at, t = at ? e.fields[at] : null; return t == null || t <= now(); };
+  if ([...byKey.values()].some(r => r.sub.list?.due?.into)) clock.listedDue = ms => up.due(reportTime(ms)[0] + ms);
+  const delivered = e => { if (e.row.sub.list.due?.into) return e.fields.delivered !== false; const at = e.row.sub.list.at, t = at ? e.fields[at] : null; return t == null || t <= now(); };
   // A source declared `"listed"` answers from a list: asked again when it changes.
   const watchers = new Map();
   const listedChanged = state => {
     for (const tell of watchers.get(state) ?? []) tell();
-    const keys = [...byKey.values()].filter(r => r.sub.listed?.state === state).map(r => r.key);
+    const keys = [...byKey.values()].filter(r => r.sub.listed && lists.state(r, r.sub.listed.state) === state).map(r => r.key);
     if (keys.length) reask(keys);
   };
   wk = wakes({ events, say, value, lists, changed: listedChanged, toEpoch: ms => reportTime(ms)[0] + ms,
@@ -1018,7 +1016,7 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
     if (state === "granted") allow(name);
     for (const h of [...held]) {
       if (h.permission !== name) continue;
-      const p = permissionNamed(h.row, h.permission), fails = denialFails(p, h.args);
+      const p = permissionNamed(h.row, h.permission), fails = denialFails(p, h.args) && !(h.send && h.row.sub.deniedAnswers);
       if (state === "denied" && fails) { release(h, { error: p.denied }); continue; }
       if ((state !== "granted" && !(state === "denied" && !fails)) || h.waits !== "permission") continue;
       // A call that needs another permission too asks it next (`getUserMedia(audio=true, video=true)`).
@@ -1110,7 +1108,7 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
     declared() {
       const out = {};
       for (const row of byKey.values()) {
-        if (row.sub.list) out[row.sub.list.state] = (lists.get(row.sub.list.state) ?? []).map(e => ({ ...e.fields, delivered: delivered(e), ref: e.ref, ...wk.fields(e) }));
+        if (row.sub.list) out[row.sub.list.state] = (lists.get(lists.state(row, row.sub.list.state)) ?? []).map(e => ({ ...e.fields, delivered: delivered(e), ref: e.ref, ...wk.fields(e) }));
         if (row.sub.set) out[row.sub.set.state] = setValues.get(`${extensionOf(row)}/${row.sub.set.state}`) ?? null;
       }
       return out;
@@ -1158,7 +1156,7 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
         : h.waits === "check" ? { request: declaredOf(h.row), origin: "app" }
         // A sheet shows what the call asked (the properties, the event).
         : h.waits === "choose" ? { request: declaredOf(h.row), origin: "app", options: h.args ?? {} } : h.waits === "device" ? dv.ticket(h).args : { request: declaredOf(h.row) } } })),
-      ...effects.map(h => ({ name: h.row.key, ticket: h.ticket, device: { capability: "permission", args: { capability: h.row.sub.permission.name, request: declaredOf(h.row), origin: "app" } } }))],
+      ...effects.map(h => ({ name: h.row.key, ticket: h.ticket, device: { capability: "permission", args: { capability: h.permission, request: declaredOf(h.row), origin: "app" } } }))],
     // `tap @t allow|deny|cancel`, `type @t <value>`, `tap @ref` on a listed entry; undefined for a ticket that is not a module's.
     answer(req) {
       const entry = req.op === "tap" && [...lists.values()].flat().find(e => e.ref === req.ticket);
@@ -1167,17 +1165,17 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
         // A registration's tap is a wake, and leaves it listed; a call's takes the person's choice and leaves it listed.
         if (entry.row.sub.list.tap?.as === "wake") return wk.tap(entry);
         if (req.choice != null || up.chooses(entry)) return req.choice == null ? { error: `@${req.ticket} takes a choice: tap @${req.ticket} <choice>` } : up.choose(entry, req.choice);
-        const state = entry.row.sub.list.state;
+        const state = lists.state(entry.row, entry.row.sub.list.state);
         lists.set(state, lists.get(state).filter(e => e !== entry));
-        say(`${state} @${req.ticket}: tapped`);
+        say(`${entry.row.sub.list.state} @${req.ticket}: tapped`);
         return activate(entry.row, entry.fields, req.ticket);
       }
       const e = effects.find(x => x.ticket === req.ticket);
       if (e) {
         if (req.op !== "tap" || !["allow", "deny", "cancel"].includes(req.choice)) return { error: `@${e.ticket} (permission): tap takes cancel | allow | deny` };
         say(`device permission ${e.ticket} ${req.choice === "cancel" ? "cancelled" : `answered: ${req.choice}`}`);
-        if (req.choice === "cancel") { effects.splice(effects.indexOf(e), 1); say(`${declaredOf(e.row)}: refused: ${e.row.sub.permission.denied}`); e.resolve({ error: e.row.sub.permission.denied }); }
-        else setPermission(e.row.sub.permission.name, req.choice === "allow" ? "granted" : "denied");
+        if (req.choice === "cancel") { effects.splice(effects.indexOf(e), 1); say(`${declaredOf(e.row)}: refused: ${permissionNamed(e.row, e.permission).denied}`); e.resolve({ error: permissionNamed(e.row, e.permission).denied }); }
+        else setPermission(e.permission, req.choice === "allow" ? "granted" : "denied");
         return { ticket: req.ticket, capability: "permission", answered: req.choice, delivery: "substituted" };
       }
       const h = held.find(x => x.ticket === req.ticket);

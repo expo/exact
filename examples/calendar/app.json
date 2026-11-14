@@ -5,8 +5,9 @@
   "id": "com.exact.calendar",
   "start_url": "/",
   "display": "standalone",
-  "theme_color": "#F7F7FA",
-  "background_color": "#F7F7FA",
+  "theme_color": "#ffffff",
+  "background_color": "#ffffff",
+  "color_scheme_dark": { "theme_color": "#000000", "background_color": "#000000" },
   "icons": [
     {
       "src": "assets/icon.png",

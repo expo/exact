@@ -186,18 +186,17 @@ pub(in crate::presenter) fn paragraph(
     scale: f32,
     width: Option<f32>,
 ) -> Rc<Paragraph> {
-    let style = StyleProps {
-        font_size: size * scale,
-        font_weight: weight,
-        line_height: exact_kernel::LineHeight::Length(line * scale),
-        letter_spacing: tracking * scale,
-        white_space: match width {
+    let style = StyleProps::default().with_rows(|rows| {
+        rows.font_size = size * scale;
+        rows.font_weight = weight;
+        rows.line_height = exact_kernel::LineHeight::Length(line * scale);
+        rows.letter_spacing = tracking * scale;
+        rows.white_space = match width {
             Some(_) => WhiteSpace::Normal,
             None => WhiteSpace::Nowrap,
-        },
-        text_align: TextAlign::Left,
-        ..Default::default()
-    };
+        };
+        rows.text_align = TextAlign::Left;
+    });
     engine.paragraph(&crate::paint::text_spec(&style, text), width)
 }
 

@@ -79,6 +79,7 @@ component Spark
   state likes = 0
   // The profile a like matched, or -1.
   state matched = -1
+  state matchReturn = "btn-like"
 
   derive count = profiles.length
   derive cardWidth = min(viewport.width - 24, 420)
@@ -116,12 +117,15 @@ component Spark
         stack = stack * 4 + decision
         likes = likes + (decision >= 2 ? 1 : 0)
         matched = (decision >= 2 and topLikesYou) ? index : -1
+        matchReturn = decision == 3 ? "btn-super" : "btn-like"
         flungY = y
         flungPhoto = photo
         photo = 0
         index = index + 1
         x = 0
         y = 0
+        if decision >= 2 and topLikesYou
+          showModal("match-dialog")
 
   // The last decision, taken back: its card, parked off-screen, becomes the
   // top again, and its transition brings it back in.
@@ -148,6 +152,7 @@ component Spark
 
   action keepSwiping
     matched = -1
+    focus(matchReturn)
 
   action nextPhoto(total: number)
     photo = min(photo + 1, total - 1)
@@ -292,7 +297,7 @@ component RoundButton
     press: action
   view
     // The shadow stays literal artwork in both schemes.
-    button testId=testId aria-label=label press=press disabled=off -exact-press-scale=0.9 width=size height=size flex-shrink=0 border-radius=999 border-width=0 padding=0 display="flex" align-items="center" justify-content="center" background-color="-exact-secondary-grouped-background" box-shadow="0 6px 18px rgba(20, 24, 31, 0.12)" opacity=(off ? 0.45 : 1) transition="opacity 200ms ease-out"
+    button id=testId testId=testId aria-label=label press=press disabled=off -exact-press-scale=0.9 width=size height=size flex-shrink=0 border-radius=999 border-width=0 padding=0 display="flex" align-items="center" justify-content="center" background-color="-exact-secondary-grouped-background" box-shadow="0 6px 18px rgba(20, 24, 31, 0.12)" opacity=(off ? 0.45 : 1) transition="opacity 200ms ease-out"
       svg width=glyph height=glyph viewBox="0 0 24 24"
         path d=path fill=color
 
@@ -322,11 +327,11 @@ component MatchOverlay
   view
     // Paint the dark brand artwork as soon as its light status-bar ink is
     // selected. Only the contents enter with a delay.
-    column testId="match-overlay" color-scheme="dark" status-bar-style="auto" role="dialog" aria-label="It's a match" position="absolute" top=0 left=0 right=0 bottom=0 align-items="center" justify-content="center" gap=22 padding=32 background-image="linear-gradient(160deg, rgba(192, 23, 90, 0.94), rgba(183, 50, 66, 0.94) 55%, rgba(166, 74, 36, 0.94))"
+    dialog id="match-dialog" cancel=keepSwiping testId="match-overlay" color-scheme="dark" status-bar-style="auto" aria-label="It's a match" position="absolute" top=0 left=0 right=0 bottom=0 width="100%" height="100%" max-width="none" max-height="none" margin=0 box-sizing="border-box" border-width=0 display="flex" flex-direction="column" align-items="center" justify-content="center" gap=22 padding=32 background-image="linear-gradient(160deg, rgba(192, 23, 90, 0.94), rgba(183, 50, 66, 0.94) 55%, rgba(166, 74, 36, 0.94))"
       column align-items="center" gap=22 animation="pop 420ms cubic-bezier(.2, .9, .3, 1.2) 320ms both"
         text "It's a match!" testId="match-title" font-size=44 font-weight=900 font-style="italic" letter-spacing=-1 color="-exact-label" text-align="center"
         text `You and ${p.name} like each other.` font-size=17 color="-exact-label" text-align="center"
         // The portrait shadow stays literal artwork in both schemes.
         image (match first(p.photos) { case some(u) => u, case none => "" }) aria-label=`Photo of ${p.name}` width=168 height=168 border-radius=999 object-fit="cover" border-width=5 border-style="solid" border-color="-exact-label" box-shadow="0 12px 30px rgba(0, 0, 0, 0.25)" testId="match-photo"
-        button testId="keep-swiping" press=keepSwiping -exact-press-scale=0.96 padding-left=36 padding-right=36 padding-top=14 padding-bottom=14 border-radius=999 border-width=2 border-style="solid" border-color="-exact-label" background-color="-exact-fill"
+        button autofocus=true testId="keep-swiping" press=keepSwiping -exact-press-scale=0.96 padding-left=36 padding-right=36 padding-top=14 padding-bottom=14 border-radius=999 border-width=2 border-style="solid" border-color="-exact-label" background-color="-exact-fill"
           text "Keep swiping" font-size=17 font-weight=700 color="-exact-label"

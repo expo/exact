@@ -855,10 +855,12 @@ else {
       check(box(await f.layout(), 'rows').sy === 0, 'the rows did not return to the top after the contact');
     }
     await f.tap('row-1', { wheel: [0, 100] });
+    check((await f.clock('settle')).settled === true, 'the wheel scroll settled');
     l = await f.layout();
     check(box(l, 'rows').sy === 100, `the scroll node took a wheel of 100: scrolled ${box(l, 'rows').sy}`);
     check(box(l, 'root').y === 0, 'the page moved for a wheel the scroll node consumed');
     for (let i = 0; i < 12; i++) await f.tap('rows', { wheel: [0, 400] });
+    check((await f.clock('settle')).settled === true, 'the chained scroll settled');
     l = await f.layout();
     const limit = box(l, 'rows').sy;
     // 652 is a parity number: the fixture's rows under each host's text
@@ -1188,6 +1190,9 @@ if (deckFixture) {
       check(st.slots.note === 'hi' && (host === 'linux' || st.slots.focused === true), `typing focused the field and set it: ${JSON.stringify(st.slots)}`);
       let kb = 0;
       for (let i = 0; i < 40; i++) { l = await f.layout(); kb = l.env['keyboard-inset-height']; if (host !== 'ios' || kb > 0) break; await sleep(50); }
+      check((await f.clock('settle')).settled === true, 'the keyboard reveal settled');
+      l = await f.layout();
+      kb = l.env['keyboard-inset-height'];
       const note = box(l, 'note');
       check(l.viewport.h === viewport0.h && box(l, 'root').h === rootBox.h, `the layout viewport does not change for a keyboard: ${JSON.stringify(l.viewport)}, root ${JSON.stringify(box(l, 'root'))}`);
       if (host === 'ios') {
@@ -1224,6 +1229,8 @@ if (deckFixture) {
       st = await f.state();
       check(st.slots.focused === false, `the dismiss button took the focus: ${JSON.stringify(st.slots)}`);
       for (let i = 0; i < 40; i++) { l = await f.layout(); if (l.env['keyboard-inset-height'] === 0) break; await sleep(50); }
+      check((await f.clock('settle')).settled === true, 'the keyboard dismissal settled');
+      l = await f.layout();
       check(l.env['keyboard-inset-height'] === 0 && box(l, 'note').y === noteBefore.y, `after the keyboard went the field is back: keyboard ${l.env['keyboard-inset-height']}, the field at ${box(l, 'note').y} (was ${noteBefore.y})`);
     } catch (error) {
       failures.push(`the insets fixture stopped: ${error.message}`);

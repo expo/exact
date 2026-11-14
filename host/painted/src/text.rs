@@ -30,6 +30,8 @@ mod flow;
 #[cfg(test)]
 mod flow_tests;
 mod font_cache;
+#[cfg(test)]
+mod font_stack_tests;
 mod fonts;
 mod lines;
 mod shaping;
@@ -54,7 +56,7 @@ use crate::image::Assets;
 use exact_kernel::{
     AxisOffer, ParagraphStamp, TextAlign, TextMeasureRequest, TextMeasurer, TextMetrics,
 };
-use exact_plan::{Plan, StackMemberKind, StacksId};
+use exact_plan::{Plan, StackMemberKind};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
@@ -302,7 +304,7 @@ pub struct Paragraph {
     /// The width to break again for `record`; `None` when it is always kept
     /// (flowed, clamped, ellipsized and adopted widths).
     remake: Option<Option<f32>>,
-    flow: Option<flow::FlowLayout>,
+    flow: Option<Arc<flow::FlowLayout>>,
     #[cfg(test)]
     layout_lifetime: Arc<()>,
     /// Points, rounded up.
@@ -559,7 +561,7 @@ pub(crate) fn canvas_font_system(
     plan: &Plan,
     assets: &Assets,
 ) -> (parley::FontContext, Vec<(String, FamilyChoice)>) {
-    let c = catalog::Catalog::for_assets(plan, assets);
+    let mut c = catalog::Catalog::for_assets(plan, assets);
     let mut names: Vec<(String, FamilyChoice)> = [
         ("sans-serif", FamilyChoice::SansSerif),
         ("system-ui", FamilyChoice::SansSerif),
@@ -574,11 +576,18 @@ pub(crate) fn canvas_font_system(
     .map(|(n, f)| (n.to_string(), f))
     .collect();
     for (i, stack) in plan.stacks.iter().enumerate() {
-        let member = plan.stack_member(stack.members.iter().next().expect("validated stack"));
-        if let (StackMemberKind::Family, Some(family)) = (member.kind, member.family) {
-            if let Some(choice) = c.families.get(i) {
-                let name = plan.str(plan.familie(family).name).to_string();
-                names.push((name, choice.clone()));
+        for member in stack.members.iter().map(|id| plan.stack_member(id)) {
+            if let (StackMemberKind::Family, Some(family)) = (member.kind, member.family) {
+                let declared = plan.familie(family);
+                let name = plan.str(declared.name);
+                let alias = if declared.faces.len == 0 {
+                    name.to_string()
+                } else {
+                    catalog::declared_alias(i, family)
+                };
+                if c.fonts.collection.family_id(&alias).is_some() {
+                    names.push((name.into(), FamilyChoice::Declared(alias)));
+                }
             }
         }
     }
@@ -1391,11 +1400,10 @@ mod tests {
     #[test]
     fn installed_normal_monospace_is_used_for_normal_code() {
         let mut engine = TextEngine::new();
-        let style = exact_kernel::StyleProps {
-            font_family: 5,
-            font_size: 16.0,
-            ..exact_kernel::StyleProps::default()
-        };
+        let style = exact_kernel::StyleProps::default().with_rows(|rows| {
+            rows.font_family = 5;
+            rows.font_size = 16.0;
+        });
         let spec = crate::paint::text_spec(&style, "let section = 0;");
         let paragraph = engine.paragraph(&spec, Some(300.0));
         let Some(glyph) = paragraph

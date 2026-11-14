@@ -726,6 +726,9 @@ test.each([false, true])('ordinary buildBake with split directories=%s streams p
     diagnostics(built.stderr);
     const receipt = JSON.parse(built.stdout);
     assert.ok(receipt.products.some(p=>basename(p.path) === `plain-linux${process.platform === 'win32' ? '.exe' : ''}`));
+    assert.ok(receipt.binary.sourceInputs.files.some(file => file.root === 'app' && file.path === 'linux/src/main.rs'));
+    assert.equal(JSON.stringify(receipt.binary.sourceInputs).includes(dir), false);
+    assert.deepEqual(receipt.binary.sourceInputs.metadata, receipt.binary.metadata);
     assert.ok(existsSync(resolve(dir,'Cargo.lock')));
     const warm = await bake();
     assert.equal(warm.code, 0, warm.stderr);

@@ -679,6 +679,11 @@ impl<D: DataSource> Host<D> {
         node: &NodeRef<'_>,
     ) -> exact_kernel::SortedMap<&'static str, String> {
         let mut props = props_for(node);
+        if self.native_mode() && self.runner.kernel().is_top_layer(node.id) {
+            if let Some(parent) = node.parent.filter(|p| self.native_protected_id(*p)) {
+                props.insert("popoverParent", parent.to_string());
+            }
+        }
         if let Some(line) = super::layout::separator::json(self.runner.kernel(), node.id) {
             props.insert(super::layout::separator::PROP, line);
         }
@@ -779,6 +784,9 @@ pub(super) fn props_for(node: &NodeRef<'_>) -> exact_kernel::SortedMap<&'static 
                 if even_odd {
                     out.insert("symbolFillRule", "evenodd".into());
                 }
+            }
+            if let Some(svg) = crate::icon_path::asset(role) {
+                out.insert("symbolAsset", svg.into());
             }
             // Untinted, it draws in its `color` (LLP 1121 stage 9 B).
             if node.symbol_color_said() {

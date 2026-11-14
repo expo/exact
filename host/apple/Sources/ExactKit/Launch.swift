@@ -165,7 +165,24 @@ public final class ExactLaunch: NSObject {
     /// What activation spent, seconds: the app's Swift module load, each
     /// `dataReady` call (the last one runs the data module's start), how
     /// long and how often it said pending, and applying its first batch.
-    private var data: (module: Double, waited: Double, polls: Int, ready: Double, apply: Double, first: Double?) = (0, 0, 0, 0, 0, nil)
+    /// The marks, as `CACurrentMediaTime`: activation's start, the module's
+    /// evaluation on the owner when the draw posted it (LLP 1027.008 D3),
+    /// and the end of the `dataReady` that activated, by which its requests
+    /// are with the executor.
+    private var data: (module: Double, waited: Double, polls: Int, ready: Double, apply: Double, first: Double?,
+                       evaluation: (from: Double, to: Double)?, asked: Double?) = (0, 0, 0, 0, 0, nil, nil, nil)
+
+    /// The draw posted the module's evaluation to the owner: activation starts now.
+    func evaluating(_ session: ExactSession) {
+        guard session === launchSession, ttiOutcome == nil else { return }
+        if data.first == nil { data.first = CACurrentMediaTime() }
+        scheduleEvaluate()
+    }
+
+    func evaluated(_ session: ExactSession, from: Double, to: Double) {
+        guard session === launchSession, ttiOutcome == nil, data.evaluation == nil else { return }
+        data.evaluation = (from, to)
+    }
 
     func modulePrepared(_ session: ExactSession, seconds: Double) {
         guard session === launchSession, ttiOutcome == nil else { return }
@@ -183,6 +200,7 @@ public final class ExactLaunch: NSObject {
         } else {
             data.ready = ready
             data.waited = now - ready - data.module - (data.first ?? now)
+            data.asked = now
         }
     }
 
@@ -300,9 +318,13 @@ public final class ExactLaunch: NSObject {
     }
 
     /// The launch session's outstanding work, from the runner and the host.
-    /// Empty when the screen can be used.
+    /// Empty when the screen can be used. While the data source is prepared
+    /// on the owner, the ledger's read would wait there for the module's
+    /// evaluation (LLP 1027.008 D2), and only activation is outstanding.
     private func outstandingNow() -> [String]? {
-        guard let session = launchSession, let ledger = Self.ledger(session) else { return nil }
+        guard let session = launchSession else { return nil }
+        if session.dataPreparing { return ["activation"] }
+        guard let ledger = Self.ledger(session) else { return nil }
         if ledger.poisoned { finish("logic_failed"); return nil }
         failedResources = ledger.failed
         return ledger.items + (activation != "ready" ? ["activation"] : [])
@@ -485,8 +507,14 @@ public final class ExactLaunch: NSObject {
             // From the first commit to the first node's draw receipt, which
             // starts activation (the render server's first draw).
             let receipt = marks[.commit].flatMap { c in data.first.map { ms(max(0, $0 - c)) } }
-            out["data"] = ["appModule": ms(data.module), "waited": ms(max(0, data.waited)), "polls": data.polls,
-                           "ready": ms(data.ready), "apply": ms(data.apply), "receipt": receipt as Any]
+            var report: [String: Any] = ["appModule": ms(data.module), "waited": ms(max(0, data.waited)), "polls": data.polls,
+                                         "ready": ms(data.ready), "apply": ms(data.apply), "receipt": receipt as Any]
+            // After activation's start: the evaluation's start and end, and the asks.
+            if let first = data.first {
+                if let (from, to) = data.evaluation { report["evaluation"] = [ms(from - first), ms(to - first)] }
+                if let asked = data.asked { report["asked"] = ms(asked - first) }
+            }
+            out["data"] = report
         }
         if let p = marks[.process], !spans.isEmpty {
             let ms = { (t: Double) in ((t - p) * 1000 * 10).rounded() / 10 }

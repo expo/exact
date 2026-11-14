@@ -180,8 +180,9 @@ export function logged(command, args, log, { cwd, env, append = false, say = nul
   });
 }
 /** host/apple/build.mjs with `args`, its output into `log`; its exit code and output. */
+// The bake's warnings whole (`bakeWarnings`): the drive says them in one line itself and lists each in its file.
 const appleBuild = (args, log, say, app) => logged(process.execPath, [resolve(ROOT, 'host/apple/build.mjs'), ...args], log,
-  { say, env: { ...process.env, ...(app.outside ? { EXACT_APP_DIR: app.dir } : {}) } });
+  { say, env: { ...process.env, EXACT_WARNINGS_WHOLE: '1', ...(app.outside ? { EXACT_APP_DIR: app.dir } : {}) } });
 
 // ---------------------------------------------------------------- a plan-only edit (LLP 1116.003)
 

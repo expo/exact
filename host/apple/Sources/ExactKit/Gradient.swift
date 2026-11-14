@@ -29,6 +29,10 @@ struct Gradient {
     }
 
     private let css: String?
+    /// The dark scheme's `css` where it interpolates otherwise.
+    private let darkCss: String?
+    /// The view's tint, light then dark: extended sRGB, unclipped, and alpha 0–1.
+    private let tint: [[Float]]?
     private let resolvedPlacement: Placement?
     let shape: Shape
     private let light: [CGFloat]
@@ -39,9 +43,13 @@ struct Gradient {
     private let darkLinear: Bool
     private func linear(dark: Bool) -> Bool { dark && self.dark != nil ? darkLinear : lightLinear }
 
-    init?(_ value: BatchValue?) {
+    init?(_ value: BatchValue?, tint: PlatformColor? = nil) {
         guard case .object(let o)? = value else { return nil }
-        css = o["css"]?.string
+        self.tint = value?.namesTint == true ? SystemColor.tintPair(tint ?? SystemColor.appTint, extended: true)?.map { side in
+            side.map { Float($0 / 255) }
+        } : nil
+        css = o["tint"]?.string ?? o["css"]?.string
+        darkCss = o["tintDark"]?.string
         if let css {
             self.light = []; dark = nil; lightLinear = false; darkLinear = false
             shape = .angle(180); resolvedPlacement = nil
@@ -53,6 +61,8 @@ struct Gradient {
             resolvedPlacement = .axial(CGPoint(x: p[0], y: p[1]), CGPoint(x: p[2], y: p[3]))
         } else if let p = o["ellipse"]?.numbers, p.count == 4 {
             resolvedPlacement = .radial(CGPoint(x: p[0], y: p[1]), CGSize(width: p[2], height: p[3]))
+        } else if let p = o["arc"]?.numbers, p.count == 3 {
+            resolvedPlacement = .conic(CGPoint(x: p[0], y: p[1]), CGFloat(p[2]))
         } else { resolvedPlacement = nil }
         if let deg = o["linear"]?.number {
             shape = .angle(CGFloat(deg))
@@ -73,25 +83,29 @@ struct Gradient {
 
     /// Resolve in the kernel after the presenter knows the gradient box.
     private func resolved(in box: CGRect, dark: Bool) -> Gradient? {
-        guard let css else { return nil }
+        guard let css = dark ? darkCss ?? css : css else { return nil }
         return Owner.shared.sync {
             let input = Array(css.utf8), w = Float(box.width), h = Float(box.height)
-            let n = exact_gradient(input, input.count, w, h, dark ? 1 : 0, nil, 0)
-            guard n > 0 else { return nil }
-            var bytes = [UInt8](repeating: 0, count: n)
-            _ = exact_gradient(input, input.count, w, h, dark ? 1 : 0, &bytes, n)
-            return bytes.withUnsafeBufferPointer {
-                var reader = BatchReader(bytes: $0)
-                return (try? reader.value()).flatMap { Gradient($0) }
+            let color = tint?[dark ? 1 : 0] ?? []
+            return color.withUnsafeBufferPointer { c in
+                let tint = color.isEmpty ? nil : c.baseAddress
+                let n = exact_gradient(input, input.count, w, h, dark ? 1 : 0, tint, nil, 0)
+                guard n > 0 else { return nil }
+                var bytes = [UInt8](repeating: 0, count: n)
+                _ = exact_gradient(input, input.count, w, h, dark ? 1 : 0, tint, &bytes, n)
+                return bytes.withUnsafeBufferPointer {
+                    var reader = BatchReader(bytes: $0)
+                    return (try? reader.value()).flatMap { Gradient($0) }
+                }
             }
         }
     }
 
     /// A `background-image`'s layers (LLP 1077 D5): one gradient's object,
     /// or an array of them, the first on top.
-    static func layers(_ value: BatchValue?) -> [Gradient] {
-        if let list = value?.array { return list.compactMap { Gradient($0) } }
-        return Gradient(value).map { [$0] } ?? []
+    static func layers(_ value: BatchValue?, tint: PlatformColor? = nil) -> [Gradient] {
+        if let list = value?.array { return list.compactMap { Gradient($0, tint: tint) } }
+        return Gradient(value, tint: tint).map { [$0] } ?? []
     }
 
     /// The gradient's alpha as pixels `size` points at `scale`, placed in
@@ -113,7 +127,7 @@ struct Gradient {
     /// Core Animation's single ramp quantizes a hatch's stop boundaries.
     var needsDrawing: Bool {
         if case .conic = shape { return true }
-        return css?.hasPrefix("repeating-linear-gradient(") == true
+        return css?.hasPrefix("repeating-linear-gradient(") == true || css?.hasPrefix("conic-gradient(") == true
     }
 
     /// Locations 0–1 and their sRGB colours under an appearance. `dense`
@@ -158,7 +172,7 @@ struct Gradient {
             switch resolvedPlacement {
             case .axial(let a, let b): return .axial(CGPoint(x: a.x + box.minX, y: a.y + box.minY), CGPoint(x: b.x + box.minX, y: b.y + box.minY))
             case .radial(let c, let r): return .radial(CGPoint(x: c.x + box.minX, y: c.y + box.minY), r)
-            case .conic: return resolvedPlacement
+            case .conic(let c, let from): return .conic(CGPoint(x: c.x + box.minX, y: c.y + box.minY), from)
             }
         }
         let (w, h) = (max(box.width, 0), max(box.height, 0))
@@ -358,6 +372,13 @@ extension BatchValue {
 }
 
 extension NodeView {
+    var gradientTint: PlatformColor? {
+        #if os(iOS) || os(tvOS)
+        return viewTint?.resolvedColor(with: traitCollection)
+        #else
+        return viewTint ?? ThemeRoles.color("AccentColor", in: self)
+        #endif
+    }
     /// `background-attachment: fixed` (LLP 1066 D7).
     var gradientFixed: Bool { style["background_attachment"]?.string == "fixed" }
 
@@ -381,7 +402,7 @@ extension NodeView {
         if gradientLayered && boxGradient != nil { return }
         #endif
         // The last layer first, so the first is on top (LLP 1077 D5).
-        for g in Gradient.layers(style["background_image"]).reversed() {
+        for g in Gradient.layers(style["background_image"], tint: gradientTint).reversed() {
             g.paint(ctx, clip: clip, box: gradientBox, dark: drawsDark)
         }
     }
@@ -389,7 +410,7 @@ extension NodeView {
     /// Whether the background's gradients need `draw(_:)`: several layers,
     /// or a conic or repeating one (LLP 1077 D5, LLP 1066).
     var gradientDraws: Bool {
-        let layers = Gradient.layers(style["background_image"])
+        let layers = Gradient.layers(style["background_image"], tint: gradientTint)
         return layers.count > 1 || layers.contains { $0.needsDrawing }
     }
 }

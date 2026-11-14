@@ -109,6 +109,11 @@ use wire::outcome_to_json;
 
 type NativeFactory = fn(&str) -> Box<dyn NativeModule>;
 
+/// The module's journal lines since the last take: the runtime's own
+/// (`None`), those it wrote through the console among them, and the app's
+/// `console` lines, each with the method that wrote it.
+pub(crate) type Logs = Vec<(Option<exact_runner::Console>, String)>;
+
 /// The seam ABI this executor speaks. ABI 2 adds Canvas 2D's `draw` and
 /// `surfaces` (LLP 1056 D1); a module without them still reports 1, and
 /// this executor runs both.
@@ -365,7 +370,7 @@ pub struct Module {
     /// Where a test holds compressions (`Module::hold_compressions`).
     compression_hold: Option<std::sync::Arc<storage::Gate>>,
     document_owner: u64,
-    logs: Vec<String>,
+    logs: Logs,
     overruns: u32,
     /// The Canvas 2D roster the bake read (LLP 1056 D1), known before the
     /// engine loads.
@@ -377,6 +382,7 @@ pub struct Module {
     /// did not await moves to the background. An instance a worker owner
     /// builds runs one turn to its end, and keeps its answers waiting.
     main_thread: bool,
+    worker_retired: Option<Arc<std::sync::atomic::AtomicBool>>,
     background: background::Background,
 }
 
@@ -457,6 +463,7 @@ impl Module {
             canvas_surfaces: Vec::new(),
             agent_seed: None,
             main_thread: true,
+            worker_retired: None,
             background: Default::default(),
         };
         module.with_agent_seed(exact_data::crypto::AgentStream::agent_seed())
@@ -525,7 +532,10 @@ impl Module {
     /// What an owner thread needs to build this module there (LLP 1027.002
     /// D2): its bytecode, identity, directories, plan and limits — all of it
     /// `Send`; the runtime is created, run and destroyed on the owner.
-    fn build(template: &Module) -> exact_data::placed::Obtain<Module> {
+    fn build(
+        template: &Module,
+        retired: Arc<std::sync::atomic::AtomicBool>,
+    ) -> exact_data::placed::Obtain<Module> {
         let bytecode = template.bytecode.clone();
         let app_id = template.app_id.clone();
         let grants = template.grants.clone();
@@ -549,6 +559,7 @@ impl Module {
             // Before `activate`, which loads: a worker's answers wait for
             // their storage (LLP 1097 D6).
             module.main_thread = false;
+            module.worker_retired = Some(retired);
             // The template's interrupt reaches the instance on its owner, and
             // its native handle finds the instance's long-call handler.
             module.watch = watch;
@@ -615,9 +626,9 @@ impl Module {
         self.install(engine)?;
         let took_ms = started.elapsed().as_secs_f64() * 1e3;
         if took_ms > SLOW_LOAD_MS {
-            self.logs.push(format!(
+            self.logs.push((None, format!(
                 "the module's top level took {took_ms:.0} ms to evaluate, and every answer waits for it after first pixel: compute what a source needs in that source, or once on its first call"
-            ));
+            )));
         }
         Ok(())
     }
@@ -698,6 +709,7 @@ impl Module {
             self.document_owner,
             self.compression_hold.clone(),
         )?);
+        self.storage.as_mut().unwrap().worker_retired = self.worker_retired.clone();
         let ctx = &mut *self.host as *mut HostState as *mut c_void;
         let host: HostFn = host_door;
         let bytes: engine::BytesFn = crypto::bytes_door;
@@ -782,8 +794,13 @@ impl Module {
     pub fn unload(&mut self) {
         // A dev restart or a reload replaces the module: what it started
         // and did not await is finished first, within a second (LLP 1097
-        // D10). A worker's answers waited for theirs.
-        if !self.snapshot {
+        // D10). A retired worker drops its queued work without delivering it.
+        if !self.snapshot
+            && !self
+                .worker_retired
+                .as_ref()
+                .is_some_and(|r| r.load(std::sync::atomic::Ordering::Acquire))
+        {
             self.finish_background(std::time::Duration::from_secs(1));
         }
         self.drop_runtime();
@@ -863,6 +880,15 @@ impl Module {
     /// The module's `console` lines since the last take — for the runner's
     /// `logs` (LLP 1012).
     pub fn take_logs(&mut self) -> Vec<String> {
+        self.take_lines()
+            .into_iter()
+            .map(|(_, line)| line)
+            .collect()
+    }
+
+    /// [`Module::take_logs`], each `console` line with the method that wrote
+    /// it (LLP 1027.009 D1).
+    pub(crate) fn take_lines(&mut self) -> Logs {
         if let Some(engine) = self.engine.as_mut() {
             self.logs.extend(engine.take_log());
         }

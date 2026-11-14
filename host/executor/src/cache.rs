@@ -1,6 +1,7 @@
 //! The app executor's private, bounded HTTP cache (LLP 1162 D4; RFC 9111).
 use super::*;
 use exact_runner::CacheMode;
+use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub(super) const CAPACITY: usize = 16 << 20;
@@ -26,6 +27,19 @@ impl Key {
             url: identity(&request.url),
             headers,
         }
+    }
+
+    fn matches(&self, request: &Request) -> bool {
+        self.method == request.method
+            && self.headers.len() == request.headers.len()
+            && self.headers.chunk_by(|a, b| a.0 == b.0).all(|fields| {
+                fields.iter().map(|(_, value)| value).eq(request
+                    .headers
+                    .iter()
+                    .filter(|(name, _)| name.eq_ignore_ascii_case(&fields[0].0))
+                    .map(|(_, value)| value))
+            })
+            && (self.url == request.url || self.url == identity(&request.url))
     }
 }
 
@@ -97,6 +111,7 @@ pub(super) struct Cache {
     pub(super) bytes: usize,
     pub(super) preloads: Vec<super::preload::Held>,
     pub(super) journal: Vec<super::preload::Fact>,
+    pub(super) journal_pending: Arc<AtomicBool>,
     pub(super) clock: Arc<dyn Fn() -> Instant + Send + Sync>,
     tick: usize,
 }
@@ -113,9 +128,14 @@ impl Cache {
             bytes: 0,
             preloads: Vec::new(),
             journal: Vec::new(),
+            journal_pending: Arc::default(),
             clock: Arc::new(Instant::now),
             tick: 0,
         }
+    }
+    pub(super) fn take_preload_journal(&mut self) -> Vec<super::preload::Fact> {
+        self.journal_pending.store(false, Ordering::Release);
+        std::mem::take(&mut self.journal)
     }
     fn collect(&mut self) {
         super::preload::expire(self);
@@ -195,7 +215,15 @@ impl Cache {
 impl Core {
     /// Keep a private HTTP cache for the app's reads (LLP 1162 D4).
     pub fn enable_http_cache(&self) {
-        self.shared.state.lock().unwrap().cache = Some(Cache::new(self.grants.clone()));
+        let mut state = self.shared.state.lock().unwrap();
+        let mut cache = Cache::new(self.grants.clone());
+        // A preload control holds the old cache's pending bit: the new cache
+        // keeps that bit, cleared with the facts the old cache discards.
+        if let Some(old) = state.cache.take() {
+            old.journal_pending.store(false, Ordering::Release);
+            cache.journal_pending = old.journal_pending;
+        }
+        state.cache = Some(cache);
     }
 }
 
@@ -223,6 +251,50 @@ pub(super) fn replacing(
         && !Directives::of(&request.headers).no_store
         && (forced || matches!(request.cache, CacheMode::Reload | CacheMode::NoCache)))
     .then(|| Key::of(request))
+}
+
+pub(super) fn exchange(state: &State, job: &Job) -> Option<Exchange> {
+    state.cache.as_ref()?;
+    let request = &job.request;
+    (job.work.is_none() && eligible(request, job.class) && request.cache != CacheMode::NoStore)
+        .then(|| Exchange {
+            key: Key::of(request),
+            previous: None,
+            started: Instant::now(),
+            store: !job.cache_store_withheld && !Directives::of(&request.headers).no_store,
+        })
+}
+
+pub(super) fn asked(state: &mut State, r: &RequestOut, work: bool) {
+    let Some(cache) = state.cache.as_mut() else {
+        return;
+    };
+    let Some(key) = replacing(&r.request, r.class, r.forced, work) else {
+        return;
+    };
+    // A refresh must survive older completions, even before they start (LLP 1162 D4).
+    super::preload::withhold_store(cache, &r.request);
+    for old in state
+        .running
+        .iter_mut()
+        .filter_map(|r| r.cache_exchange.as_mut())
+    {
+        if old.key == key {
+            old.store = false;
+        }
+    }
+    for old in &mut state.jobs[0] {
+        if key.matches(&old.request) {
+            old.cache_store_withheld = true;
+        }
+    }
+    for place in &mut state.fenced {
+        if let Fenced::Held(old, _, _, _, withheld) = place {
+            if key.matches(&old.request) {
+                *withheld = true;
+            }
+        }
+    }
 }
 
 fn replacing_before(state: &State, ticket: u64, key: &Key) -> bool {
@@ -440,13 +512,15 @@ pub(super) fn prepare(
             }
         }
     }
-    if let Some(run) = state.running.iter_mut().find(|r| r.ticket == ticket) {
-        run.cache_exchange = Some(Exchange {
-            key,
-            previous,
-            started: Instant::now(),
-            store,
-        });
+    if let Some(exchange) = state
+        .running
+        .iter_mut()
+        .find(|r| r.ticket == ticket)
+        .and_then(|r| r.cache_exchange.as_mut())
+    {
+        exchange.previous = previous;
+        exchange.started = Instant::now();
+        exchange.store &= store;
     }
     None
 }
@@ -489,7 +563,9 @@ pub(super) fn retry(state: &mut State, ticket: u64, status: u16, redirected: boo
     }
     exchange.started = Instant::now();
     if let Some(cache) = state.cache.as_mut() {
-        cache.drop_key(&exchange.key);
+        if exchange.store {
+            cache.drop_key(&exchange.key);
+        }
         cache.collect();
     }
     true
@@ -520,6 +596,8 @@ pub(super) fn response(state: &mut State, ticket: u64, response: &mut Response, 
         if store {
             cache.drop_key(&key);
         }
+        drop(previous);
+        cache.collect();
         return;
     }
     if response.status == 304 {
@@ -559,6 +637,7 @@ pub(super) fn response(state: &mut State, ticket: u64, response: &mut Response, 
     }
     let preloads = previous.as_ref().map_or(0, |entry| entry.preloads);
     drop(previous);
+    cache.collect();
     store_response(
         cache, key, started, store, response, run.cached, preloads, now, wall,
     );
@@ -573,7 +652,11 @@ pub(super) fn store_preload(
     started: Instant,
     redirected: bool,
 ) {
-    if !redirected && eligible(request, RequestClass::Read) && request.cache != CacheMode::NoStore {
+    if cache.preloads[index].store
+        && !redirected
+        && eligible(request, RequestClass::Read)
+        && request.cache != CacheMode::NoStore
+    {
         store_response(
             cache,
             Key::of(request),
@@ -600,21 +683,7 @@ fn store_response(
     now: Instant,
     wall: SystemTime,
 ) {
-    if !store {
-        return;
-    }
     if response.status != 200 && !Directives::of(&response.headers).no_store {
-        return;
-    }
-    let preloads = preloads
-        | cache
-            .entries
-            .iter()
-            .find(|e| e.key == key)
-            .map_or(0, |e| e.preloads);
-    cache.drop_key(&key);
-    cache.collect();
-    if response.status != 200 {
         return;
     }
     let mut headers = end_to_end(&response.headers);
@@ -629,6 +698,20 @@ fn store_response(
             "age",
             &current_age(&headers, delay, received).as_secs().to_string(),
         );
+    }
+    if !store {
+        return;
+    }
+    let preloads = preloads
+        | cache
+            .entries
+            .iter()
+            .find(|e| e.key == key)
+            .map_or(0, |e| e.preloads);
+    cache.drop_key(&key);
+    cache.collect();
+    if response.status != 200 {
+        return;
     }
     let Some((age, lifetime, validate)) = freshness(&headers, delay, received) else {
         return;

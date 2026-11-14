@@ -1,8 +1,9 @@
 import { capturePrivacyManifest } from '../host/apple/privacy.mjs';
+import { appleMetadataProblem } from '../host/apple/plist.mjs';
 import { appleImplementations } from '../js/bake/src/typescript.mjs';
 import { webHostFiles, hostModuleSources, MODULE_PRELUDE } from '../host/web-js/glue.mjs';
 export { webHostFiles } from '../host/web-js/glue.mjs';
-import { compilerPaths, unitDepInfo, cargoBakeInputs, bakeSourceInputs, pendingSourceInputs, inputProducts, inputHashes, sourcePath, packageDirectories, directoryInputNames, buildInputCollector, watchOutput } from './cargo-dep-info.mjs';
+import { compilerPaths, unitDepInfo, cargoBakeInputs, bakeSourceInputs, pendingSourceInputs, inputProducts, inputHashes, sourcePath, packageDirectories, directoryInputNames, buildInputCollector, binarySourceInputs, swiftTargetInputs, watchOutput } from './cargo-dep-info.mjs';
 export { compilerPaths, unitDepInfo } from './cargo-dep-info.mjs';
 import { LIBRARY_CACHE, directDependencies, prepareLibrary } from './package-libraries.mjs';
 import { ensureBun } from './bun.mjs';
@@ -577,7 +578,7 @@ export function readManifest(dir, name) {
       : /^background_color_dark: /.test(p) ? 'background_color_dark is now color_scheme_dark.background_color: "color_scheme_dark": { "background_color": "#000000" } (LLP 1163 D2)'
       // Expo's splash keys and a host's own launch colour: the launch is the manifest's one colour on every host.
       : /^((host\.\w+\.)?(splash\w*|windowBackground|backgroundColor|launchColor)): not a known key$/i.test(p) ? `${p.split(':')[0]}: not a known key; what shows before the first frame is background_color, and color_scheme_dark.background_color in a dark scheme, on every host (host.ios.launchImage adds a picture on iOS)`
-      : p).filter((p) => !/^host\.web\.(head(\[|: )|csp|cspReportOnly)/.test(p)).concat(webHeadProblems(parsed), webCspProblems(parsed));
+      : appleMetadataProblem(p)).filter((p) => !/^host\.web\.(head(\[|: )|csp|cspReportOnly)/.test(p)).concat(webHeadProblems(parsed), webCspProblems(parsed));
   if (!problems.length) problems.push(...installProblems(parsed), ...gpuModuleProblems(parsed), ...documentTypeProblems(parsed), ...shareTargetProblems(parsed), ...protocolHandlerProblems(parsed), ...appIconProblems(parsed, dir), ...launchImageProblems(parsed, dir));
   if (problems.length) throw new Error(`${path} does not conform to scripts/app.schema.json:\n  ${problems.join('\n  ')}`);
   nativeResourceMappings(parsed); nativeResourceMappings(parsed, 'ios');
@@ -1109,12 +1110,7 @@ function completeBuild(app, platform, target, graph, messages, roots, env, prepa
       for(const old of kept.slice(6))rmSync(old,{force:true});
     }
     const swift=JSON.parse(readFileSync(described,'utf8'));
-    const pending=[platform==='ios'?'ExactIOS':'ExactMac'],seen=new Set();
-    while(pending.length) { const name=pending.pop();if(seen.has(name))continue;seen.add(name);const unit=swift.targets.find((t)=>t.name===name);if(!unit)throw new Error(`Swift package has no ${name}`);
-      for(const file of unit.sources??[])add(resolve(packageRoot,unit.path,file));
-      for(const resource of unit.resources??[])add(resolve(packageRoot,resource.path));
-      if(unit.type==='system-target')add(resolve(packageRoot,unit.path));pending.push(...(unit.target_dependencies??[]));
-    }
+    swiftTargetInputs(swift,packageRoot,platform==='ios'?'ExactIOS':'ExactMac',add);
     add(resolve(packageRoot,'Package.swift'));add(resolve(packageRoot,'webarm/WebArm.swift'));add(resolve(packageRoot,'webarm/FrameBrowser.swift'));add(resolve(packageRoot,'webarm/FrameWindows.swift'));add(resolve(packageRoot,'webarm/FrameCapture.swift'));add(resolve(packageRoot,'webarm/FramePDF.swift'));add(resolve(packageRoot,'webarm/FrameAutomation.swift'));add(resolve(packageRoot,'webarm/FrameFiles.swift'));add(resolve(packageRoot,'webarm/FrameInspector.swift'));add(resolve(packageRoot,'webarm/FramePrint.swift'));add(resolve(packageRoot,'videoarm/VideoArm.swift'));add(resolve(packageRoot,'videoarm/PictureInPicture.swift'));add(resolve(packageRoot,'build.mjs'));add(resolve(packageRoot,'assets.mjs'));add(resolve(packageRoot,'bundle.mjs'));add(resolve(packageRoot,'widgets.mjs'));
     const entries=platform==='ios'&&(app.manifest.widgets?.length||app.manifest.live_activities?.length); if(entries)add(resolve(packageRoot,'widget'),true); if(entries||env.EXACT_WIDGET_GALLERY==='1')add(resolve(packageRoot,'Sources/ExactSnapshot'),true);
   }
@@ -1132,7 +1128,7 @@ function completeBuild(app, platform, target, graph, messages, roots, env, prepa
     }
   }
   const nativeResources = ['macos', 'ios'].includes(platform) ? nativeResourceInventory(app, null, platform) : []; // `host.<platform>.resources` (iOS's serve tvOS): an edit is a new binary
-  const assetCatalogApp = ['macos', 'ios'].includes(platform) ? { dir: app.dir, platform: target.includes('-tvos') ? 'tvos' : platform, manifest: { host: app.manifest.host } } : null;
+  const assetCatalogApp = ['macos', 'ios'].includes(platform) ? { dir: app.dir, platform: target.includes('-tvos') ? 'tvos' : platform, appleIcons: bundleGraph.appleIcons ?? [], manifest: { host: app.manifest.host } } : null;
   const appleAssetCatalogs = assetCatalogApp ? appleAssetCatalogInventory(assetCatalogApp, assetCatalogApp.platform) : [];
   if (assetCatalogApp) for (const path of [resolve(app.dir, platform, 'modules'), resolve(app.dir, 'modules/apple')]) {
     if (existsSync(path)) directories.set(nameOf(path), {path, names: directoryInputNames(path, watchOutput(watchOutputs))});
@@ -1155,11 +1151,15 @@ function completeBuild(app, platform, target, graph, messages, roots, env, prepa
     files:files.map(({name, sha256}) => ({name, sha256})),
     absent:[...absent.keys()].sort(), configuration, metadata,
   };
+  const sourceInputsRecord = binarySourceInputs({files, directories, absent, links, metadata}, [
+    {name:'app',path:app.dir}, {name:'exact',path:ROOT}, {name:'workspace',path:graph.metadata.workspace_root},
+    ...packages.filter(pkg => pkg.source === null).map(pkg => ({name:'workspace',path:graph.metadata.workspace_root, contains:dirname(pkg.manifest_path)})),
+  ], watchOutputs);
   const products=roots.flatMap((r)=>messages.filter((m)=>m.reason==='compiler-artifact'&&m.package_id===r.package&&m.target.name===r.name).flatMap((m)=>m.filenames)).filter((p)=>!p.endsWith('.d')&&!p.endsWith('.dSYM')).map((path)=>prepared.get(path)??path).map((path)=>{const info=statSync(path);return {path,bytes:info.size,sha256:hashes.of(path,info)};})
     .concat(generatedInputs.products);
   hashes.save();
   const sourceRecord = platform === 'windows' ? {sourceInputs:bakeSourceInputs(app, sourceInputs, watchOutputs)} : {};
-  return {version:1,backendOrigin,...sourceRecord,watchedDirectories:[...packageDirectories([...sourceInputs],watchOutputs), ...generatedInputs.watchedDirectories],...(env.EXACT_RUST_BUNDLE?{rust:resolve(baked,'rust')}:{}),...(optionalInputs.size?{optionalInputs:[...optionalInputs].sort()}:{}),...(baked!==rootOutput?{linkedPlan:baked,linkedInputs:linkedInputs(baked)}:{}),...bakedSettings(baked,app.dir),trust:env.EXACT_UPDATE_TRUST??'development',compat,graph:bundleGraph,binary:{...(privacyManifests.length ? {privacyManifests} : {}),...(assetCatalogApp ? {assetCatalogApp} : {}),...(nativeResources.length ? {nativeResourceApp:{dir:app.dir,manifest:app.manifest,platform}} : {}),sha256:buildHash(canonicalBuild(fingerprint)),...fingerprint,inputs:files,watchOutputs,links:[...links.values()],directories:[...directories.values()],missing:[...absent.values()]},products};
+  return {version:1,backendOrigin,...sourceRecord,watchedDirectories:[...packageDirectories([...sourceInputs],watchOutputs), ...generatedInputs.watchedDirectories],...(env.EXACT_RUST_BUNDLE?{rust:resolve(baked,'rust')}:{}),...(optionalInputs.size?{optionalInputs:[...optionalInputs].sort()}:{}),...(baked!==rootOutput?{linkedPlan:baked,linkedInputs:linkedInputs(baked)}:{}),...bakedSettings(baked,app.dir),trust:env.EXACT_UPDATE_TRUST??'development',compat,graph:bundleGraph,binary:{sourceInputs:sourceInputsRecord,...(privacyManifests.length ? {privacyManifests} : {}),...(assetCatalogApp ? {assetCatalogApp} : {}),...(nativeResources.length ? {nativeResourceApp:{dir:app.dir,manifest:app.manifest,platform}} : {}),sha256:buildHash(canonicalBuild(fingerprint)),...fingerprint,inputs:files,watchOutputs,links:[...links.values()],directories:[...directories.values()],missing:[...absent.values()]},products};
 }
 // The permanent companion inode owns exclusion; the JSON claim is only its diagnostic record.
 let buildLock;
@@ -1344,13 +1344,6 @@ export function readBuilds(app, env = process.env) {
   const directory=bakeOutput(app,env);if(!existsSync(directory))return [];
   return readdirSync(directory).filter((name)=>name.endsWith('.build.json')).map((name)=>JSON.parse(readFileSync(resolve(directory,name),'utf8'))).filter((r)=>r.version===1&&r.compat?.inputs?.app===app.id);
 }
-/** Frozen capabilities and the binary input identity; small enough to bind
- * inside the signed stream envelope. Absolute source paths stay private. */
-export function cohortReceipt(build) {
-  if (build?.version !== 1 || build.graph?.version !== 1 || !build.binary?.sha256) throw new Error('missing completed bake graph and binary receipt');
-  return {version:1,compat:{id:build.compat.id,inputs:build.compat.inputs,target:build.compat.target},sources:build.graph.sources,surfaceCalls:build.graph.surfaceCalls??{},binary:build.binary.sha256};
-}
-
 /** The shared dev/deploy comparison (LLP 1030 D3). A new binary and a safe
  * bundle are independent results. Compatibility-id equality decides neither. */
 export function classifyArtifacts(candidate, cohort, signingKey = null) {
@@ -1368,6 +1361,8 @@ export function classifyArtifacts(candidate, cohort, signingKey = null) {
       for(const [name,arities] of Object.entries(need)) for(const arity of arities) if(!cohort.surfaceCalls?.[name]?.includes(arity)) fail(`.${name}/${arity} (not demanded by the installed plan)`);
     } else if(key==='gpuSurfaces') {
       for(const surface of need) if(!have.gpuSurfaces?.some(s=>canonicalBuild(s)===canonicalBuild(surface))) fail(`.${surface.name} (interface ${surface.interface})`);
+    } else if(key==='appleRasterIcons') {
+      for(const [svg, rendition] of Object.entries(need)) if(canonicalBuild(have[key]?.[svg]??null)!==canonicalBuild(rendition)) fail(`.${svg} (requires the installed SVG rendition)`);
     } else if(key==='executors'||key==='hatches') { for(const item of need) if(!have[key]?.includes(item)) fail(key==='hatches'?`.${item} (handled by this platform's module, not by the installed one)`:`.${item}`); // hatches: LLP 1075.003.000.001 §4.3, a cohort from before the capability handles none
     } else if(key==='typescriptRuntime') { if(!((have[key]??0)>=need)) fail(` (requires a prelude of runtime ${need} or later; this cohort's is ${have[key]??0})`); /* LLP 1108 D6 R2: an older prelude ignores exactBodyFrom */ } else if(key==='grantCeiling') {
       const grants=new Set((have.grantCeiling??'').split('\n').filter(Boolean));

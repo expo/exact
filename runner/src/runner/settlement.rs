@@ -294,7 +294,7 @@ impl<D: DataSource> Runner<D> {
                 let mut progress = false;
                 let mut all = true;
                 for i in 0..self.plan.derives.len() {
-                    if derives[i].is_some() {
+                    if self.plan.derives[i].unsettled || derives[i].is_some() {
                         continue;
                     }
                     // Unchanged inputs, unchanged value: no evaluation.
@@ -595,10 +595,21 @@ impl<D: DataSource> Runner<D> {
                     if !open {
                         // Idle: a request in flight is let go when this
                         // settlement stands, except an upload's, which goes on;
-                        // the value stays and stops being an answer.
+                        // the value stays and stops being an answer. A refresh
+                        // or a store change asks nothing of it and is not
+                        // remembered: waking asks it anyway (LLP 1161.002 D2).
+                        force.retain(|f| *f != i);
+                        self.reconciling.retain(|r| *r != i);
                         let upload = self.uploading(i);
                         if !upload {
-                            effects[i] = RequestEffect::Answered;
+                            // An earlier pass's `Later` was never handed out.
+                            if let RequestEffect::Later { requests, .. } =
+                                std::mem::replace(&mut effects[i], RequestEffect::Answered)
+                            {
+                                for request in &requests {
+                                    self.discard_request(request);
+                                }
+                            }
                             pending_res[i] = false;
                             self.resources[i].failed_args = None;
                         }
@@ -789,6 +800,16 @@ impl<D: DataSource> Runner<D> {
                             p.args.clone_from(&args);
                         }
                     }
+                    // @ref LLP 1027.005 D3/D4 — only a persisted boot seed, or
+                    // an entry waiting for its identity, ignores context, and
+                    // only for known, equal identifying arguments (`kept_wait`).
+                    // A refused commit restores `states` and the resource row.
+                    let kept = self.admit_kept(i, &args, valid_args, ready, &mut states);
+                    let (kept_seed, hold) = (kept.kept_seed, kept.hold);
+                    if kept.admitted_early {
+                        pending_res[i] = false;
+                        awaiting[i] = false;
+                    }
                     // The value may still answer older arguments while a
                     // request is in flight. Reuse follows the current ask;
                     // the standing value keeps its own provenance.
@@ -803,41 +824,6 @@ impl<D: DataSource> Runner<D> {
                             .find(|p| p.target == Target::Resource(i))
                             .map(|p| &p.args),
                     };
-                    // @ref LLP 1027.005 D3/D4 — only a persisted boot seed
-                    // ignores context, and only until its source is ready.
-                    // Consume the mark on mismatch or activation even when
-                    // the old value stands during an asynchronous request.
-                    // `states` is tentative, so a refused pass restores both.
-                    // A seed whose identity reads a resource still on its
-                    // fallback is not this launch's answer yet: it is
-                    // neither admitted nor reused (LLP 1027.005 D3, 2026-10-10).
-                    let unknown = states[i].as_ref().is_some_and(|s| s.kept_seed)
-                        && !ready
-                        && self.identity_unknown(i, &states);
-                    let kept_seed = valid_args
-                        && !unknown
-                        && states[i].as_ref().is_some_and(|s| {
-                            s.kept_seed
-                                && (if super::kept::kept_surface(&self.plan, i) {
-                                    self.surface_seed_waiting(i)
-                                } else {
-                                    !ready
-                                })
-                                && s.args
-                                    == args[..row.args.len as usize - usize::from(row.context)]
-                        });
-                    if let Some(state) = states[i].as_mut().filter(|s| s.kept_seed && !kept_seed) {
-                        // Refused before readiness, not consumed by it: say so.
-                        if !ready {
-                            let identity = row.args.len as usize - usize::from(row.context);
-                            let kept = state.args.clone();
-                            let now = (!unknown).then(|| &args[..identity]);
-                            super::kept::refuse(&mut self.keeping, &self.plan, i, &kept, now);
-                        }
-                    }
-                    if let Some(state) = &mut states[i] {
-                        state.kept_seed = kept_seed;
-                    }
                     // A store-reading resource is reusable only at the exact
                     // store revision it observed. `answer` and `parse` both
                     // write through Store, so this is the one dirtying point.
@@ -847,7 +833,7 @@ impl<D: DataSource> Runner<D> {
                     let reuse = states[i]
                         .as_ref()
                         .filter(|_| valid_args || failed)
-                        .filter(|_| !unknown)
+                        .filter(|_| !hold)
                         .filter(|s| {
                             kept_seed
                                 || failed
@@ -1333,13 +1319,14 @@ impl<D: DataSource> Runner<D> {
             // A resource later in plan order may have written after an
             // earlier reader settled. Repeat against the tentative states;
             // the writer's state already carries the new revision, so it
-            // does not refresh itself.
+            // does not refresh itself, and a reader asleep behind a closed
+            // gate asks nothing (LLP 1161.002 D2).
             let stale_store_reader = states.iter().enumerate().any(|(i, state)| {
                 self.asks_on_store_change(i)
                     && !self.asks_again_after_reply(i)
                     && state
                         .as_ref()
-                        .is_none_or(|state| state.store_revision != revision)
+                        .is_none_or(|state| !state.asleep && state.store_revision != revision)
             });
             if stale_store_reader {
                 continue;

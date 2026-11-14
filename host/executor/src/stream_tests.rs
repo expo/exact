@@ -734,6 +734,16 @@ fn the_parser_reads_lines_fields_and_cursors_as_html_does() {
     // A blank line with no data dispatches nothing; `id:` persists.
     assert!(parse(&[b"event: x\n\n\n"]).is_empty());
     assert!(EventStream::new(4).push(b"data: 12345\n").is_err());
+    // The ceiling counts the data delivered: a field of exactly `limit`
+    // bytes, or fields joined by line feeds to `limit`, pass.
+    let mut four = EventStream::new(4);
+    assert_eq!(four.push(b"data: 1234\n\n").unwrap()[0].data, "1234");
+    assert_eq!(
+        four.push(b"data: 1\ndata: 23\n\n").unwrap()[0].data,
+        "1\n23"
+    );
+    assert!(EventStream::new(4).push(b"data: 12\ndata: 34\n").is_err());
+    assert!(EventStream::new(4).push(b"data: 1234\ndata:\n").is_err());
 }
 
 /// A local SSE peer on the platform transport (Darwin on Apple, the Linux

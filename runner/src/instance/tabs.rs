@@ -109,7 +109,7 @@ fn literal_str(plan: &Plan, n: NodesId, prop: PropId) -> Option<&str> {
         if b.kind != BindingKind::Prop || b.id != prop as u16 {
             return None;
         }
-        match crate::vm::instructions(plan.code(b.expr))
+        match crate::vm::instructions(plan.read_code(plan.code(b.expr)).0)
             .collect::<Result<Vec<_>, _>>()
             .as_deref()
         {
@@ -458,7 +458,10 @@ fn open_panel(
         .as_ref()
         .and_then(Value::as_str)
         .map(str::to_owned);
-    let mut frame = ArmFrame::default();
+    let mut frame = ArmFrame {
+        region: Some(region.0),
+        ..ArmFrame::default()
+    };
     if plan.slots.iter().any(|s| s.owner == Some(contents)) {
         let slots: RowSlots = Rc::new(RefCell::new(BTreeMap::new()));
         frame.region = Some(region.0);

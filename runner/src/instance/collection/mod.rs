@@ -144,6 +144,13 @@ struct Mounted {
     /// Past the window, kept for the next row it needs ([`reuse`]).
     held: bool,
 }
+
+// Both window publication paths share the sort, including under LTO.
+#[inline(never)]
+fn sort_mounted(rows: &mut [Mounted]) {
+    rows.sort_by_key(|row| row.position);
+}
+
 #[derive(Debug)]
 pub(crate) struct Collection {
     /// The app modes around the list (LLP 1121 D5): what a row it mounts
@@ -197,6 +204,9 @@ pub(crate) struct Collection {
     edge_armed: [bool; 2],
     /// Each edge's row when it last fired ([`Collection::disarm_edge`]).
     edge_fired: [Option<Rc<str>>; 2],
+    /// A page landed before the first row: the start re-arms at the first
+    /// report whose window is measured ([`Collection::page_before_start`]).
+    start_owed: bool,
     /// The last realization left window rows unbuilt or kept rows past it.
     pending: bool,
     /// The outer list whose row holds this one (LLP 1070 N1).
@@ -344,7 +354,7 @@ impl Collection {
         fresh: bool,
         remount: bool,
     ) -> Result<(), InstanceError> {
-        let deps = &u.sites.deps;
+        let deps = &u.sites.data.deps;
         let index = self.region.0 as usize;
         let keys_stale = fresh || u.stale_outside(&deps.keys[index], 1);
         let data_changed = keys_stale || u.stale(&deps.subjects[index]);
@@ -377,7 +387,7 @@ impl Collection {
         // Items that changed in place: the same keys in the same order, and
         // no input of the rows' bodies or keys changed (a live tick's prices).
         let mut in_place: Option<Vec<usize>> = None;
-        let (last, count) = (self.last_key(), self.index.len());
+        let (order, last, count) = (self.index.order(), self.last_key(), self.index.len());
         if data_changed {
             let descriptor = u.env.plan.region(self.region);
             let Value::List(items) = u
@@ -447,6 +457,7 @@ impl Collection {
             }
             if self.index.len() == 0 {
                 self.edge_armed = [true; 2];
+                self.start_owed = false;
             }
             // @ref LLP 1010 (2026-09-29 ruling, provisional) — rows that
             // arrived are a new end: the old last row is still here with rows
@@ -458,6 +469,9 @@ impl Collection {
             let kept = last.as_deref().and_then(|key| self.index.position(key));
             if kept.is_some_and(|p| p + 1 < self.index.len() || self.index.len() > count) {
                 self.edge_armed[1] = true;
+            }
+            if self.edge_handlers[0] && self.page_before_start(&order) {
+                self.start_owed = true;
             }
             let anchor = self.committed_anchor(anchor, drop_anchor);
             self.cancel_if_row_left();
@@ -725,7 +739,7 @@ impl Collection {
             let mounted = match old.remove(&text) {
                 Some(mut mounted) => {
                     mounted.held = false;
-                    let body = &u.sites.deps.bodies[self.region.0 as usize];
+                    let body = &u.sites.data.deps.bodies[self.region.0 as usize];
                     let dirty = self.reposition(&mut mounted, position, body.reads_position());
                     if update {
                         update_row(u, &mut mounted.row, frames, dirty, body)?;
@@ -771,7 +785,7 @@ impl Collection {
                     }
                 }
             }
-            self.mounted.sort_by_key(|row| row.position);
+            sort_mounted(&mut self.mounted);
             self.pending = pending || kept;
             self.emit_children(u)?;
             self.emit_preview(u)?;
@@ -839,7 +853,7 @@ impl Collection {
             self.reposition(&mut mounted, position, true);
             self.settle_mounted(u, mounted, &text)?;
         }
-        self.mounted.sort_by_key(|row| row.position);
+        sort_mounted(&mut self.mounted);
         self.pending = pending;
         self.emit_children(u)?;
         self.emit_preview(u)?;

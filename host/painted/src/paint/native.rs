@@ -6,6 +6,12 @@
 //! clips and stacks as the box does. Other backends draw nothing for them.
 use super::*;
 
+pub(super) fn new_session() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
 /// Which platform element.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NativeKind {
@@ -93,6 +99,7 @@ impl Painter {
                     "module": p.str(PropId::NativeViewModuleName),
                     "generation": node.key.generation,
                     "slot": node.key.index,
+                    "session": self.native_session,
                     "disabled": flag(PropId::Disabled),
                     "props": p.str(PropId::NativeViewProps),
                 }),

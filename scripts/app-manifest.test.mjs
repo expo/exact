@@ -5,6 +5,38 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 
+test('Apple metadata dictionaries refuse every key together with grant or generic advice', async () => {
+  const { readManifest } = await import('./app.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'manifest-apple-metadata-'));
+  const save = host => writeFileSync(resolve(dir, 'app.json'), JSON.stringify({
+    name: 'Metadata', app: { id: 'dev.exact.metadata', name: 'Metadata' }, host,
+  }));
+  try {
+    save({ ios: { infoPlist: { NSPhotoLibraryAddUsageDescription: 'Save a photo', VendorKey: true },
+      entitlements: { 'aps-environment': 'development', 'com.apple.developer.applesignin': ['Default'], 'vendor.claim': true } },
+      macos: { infoPlist: { NSMicrophoneUsageDescription: 'Record', LSUIElement: true }, entitlements: { 'com.apple.security.device.audio-input': true, 'com.apple.developer.aps-environment': 'development' } } });
+    assert.throws(() => readManifest(dir, 'metadata'), error => {
+      for (const text of [
+        'host.ios.infoPlist.NSPhotoLibraryAddUsageDescription: refused; write `device.photos-add purpose.<key>`',
+        'host.ios.entitlements.aps-environment: refused; write `device.push` beside `device.notifications purpose.<key>`',
+        'com.apple.developer.applesignin: refused; write `auth.apple <client id>`',
+        'host.macos.infoPlist.NSMicrophoneUsageDescription: refused; write `device.microphone purpose.<key>`',
+        'LSUIElement: refused; Exact writes this key itself from its declarations',
+        'host.macos.entitlements.com.apple.security.device.audio-input: refused; Exact writes this key itself from its declarations',
+        'host.macos.entitlements.com.apple.developer.aps-environment: refused; Exact writes this key itself from its declarations',
+        'feedback note', 'VendorKey', 'vendor.claim',
+      ]) assert.ok(error.message.includes(text), text + '\n' + error.message);
+      return true;
+    });
+    for (const value of [null, [], true, 'key']) {
+      save({ ios: { infoPlist: value, entitlements: value }, macos: { infoPlist: value, entitlements: value } });
+      assert.throws(() => readManifest(dir, 'metadata'), /expected object/);
+    }
+    save({ ios: { infoPlist: {}, entitlements: {} }, macos: { infoPlist: {}, entitlements: {} } });
+    assert.deepEqual(readManifest(dir, 'metadata').host.ios.infoPlist, {});
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('a widget declares fixed enum configuration choices', async () => {
   const { readManifest } = await import('./app.mjs');
   const dir = mkdtempSync(resolve(tmpdir(), 'widget-configuration-'));

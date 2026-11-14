@@ -507,6 +507,9 @@ impl Lowerer {
                     )),
                 },
                 Attr::Ignored => {}
+                Attr::ExternalReference => self.warnings.push(format!(
+                    "`{name}` on `<{tag}>` is an external reference and is dropped from an SVG image"
+                )),
                 Attr::Unknown => self.warnings.push(format!(
                     "`{name}` on `<{tag}>` is not an attribute this host draws"
                 )),
@@ -594,8 +597,10 @@ impl Lowerer {
                     PropId::from_name("href").expect("href"),
                     PropValue::Str(value.into()),
                 )
-            } else {
+            } else if value.is_empty() {
                 Attr::Ignored
+            } else {
+                Attr::ExternalReference
             };
         }
         if let Some(prop) = PropId::from_name(name) {
@@ -648,6 +653,7 @@ enum Attr {
     Prop(PropId, PropValue),
     Style(StyleId, StyleValue<'static>),
     Ignored,
+    ExternalReference,
     Unknown,
 }
 

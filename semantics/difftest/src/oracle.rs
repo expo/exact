@@ -184,6 +184,15 @@ impl Oracle {
             ));
             out.push('\n');
         }
+        // The sources the program declares, whose request the runner makes
+        // itself (LLP 1162.001).
+        for f in &self.plan.fetches {
+            out.push_str("fetch ");
+            out.push_str(&crate::observe::quote(
+                self.plan.str(self.plan.sources[f.source.0 as usize].name),
+            ));
+            out.push('\n');
+        }
         for (name, t, v) in self.facts.borrow().iter() {
             out.push_str("fact ");
             out.push_str(&crate::observe::quote(name));

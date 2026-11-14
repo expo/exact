@@ -225,7 +225,7 @@ pub struct Icon<'a> {
     /// The SVG's viewBox, `min-x min-y width height`.
     pub view_box: &'a str,
     /// Its paths' `d`, drawn as a template (filled), its rule's marker
-    /// stripped; empty for an SVG the web draws as the file.
+    /// stripped; empty for an SVG drawn from a file or an Apple raster asset.
     pub path: &'a str,
     /// The SVG's path under `assets/`.
     pub svg: &'a str,
@@ -265,6 +265,12 @@ impl<'a> Icon<'a> {
             svg,
             even_odd,
         })
+    }
+
+    /// The file the Apple build rasterizes, when neither an SF Symbol nor
+    /// a template path supplies the icon.
+    pub fn apple_asset(&self) -> Option<&'a str> {
+        (self.sf.is_empty() && self.path.is_empty() && !self.svg.is_empty()).then_some(self.svg)
     }
 
     /// The source form a host reads, after `symbol:` (as the build writes a

@@ -122,7 +122,8 @@ test('an aborted fetch rejects with its signal\'s reason; an exactTimeout is sti
 test('preload and prefetch validate options and leave web requests as written', async () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-preload-option-'));
   const sent = [], before = globalThis.fetch;
-  globalThis.fetch = async (url, init) => { sent.push([url, init]); return new Response('reply'); };
+  // Its response names the URL it came from, as the browser's does; admission refuses one that names none.
+  globalThis.fetch = async (url, init) => { sent.push([url, init]); return Object.defineProperty(new Response('reply'), 'url', { value: String(url) }); };
   try {
     writeFileSync(resolve(dir, 'admission.js'), readFileSync(resolve(ROOT, 'host/web-js/admission.js'), 'utf8').replace(/'\.\.\/web\/([a-z-]+\.js)'/g, "'./$1'"));
     for (const name of ['grant-admission.js', 'faults.js', 'navigation.js', 'address-space.js']) writeFileSync(resolve(dir, name), hostFixtureFile(resolve(ROOT, 'host/web', name)));

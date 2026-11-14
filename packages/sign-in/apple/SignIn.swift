@@ -1,6 +1,6 @@
-// @exact/sign-in on Apple (LLP 1133.014): an identity-only Apple request
-// and the provider buttons. Combined passkey requests still belong to
-// passkeys; Google and getCredentialState are not implemented here.
+// @exact/sign-in on Apple (LLP 1133.014): Apple requests, credential
+// decoding and provider buttons. Passkeys owns the combined controller;
+// Google and getCredentialState are not implemented here.
 import AuthenticationServices
 import ExactPackage
 import Foundation
@@ -11,12 +11,25 @@ import AppKit
 import UIKit
 #endif
 
-public final class SignInModule: NSObject, ExactPackage {
+public final class SignInModule: NSObject, ExactPackage, ExactCredentialMember {
     let context: ExactPackageContext
-    private var ceremony: AppleSignInCeremony?
+    private var running: [ObjectIdentifier: AppleSignInCeremony] = [:]
     static let appleConfig = "https://appleid.apple.com"
 
-    public init(context: ExactPackageContext) { self.context = context }
+    public init(context: ExactPackageContext) {
+        self.context = context
+        super.init()
+        context.credentials.register("passkeys#get.identity", member: self)
+    }
+
+    public func credentialRequest(_ args: [String: Any]) throws -> ExactCredentialRequest {
+        let request = try Self.request(args)
+        let state = request.state
+        return ExactCredentialRequest(requests: [request]) { credential in
+            guard let credential = credential as? ASAuthorizationAppleIDCredential else { return nil }
+            return Self.answer(credential, state: state)
+        }
+    }
 
     private var apple: Bool {
         #if os(macOS)
@@ -32,7 +45,7 @@ public final class SignInModule: NSObject, ExactPackage {
 
     static func capabilities(apple: Bool) -> [String: Any] {
         ["available": true, "providers": [
-            "apple": ["active": apple, "passive": apple, "withPublicKey": false],
+            "apple": ["active": apple, "passive": apple, "withPublicKey": apple],
             "google": ["active": false, "passive": false, "withPublicKey": false],
         ]]
     }
@@ -51,11 +64,12 @@ public final class SignInModule: NSObject, ExactPackage {
     }
 
     private func signIn(_ args: [String: Any], _ reply: @escaping ([String: Any]) -> Void) {
+        guard args["publicKey"] == nil else { return reply(["error": "NotSupportedError", "message": "passkeys owns combined requests"]) }
         guard context.origin == "app", context.foreground else { return reply(["error": "NotAllowedError", "message": "person-required"]) }
         guard apple else { return reply(["error": "NotSupportedError", "message": "this build has no Sign in with Apple entitlement"]) }
         let request: ASAuthorizationAppleIDRequest
         do { request = try Self.request(args) }
-        catch let failure as SignInFailure { return reply(failure.json) }
+        catch let failure as ExactCredentialFailure { return reply(failure.json) }
         catch { return reply(["error": "TypeError"]) }
         let passive = (args["identity"] as? [String: Any])?["mode"] as? String != "active"
         present(request, passive: passive, reply)
@@ -63,29 +77,36 @@ public final class SignInModule: NSObject, ExactPackage {
 
     func present(_ request: ASAuthorizationAppleIDRequest, passive: Bool, _ reply: @escaping ([String: Any]) -> Void) {
         guard let anchor = context.presentation?.window else { return reply(["error": "NotAllowedError", "message": "the session has no presentation window"]) }
-        if let held = ceremony {
-            guard held.passive && !passive else { return reply(["error": "NotAllowedError", "message": "busy"]) }
-            held.abort()
-        }
         let current = AppleSignInCeremony(request: request, number: context.request, passive: passive, anchor: anchor)
-        ceremony = current
+        current.done = reply
+        hold(current) { [weak current] in current?.start() }
+    }
+
+    func hold(_ current: AppleSignInCeremony, start: @escaping () -> Void = {}) {
+        let key = ObjectIdentifier(current)
+        running[key] = current
+        let reply = current.done
+        let credentials = context.credentials
         current.done = { [weak self, weak current] answer in
-            if self?.ceremony === current { self?.ceremony = nil }
-            reply(answer)
+            self?.running[key] = nil
+            reply?(answer)
+            if let current { credentials.finish(current) }
         }
-        current.start()
+        credentials.enqueue(current, replaceable: current.passive, modal: true,
+                            start: start, cancel: { [weak current] in current?.abort($0) })
     }
 
     public func cancel(_ request: Int) {
-        if ceremony?.number == request { ceremony?.abort() }
+        Array(running.values).filter { $0.number == request }.forEach { $0.abort() }
     }
 
     public func foreground(_ shown: Bool) {
-        if !shown { ceremony?.abort() }
+        if !shown { context.credentials.cancelSheets() }
     }
 
     public func destroy(_ done: @escaping () -> Void) {
-        ceremony?.abort()
+        context.credentials.unregister("passkeys#get.identity", member: self)
+        context.credentials.cancel(Array(running.values))
         done()
     }
 
@@ -97,11 +118,11 @@ public final class SignInModule: NSObject, ExactPackage {
         let providers = options["providers"] as? [[String: Any]] ?? []
         let mode = options["mode"] as? String ?? "passive"
         let mediation = args["mediation"] as? String ?? "optional"
-        guard args["publicKey"] == nil, ["active", "passive"].contains(mode),
+        guard (args["publicKey"] == nil || mode == "passive"), ["active", "passive"].contains(mode),
               ["optional", "required"].contains(mediation),
               let provider = providers.first(where: { $0["configURL"] as? String == appleConfig }),
               mode != "active" || providers.count == 1 else {
-            throw SignInFailure(["error": "NotSupportedError", "message": "this implementation offers Apple identity requests alone"])
+            throw ExactCredentialFailure(["error": "NotSupportedError", "message": "Apple identity must be passive beside a passkey, with optional or required mediation"])
         }
         let request = ASAuthorizationAppleIDProvider().createRequest()
         request.nonce = (provider["params"] as? [String: Any])?["nonce"] as? String
@@ -109,6 +130,15 @@ public final class SignInModule: NSObject, ExactPackage {
         let fields = provider["fields"] as? [String] ?? ["name", "email", "picture"]
         request.requestedScopes = [ASAuthorization.Scope.fullName, .email].filter { fields.contains($0 == .fullName ? "name" : "email") }
         return request
+    }
+
+    static func answer(_ credential: ASAuthorizationAppleIDCredential, state: String?) -> [String: Any] {
+        guard credential.state == state else {
+            return ["error": "IdentityCredentialError", "message": "Apple returned an unexpected state"]
+        }
+        return answer(token: credential.identityToken, code: credential.authorizationCode, state: credential.state,
+                      user: credential.user, name: credential.fullName, email: credential.email,
+                      status: credential.realUserStatus, scopes: credential.authorizedScopes)
     }
 
     static func answer(token: Data?, code: Data?, state: String?, user: String, name: PersonNameComponents?,
@@ -151,11 +181,6 @@ public final class SignInModule: NSObject, ExactPackage {
     }
 }
 
-struct SignInFailure: Error {
-    let json: [String: Any]
-    init(_ json: [String: Any]) { self.json = json }
-}
-
 /// One request, anchored to the calling session, with exactly one reply.
 final class AppleSignInCeremony: NSObject, ASAuthorizationControllerDelegate, ASAuthorizationControllerPresentationContextProviding {
     let controller: ASAuthorizationController
@@ -184,18 +209,18 @@ final class AppleSignInCeremony: NSObject, ASAuthorizationControllerDelegate, AS
         reply?(answer)
     }
 
-    func abort() {
-        finish(["error": "AbortError"])
+    func abort(_ answer: [String: Any] = ["error": "AbortError"]) {
+        let reply = done
+        done = nil
         controller.cancel()
+        reply?(answer)
     }
 
     func authorizationController(controller: ASAuthorizationController, didCompleteWithAuthorization authorization: ASAuthorization) {
-        guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential, credential.state == state else {
-            return finish(["error": "IdentityCredentialError", "message": "Apple returned an unexpected credential or state"])
+        guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential else {
+            return finish(["error": "IdentityCredentialError", "message": "Apple returned an unexpected credential"])
         }
-        finish(SignInModule.answer(token: credential.identityToken, code: credential.authorizationCode, state: credential.state,
-                                  user: credential.user, name: credential.fullName, email: credential.email,
-                                  status: credential.realUserStatus, scopes: credential.authorizedScopes))
+        finish(SignInModule.answer(credential, state: state))
     }
 
     func authorizationController(controller: ASAuthorizationController, didCompleteWithError error: Error) {

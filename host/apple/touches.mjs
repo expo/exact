@@ -437,7 +437,7 @@ export async function openTouches({ udid, appId, foldable }) {
 
 const sameAim = (a, b) => a.orientation === b.orientation && a.session === b.session && a.generation === b.generation
   && ['w', 'h', 'x', 'y'].every((k) => a.screen[k] === b.screen[k]) && a.point[0] === b.point[0] && a.point[1] === b.point[1]
-  && ['viewport', 'fixed', 'fixedAxes', 'display'].every(k => JSON.stringify(a[k]) === JSON.stringify(b[k]));
+  && ['viewport', 'safeArea', 'fixed', 'fixedAxes', 'display'].every(k => JSON.stringify(a[k]) === JSON.stringify(b[k]));
 
 /** SpringBoard reads and gestures over the session's existing runner (WP14). */
 export async function springboard(touches, request, alive) {
@@ -469,20 +469,20 @@ export const DRAG_BOUNDS = { press: 10000, hold: 10000, over: 2000, total: 10000
  * foreground and injects, and the window's dispatch log must show exactly
  * one new touch that began and ended (for a drag that moves, moved by the
  * asked delta) — else an error that says what the log saw. `drag` is
- * `{dx, dy, press, over, hold, during, tick}`, points and ms; `during` are thunks
+ * `{dx, dy, press, over, hold, into, during, tick}`, points and ms; `during` are thunks
  * run while the finger is down after the move, each bracketed by the log:
  * begun before the first, not lifted after the last; `tick(until, down)`
  * moves the app's clock after them, given the local time to stop moving on
  * real time and whether the finger is still down. `ask` is the app's carrier; `touches`
  * the runner's.
  */
-/** Whether a drag may reach viewport point `p` by the aim `a`: in its viewport, or over the software keyboard while it
- *  shows (`a.keyboard`, LLP 1080.000 §11: a person's drag to dismiss it ends there). */
-export function reaches(a, [x, y]) {
-  const within = ([bx, by, bw, bh]) => x >= bx && y >= by && x <= bx + bw && y <= by + bh;
-  return within([0, 0, ...a.viewport]) || (Array.isArray(a.keyboard) && within(a.keyboard));
+/** A drag's endpoint in viewport coordinates. `into keyboard` extends its bottom to the screen's safe edge;
+ * the page origin (`screen.y`) must be subtracted before comparing points. */
+export function reaches(a, [x, y], into) {
+  const bottom = into === 'keyboard' ? a.screen?.h - a.screen?.y - a.safeArea?.bottom : a.viewport[1];
+  return x >= 0 && x <= a.viewport[0] && y >= 0 && y <= bottom;
 }
-const outside = (a) => `outside the viewport (${a.viewport[0]} × ${a.viewport[1]})${Array.isArray(a.keyboard) ? ' and the software keyboard' : ' and no software keyboard shows'}`;
+const outside = (a, into) => into ? 'outside the screen above its bottom safe area' : `outside the viewport (${a.viewport[0]} × ${a.viewport[1]})`;
 
 // What a lost touch's error advises: the synthesizer, unlike XCTest's public calls, does not wait for the app to go idle
 const SETTLE_FIRST = 'a real touch played while native work still moves (a push, a sheet, the keyboard) can be lost, so `clock settle` first';
@@ -510,12 +510,17 @@ export async function realTap({ ask, touches, id, at, rel, drag, abandon }) {
   if (aim.error) throw new Error(aim.error);
   if (!sameAim(first.aim, aim.aim)) throw new Error(`${what}: the screen rotated or moved since aim`);
   const a = aim.aim;
+  if (drag) {
+    if (!reaches(a, a.at)) throw new Error(`${what}: the start (${a.at}) is ${outside(a)}`);
+    if (drag.into !== undefined && drag.into !== 'keyboard') throw new Error(`${what}: into takes keyboard`);
+    if (drag.into && !Array.isArray(a.keyboard)) throw new Error(`${what}: into keyboard needs the software keyboard up at the press`);
+  }
   // `screen`: where XCTest's synthesizer presses a tap, on the display whose size is `display` (touches.swift).
   let request = { op: 'tap', point: a.point, ...(a.fixed ? { screen: a.fixed, display: a.display } : {}) }, moves = false, ms = 0;
   if (drag) {
-    // The end, from the start the host resolved just now, in the viewport or over the keyboard it reported with it.
+    // Resolve the end from the host's aim, including its current screen origin and safe area.
     const end = [a.at[0] + drag.dx, a.at[1] + drag.dy];
-    if (!reaches(a, end)) throw new Error(`${what}: the drag would end at (${end}), ${outside(a)}`);
+    if (!reaches(a, end, drag.into)) throw new Error(`${what}: the drag would end at (${end}), ${outside(a, drag.into)}`);
     moves = drag.dx !== 0 || drag.dy !== 0;
     ms = drag.press + drag.hold + (moves ? drag.over : 0);
     // Points per second: what XCTest's velocity measured as on a 3x simulator, whatever its header says (§11).
@@ -535,7 +540,7 @@ export async function realTap({ ask, touches, id, at, rel, drag, abandon }) {
       offset += leg.press + (leg.dx || leg.dy ? leg.over : 0);
       x += leg.dx; y += leg.dy;
       const point = [a.at[0] + x, a.at[1] + y];
-      if (!reaches(a, point)) throw new Error(`${what}: path waypoint (${point}) is ${outside(a)}`);
+      if (!reaches(a, point, drag.into)) throw new Error(`${what}: path waypoint (${point}) is ${outside(a, drag.into)}`);
       checkpoints.push({ offset, end: offset + leg.hold, ops: leg.during, tick: leg.tick });
       offset += leg.hold;
       return { to: [a.fixed[0] + x * rx + y * ux, a.fixed[1] + x * ry + y * uy], over: (leg.dx || leg.dy ? leg.over : 0) / 1000, hold: leg.hold / 1000 };
@@ -729,7 +734,7 @@ export async function realTap({ ask, touches, id, at, rel, drag, abandon }) {
         tapped: id, at: a.at, delivery: 'platform',
         landed: { session: began.session, generation: began.generation, node: began.node, view: began.view },
         touch: { id: began.touch, began: began.t, ended: end.t, ...(began.dispatched != null ? { dispatched: began.dispatched } : {}), moved: moved.length, type: began.type, ...(drag ? { travel, lastMove: moved.at(-1)?.t ?? null } : {}) },
-        ...(drag ? { drag: { dx: drag.dx, dy: drag.dy, press: drag.press, over: moves ? drag.over : 0, hold: drag.hold, ...(legs ? { path: legs.map(({during, tick, ...leg}) => leg) } : {}) } } : {}),
+        ...(drag ? { drag: { dx: drag.dx, dy: drag.dy, press: drag.press, over: moves ? drag.over : 0, hold: drag.hold, ...(drag.into ? { into: drag.into } : {}), ...(legs ? { path: legs.map(({during, tick, ...leg}) => leg) } : {}) } } : {}),
         ...(during.length ? { during } : {}), ...(reachedIn !== undefined ? { reached: reachedIn } : {}),
         // The view the touch began on left the window before the lift (D5): it had no lift, though another view may
         // have acted on the touch (a scroller under a drag, a press on its down), so the caller reads the state

@@ -69,10 +69,9 @@ fn apply(k: &mut Kernel, ops: &[Op]) {
 }
 fn tree(engine: Shared, text: &str) -> Kernel {
     let mut k = Kernel::new(Box::new(Measurer(engine)));
-    let mut style = StyleProps {
-        width: Dimension::Points(320.),
-        ..StyleProps::default()
-    };
+    let mut style = StyleProps::default().with_rows(|rows| {
+        rows.width = Dimension::Points(320.);
+    });
     style.mask.set(StyleId::Width);
     apply(
         &mut k,
@@ -218,10 +217,10 @@ fn paint_only_revision_refreshes_pixels_without_copy_hash_or_shape() {
     let mut p = Painter::new(e.clone(), 1., Box::new(Raster::new()));
     let a = paint(&mut p, &k);
     let stamp = k.node(2).unwrap().paragraph_stamp().unwrap();
-    let mut style = StyleProps {
-        text_color: exact_kernel::ColorValue::Fixed(exact_kernel::Color::rgba(210, 20, 30, 255)),
-        ..StyleProps::default()
-    };
+    let mut style = StyleProps::default().with_rows(|rows| {
+        rows.text_color =
+            exact_kernel::ColorValue::Fixed(exact_kernel::Color::rgba(210, 20, 30, 255));
+    });
     style.mask.set(StyleId::TextColor);
     apply(
         &mut k,
@@ -333,13 +332,12 @@ fn pixel_oracle_after_appearance_scale_width_and_metric_changes() {
     let mut k = tree(e.clone(), "Áj Italic source\nMMMM colored words");
     let mut p = Painter::new(e.clone(), 1., Box::new(Raster::new()));
     let _ = paint(&mut p, &k);
-    let mut style = StyleProps {
-        text_color: exact_kernel::ColorValue::LightDark(
+    let mut style = StyleProps::default().with_rows(|rows| {
+        rows.text_color = exact_kernel::ColorValue::LightDark(
             exact_kernel::Color::rgba(220, 30, 20, 255),
             exact_kernel::Color::rgba(20, 180, 70, 255),
-        ),
-        ..StyleProps::default()
-    };
+        );
+    });
     style.mask.set(StyleId::TextColor);
     apply(
         &mut k,
@@ -358,11 +356,10 @@ fn pixel_oracle_after_appearance_scale_width_and_metric_changes() {
     assert_eq!(stamp, k.node(2).unwrap().paragraph_stamp().unwrap());
     assert_eq!(e.borrow().shape_calls, before);
     for (width, size, scale) in [(320., 16., 1.), (173.25, 16., 1.), (173.25, 22., 2.)] {
-        let mut style = StyleProps {
-            width: Dimension::Points(width),
-            font_size: size,
-            ..StyleProps::default()
-        };
+        let mut style = StyleProps::default().with_rows(|rows| {
+            rows.width = Dimension::Points(width);
+            rows.font_size = size;
+        });
         style.mask.set(StyleId::Width);
         style.mask.set(StyleId::FontSize);
         apply(
@@ -455,10 +452,9 @@ fn retained_identified_600_to_632_reuses_giant_shape() {
     let text = "office café e\u{301} العربية 漢字 🧪 word ".repeat(2048);
     assert!(text.len() >= 65536);
     let mut k = tree(e.clone(), "");
-    let mut bold = StyleProps {
-        font_weight: 700,
-        ..StyleProps::default()
-    };
+    let mut bold = StyleProps::default().with_rows(|rows| {
+        rows.font_weight = 700;
+    });
     bold.mask.set(StyleId::FontWeight);
     apply(
         &mut k,
@@ -995,12 +991,10 @@ mod owned_spec {
                 held_b.push(pb);
             }
             let prior = k.node(2).unwrap().paragraph_stamp().unwrap();
-            let mut style = StyleProps {
-                text_color: exact_kernel::ColorValue::Fixed(exact_kernel::Color::rgba(
-                    220, 15, 25, 255,
-                )),
-                ..StyleProps::default()
-            };
+            let mut style = StyleProps::default().with_rows(|rows| {
+                rows.text_color =
+                    exact_kernel::ColorValue::Fixed(exact_kernel::Color::rgba(220, 15, 25, 255));
+            });
             style.mask.set(StyleId::TextColor);
             apply(
                 &mut k,

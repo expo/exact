@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-const RELEASE_TAG: &str = "hermes-vanilla-d412d3bd8512-v4";
+const RELEASE_TAG: &str = "hermes-vanilla-d412d3bd8512-v6";
 const HERMES_SOURCE_COMMIT: &str = "d412d3bd851278712c20cca25d094e32641a0465";
 
 #[test]

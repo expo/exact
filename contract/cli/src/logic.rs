@@ -423,6 +423,7 @@ pub fn web_linked(plan: &exact_plan::Plan, inputs: &serde_json::Value) -> String
                     | Capability::Transitions
                     | Capability::MediaPicker
                     | Capability::AuthSession
+                    | Capability::Presence
                     | Capability::Numerals
                     | Capability::Dates
                     | Capability::Sqlite
@@ -467,6 +468,11 @@ pub fn web_linked(plan: &exact_plan::Plan, inputs: &serde_json::Value) -> String
             | Capability::Animations
             | Capability::Gradients
             | Capability::Grid
+            | Capability::Shadows
+            | Capability::Corners
+            | Capability::Rotate
+            | Capability::TextStroke
+            | Capability::SymbolPalette
             | Capability::Geometry
             | Capability::Segments
             | Capability::Dataset
@@ -476,6 +482,7 @@ pub fn web_linked(plan: &exact_plan::Plan, inputs: &serde_json::Value) -> String
             | Capability::Transitions
             | Capability::MediaPicker
             | Capability::AuthSession
+            | Capability::Presence
             | Capability::Numerals
             | Capability::Dates
             | Capability::Sqlite
@@ -507,6 +514,7 @@ pub fn apple_linked(uses: exact_runner::Uses, host: &str) -> String {
     for (capability, group) in [
         (Capability::GroupedLists, "grouped_list_exports"),
         (Capability::Markdown, "markup_exports"),
+        (Capability::Presence, "presence_exports"),
     ] {
         if uses.has(capability) {
             entry.push_str(&format!("{apple}::{group}!();\n"));
@@ -647,6 +655,12 @@ mod tests {
             markdown.contains("::exact_apple::markup_exports!();"),
             "{markdown}"
         );
+        let presence = Uses::NONE.with_grants("secret.keep token user-presence optional");
+        for host in ["exact_apple", "exact_apple_update"] {
+            let entry = super::apple_linked(presence, host);
+            assert!(entry.contains("::presence_exports!();"), "{entry}");
+            assert!(entry.contains("::Capability::Presence"), "{entry}");
+        }
     }
 
     #[test]

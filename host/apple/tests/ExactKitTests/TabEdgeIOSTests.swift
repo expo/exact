@@ -24,21 +24,21 @@ final class TabEdgeIOSTests: XCTestCase {
 
     private func spin(_ seconds: Double) { RunLoop.main.run(until: Date().addingTimeInterval(seconds)) }
 
-    private func fixture() throws -> ExactSession {
+    private func fixture(wholeScreen: Bool = false) throws -> ExactSession {
         let path = try XCTUnwrap(ProcessInfo.processInfo.environment["EXACT_TAB_EDGE_PLAN"], "build.mjs --test --ios compiles the tab-edge fixture")
         ExactGroupedLists.install()
         let session = ExactApp.shared.makeSession(label: "tab-edge")
         self.session = session
         let view = ExactView(session: session)
         let host = UIViewController()
-        let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene
+        let scene = hostedWindowScene()
         let window = scene.map { UIWindow(windowScene: $0) } ?? UIWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
-        window.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+        window.frame = wholeScreen ? (window.windowScene?.screen.bounds ?? window.frame) : CGRect(x: 0, y: 0, width: 402, height: 874)
         window.rootViewController = host
         window.makeKeyAndVisible()
         host.view.addSubview(view)
         self.window = window
-        XCTAssertNil(session.boot(plan: try Data(contentsOf: URL(fileURLWithPath: path)), size: CGSize(width: 402, height: 874)).error)
+        XCTAssertNil(session.boot(plan: try Data(contentsOf: URL(fileURLWithPath: path)), size: window.bounds.size).error)
         view.frame = host.view.bounds
         view.layoutIfNeeded()
         try waitForRoute("scrolls")
@@ -73,17 +73,26 @@ final class TabEdgeIOSTests: XCTestCase {
 
     /// Scrolled to its end as a finger's scroll ends there: the offset UIKit
     /// rests at, its content size and insets as they are once laid out (a
-    /// grouped list's cells size themselves as they come in).
-    private func scrollToEnd(_ sv: UIScrollView) {
-        for _ in 0..<6 {
+    /// grouped list's cells size themselves as they come in). It seeks again
+    /// whenever the measured end moves, and passes on a turn that found the
+    /// scroller already there with no native work in flight.
+    private func scrollToEnd(_ sv: UIScrollView, file: StaticString = #filePath, line: UInt = #line) {
+        guard let session else { return XCTFail("no session", file: file, line: line) }
+        let agent = Agent(session: session)
+        func end() -> CGFloat {
             sv.layoutIfNeeded()
             let i = sv.adjustedContentInset
-            let end = max(-i.top, sv.contentSize.height + i.bottom - sv.bounds.height)
-            if abs(sv.contentOffset.y - end) < 0.5 { break }
-            sv.setContentOffset(CGPoint(x: sv.contentOffset.x, y: end), animated: false)
-            spin(0.1)
+            return max(-i.top, sv.contentSize.height + i.bottom - sv.bounds.height)
         }
-        spin(0.2)
+        waitFor("the scroller rests at its measured end", facts: { "offset \(sv.contentOffset.y), end \(end())" }) {
+            session.presenter.settlePump()
+            let end = end()
+            guard abs(sv.contentOffset.y - end) < 0.5 else {
+                sv.setContentOffset(CGPoint(x: sv.contentOffset.x, y: end), animated: false)
+                return false
+            }
+            return !agent.nativeInFlight()
+        }
     }
 
     /// The route `name`'s scroller and its last row's box in the window,
@@ -124,6 +133,188 @@ final class TabEdgeIOSTests: XCTestCase {
             XCTAssertEqual(nav.viewControllers.count, 2, "\(tab) pushed")
             try assertClear(pushed, tabs)
         }
+    }
+
+    func testAReplacementBarClearsTheGridAndKeepsUIKitScrollAdjustment() throws {
+        try replacementBar()
+    }
+
+    func testAReplacementBarClearsAPushedGridAndRestoresItsInset() throws {
+        try replacementBar(pushed: true)
+    }
+
+    func testAReplacementBarWithHorizontalMarginsClearsTheGrid() throws {
+        try replacementBar(inset: true)
+    }
+
+    /// The bar is the panels' sibling inside a column of their own, not the navigation root's child.
+    func testAReplacementBarInAColumnWithThePanelsClearsTheGrid() throws {
+        try replacementBar(wrapped: true)
+    }
+
+    private func replacementBar(pushed: Bool = false, inset: Bool = false, wrapped: Bool = false) throws {
+        guard #available(iOS 18.0, *) else { throw XCTSkip("setTabBarHidden is iOS 18") }
+        let session = try fixture(wholeScreen: true), p = session.presenter
+        try tap("tab-grid", route: "grid")
+        if pushed { try tap("open-grid", route: "gridPushed") }
+        let name = pushed ? "gridPushed" : "grid"
+        if inset { try tap("inset-bar", route: name) }
+        if wrapped { try tap("wrap-bar", route: name) }
+        let tabs = try XCTUnwrap(p.navigation.tabController)
+        let route = try XCTUnwrap(p.navigation.activeRoute)
+        let scroll = try XCTUnwrap(try node("content-\(name)").scrollView)
+        scrollToEnd(scroll)
+        let originalInset = scroll.adjustedContentInset.bottom
+        let originalOffset = scroll.contentOffset.y
+        let originalFrame = box(scroll)
+        XCTAssertGreaterThan(originalInset, 0)
+
+        let host = try XCTUnwrap(window?.rootViewController)
+        let reference = UIViewController(), native = UIScrollView()
+        host.addChild(reference)
+        reference.view.frame = scroll.convert(scroll.bounds, to: host.view)
+        host.view.insertSubview(reference.view, at: 0)
+        reference.didMove(toParent: host)
+        defer {
+            reference.willMove(toParent: nil)
+            reference.view.removeFromSuperview()
+            reference.removeFromParent()
+        }
+        native.frame = reference.view.bounds
+        native.contentInsetAdjustmentBehavior = .always
+        reference.view.addSubview(native)
+        reference.view.layoutIfNeeded()
+        let systemBottom = reference.view.safeAreaInsets.bottom
+        reference.additionalSafeAreaInsets.bottom = originalInset - systemBottom
+        reference.view.layoutIfNeeded()
+        native.contentSize = scroll.contentSize
+        native.contentOffset = scroll.contentOffset
+        XCTAssertEqual(native.adjustedContentInset.bottom, originalInset, accuracy: 0.5)
+
+        try tap("select-grid", route: name)
+        let bar = try node("selection-bar")
+        waitFor("the native bar hides and select mode settles") { tabs.isTabBarHidden && !Agent(session: session).nativeInFlight() }
+        let obstruction = max(0, box(scroll).maxY - box(bar).minY)
+        reference.additionalSafeAreaInsets.bottom = max(0, obstruction - systemBottom)
+        reference.view.layoutIfNeeded()
+        XCTAssertEqual(scroll.adjustedContentInset.bottom, obstruction, accuracy: 0.5,
+                       "the authored row replaces the tab bar's obstruction, including the indicator only once")
+        XCTAssertEqual(box(scroll), originalFrame, "the grid keeps its whole-view allocation")
+        XCTAssertEqual(scroll.contentOffset.y - originalOffset, native.contentOffset.y - originalOffset, accuracy: 0.5,
+                       "a grid at its end follows the same inset change as an ordinary UIKit scroller")
+        XCTAssertLessThanOrEqual(box(try node("\(name)-30")).maxY, box(bar).minY + 0.5,
+                                 "the final row is visible above the replacement bar")
+        // A row inside the panels' column still paints under the container, which `placeOwner` orders
+        // only among the navigation root's children.
+        if !wrapped {
+            let middle = bar.convert(CGPoint(x: bar.bounds.midX, y: bar.bounds.midY), to: nil)
+            XCTAssertTrue(try XCTUnwrap(window).hitTest(middle, with: nil)?.isDescendant(of: bar) == true,
+                          "the authored row is over the native container")
+        }
+        let selectedOffset = scroll.contentOffset.y, nativeSelectedOffset = native.contentOffset.y
+
+        try tap("select-grid", route: name)
+        reference.additionalSafeAreaInsets.bottom = originalInset - systemBottom
+        reference.view.layoutIfNeeded()
+        waitFor("the native bar and its inset return") {
+            !tabs.isTabBarHidden && !Agent(session: session).nativeInFlight()
+                && abs(scroll.adjustedContentInset.bottom - originalInset) < 0.5
+        }
+        XCTAssertEqual(scroll.adjustedContentInset.bottom, originalInset, accuracy: 0.5)
+        XCTAssertEqual(tabs.additionalSafeAreaInsets.bottom, 0, accuracy: 0.5)
+        XCTAssertEqual(route.additionalSafeAreaInsets.bottom, 0, accuracy: 0.5)
+        XCTAssertEqual(scroll.contentOffset.y - selectedOffset, native.contentOffset.y - nativeSelectedOffset, accuracy: 0.5,
+                       "restoring the bar leaves scroll adjustment to UIKit too")
+        scrollToEnd(scroll)
+        XCTAssertLessThanOrEqual(box(try node("\(name)-30")).maxY, box(tabs.tabBar).minY + 0.5)
+    }
+
+    func testAnAuthoredTablistClearsTheGridAndRestoresTheNativeInset() throws {
+        guard #available(iOS 18.0, *) else { throw XCTSkip("setTabBarHidden is iOS 18") }
+        let session = try fixture(wholeScreen: true), p = session.presenter
+        try tap("tab-grid", route: "grid")
+        let tabs = try XCTUnwrap(p.navigation.tabController)
+        let scroll = try XCTUnwrap(try node("content-grid").scrollView)
+        scrollToEnd(scroll)
+        let originalInset = scroll.adjustedContentInset.bottom
+        try tap("author-tabs", route: "grid")
+        let bar = try node("tabs")
+        let obstruction = box(scroll).maxY - box(bar).minY
+        XCTAssertTrue(tabs.isTabBarHidden)
+        XCTAssertGreaterThan(obstruction, try XCTUnwrap(window).safeAreaInsets.bottom)
+        XCTAssertEqual(scroll.adjustedContentInset.bottom, obstruction, accuracy: 0.5)
+        scrollToEnd(scroll)
+        XCTAssertLessThanOrEqual(box(try node("grid-30")).maxY, box(bar).minY + 0.5)
+        XCTAssertGreaterThan(bar.layer.zPosition, tabs.view.layer.zPosition)
+        try tap("author-tabs", route: "grid")
+        waitFor("the native tab bar restores its inset") {
+            !tabs.isTabBarHidden && abs(scroll.adjustedContentInset.bottom - originalInset) < 0.5
+        }
+        XCTAssertEqual(tabs.additionalSafeAreaInsets.bottom, 0, accuracy: 0.5)
+    }
+
+    func testAReplacementBarSharesClearanceWithOuterInsetsAndTheKeyboard() throws {
+        guard #available(iOS 18.0, *) else { throw XCTSkip("setTabBarHidden is iOS 18") }
+        guard hostedWindowScene() != nil else {
+            throw missing("scene", "native search editing needs the hosted app responder lifecycle")
+        }
+        let session = try fixture(wholeScreen: true), p = session.presenter
+        try tap("tab-grid", route: "grid")
+        try tap("select-grid", route: "grid")
+        let tabs = try XCTUnwrap(p.navigation.tabController), route = try XCTUnwrap(p.navigation.activeRoute)
+        let scroll = try XCTUnwrap(try node("content-grid").scrollView)
+        let bar = try node("selection-bar"), host = try XCTUnwrap(window?.rootViewController)
+        let indicator = host.view.safeAreaInsets.bottom
+        let obstruction = box(scroll).maxY - box(bar).minY
+        waitFor("the authored row sets the bottom inset") { abs(scroll.adjustedContentInset.bottom - obstruction) < 0.5 }
+        let added = tabs.additionalSafeAreaInsets.bottom
+        for _ in 0..<3 { p.navigation.reportCovers() }
+        XCTAssertEqual(tabs.additionalSafeAreaInsets.bottom, added, accuracy: 0.5, "reporting does not accumulate the row's inset")
+
+        host.additionalSafeAreaInsets.bottom = 20
+        host.view.layoutIfNeeded()
+        p.navigation.reportCovers()
+        waitFor("an outer container's obstruction is counted once") {
+            abs(scroll.adjustedContentInset.bottom - max(indicator + 20, obstruction)) < 0.5
+        }
+        XCTAssertEqual(tabs.additionalSafeAreaInsets.bottom, max(0, obstruction - indicator - 20), accuracy: 0.5)
+        host.additionalSafeAreaInsets.bottom = 0
+        host.view.layoutIfNeeded()
+        p.navigation.reportCovers()
+        waitFor("the row takes back only its own clearance") { abs(scroll.adjustedContentInset.bottom - obstruction) < 0.5 }
+
+        tabs.additionalSafeAreaInsets.bottom += 20
+        tabs.view.layoutIfNeeded()
+        p.navigation.reportCovers()
+        tabs.view.layoutIfNeeded()
+        XCTAssertEqual(tabs.additionalSafeAreaInsets.bottom, 20, accuracy: 0.5, "an app's own inset survives the row's reconciliation")
+        tabs.additionalSafeAreaInsets.bottom -= 20
+        tabs.view.layoutIfNeeded()
+        p.navigation.reportCovers()
+        tabs.view.layoutIfNeeded()
+        XCTAssertEqual(tabs.additionalSafeAreaInsets.bottom, added, accuracy: 0.5)
+
+        let search = try XCTUnwrap(route.navigationItem.searchController)
+        search.isActive = true
+        let field = search.searchBar.searchTextField
+        XCTAssertTrue(field.becomeFirstResponder())
+        waitFor("the search field is presented") { search.isActive && !search.isBeingPresented && field.window != nil }
+        let top = try XCTUnwrap(window).bounds.maxY - 300
+        setKeyboard(p, top: top, responder: field)
+        XCTAssertTrue(p.editsInBar(of: route.view))
+        XCTAssertEqual(p.keyboardTop ?? 0, top, accuracy: 0.5)
+        defer {
+            setKeyboard(p, top: nil)
+            field.resignFirstResponder()
+            search.isActive = false
+        }
+        waitFor("the keyboard extends the inherited row's safe area") {
+            abs(route.view.safeAreaInsets.bottom - 300) < 0.5 && abs(scroll.adjustedContentInset.bottom - 300) < 0.5
+        }
+        XCTAssertEqual(tabs.additionalSafeAreaInsets.bottom, added, accuracy: 0.5)
+        setKeyboard(p, top: nil)
+        field.resignFirstResponder()
+        waitFor("dismissing the keyboard restores the row's inset") { abs(scroll.adjustedContentInset.bottom - obstruction) < 0.5 }
     }
 
     func testRouteWaitIncludesDelayedPressDelivery() throws {

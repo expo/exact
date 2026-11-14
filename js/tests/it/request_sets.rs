@@ -535,7 +535,7 @@ fn the_runner_emits_five_reads_from_one_turn_and_settles_on_the_last_reply() {
             Placement::Main
         });
         let data = Mixed::new(module, RustSource(ordered), &["batch"], &[]).unwrap();
-        let data = Placed::built(data, exact_runner::Placement::Main, |_| {
+        let data = Placed::built(data, exact_runner::Placement::Main, |_, _| {
             unreachable!("inline")
         });
         let mut data = Swappable::off(Storage::new(data));

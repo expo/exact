@@ -86,6 +86,83 @@ fn upload(path: &str) -> Request {
 
 const GRANTS: &str = "net.fetch https://example.test\nfs.read app:/tmp";
 
+struct Gate {
+    open: Arc<(Mutex<bool>, Condvar)>,
+    entered: Receiver<()>,
+}
+impl Gate {
+    fn new() -> (Self, Arc<dyn Fn() + Send + Sync>) {
+        let open = Arc::new((Mutex::new(false), Condvar::new()));
+        let waiting = open.clone();
+        let (entered, entry) = channel();
+        let hook = Arc::new(move || {
+            entered.send(()).unwrap();
+            let (lock, changed) = &*waiting;
+            let (lock, _) = changed
+                .wait_timeout_while(lock.lock().unwrap(), Duration::from_secs(30), |open| !*open)
+                .unwrap();
+            assert!(*lock, "held reader was not released");
+        });
+        (
+            Self {
+                open,
+                entered: entry,
+            },
+            hook,
+        )
+    }
+    fn wait(&self) {
+        self.entered.recv_timeout(Duration::from_secs(30)).unwrap();
+    }
+    fn release(&self) {
+        *self.open.0.lock().unwrap() = true;
+        self.open.1.notify_all();
+    }
+}
+impl Drop for Gate {
+    fn drop(&mut self) {
+        self.release();
+    }
+}
+
+#[test]
+fn a_finished_initializer_returns_its_reader_before_the_upload_continues() {
+    let _turn = one_at_a_time();
+    let files = Files::new();
+    std::fs::write(files.0.join("tmp/photo.jpg"), b"photo").unwrap();
+    let (core, _, _) = recording(GRANTS);
+    core.set_app_roots(files.roots());
+    let (held, hold) = Gate::new();
+    let readers: Vec<_> = (1..super::body::MAX_READERS)
+        .map(|_| {
+            let hold = hold.clone();
+            super::body::reader(move || hold()).unwrap()
+        })
+        .collect();
+    for _ in &readers {
+        held.wait();
+    }
+    let (reply, hook) = Gate::new();
+    let once = std::sync::atomic::AtomicBool::new(false);
+    *super::body::READERS.replied.lock().unwrap() = Some(Arc::new(move || {
+        if !once.swap(true, Ordering::AcqRel) {
+            hook();
+        }
+    }));
+    let mut request = upload("app:/tmp/photo.jpg");
+    let roots = super::body::prepare(&core.shared, &request, &|| None).unwrap();
+    reply.wait();
+    let result = super::body::resolve(roots.as_ref(), GRANTS, &mut request, &|| None);
+    reply.release();
+    held.release();
+    for reader in readers {
+        reader.join().unwrap();
+    }
+    *super::body::READERS.replied.lock().unwrap() = None;
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(request.body, b"photo");
+}
+
 #[test]
 fn a_body_from_an_app_file_reaches_the_transport_byte_for_byte() {
     let _turn = one_at_a_time();
@@ -363,7 +440,7 @@ fn stuck_readers_are_bounded_and_keep_their_place_until_they_return() {
             while !release.load(Ordering::Acquire) {
                 std::thread::sleep(Duration::from_millis(2));
             }
-            Ok(Vec::new())
+            Ok(Vec::<u8>::new())
         }
     };
     let deadline_after_start = |first: &std::cell::Cell<bool>| {
@@ -402,4 +479,125 @@ fn stuck_readers_are_bounded_and_keep_their_place_until_they_return() {
     assert_eq!(READERS.running(), 0);
     let ok = super::body::acquire(&READERS, |_| Ok(b"bytes".to_vec()), &|| None);
     assert_eq!(ok.unwrap(), b"bytes");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_root_substituted_after_its_check_is_refused_without_sending() {
+    let _turn = one_at_a_time();
+    let files = Files::new();
+    let other = Files::new();
+    std::fs::write(other.0.join("tmp/photo.jpg"), b"outside").unwrap();
+    let (core, sent, woke) = recording(GRANTS);
+    core.set_app_roots(files.roots());
+    let (root, outside) = (files.0.join("tmp"), other.0.join("tmp"));
+    *core.shared.roots_checked.lock().unwrap() = Some(Arc::new(move || {
+        std::fs::remove_dir(&root).unwrap();
+        std::os::unix::fs::symlink(&outside, &root).unwrap();
+    }));
+    core.run(job(1, upload("app:/tmp/photo.jpg")), None)
+        .unwrap();
+    let outcomes = collect(&core, &woke, 1);
+    assert!(
+        matches!(
+            &outcomes[0].1,
+            Outcome::Failed {
+                kind: FailureKind::Refused,
+                ..
+            }
+        ),
+        "{outcomes:?}"
+    );
+    assert!(sent.lock().unwrap().is_empty(), "outside bytes were sent");
+}
+
+#[test]
+fn initialization_is_bounded_by_the_requests_deadline_and_abort() {
+    let _turn = one_at_a_time();
+    for destination in [false, true] {
+        for timeout in [true, false] {
+            let files = Files::new();
+            std::fs::write(files.0.join("tmp/photo.jpg"), b"photo").unwrap();
+            let (core, sent, woke) = recording(&format!("{GRANTS}\nfs.write app:/tmp"));
+            core.set_app_roots(files.roots());
+            let (held, hook) = Gate::new();
+            *core.shared.roots_checked.lock().unwrap() = Some(hook);
+            let (armed, deadline) = channel();
+            *core.shared.deadline_armed.lock().unwrap() = Some(armed);
+            let mut request = if destination {
+                Request::get("https://example.test/download").body_to("app:/tmp/new")
+            } else {
+                upload("app:/tmp/photo.jpg")
+            };
+            if timeout {
+                request = request.timeout(60_000);
+            }
+            core.run(job(1, request), None).unwrap();
+            held.wait();
+            if timeout {
+                if let Some(machine) = &core.machine {
+                    let run = {
+                        let state = core.shared.state.lock().unwrap();
+                        let run = &state.running[0];
+                        (run.ticket, run.generation)
+                    };
+                    machine.timer.expire(run);
+                } else {
+                    deadline
+                        .recv_timeout(Duration::from_secs(30))
+                        .unwrap()
+                        .expire();
+                }
+                let outcomes = collect(&core, &woke, 1);
+                assert!(
+                    matches!(
+                        &outcomes[0].1,
+                        Outcome::Failed {
+                            kind: FailureKind::Timeout,
+                            ..
+                        }
+                    ),
+                    "{outcomes:?}"
+                );
+            } else {
+                core.cancel(&[1]);
+                let until = Instant::now() + Duration::from_secs(30);
+                while core
+                    .shared
+                    .state
+                    .lock()
+                    .unwrap()
+                    .running
+                    .iter()
+                    .any(|r| !r.terminal)
+                {
+                    assert!(Instant::now() < until, "abort did not settle");
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+            }
+            assert!(sent.lock().unwrap().is_empty());
+            assert!(!files.0.join("tmp/new").exists());
+            assert!(core.shared.roots.get().is_none());
+            assert_eq!(
+                super::super::body::READERS.running(),
+                1,
+                "a stalled initializer must keep its reader permit"
+            );
+            held.release();
+            super::body_to::physically_ended(&core);
+            let until = Instant::now() + Duration::from_secs(30);
+            while super::super::body::READERS.running() != 0 && Instant::now() < until {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert_eq!(super::super::body::READERS.running(), 0);
+            let state = core.shared.state.lock().unwrap();
+            assert_eq!(state.counts, [0, 0]);
+            assert_eq!(state.bytes, [0, 0]);
+            assert_eq!(state.book.reservations(), (0, 0, 0));
+            drop(state);
+            assert!(core.drain().is_empty());
+            assert!(sent.lock().unwrap().is_empty());
+            assert!(!files.0.join("tmp/new").exists());
+        }
+    }
 }

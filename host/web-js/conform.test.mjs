@@ -1,6 +1,6 @@
 import { test, expect } from 'bun:test';
 import { conformArgs } from './conform-args.mjs';
-import { clockOnAll, clockVerdict, parseStep } from './conform-steps.mjs';
+import { clockOnAll, clockVerdict, failedTests, parseStep } from './conform-steps.mjs';
 import { open } from '../../scripts/agent.mjs';
 import { launchFacts, suiteBrowser } from '../../scripts/agent-launch.mjs';
 import { browserMissing } from '../../scripts/agent-playwright.mjs';
@@ -15,7 +15,7 @@ import { basename, dirname, resolve } from 'node:path';
 const comparisonSource = readFileSync(resolve(import.meta.dir, 'conform.mjs'), 'utf8');
 async function fixtureDrive(browser, {
   refuse = null, broken = null, unavailable = null, poison = null, screenshotError = null,
-  appTests = false, settleAfterRefusal = false, knownTree = false,
+  appTests = false, settleAfterRefusal = false, knownTree = false, evaluate = async () => null, shot = async () => null,
   script = 'tap scripted\nrefused tap refused\nreload\nwheel auto 12\nclock +5',
 } = {}) {
   const events = [], sessions = [], shots = [];
@@ -26,7 +26,7 @@ async function fixtureDrive(browser, {
     ...comparisons, crossBrowser: browser, crossBrowsers: browser?.split(',') ?? [],
     readyBrowsers: browser?.split(',') ?? [], maxSteps: 3,
     STATE_KEYS: ['slots'], LINUX_APART: {}, LINUX_OPS: [], linuxFor: () => null, linuxRef: false,
-    root: '/checkout', here: '/checkout/host/web-js', resolve, parseStep, clockOnAll,
+    root: '/checkout', here: '/checkout/host/web-js', resolve, parseStep, clockOnAll, failedTests,
     resolveApp: () => ({ dir: '/fixture' }),
     existsSync: path => path.endsWith('.steps') || (appTests && path.endsWith('app.test.contract')),
     readFileSync: path => path.endsWith('.steps') ? script : '',
@@ -60,8 +60,9 @@ async function fixtureDrive(browser, {
       const { browser } = options;
       events.push([browser, 'open', options]);
       if (browser === unavailable) throw new Error('engine unavailable');
+      const index = sessions.length;
       const session = {
-        browser, value: 0, pending: ['boot'], carrier: { evaluate: async () => null },
+        browser, value: 0, pending: ['boot'], carrier: { evaluate: source => evaluate(source, index) },
         state: async () => {
           events.push([browser, 'state']);
           return { slots: { value: session.value } };
@@ -89,7 +90,7 @@ async function fixtureDrive(browser, {
           return {};
         },
         screenshot: async path => {
-          shots.push([browser, path]);
+          shots.push([browser, path, await shot(index)]);
           if (browser === screenshotError) throw new Error('capture unavailable');
         },
         close: async () => { events.push([browser, 'close']); },
@@ -136,6 +137,28 @@ test('the wasm and JS drive still delivers every step to its two Chrome pages', 
   expect(run.report.failures).toEqual([]);
   expect(run.report.steps.map(s => s.step)).toEqual(['boot', 'tap scripted', 'refused tap refused', 'reload', 'wheel auto 12', 'clock +5', 'tap auto', 'clock +60000']);
   expect(run.report.steps.every(s => !s.browser && s.differences === 0)).toBe(true);
+});
+
+test('conformance screenshots pin only auto images to one filter, after both pages agree on each image\'s', async () => {
+  const browser = await suiteBrowser();
+  const markup = first => `<img style="image-rendering:${first}"><img style="image-rendering:crisp-edges"><div style="image-rendering:pixelated"><img></div><img>`;
+  const modes = page => page.locator('img').evaluateAll(images => images.map(image => [getComputedStyle(image).imageRendering, image.getAttribute('style')]));
+  try {
+    const agreeing = [await browser.newPage(), await browser.newPage()];
+    for (const page of agreeing) await page.setContent(markup('auto'));
+    const run = await fixtureDrive(null, { evaluate: (source, i) => agreeing[i].evaluate(source), shot: i => modes(agreeing[i]) });
+    const captured = [['pixelated', 'image-rendering:auto'], ['crisp-edges', 'image-rendering:crisp-edges'], ['pixelated', null], ['pixelated', null]];
+    expect(run.shots.length).toBeGreaterThan(0);
+    for (const [, , seen] of run.shots) expect(seen.map(([mode]) => mode)).toEqual(captured.map(([mode]) => mode));
+    expect(run.report.failures).toEqual([]);
+    for (const page of agreeing) {
+      expect(await modes(page)).toEqual([['auto', 'image-rendering:auto'], ['crisp-edges', 'image-rendering:crisp-edges'], ['pixelated', null], ['auto', null]]);
+    }
+    const apart = [await browser.newPage(), await browser.newPage()];
+    await apart[0].setContent(markup('auto')); await apart[1].setContent(markup('crisp-edges'));
+    const disagreeing = await fixtureDrive(null, { evaluate: (source, i) => apart[i].evaluate(source) });
+    expect(disagreeing.report.failures.some(f => /image-rendering/.test(f.what))).toBe(true);
+  } finally { await browser.close(); }
 });
 
 test('one engine can refuse, fail to open or lose its tree while the other finishes', async () => {
@@ -866,9 +889,9 @@ test('every wasm-vs-JS comparison site records through differ, which alone tags 
   const source = readFileSync(resolve(import.meta.dir, 'conform.mjs'), 'utf8');
   expect(source).toContain('const differ = (step, what, field = null) => fail(step, what, field, !crossBrowser);');
   const sites = source.split('\n').filter(l => /\bdiffer\(step,/.test(l));
-  expect(sites.length).toBe(8);
+  expect(sites.length).toBe(9);
   for (const [i, mark] of ["differ(step, 'state ' + x)", 'differ(step, x, crossBrowser ? `tree.${i}` : null)', 'differ(step, x.what, crossBrowser ? x.field : null)',
-    'op.forEach(x => differ(step, x))', 'differ(step, `screenshot: ', 'differ(step, `bound refusals: ', 'differ(step, `sound lines: ', 'differ(step, `storage lines: '].entries()) expect(sites[i], mark).toContain(mark);
+    'op.forEach(x => differ(step, x))', 'differ(step, `image-rendering: ', 'differ(step, `screenshot: ', 'differ(step, `bound refusals: ', 'differ(step, `sound lines: ', 'differ(step, `storage lines: '].entries()) expect(sites[i], mark).toContain(mark);
   // No other call passes `fail`'s difference flag, and Linux's comparisons fail as they are.
   expect(source.split('\n').filter(l => /\bfail\([^\n]*,\s*(?:true|!crossBrowser)\)/.test(l) && !l.includes('const differ ='))).toEqual([]);
   expect(source).toContain("o.forEach(x => fail(step, 'linux ' + x));");
@@ -907,9 +930,21 @@ test('bound comparisons include the evaluation and words while joining view and 
   const start = comparisonSource.indexOf('const boundReasons =');
   const end = comparisonSource.indexOf('}).filter((r, i, all) => r !== all[i - 1]);', start) + '}).filter((r, i, all) => r !== all[i - 1]);'.length;
   const reasons = new Function(source + comparisonSource.slice(start, end) + '; return boundReasons;')();
+  for (const [kind, suffix] of [
+    ['CallLimit', ': past the 65,536 derive calls one evaluation may take'],
+    ['CallDepth', ': past 64 derive call levels'],
+  ]) {
+    const reason = `Trap(${kind} { pc: 19 })${suffix}`;
+    expect(reasons([`site 0: text trapped ${reason}; unset`])).toEqual([reason]);
+  }
   const suffix = ': past the 65,536 list steps one evaluation may take';
   expect(reasons([`poisoned: Instance(Trap(IterationLimit { pc: 17 })) in view 12 (site 58) each subject${suffix}`]))
     .toEqual(reasons([`poisoned: Instance(Trap(IterationLimit { pc: 17 })) in site 58 each subject${suffix}`]));
   expect(reasons([`refused: Trap(IterationLimit { pc: 17 }) in derive "a"${suffix}`]))
     .not.toEqual(reasons([`refused: Trap(IterationLimit { pc: 17 }) in derive "b"${suffix}`]));
+});
+
+test('a failed test\'s detail leaves out a long test\'s progress and the property count', () => {
+  const output = ['test "a": FAIL', '  a: line 3: expected 1', 'still running test "b": 30s, at line 9 of 12 (drag)', 'properties on web: 4 always line checks', 'test "b": FAIL', '  b: line 9: no', '1 passed, 2 failed'].join('\n');
+  expect(failedTests(output)).toEqual(['test "a": FAIL | a: line 3: expected 1', 'test "b": FAIL | b: line 9: no']);
 });

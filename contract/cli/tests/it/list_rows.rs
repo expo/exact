@@ -247,7 +247,10 @@ list testId=\"leading\"
             exact_kernel::Dimension::Points(n) => n,
             other => panic!("{other:?}"),
         };
-        (points(style.padding_left), points(style.padding_right))
+        (
+            points(style.padding_left.clone()),
+            points(style.padding_right.clone()),
+        )
     };
     assert_eq!(face_inset(&r), (16.0, 16.0), "a native button's face");
     // A swipe with leading actions is its author's to pad (what the web's sheet can select).

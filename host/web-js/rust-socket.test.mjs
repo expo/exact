@@ -33,7 +33,7 @@ function standIn(url) {
   const reply = fill => {
     const bytes = [], u8 = v => bytes.push(v), u16 = v => bytes.push(v & 255, v >>> 8 & 255), u32 = v => bytes.push(v & 255, v >>> 8 & 255, v >>> 16 & 255, v >>> 24 & 255);
     const string = v => { const e = new TextEncoder().encode(v); u32(e.length); bytes.push(...e); };
-    u32(11); fill({ u8, u16, u32, string, bytes }); output = Uint8Array.from(bytes); new Uint8Array(memory.buffer, out, output.length).set(output);
+    u32(12); fill({ u8, u16, u32, string, bytes }); output = Uint8Array.from(bytes); new Uint8Array(memory.buffer, out, output.length).set(output);
   };
   // A call (`call_request`) as a Rust source receives it.
   const decode = at => {
@@ -42,6 +42,8 @@ function standIn(url) {
     const raw = () => { const n = u32(), b = new Uint8Array(memory.buffer, at, n).slice(); at += n; return b; }, string = () => new TextDecoder().decode(raw());
     const code = u8(), source = string();
     u8(); for (let n = u32(); n--;) throw new Error('the stand-in takes no arguments');
+    const kindOfTarget = u8(), target = kindOfTarget ? { kind: kindOfTarget, row: u32() } : null;
+    if (kindOfTarget === 3) target.sent = u64();
     for (let n = u32(); n--;) string();
     for (let n = u32(); n--;) { string(); string(); }
     let outcome = null;
@@ -54,10 +56,10 @@ function standIn(url) {
     }
     const kind = u8(), own = kind === 2 ? { id: u32(), ticket: u64() } : null;
     const open = []; for (let n = u32(); n--;) open.push({ id: u32(), ticket: u64(), buffered: u64() });
-    return { code, source, outcome, kind, own, open };
+    return { code, source, target, outcome, kind, own, open };
   };
   const exports = {
-    memory, exact_logic_abi: () => 11, exact_logic_create: () => 1, exact_logic_alloc: () => 0, exact_logic_dealloc() {},
+    memory, exact_logic_abi: () => 12, exact_logic_create: () => 1, exact_logic_alloc: () => 0, exact_logic_dealloc() {},
     exact_logic_output: () => out, exact_logic_output_len: () => output.length,
     exact_logic_call(_session, pointer) {
       const code = new Uint8Array(memory.buffer)[pointer + 4];
@@ -155,16 +157,16 @@ test("a Rust source's socket on the JS target subscribes on open, sends from a m
         ? fail(new Error(`timed out waiting for ${what}: ${JSON.stringify({ shown, heard: [...heard], journal: rt.journal })}`)) : setTimeout(look, 2);
       look();
     });
-    let tickets = 0;
-    const ask = (name, owner = {}) => {
-      const a = data.answer(name, [], store, name, false);
+    let tickets = 0, resources = 0;
+    const ask = (name, owner = { index: resources++ }) => {
+      const a = data.answer(name, [], store, name, false, false, owner);
       expect(a.req).toMatchObject({ socket: true, stream: true, url: `${url}/${name}` });
       const ctl = Object.assign(new AbortController(), { resource: true, owner, ticket: ++tickets, streamName: name, active: () => true });
       // (rt.js sends it as the asking commit's origin, resources.js)
       data.fetch({ ...a.req, origin: 'app' }, m => {
-        try { const p = data.parse(name, [], { streamed: [m] }, store); shown[name] = p.v; for (const go of p.effects ?? []) go(); }
+        try { const p = data.parse(name, [], { streamed: [m] }, store, a.req); shown[name] = p.v; for (const go of p.effects ?? []) go(); }
         catch (e) { shown[name] = `failed: ${e.message}`; }
-      }, ctl).then(o => { shown[name] = data.parse(name, [], o, store).v; });
+      }, ctl).then(o => { shown[name] = data.parse(name, [], o, store, a.req).v; });
       return { ctl, owner };
     };
     const send = (source, stands = true) => {
@@ -178,6 +180,7 @@ test("a Rust source's socket on the JS target subscribes on open, sends from a m
     const book = ask('book');
     await until('the subscription echoed', () => shown.book === 'echo: SUBSCRIBE book');
     const open = turns.find(t => t.outcome?.event === 'open');
+    expect(open.target).toEqual({ kind: 1, row: 0 });
     expect(open).toMatchObject({ code: 4, kind: 2, own: { id: 0, ticket: 1 }, open: [{ id: 0, ticket: 1, buffered: 0 }] });
     expect(rt.journal).toContain('t=0 socket send: 14 bytes (book)');
     // A mutation sends on the handle it kept; a refused commit sends nothing, and says so.
@@ -205,6 +208,7 @@ test("a Rust source's socket on the JS target subscribes on open, sends from a m
     ask('book', book.owner);
     await until('the new subscription', () => said('/book').length === 5);
     expect(turns.findLast(t => t.outcome?.event === 'open').own).toEqual({ id: 0, ticket: 3 });
+    expect(turns.filter(t => t.source === 'book').every(t => t.target.kind === 1 && t.target.row === 0)).toBe(true);
     expect(() => send('hello:book-old')).toThrow('InvalidStateError: the socket is not open');
     expect(turns.at(-1)).toMatchObject({ kind: 1, own: null });
     expect(turns.at(-1).open.map(s => [s.id, s.ticket]).sort()).toEqual([[0, 3], [1, 2]]);

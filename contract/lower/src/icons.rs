@@ -22,7 +22,7 @@ pub(crate) struct Resolved {
     pub name: String,
     pub sf: String,
     pub view_box: String,
-    /// Empty when the SVG is no template, which the web draws as the file.
+    /// Empty for a non-template SVG, drawn from a file or an Apple raster asset.
     /// An even-odd icon's starts `evenodd:` (stage 14 C2), in the plan's row
     /// and the source form alike; a nonzero one's is the `d`s alone, as
     /// before. Every reader strips it through `exact_kernel::Icon`.
@@ -63,7 +63,7 @@ pub(crate) fn is_refused(name: &str) -> bool {
     REFUSED.with(|r| r.borrow().iter().any(|n| n == name))
 }
 
-/// The SVG every host but the web draws ([`crate::icon_svg`]'s template).
+/// The SVG subset drawn as a tinted path ([`crate::icon_svg`]'s template).
 pub(crate) const TEMPLATE: &str = "filled `<path>`s in one opaque colour under the `<svg>`'s viewBox, all by one `fill-rule` (nonzero or evenodd), with no stroke, transform, opacity or other element";
 
 /// An icon's SVG's most bytes.
@@ -75,10 +75,10 @@ fn apple(target: &str) -> bool {
 }
 
 /// The source `target` draws for `icon`, by D10's rule (the one
-/// `tamber-icon-missing` checks): Apple the SF Symbol, else a template
-/// SVG's path (stage 9 A; not yet a watch's), every other host a
-/// template's path, and the web an SVG as written; `None` where it draws
-/// none.
+/// `tamber-icon-missing` checks): Apple draws the SF Symbol, falling back
+/// to an SVG except on watchOS. Non-template SVGs become raster assets
+/// in the Apple build. Other hosts draw template paths; the web and Linux
+/// also draw non-template SVG files.
 fn drawn(
     target: &str,
     icon: &tamber::Icon,
@@ -87,8 +87,10 @@ fn drawn(
     let template = svg.is_some_and(|s| s.not_template.is_none());
     match apple(target) {
         true if icon.sf.is_some() => Some("sf"),
-        true => (template && target != "watchos").then_some("svg"),
-        false => (template || (target == "web" && svg.is_some())).then_some("svg"),
+        true => (svg.is_some() && target != "watchos").then_some("svg"),
+        false => {
+            (template || (matches!(target, "web" | "linux") && svg.is_some())).then_some("svg")
+        }
     }
 }
 
@@ -164,6 +166,22 @@ impl<'a> Home<'a> {
         matches!(confined::read(path, root), Err(Unread::Leaves))
     }
 
+    /// Read the asset by the same ownership rule as an icon's SVG.
+    pub(crate) fn read(&self, file: &str) -> Result<Vec<u8>, String> {
+        let root = self.root.ok_or("the asset has no app directory")?;
+        let path = root.join("assets").join(file);
+        match self.package {
+            Some(_) => confined::read(&path, root).map_err(|why| match why {
+                Unread::Leaves => format!(
+                    "{} leaves the package (a link to a file outside its `assets/`): a package's SVG is its own file",
+                    self.shown(file)
+                ),
+                Unread::Missing(e) | Unread::Failed(e) => format!("{}: {e}", self.shown(file)),
+            }),
+            None => std::fs::read(&path).map_err(|e| format!("{}: {e}", self.shown(file))),
+        }
+    }
+
     /// `assets/<file>` as a refusal names it: a package's by its package.
     fn shown(&self, file: &str) -> String {
         match self.package {
@@ -178,31 +196,19 @@ impl<'a> Home<'a> {
 /// its design file's `assets/` (the app's, or its package's), it doesn't
 /// read as one, a template is over its size (its path travels in the plan
 /// and in every literal source), or a package's is no template (stage 13,
-/// Q2: the web, which alone draws an SVG as written, stages the app's
-/// `assets/` only).
+/// Q2: non-template files are loaded from the app's `assets/` only).
 fn svg_of(icon: &tamber::Icon, home: Home) -> Result<Option<crate::icon_svg::Svg>, String> {
-    let (file, root) = match (&icon.svg, home.root) {
+    let file = match (&icon.svg, home.root) {
         (None, _) => return Ok(None),
         (Some(_), None) => return Err(format!("`{}`: an icon's SVG is under the app's `assets/`; compile this source with `compile_path`", icon.name)),
         (Some(file), _) if file.contains('|') => {
             return Err(format!("`{}`: an SVG's path has no `|`", icon.name))
         }
-        (Some(file), Some(root)) => (file, root),
+        (Some(file), Some(_)) => file,
     };
-    let path = root.join("assets").join(file);
-    // A package's read only as its own file, from the file checked (round 3,
-    // R3-4: [`confined::read`]); the app's as it is.
-    let bytes = match home.package {
-        Some(_) => confined::read(&path, root).map_err(|why| match why {
-            Unread::Leaves => format!(
-                "`{}`: {} leaves the package (a link to a file outside its `assets/`): a package's SVG is its own file",
-                icon.name,
-                home.shown(file)
-            ),
-            Unread::Missing(e) | Unread::Failed(e) => format!("`{}`: {}: {e}", icon.name, home.shown(file)),
-        })?,
-        None => std::fs::read(&path).map_err(|e| format!("`{}`: {}: {e}", icon.name, home.shown(file)))?,
-    };
+    let bytes = home
+        .read(file)
+        .map_err(|why| format!("`{}`: {why}", icon.name))?;
     String::from_utf8(bytes)
         .map_err(|e| e.to_string())
         .and_then(|t| Ok((t.len(), crate::icon_svg::read(&t)?)))
@@ -255,7 +261,7 @@ impl Target {
 
 /// The targets an app ships: its manifest's `host`, `deploy.store` and
 /// `deploy.binaries` keys, and its target crates (`android/`, `linux/`,
-/// `web/`). An app with no manifest is checked for none.
+/// `web/`, `windows/`). An app with no manifest is checked for none.
 fn targets(root: Option<&Path>) -> Vec<Target> {
     // A game's resolved manifest first, as the build reads it (`Manifest::read`).
     let read = |file: &str| {
@@ -274,7 +280,7 @@ fn targets(root: Option<&Path>) -> Vec<Target> {
         }),
     };
     // An app's target crate is a target it builds (theme2's ruling).
-    for dir in ["android", "linux", "web"] {
+    for dir in ["android", "linux", "web", "windows"] {
         if root.is_some_and(|r| r.join(dir).join("Cargo.toml").is_file()) {
             add(dir, format!("the `{dir}/` crate"));
         }
@@ -351,15 +357,15 @@ pub(crate) fn declare<'a>(
                 continue;
             }
             errors.push(match (&svg, &icon.svg) {
-                // A one-colour SVG a watch doesn't draw yet: it needs the SF Symbol.
-                (Some(s), Some(_)) if s.not_template.is_none() => refuse(
+                // A watch draws neither template paths nor raster icon assets.
+                (Some(_), Some(_)) if target == "watchos" => refuse(
                     "tamber-icon-missing",
                     format!("{} has no source for {target}: a watch draws an icon only as an SF Symbol (an `sf` source)", icon.name),
                 ),
                 (Some(s), Some(file)) => refuse(
                     "tamber-icon-svg",
                     format!(
-                        "`{}`: {} is no one-colour shape ({}), and the app ships {target}, which draws an icon only as {TEMPLATE}{} (the web alone draws any SVG as written). To fix it, {}; or start from an SVG already in that form (Material Symbols' are){}",
+                        "`{}`: {} is no one-colour shape ({}), and the app ships {target}, which draws an icon only as {TEMPLATE}{} (the web, Linux, iOS, macOS and tvOS also draw non-template SVG files). To fix it, {}; or start from an SVG already in that form (Material Symbols' are){}",
                         icon.name,
                         home.shown(file),
                         s.not_template.as_deref().unwrap_or(""),

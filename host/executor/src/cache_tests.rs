@@ -12,6 +12,7 @@ pub(in super::super) struct Plan {
     headers: Headers,
     body: Vec<u8>,
     pub(in super::super) held: Option<Receiver<()>>,
+    pub(in super::super) cache_control: Option<&'static str>,
     pub(in super::super) disconnect: bool,
     truncated: bool,
     /// The `Content-Length` the head states, when not the body's.
@@ -29,6 +30,7 @@ impl Plan {
                 .collect(),
             body: body.to_vec(),
             held: None,
+            cache_control: None,
             disconnect: false,
             truncated: false,
             declares: None,
@@ -172,6 +174,7 @@ fn serve(mut socket: TcpStream, server: Arc<(Mutex<ServerState>, Condvar)>) {
         .collect();
     let length = first(&headers, "content-length").map_or(0, |s| s.parse().unwrap());
     socket.read_exact(&mut vec![0; length]).unwrap();
+    let cache_control = first(&headers, "cache-control").unwrap_or("").to_owned();
     let plan = {
         let mut state = server.0.lock().unwrap();
         state.seen.push((method.clone(), path.clone(), headers));
@@ -182,7 +185,11 @@ fn serve(mut socket: TcpStream, server: Arc<(Mutex<ServerState>, Condvar)>) {
         if method == "GET" && plans.front().is_some_and(|p| p.disconnect) {
             return;
         }
-        plans.pop_front().expect("a planned response")
+        let index = plans
+            .iter()
+            .position(|p| p.cache_control.is_none_or(|value| value == cache_control))
+            .expect("a response planned for these request headers");
+        plans.remove(index).unwrap()
     };
     if let Some(held) = plan.held {
         let _ = held.recv_timeout(HANG);
@@ -1142,6 +1149,7 @@ fn a_non_app_read_checks_its_reach_outside_the_state_lock_and_can_hit() {
             state.ordered.push_back(2);
             state.jobs[lane].push_back(Job {
                 ticket: 2,
+                cache_store_withheld: false,
                 request,
                 forced: false,
                 work: None,

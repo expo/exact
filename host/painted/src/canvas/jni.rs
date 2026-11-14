@@ -716,6 +716,7 @@ macro_rules! canvas_jni {
                 id: jint,
                 slot: jint,
                 generation: jint,
+                session: jlong,
                 kind: jstring,
                 payload: jstring,
             ) {
@@ -725,7 +726,7 @@ macro_rules! canvas_jni {
                     index: slot as u32,
                     generation: generation as u32,
                 };
-                with(|h| h.module_event(id as u32, key, &kind, payload));
+                with(|h| h.module_event(id as u32, key, session as u64, &kind, payload));
             }
 
             $crate::canvas_jni_scroll!();

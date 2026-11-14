@@ -5,6 +5,29 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseSync } from 'rolldown/utils';
 import { check, configure, implementationFor, moduleInterfaces } from '../src/typescript.mjs';
+import { languageModelToolCheck, languageModelTools } from '../src/__exact_binding.mjs';
+
+test('literal model declarations follow only constants whose objects cannot escape or mutate', () => {
+  const declaration='export type LanguageModelToolSchemas = [];';
+  const definition="{name:'draft', description:'Tool', inputSchema:{type:'object'}}";
+  const checked=(code)=>languageModelToolCheck(languageModelTools(declaration,[['app.ts', `import {createLanguageModel} from '@exact/language-model';\n${code}`]],parseSync));
+  for (const code of [
+    `const definition=${definition}; createLanguageModel({tools:[definition]});`,
+    `const definition=${definition}; const alias=definition; const options={tools:[alias]}; createLanguageModel(options);`,
+    `const definition=${definition}; function other(definition: any) { definition.name='live'; } createLanguageModel({tools:[definition]});`,
+    `export const name='draft'; const definition={name, inputSchema:{type:'object'}}; createLanguageModel({tools:[definition]});`,
+  ]) expect(checked(code)).toContain('"name":"draft"');
+  for (const code of [
+    `const definition=${definition}; definition.name='live'; createLanguageModel({tools:[definition]});`,
+    `const definition=${definition}; const alias=definition; alias.name='live'; createLanguageModel({tools:[definition]});`,
+    `const definition=${definition}; const options={tools:[definition]}; alter(options); createLanguageModel({tools:[definition]});`,
+    `const definition=${definition}; const list=[definition]; list.push(${definition}); createLanguageModel({tools:list});`,
+    `const definition=${definition}; export {definition}; createLanguageModel({tools:[definition]});`,
+    `export const definition=${definition}; createLanguageModel({tools:[definition]});`,
+    `const schema={type:'object'}; const definition={name:'draft', inputSchema:schema}; schema.type='array'; createLanguageModel({tools:[definition]});`,
+    `const definition=${definition}; const alias=definition; export const options={tools:[alias]}; createLanguageModel({tools:[definition]});`,
+  ]) expect(checked(code)).toBe('');
+});
 
 test('generated json bindings narrow opaque values and retain known DOM dictionaries', async () => {
   const root = mkdtempSync(join(tmpdir(), 'exact-json-bindings-'));

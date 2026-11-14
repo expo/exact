@@ -11,7 +11,7 @@ impl NodeInst {
     }
 
     pub(super) fn constant(sites: &SiteIndex, row: &exact_plan::NodesRow, i: usize) -> bool {
-        sites.deps.bindings[(row.bindings.start + i as u32) as usize].is_constant()
+        sites.data.deps.bindings[(row.bindings.start + i as u32) as usize].is_constant()
     }
 
     /// The value binding `i` last emitted.

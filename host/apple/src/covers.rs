@@ -122,14 +122,7 @@ impl<D: DataSource> Host<D> {
                 error.get_or_insert(format!("cover: {e:?}"));
             }
         }
-        for &(view, block) in blocks {
-            match self.runner.kernel_mut().set_host_block(view, block) {
-                // Its frame is in another space now: sent whatever it is.
-                Ok(()) => self.queue_layout(view),
-                Err(e) => drop(error.get_or_insert(format!("block: {e:?}"))),
-            }
-        }
-        self.runner.place_blocks(placements);
+        error = error.or(self.blocks_into(blocks, placements));
         for &(view, list) in margins {
             if let Err(e) = self.runner.kernel_mut().set_grouped_margins(view, list) {
                 error.get_or_insert(format!("grouped margins: {e:?}"));
@@ -151,5 +144,36 @@ impl<D: DataSource> Host<D> {
             self.canvas_turn(&mut batch);
         }
         self.finish(batch, error)
+    }
+    /// Set allocations and placements before the caller's single layout.
+    pub(super) fn blocks_into(
+        &mut self,
+        blocks: &[(ViewId, Option<HostBlock>)],
+        placements: &[(ViewId, Option<exact_runner::BlockPlacement>)],
+    ) -> Option<String> {
+        let mut error = None;
+        if !blocks.is_empty() {
+            self.presence.unauthored = true;
+            self.height_targets_dirty = true;
+        }
+        for &(view, block) in blocks {
+            let captured = self.native_captured_id(view);
+            match self.runner.kernel_mut().set_host_block(view, block) {
+                // Its frame is in another space now: sent whatever it is.
+                Ok(()) => self.queue_layout(view),
+                Err(e) => drop(error.get_or_insert(format!("block: {e:?}"))),
+            }
+            if captured != self.native_captured_id(view) {
+                self.content_region
+                    .as_mut()
+                    .unwrap()
+                    .native
+                    .as_mut()
+                    .unwrap()
+                    .dirty = true;
+            }
+        }
+        self.runner.place_blocks(placements);
+        error
     }
 }

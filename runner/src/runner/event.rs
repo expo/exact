@@ -887,80 +887,6 @@ impl<D: DataSource> Runner<D> {
             .map_err(ActionBindingError::Dispatch)
     }
 
-    fn binding_projection(
-        &self,
-        code: Code,
-        frames: &[super::Frame],
-        string_bytes: &mut usize,
-    ) -> Result<BindingScalar, ActionBindingRefusal> {
-        use ActionBindingRefusal::{Limit, Unsupported};
-        if code.len > 128 {
-            return Err(Limit);
-        }
-        let mut r = crate::vm::instructions(self.plan.code(code)).peekable();
-        let first = binding_step(&mut r)?;
-        let op = first.op;
-        let mut value = match op {
-            Opcode::Number => Value::Number(first.number),
-            Opcode::Bool => Value::Bool(first.args[0] != 0),
-            Opcode::Unit => Value::Unit,
-            Opcode::Str => {
-                let id = exact_plan::StrId(first.args[0] as u32);
-                if binding_step(&mut r)?.op != Opcode::Return || r.peek().is_some() {
-                    return Err(Unsupported);
-                }
-                return BindingScalar::string(self.plan.str(id), string_bytes);
-            }
-            Opcode::LoadSlot => {
-                let id = first.args[0] as u32;
-                let row = self.plan.slots.get(id as usize).ok_or(Unsupported)?;
-                match self.plan.owner_region(row) {
-                    Some(owner) => super::Frame::row_of(frames, owner.0)
-                        .and_then(|slots| slots.borrow().get(&id).cloned())
-                        .ok_or(Unsupported)?,
-                    None => self.slots.get(id as usize).cloned().ok_or(Unsupported)?,
-                }
-            }
-            Opcode::LoadItem | Opcode::LoadBound => {
-                let depth = first.args[0] as usize;
-                let frame = frames
-                    .len()
-                    .checked_sub(depth + 1)
-                    .and_then(|i| frames.get(i))
-                    .ok_or(Unsupported)?;
-                (if op == Opcode::LoadItem {
-                    &frame.item
-                } else {
-                    &frame.bound
-                })
-                .clone()
-                .ok_or(Unsupported)?
-            }
-            _ => return Err(Unsupported),
-        };
-        let mut fields = 0;
-        loop {
-            let step = binding_step(&mut r)?;
-            match step.op {
-                Opcode::Return if r.peek().is_none() => {
-                    return BindingScalar::capture(&value, string_bytes)
-                }
-                Opcode::Field => {
-                    fields += 1;
-                    if fields > 8 {
-                        return Err(Limit);
-                    }
-                    let index = step.args[0] as usize;
-                    let Value::Record(record) = &value else {
-                        return Err(Unsupported);
-                    };
-                    value = record.get(index).cloned().ok_or(Unsupported)?;
-                }
-                _ => return Err(Unsupported),
-            }
-        }
-    }
-
     fn binding_action(
         &self,
         id: ActionsId,
@@ -1496,3 +1422,5 @@ impl<D: DataSource> Runner<D> {
 
 #[cfg(test)]
 mod retained_binding_tests;
+
+mod projection;

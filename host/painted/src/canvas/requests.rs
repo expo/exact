@@ -68,16 +68,19 @@ impl<D: DataSource + Default> CanvasHost<D> {
         answer
     }
 
-    /// An app module's event, only for the allocation whose view the reader still holds.
+    /// An app module's event, only for the session and allocation whose view the reader still holds.
     pub fn module_event(
         &mut self,
         id: u32,
         key: exact_kernel::NodeKey,
+        session: u64,
         kind: &str,
         payload: String,
     ) {
         let now = self.now();
-        self.force |= self.p.reader_module_event(id, key, kind, payload, now);
+        self.force |= self
+            .p
+            .reader_module_event(id, key, session, kind, payload, now);
     }
 
     /// The reader's answer to request `id`, or its cancellation (`None`).
@@ -105,17 +108,10 @@ impl<D: DataSource + Default> CanvasHost<D> {
         self.force = true;
     }
 
-    /// The activity started or stopped: the page's visibility, which a
-    /// return lock reads (LLP 1133.010 §9).
-    pub fn page_hidden(&mut self, hidden: bool) {
-        let page = self.p.host().runner().page();
-        if page.hidden != hidden {
-            let error = self.p.set_page(exact_runner::Page { hidden, ..page });
-            if let Some(error) = error {
-                eprintln!("exact: page: {error}");
-            }
-            self.force = true;
-        }
+    /// Android's visibility and execution eligibility, composed by `Exact.executionEligible`
+    /// from Activity and promoted service ownership. Release gated streams before returning.
+    pub fn page_hidden(&mut self, hidden: bool, eligible: bool) {
+        self.force |= self.p.page_execution(hidden, eligible);
     }
 
     /// A package's call of the app's handler (`ExtensionContext.invoke`, LLP

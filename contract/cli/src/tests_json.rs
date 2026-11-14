@@ -111,6 +111,7 @@ fn step_json(step: &Step, s: &mut String) {
             to,
             from,
             mouse,
+            into,
             press,
             over,
             hold,
@@ -135,6 +136,10 @@ fn step_json(step: &Step, s: &mut String) {
             }
             if *mouse {
                 s.push_str(",\"mouse\":true");
+            }
+            if let Some(into) = into {
+                s.push_str(",\"into\":");
+                q(into, s);
             }
             for (name, ms) in [("press", press), ("over", over), ("hold", hold)] {
                 if let Some(ms) = ms {

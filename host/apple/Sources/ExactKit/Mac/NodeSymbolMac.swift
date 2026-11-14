@@ -23,11 +23,10 @@ extension NodeView {
         if symbolKey != key {
             symbolKey = key; loadGeneration += 1
             let generation = loadGeneration
-            // An icon with no SF Symbol draws its own path (D10, stage 9 A).
-            image = name.isEmpty ? iconPathImage(side: points) : symbolImage(name, SymbolMeasure.configuration(points: points, weight: weight))
+            image = name.isEmpty ? faceSymbol.flatMap { FaceSymbol.image($0, points: points) } : symbolImage(name, SymbolMeasure.configuration(points: points, weight: weight))
             symbolFound = image != nil; if points <= 0 { image = nil }
-            if name.isEmpty, props["symbolPath"] == nil, !source.hasPrefix("symbol:sf/"), source != "symbol:", symbolRefusal != source { symbolRefusal = source; presenter?.session?.log("image \(RasterRetry.withoutQuery(source)) refused: unknown symbol role") }
-            if !name.isEmpty || source.hasPrefix("symbol:sf/") || source == "symbol:" { symbolRefusal = nil }
+            if name.isEmpty, props["symbolPath"] == nil, props["symbolAsset"] == nil, !source.hasPrefix("symbol:sf/"), source != "symbol:", symbolRefusal != source { symbolRefusal = source; presenter?.session?.log("image \(RasterRetry.withoutQuery(source)) refused: unknown symbol role") }
+            if !name.isEmpty || props["symbolAsset"] != nil || source.hasPrefix("symbol:sf/") || source == "symbol:" { symbolRefusal = nil }
             let clip = symbolClip ?? SymbolClip()
             if symbolClip == nil { clip.wantsLayer = true; clip.layer?.masksToBounds = true; symbolClip = clip; (clipBox ?? self).addSubview(clip) }
             // A template path is filled as its paths at the frame (stage 14 C1,
@@ -45,9 +44,9 @@ extension NodeView {
                 showSymbol(image, on: leaf); leaf.setAccessibilityElement(false)
             }
             // The symbol's size when the kernel's measurer could not say
-            presenter?.queueIntrinsicSize(self, generation: generation, SymbolMeasure.size(name, points: points, weight: weight))
+            presenter?.queueIntrinsicSize(self, generation: generation, props["symbolAsset"] != nil ? image?.size : SymbolMeasure.size(name, points: points, weight: weight))
         }
-        symbolView?.contentTintColor = symbolInk
+        symbolView?.contentTintColor = faceSymbol.map(FaceSymbol.isOriginal) == true ? nil : symbolInk
         symbolView?.symbolConfiguration = symbolConfiguration(SymbolMeasure.configuration(points: points, weight: weight))
         // A colour that comes or goes while its row is selected (TableInkMac.swift).
         symbolView?.cell?.backgroundStyle = symbolBackground(inEmphasizedRow)

@@ -6,8 +6,8 @@ import assert from 'node:assert/strict';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
-import { PLIST_KEYS, modulePlist, packageKeys } from './plist.mjs';
-import { infoPlist, macInfoPlist } from './build.mjs';
+import { PLIST_KEYS, appleMetadataProblem, modulePlist, packageKeys } from './plist.mjs';
+import { entitlements, infoPlist, macInfoPlist } from './build.mjs';
 import { buildPainted } from '../apple-painted/build.mjs';
 
 const packages = resolve(import.meta.dir, '../../packages');
@@ -15,6 +15,47 @@ const purchases = JSON.parse(readFileSync(resolve(packages, 'purchases/apple/exa
 const impl = (plistKeys) => [{ extension: 'purchases', plistKeys }];
 const flat = (plist) => plist.replace(/>\s+</g, '><');
 const KEY = /<key>SKIncludeConsumableInAppPurchaseHistory<\/key><true\/>/;
+
+test('location metadata advice chooses one grant and keeps prerequisites beside it', () => {
+  const key = 'NSLocationWhenInUseUsageDescription';
+  for (const platform of ['ios', 'macos']) {
+    const path = `host.${platform}.infoPlist.${key}`;
+    const background = platform === 'macos'
+      ? ' or write `device.geolocation-background purpose.<key>` beside `device.geolocation purpose.<key>`' : '';
+    assert.equal(appleMetadataProblem(`${path}: not a known key`),
+      `${path}: refused; choose one: write \`device.geolocation purpose.<key>\` or write \`device.geolocation-approximate purpose.<key>\`${background}`);
+  }
+  const path = 'host.ios.infoPlist.NSLocationAlwaysAndWhenInUseUsageDescription';
+  assert.equal(appleMetadataProblem(`${path}: not a known key`),
+    `${path}: refused; write \`device.geolocation-background purpose.<key>\` beside \`device.geolocation purpose.<key>\``);
+});
+
+test('metadata refusals reserve specific advice for proven grants', () => {
+  const refusal = (platform, kind, key) => appleMetadataProblem(`host.${platform}.${kind}.${key}: not a known key`);
+  const generic = [
+    ['ios', 'entitlements', 'com.apple.developer.associated-domains'],
+    ['macos', 'entitlements', 'com.apple.developer.associated-domains'],
+    ['macos', 'entitlements', 'com.apple.application-identifier'],
+    ['macos', 'entitlements', 'com.apple.developer.team-identifier'],
+    ['ios', 'entitlements', 'keychain-access-groups'],
+    ...['ios', 'macos'].map(p => [p, 'entitlements', 'com.apple.security.application-groups']),
+    ...['ExactAppGroup', 'ExactAppIdentifier', 'ExactWidgetKinds', 'ExactWidgetTypeScript', 'ExactWidgetGeneration', 'ExactKeychainAccessGroup'].map(k => ['ios', 'infoPlist', k]),
+    ...['allow-jit', 'allow-unsigned-executable-memory', 'disable-library-validation'].map(k => ['macos', 'entitlements', `com.apple.security.cs.${k}`]),
+    ['ios', 'infoPlist', 'ExactCapturesInBackground'],
+    ['ios', 'infoPlist', 'UIBackgroundModes'],
+    ['macos', 'infoPlist', 'ExactProtocolHandlers'],
+    ['ios', 'infoPlist', 'NSLocationTemporaryUsageDescriptionDictionary'],
+  ];
+  const failures = generic.filter(([platform, kind, key]) => !/refused; Exact writes this key itself from its declarations.*docs\/reference.md.*cannot be set here/.test(refusal(platform, kind, key)));
+  assert.deepEqual(failures, []);
+  for (const [key, line] of [
+    ['aps-environment', 'device.push` beside `device.notifications purpose.<key>'],
+    ['com.apple.developer.applesignin', 'auth.apple <client id>'],
+  ]) assert.ok(refusal('ios', 'entitlements', key).includes(line));
+  for (const key of ['ExactAudioSession', 'NSSupportsLiveActivities', 'NSSupportsLiveActivitiesFrequentUpdates'])
+    assert.match(refusal('macos', 'infoPlist', key), /feedback note/);
+  assert.match(refusal('ios', 'infoPlist', 'vendor.key'), /feedback note.*vendor.key/);
+});
 
 test.skipIf(process.platform !== 'darwin')('the painted Café bundle agrees with its plist and verifies after signing', () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-painted-sign-'));

@@ -310,6 +310,10 @@ impl Backend for Ink {
             &[],
             Transform::identity(),
             None,
+            (
+                exact_kernel::ImageRendering::Auto,
+                [w.ceil() as u32, h.ceil() as u32],
+            ),
         );
         true
     }
@@ -549,16 +553,21 @@ impl Backend for Ink {
         clips: &[Shape],
         ts: Transform,
         tint: Option<[u8; 4]>,
+        rendering: exact_kernel::ImageRendering,
     ) {
         self.observe_transform(ts);
-        let size = images::sampling_size(
-            [image.width(), image.height()],
-            dst,
-            self.device_transform(ts),
-        );
+        let size = if rendering == exact_kernel::ImageRendering::Auto {
+            images::sampling_size(
+                [image.width(), image.height()],
+                dst,
+                self.device_transform(ts),
+            )
+        } else {
+            [image.width(), image.height()]
+        };
         let result = self.images.bitmap(&mut self.device, image, size);
         if let Some(texture) = self.accept(result) {
-            self.picture(texture, dst, clips, ts, tint);
+            self.picture(texture, dst, clips, ts, tint, (rendering, size));
         }
     }
 
@@ -578,7 +587,17 @@ impl Backend for Ink {
         self.observe_transform(ts);
         let result = self.images.pixmap(&mut self.device, pixels);
         if let Some(texture) = self.accept(result) {
-            self.picture(texture, dst, clips, ts, None);
+            self.picture(
+                texture,
+                dst,
+                clips,
+                ts,
+                None,
+                (
+                    exact_kernel::ImageRendering::Auto,
+                    [pixels.width(), pixels.height()],
+                ),
+            );
         }
     }
 

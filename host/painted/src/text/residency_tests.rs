@@ -98,7 +98,16 @@ impl Backend for ControlledBackend {
     fn fill(&mut self, _: &Shape, _: [u8; 4], _: Transform) {}
     fn fill_gradient(&mut self, _: &Shape, _: &crate::paint::GradientPaint, _: Transform) {}
     fn fill_border(&mut self, _: &crate::paint::border::BorderFill, _: Transform) {}
-    fn image(&mut self, _: &Arc<Bitmap>, _: Rect4, _: &[Shape], _: Transform, _: Option<[u8; 4]>) {}
+    fn image(
+        &mut self,
+        _: &Arc<Bitmap>,
+        _: Rect4,
+        _: &[Shape],
+        _: Transform,
+        _: Option<[u8; 4]>,
+        _: exact_kernel::ImageRendering,
+    ) {
+    }
     fn text(
         &mut self,
         _: &mut TextEngine,
@@ -153,10 +162,9 @@ fn text_tree(text: &str, width: f32) -> Kernel {
     kernel
 }
 fn resize(kernel: &mut Kernel, width: f32) {
-    let mut style = StyleProps {
-        width: Dimension::Points(width),
-        ..StyleProps::default()
-    };
+    let mut style = StyleProps::default().with_rows(|rows| {
+        rows.width = Dimension::Points(width);
+    });
     style.mask.set(StyleId::Width);
     kernel
         .apply(
@@ -500,10 +508,9 @@ fn catalog_swap_failed_frame_reports_deduplicated_retiring_accepted_storage() {
         Box::new(ControlledBackend { fail: fail.clone() }),
     );
     let mut kernel = text_tree(text, 140.);
-    let mut style = StyleProps {
-        width: Dimension::Points(140.),
-        ..StyleProps::default()
-    };
+    let mut style = StyleProps::default().with_rows(|rows| {
+        rows.width = Dimension::Points(140.);
+    });
     style.mask.set(StyleId::Width);
     kernel
         .apply(
@@ -634,10 +641,9 @@ fn taffy_small_control_after_paragraph_preserves_measure_to_paint_handoff() {
         shared: engine.clone(),
         observed: observed.clone(),
     }));
-    let mut paragraph_style = StyleProps {
-        width: Dimension::Points(140.),
-        ..StyleProps::default()
-    };
+    let mut paragraph_style = StyleProps::default().with_rows(|rows| {
+        rows.width = Dimension::Points(140.);
+    });
     paragraph_style.mask.set(StyleId::Width);
     kernel
         .apply(
@@ -833,10 +839,9 @@ fn two_accepted_owner_widths_survive_handoff_drain_and_warm_repaint() {
     let engine = TextEngine::shared();
     engine.borrow_mut().paragraphs.set_target(0);
     let mut kernel = text_tree(text, 140.);
-    let mut style = StyleProps {
-        width: Dimension::Points(280.),
-        ..StyleProps::default()
-    };
+    let mut style = StyleProps::default().with_rows(|rows| {
+        rows.width = Dimension::Points(280.);
+    });
     style.mask.set(StyleId::Width);
     kernel
         .apply(
@@ -913,10 +918,9 @@ fn lazy_ink_growth_is_counted_in_overlapping_handoff_catalog_and_retiring_owners
     let engine = TextEngine::shared();
     engine.borrow_mut().paragraphs.set_target(0);
     let mut kernel = text_tree(text, 140.);
-    let mut style = StyleProps {
-        width: Dimension::Points(140.),
-        ..StyleProps::default()
-    };
+    let mut style = StyleProps::default().with_rows(|rows| {
+        rows.width = Dimension::Points(140.);
+    });
     style.mask.set(StyleId::Width);
     kernel
         .apply(

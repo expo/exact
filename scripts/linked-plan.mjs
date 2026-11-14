@@ -14,7 +14,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writ
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { bakeTarget, cargoEnvironment, developmentBuildEnv } from './app.mjs';
-import { webOnly } from './app-cli.mjs';
+import { oneScheme, webOnly } from './app-cli.mjs';
 import { appleCargo } from './cargo-check.mjs';
 import { cargoInputPaths, packageDirectories, watchedDigest } from './cargo-dep-info.mjs';
 
@@ -259,10 +259,12 @@ export function recordRustBake(env, outputs = []) {
 }
 
 /** An Apple bake's warning lines for app `name`, in the compiler's order: each, but the SF Symbols only the web draws
- * blank (`webOnly`), which are one line counting them at the first one's place. */
+ * blank (`webOnly`), which are one line counting them at the first one's place, and the literal colours that stay one
+ * in dark mode, one line past one (`oneScheme`), unless a drive reads them (`EXACT_WARNINGS_WHOLE`), which lists each in
+ * its file and says the one line itself. */
 export function bakeWarnings(name, warnings) {
   const web = warnings.filter(webOnly), one = web.length === 1, lines = [];
-  for (const warning of warnings) {
+  for (const warning of process.env.EXACT_WARNINGS_WHOLE ? warnings : oneScheme(warnings)) {
     if (!webOnly(warning)) lines.push(warning);
     else if (warning === web[0]) lines.push(`${warning.split(' warning [')[0]} warning [lower-symbol-platform] ${web.length} SF Symbol use${one ? '' : 's'} draw${one ? 's' : ''} blank on the web, here first: an icon token or a role draws on every host (\`bun exact.mjs contract build --json\` says each, and how)`);
   }

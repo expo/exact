@@ -18,7 +18,7 @@ import org.robolectric.annotation.Config
  * activity. Paused under a dialog it does, as when a permission's answer arrives before the resume; stopped it does
  * not (expo/exact#382). */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [31], manifest = Config.NONE)
+@Config(sdk = [31], manifest = Config.NONE, shadows = [ExtensionInvokeTest.Host::class])
 class ForegroundStartTest {
     private val application = RuntimeEnvironment.getApplication()
     private val services = ForegroundServices(application, "calls") { false }
@@ -40,6 +40,7 @@ class ForegroundStartTest {
     }
 
     @After fun leave() {
+        Exact.hidden(false)
         Claims.held.toList().forEach { it.release() }
         Extensions.paused()
         Extensions.stopped(false)
@@ -47,6 +48,44 @@ class ForegroundStartTest {
     }
 
     private fun started() = shadowOf(application).nextStartedService?.component
+
+    @Test fun promotedClaimsKeepExecutionUntilTheLastOneEndsWhileHidden() {
+        val first = services.claim("call", setOf("phoneCall"), "app")!!
+        val second = services.claim("call", setOf("phoneCall"), "app")!!
+        Exact.hidden(true)
+        assertFalse("a requested service is not yet promoted", Exact.executionEligible())
+        val service = Robolectric.buildService(ForegroundService.Call::class.java).create().get()
+        try {
+            ExtensionInvokeTest.Host.eligibility.clear()
+            Claims.started(service)
+            assertTrue(Exact.executionEligible())
+            assertEquals(listOf(true), ExtensionInvokeTest.Host.eligibility)
+            Exact.hidden(false)
+            Exact.hidden(true)
+            assertTrue("a promoted service keeps execution when the Activity stops", Exact.executionEligible())
+            first.release()
+            assertTrue(Exact.executionEligible())
+            second.release()
+            assertFalse(Exact.executionEligible())
+            assertEquals(false, ExtensionInvokeTest.Host.eligibility.last())
+            assertEquals(true, ExtensionInvokeTest.Host.visibility.last())
+        } finally { service.onDestroy() }
+    }
+
+    @Test fun aFailedPromotionCannotKeepExecutionAfterTheActivityStops() {
+        var lost = false
+        val claim = services.claim("call", setOf("phoneCall"), "app",
+            notification = { throw SecurityException("promotion refused") }, lost = { lost = true })!!
+        val service = Robolectric.buildService(ForegroundService.Call::class.java).create().get()
+        try {
+            Claims.started(service)
+            assertTrue(lost)
+            assertTrue(claim.released)
+            Exact.hidden(true)
+            assertFalse(Exact.executionEligible())
+            assertEquals(false, ExtensionInvokeTest.Host.eligibility.last())
+        } finally { service.onDestroy() }
+    }
 
     @Test fun aStartWhileTheActivityShowsPausedUnderADialogIsMade() {
         Extensions.paused()

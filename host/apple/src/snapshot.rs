@@ -235,7 +235,7 @@ impl<D: exact_runner::DataSource> crate::Host<D> {
                             }
                             let remaining = deadline.saturating_duration_since(Instant::now());
                             if remaining.is_zero() {
-                                executor.forget(&|_| false);
+                                executor.forget(&|_| false, false);
                                 return Err("widget refresh timed out".into());
                             }
                             std::thread::park_timeout(remaining);

@@ -606,7 +606,14 @@ fn run(
     key: &mut Option<Vec<u8>>,
     lits: &mut Vec<Lit>,
 ) -> Result<Option<Lit>, Refusal> {
-    let ins: Vec<_> = instructions(code)
+    if exact_runner::vm::transitive_instructions(plan, code).any(|i| {
+        i.is_ok_and(|i| {
+            i.op == Opcode::LoadDerive && plan.unsettled_body(i.args[0] as u32).is_some()
+        })
+    }) {
+        return Err(Refusal::SidePath);
+    }
+    let ins: Vec<_> = instructions(plan.read_code(code).0)
         .collect::<Result<_, _>>()
         .map_err(|_| Refusal::NonLiteralArm)?;
     let (mut stack, mut locals, mut at, mut steps): (Vec<V>, Vec<V>, usize, usize) =

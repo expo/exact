@@ -46,7 +46,10 @@ import dev.exact.canvas.TrackOwner
 import org.json.JSONArray
 import org.json.JSONObject
 
-class MediaCaptureModule(context: ExtensionContext) : ExactExtension(context), TrackOwner {
+class MediaCaptureModule internal constructor(
+    context: ExtensionContext, private val audioSource: AudioSource?,
+) : ExactExtension(context), TrackOwner {
+    constructor(context: ExtensionContext) : this(context, if (context.agent) null else Capture)
     companion object {
         /** The app's access hatch (D5): the builder, once per capture, after the module's words are set. */
         @JvmStatic var hatch: ((AudioRecord.Builder) -> Unit)? = null
@@ -59,8 +62,10 @@ class MediaCaptureModule(context: ExtensionContext) : ExactExtension(context), T
         )
     }
 
-    private class Track(val id: String, val stream: String, val label: String, val options: JSONObject) {
+    private class Track(val id: String, val stream: String, val label: String, val options: JSONObject, source: AudioSource?) {
+        val audio = source?.let(::TrackAudioSource)
         var enabled = true
+            set(value) { field = value; audio?.enabled = value }
         var muted = true
         var muteReason: String? = "idle"
         var readyState = "live"
@@ -160,7 +165,7 @@ class MediaCaptureModule(context: ExtensionContext) : ExactExtension(context), T
         val make = {
             next += 1
             val t = Track("track-${context.session}-$next", "stream-${context.session}-$next",
-                if (context.agent) "Agent microphone" else "Microphone", args)
+                if (context.agent) "Agent microphone" else "Microphone", args, audioSource)
             t.platformMute = overlay
             tracks[t.id] = t
             opened = true
@@ -187,7 +192,7 @@ class MediaCaptureModule(context: ExtensionContext) : ExactExtension(context), T
         t.consumers[consumer] = Unit
         when {
             t.active -> {
-                consumer.live(if (context.agent) null else Capture)
+                consumer.live(t.audio)
                 if (t.muted) consumer.muted(t.muteReason ?: "idle")
             }
             // While a recognizer holds the microphone exclusively, a track stays idle (LLP 1133.012 D8).
@@ -230,7 +235,7 @@ class MediaCaptureModule(context: ExtensionContext) : ExactExtension(context), T
                 t.platformMute = "interrupted"
             }
         }
-        each(t) { it.live(if (context.agent) null else Capture) }
+        each(t) { it.live(t.audio) }
         settle(t)
         if (t.leased || context.agent) claimBackground()
     }
@@ -268,6 +273,7 @@ class MediaCaptureModule(context: ExtensionContext) : ExactExtension(context), T
     private fun end(t: Track, why: String) {
         if (t.readyState != "live") return
         t.readyState = "ended"; t.active = false
+        t.audio?.removeTaps()
         release(t)
         context.log("media-capture: ${t.id} ended ($why)")
         each(t) { it.ended() }
@@ -474,4 +480,36 @@ class MediaCaptureModule(context: ExtensionContext) : ExactExtension(context), T
             r.release()
         }
     }
+}
+
+/** Disabled audio is silence with the input's sample count; the shared microphone stays unchanged (LLP 1133.033 D8). */
+internal class TrackAudioSource(private val source: AudioSource) : AudioSource {
+    @Volatile var enabled = true
+    override val sampleRate get() = source.sampleRate
+    override val channels get() = source.channels
+    private val taps = java.util.concurrent.CopyOnWriteArrayList<() -> Unit>()
+
+    override fun tap(block: (ShortArray, Int) -> Unit): () -> Unit {
+        val active = java.util.concurrent.atomic.AtomicBoolean(true)
+        // Only this tap's capture callback accesses its reusable silence.
+        var silence = ShortArray(4096)
+        val upstream = source.tap { samples, n ->
+            if (active.get()) {
+                if (enabled) block(samples, n)
+                else {
+                    if (silence.size < n) silence = ShortArray(n)
+                    silence.fill(0, 0, n)
+                    block(silence, n)
+                }
+            }
+        }
+        lateinit var cancel: () -> Unit
+        cancel = {
+            if (active.getAndSet(false)) { upstream(); taps -= cancel }
+        }
+        taps += cancel
+        return cancel
+    }
+
+    fun removeTaps() { taps.toList().forEach { it() } }
 }

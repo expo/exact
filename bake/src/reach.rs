@@ -803,7 +803,7 @@ mod grant_lines_tests;
 mod tests {
     use super::*;
 
-    fn compat(grants: &str) -> Compat {
+    pub(super) fn compat(grants: &str) -> Compat {
         Compat {
             id: "old".into(),
             inputs: json!({"grantCeiling": grants, "javascriptGrants": grants, "rustGrants": ""}),
@@ -818,7 +818,7 @@ mod tests {
         }
     }
 
-    fn app(tables: &[(&str, &str)]) -> tempdir::Dir {
+    pub(super) fn app(tables: &[(&str, &str)]) -> tempdir::Dir {
         let dir = tempdir::Dir::new();
         std::fs::create_dir(dir.0.join("strings")).unwrap();
         for (locale, json) in tables {
@@ -827,7 +827,7 @@ mod tests {
         dir
     }
 
-    mod tempdir {
+    pub(super) mod tempdir {
         pub struct Dir(pub std::path::PathBuf);
         impl Dir {
             pub fn new() -> Dir {

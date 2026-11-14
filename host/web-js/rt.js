@@ -445,7 +445,7 @@ export function commit(f, what = 'commit', finished) {
     store = Store.save(),
     queued = Sched?.save(),
     writes = Ov.save();
-  let ok = true,
+  let sound, ok = true,
     // where a refusal stops it (`Why`)
     step = Booting ? 'building the view' : `running the ${what}`;
   try {
@@ -477,7 +477,7 @@ export function commit(f, what = 'commit', finished) {
     // gated tasks and sequences over the settled state, inside the rollback (LLP 1092 D8, LLP 1125 D2)
     step = 'arming its tasks and sequences';
     Sched?.gates();
-    Sounds.gate?.();
+    sound = Sounds.gate?.();
   } catch (e) {
     ok = false;
     for (const [n, v] of undo.reverse()) write(n, v);
@@ -523,6 +523,11 @@ export function commit(f, what = 'commit', finished) {
     }
   Writes = Finishes = null;
   unpark();
+  // Freeze releases streams and stops sequences even when the tree waits for a view transition.
+  if (ok) {
+    if (Sounds.frozen && Open.size) closeLetGo(inflight, say);
+    Sounds.committed?.(sound);
+  }
   // What the commit would have sent and did not is refused, whatever stopped its tree update (a hook that threw, a
   // poisoned tree, a tail a view transition never ran): an answer's batches that wait for it too (ts-stream.js).
   let sent = 0;
@@ -569,7 +574,7 @@ export function commit(f, what = 'commit', finished) {
     for (const c of cmds) command(...c);
     Sounds.apply?.(cmds);
     Sounds.midiApply?.(cmds);
-    Sounds.stood?.();
+    Sounds.stood?.(sound);
     // after its focus commands, as the wasm host (focus.js); then the focus follows the route (input-glue.js;
     // LLP 1115.000 D4.2)
     if (!Booting) {
@@ -633,6 +638,7 @@ function drain() {
   for (const [e, o] of Scrolls)
     for (const name in o) {
       const at = o[name];
+      if (e[name] !== at) globalThis.exact?.fragment?.cancel(false);
       if (e.$jump) e.$jump(name, at);
       else if (e[name] !== at) {
         if (
@@ -740,6 +746,7 @@ export const Sounds = {
   apply: null,
   own: new Set(['playSound', 'playSounds', 'stopSounds', 'setSounds', 'sendMIDI', 'requestMIDIAccess']),
   gate: null,
+  committed: null,
   stood: null,
   seq: null,
   midi: null,
@@ -779,6 +786,7 @@ Object.assign(Link, {
   busy: () => !!Writes,
   poisoned: () => Poisoned,
   pauseTimers,
+  Invocation,
 });
 /** The app's data sources (LLP 1016). `answer(source, args, store)` gives `{v}` now, `{req}` (an HTTP request the host
  * runs, then `parse`s), a Promise (an executor-local continuation: TypeScript), or `null` while the source is not

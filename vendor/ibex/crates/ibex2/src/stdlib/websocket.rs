@@ -64,6 +64,12 @@ pub trait MessageSender: Send + Sync {
     fn send_text(&self, text: &str) -> Result<(), HostError>;
     fn send_binary(&self, bytes: &[u8]) -> Result<(), HostError>;
     fn close(&self, code: Option<u16>, reason: &str) -> Result<(), HostError>;
+    /// Wait at most `timeout` for a submitted close to reach the transport.
+    /// Apple waits for the platform's closing handshake; portable sockets wait
+    /// for the close frame's write. False means failure or an unconfirmed close.
+    fn wait_close(&self, _timeout: std::time::Duration) -> bool {
+        false
+    }
     fn buffered_amount(&self) -> usize;
     /// An observational snapshot of the transport's outbound message count.
     /// This does not reserve admission: a concurrent or subsequent send may

@@ -1100,7 +1100,7 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
         // an SF Symbol here (an image is laid out at its own size, a symbol
         // in the standard space, so titles stay aligned), its size the
         // cell's Dynamic Type size, drawn again as that changes.
-        let path = row.symbol.flatMap { FaceSymbol.isPath($0) ? $0 : nil }
+        let path = row.symbol.flatMap { FaceSymbol.isCustom($0) ? $0 : nil }
         cell.pathSymbol = path
         if path != nil {
             c.imageProperties.reservedLayoutSize = CGSize(width: UIListContentConfiguration.ImageProperties.standardDimension,
@@ -1156,7 +1156,7 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
         }
         // A colour of its own is the image's, which UIKit draws as it is, as it keeps a title's colour
         // behind a sheet or an alert; a tint it gave the image would grey there (`GroupedCell.inked`)
-        cell.imageInk = ink
+        cell.imageInk = row.symbol.map(FaceSymbol.isOriginal) == true ? nil : ink
         c.image = cell.inked(c.image)
         cell.show(c)
         activePaint(cell, id, content: c)

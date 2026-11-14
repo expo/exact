@@ -5,6 +5,20 @@
 
 use super::{parse_pixel_length, StyleId, StyleValueError, Vec2};
 
+#[cfg(target_arch = "wasm32")]
+type Parsers = (
+    fn(&str) -> Option<([f32; 3], f32)>,
+    fn(&str) -> Option<RotateAxis>,
+);
+#[cfg(target_arch = "wasm32")]
+static LINKED: std::sync::OnceLock<Parsers> = std::sync::OnceLock::new();
+
+/// Link the rotation grammars on wasm (LLP 1047 D2). Native hosts parse directly.
+pub fn link() {
+    #[cfg(target_arch = "wasm32")]
+    let _ = LINKED.set((rotate_grammar, RotateAxis::grammar));
+}
+
 pub(super) fn velocity(text: &str) -> Result<Vec2, StyleValueError> {
     let mut numbers = text.split_whitespace().map(str::parse::<f32>);
     match (numbers.next(), numbers.next(), numbers.next()) {
@@ -46,6 +60,13 @@ fn angle(word: &str) -> Option<f32> {
 /// `rotate`'s value: `none`, `<angle>`, `x|y|z <angle>`, or
 /// `<number>{3} <angle>`, as its axis and its angle in degrees.
 pub fn rotate(text: &str) -> Option<([f32; 3], f32)> {
+    #[cfg(target_arch = "wasm32")]
+    return LINKED.get().and_then(|p| (p.0)(text));
+    #[cfg(not(target_arch = "wasm32"))]
+    rotate_grammar(text)
+}
+
+fn rotate_grammar(text: &str) -> Option<([f32; 3], f32)> {
     let words: Vec<&str> = text.split_ascii_whitespace().collect();
     match words[..] {
         [none] if none.eq_ignore_ascii_case("none") => Some(([0.0, 0.0, 1.0], 0.0)),
@@ -75,7 +96,14 @@ impl RotateAxis {
     /// (its wire form, `css()`). An axis along z is z: a `-z` one turns the
     /// angle the other way instead (`f32_row`), so the 2D path draws it.
     pub fn parse(css: &str) -> Option<Self> {
-        let axis = rotate(css)
+        #[cfg(target_arch = "wasm32")]
+        return LINKED.get().and_then(|p| (p.1)(css));
+        #[cfg(not(target_arch = "wasm32"))]
+        Self::grammar(css)
+    }
+
+    fn grammar(css: &str) -> Option<Self> {
+        let axis = rotate_grammar(css)
             .map(|(axis, _)| axis)
             .or_else(|| axis_only(css))?;
         Some(Self(if axis[0] == 0.0 && axis[1] == 0.0 {

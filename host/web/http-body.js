@@ -15,9 +15,10 @@ export async function boundedHttpBody(response, limit) {
 // A `text/event-stream` parser (HTML's "Parsing an event stream"), the same
 // rules as the native executor's: lines end at CR, LF or CRLF even across
 // chunks; `data` lines join with LF; `id` persists as the cursor; comments
-// and `retry` are dropped (the host never reconnects, LLP 1069.004). One
-// event over `limit` bytes, or line over `limit + 64`, is refused, never
-// truncated: received bytes for lines, decoded UTF-8 bytes for event data.
+// and `retry` are dropped (the host never reconnects, LLP 1069.004). An
+// event whose data is over `limit` bytes, or a line over `limit + 64`, is
+// refused, never truncated: received bytes for lines, decoded UTF-8 bytes for
+// event data.
 const utf8Length = (s) => { let n = 0; for (const c of s) n += charBytes(c); return n; };
 const charBytes = (c) => { const p = c.codePointAt(0); return p < 0x80 ? 1 : p < 0x800 ? 2 : p < 0x10000 ? 3 : 4; };
 export function eventStream(limit) {
@@ -41,7 +42,8 @@ export function eventStream(limit) {
     if (value.startsWith(' ')) value = value.slice(1);
     if (field === 'data') {
       const bytes = utf8Length(value);
-      if (dataBytes + bytes + 1 > limit) throw Error('an event exceeds the response ceiling');
+      // The line feed stored after a value is the event's only when another field follows: counted then, in `dataBytes`.
+      if (dataBytes + bytes > limit) throw Error('an event exceeds the response ceiling');
       data += value + '\n'; dataBytes += bytes + 1; hasData = true;
     } else if (field === 'event') event = value;
     else if (field === 'id' && !value.includes('\0')) id = value;

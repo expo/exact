@@ -978,12 +978,11 @@ mod tests {
                 WhiteSpace::Normal,
             ] {
                 for words in ["  wor", "a longer wor", ""] {
-                    let mut style = StyleProps {
-                        white_space: space,
-                        text_transform: TextTransform::Capitalize,
-                        line_clamp: 2,
-                        ..StyleProps::default()
-                    };
+                    let mut style = StyleProps::default().with_rows(|rows| {
+                        rows.white_space = space;
+                        rows.text_transform = TextTransform::Capitalize;
+                        rows.line_clamp = 2;
+                    });
                     for row in [
                         StyleId::WhiteSpace,
                         StyleId::TextTransform,
@@ -1046,10 +1045,9 @@ mod tests {
         use exact_kernel::{Kernel, NodeType, Op, PropId, StyleId};
         let mut cached = CellMeasurer::default();
         let mut kernel = Kernel::with_monospace();
-        let mut style = StyleProps {
-            white_space: WhiteSpace::Pre,
-            ..StyleProps::default()
-        };
+        let mut style = StyleProps::default().with_rows(|rows| {
+            rows.white_space = WhiteSpace::Pre;
+        });
         style.mask.set(StyleId::WhiteSpace);
         let mut ops = Vec::new();
         for id in 1..=130 {

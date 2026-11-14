@@ -18,6 +18,17 @@ import UIKit
 #endif
 
 extension NodeView {
+    #if !os(macOS)
+    func trackClipboardHandlers(_ listening: Bool) {
+        let listening = listening && presenter != nil && !handlers.isDisjoint(with: Self.clipboardEvents)
+        guard listening != clipboardListening else { return }
+        presenter?.clipboardHandlerCount += listening ? 1 : -1
+        clipboardListening = listening
+    }
+    #endif
+
+    static let clipboardEvents: Set<String> = ["copy", "cut", "paste"]
+
     /// The handlers that make a node focusable: the web's rule that only a
     /// focusable element hears these (a clipboard event goes to the focus).
     static let focusEvents: Set<String> = ["focus", "blur", "key", "keyup", "copy", "cut", "paste"]
@@ -31,11 +42,17 @@ extension NodeView {
 
     /// The event `action` is and its nearest handler, the node or an ancestor.
     func clipboardHearer(_ action: Selector) -> (kind: UInt32, node: NodeView)? {
+        #if !os(macOS)
+        if let presenter, presenter.clipboardHandlerCount == 0 { return nil }
+        #endif
         let kinds: [(Selector, String, UInt32)] = [(#selector(copy(_:)), "copy", 32), (#selector(cut(_:)), "cut", 33), (#selector(paste(_:)), "paste", 34)]
         guard let (_, name, kind) = kinds.first(where: { $0.0 == action }) else { return nil }
         #if os(macOS)
         let chain = sequence(first: self as NSView, next: \.superview)
         #else
+        #if DEBUG
+        presenter?.clipboardAncestryWalks += 1
+        #endif
         // Up the logical ancestry, out of a presentation too (LLP 1123 D2)
         let chain = presenter?.logicalAncestry(of: self) ?? sequence(first: self as UIView, next: \.superview)
         #endif

@@ -483,13 +483,13 @@ extension NodeView {
     ///   runs' backgrounds on the painted baseline, lies within the box;
     /// - its paint is what `Text` draws from an attributed string (font,
     ///   colour, kerning, underline, line-through) and the backgrounds
-    ///   `showNumerals` paints: no shadow, no stroke, nothing hidden.
+    ///   `showNumerals` paints: no shadow, stroke or inline opacity group, nothing hidden.
     /// Any other paragraph is drawn as any other; where it rasters, the
     /// raster rolls whole.
     var rollsNumerals: Bool {
         guard NumeralLink.installed != nil, hasContentTransition, rastersText, !cssVisibilityHidden else { return false }
         let spec = paragraphSpec()
-        guard spec.shadow == nil, !spec.runs.contains(where: { $0.box != nil || $0.hidden || $0.stroke != nil || $0.shadow != nil }),
+        guard spec.shadow == nil, !spec.runs.contains(where: { $0.box != nil || $0.hidden || $0.stroke != nil || $0.shadow != nil || !$0.opacity.isEmpty }),
               let p = paragraphLayout(), p.lines.count <= 1 else { return false }
         guard let first = p.lines.first else { return true }
         let box = paragraphBox()

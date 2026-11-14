@@ -112,3 +112,77 @@ fn gpu_time_is_measured_only_for_a_reader_and_only_with_timestamps() {
         "arming perf drops a reader's sample-less timing at once"
     );
 }
+
+#[test]
+fn world_perf_difference_reads_only_the_requested_ticks_over_the_wire() {
+    #[derive(Default, exact_game::Data)]
+    struct Sample {
+        count: u64,
+    }
+    #[allow(non_snake_case)]
+    #[derive(Default, exact_game::Data)]
+    struct Spans {
+        incarnation: String,
+        generation: u64,
+        spanTicks: u64,
+        spans: Vec<Sample>,
+        error: String,
+    }
+    #[allow(non_snake_case)]
+    #[derive(Default, exact_game::Data)]
+    struct Metrics {
+        tickSpans: Spans,
+    }
+    #[derive(Default, exact_game::Data)]
+    struct WorldState {
+        perf: Metrics,
+    }
+    #[derive(Default, exact_game::Data)]
+    struct Reply {
+        world: WorldState,
+    }
+    let mut s = surface();
+    s.agent(r#"{"op":"clock","now":0}"#);
+    s.agent(r#"{"op":"state","perf":true}"#);
+    s.agent(r#"{"op":"clock","now":34}"#);
+    let read = |text: String| {
+        exact_game::json::from_str::<Reply>(&text)
+            .unwrap()
+            .world
+            .perf
+            .tickSpans
+    };
+    let first = read(s.agent(r#"{"op":"state","perf":true}"#).unwrap());
+    let request = |ticks| {
+        format!(
+            r#"{{"op":"state","perf":true,"span_since":{{"incarnation":{},"generation":{},"ticks":{ticks}}}}}"#,
+            serde_json::to_string(&first.incarnation).unwrap(),
+            first.generation
+        )
+    };
+    let window = read(s.agent(&request(1)).unwrap());
+    assert!(!window.spans.is_empty());
+    assert!(window.spans.iter().all(|s| s.count == 1));
+    let all = read(s.agent(&request(0)).unwrap());
+    assert!(all.spans.iter().all(|s| s.count == 2));
+    let backwards = read(s.agent(&request(3)).unwrap());
+    assert!(backwards.error.contains("counters went back"));
+    s.agent(r#"{"op":"state","perf_reset":true}"#);
+    s.agent(r#"{"op":"clock","now":68}"#);
+    let reset = read(s.agent(r#"{"op":"state","perf":true}"#).unwrap());
+    assert_eq!(reset.spanTicks, first.spanTicks);
+    assert_eq!(reset.incarnation, first.incarnation);
+    assert_ne!(reset.generation, first.generation);
+    assert!(read(s.agent(&request(2)).unwrap())
+        .error
+        .contains("recording generation"));
+    let saved = s.carry().unwrap().unwrap();
+    s.restore(&saved, exact_gpu::Restore::Carry).unwrap();
+    assert!(read(s.agent(&request(2)).unwrap())
+        .error
+        .contains("world incarnation"));
+    s = surface();
+    assert!(read(s.agent(&request(2)).unwrap())
+        .error
+        .contains("world incarnation"));
+}

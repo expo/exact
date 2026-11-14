@@ -923,9 +923,15 @@ design (a `set-state` or `unset-state`: the Contract source that declares its `s
   edit itself, answered before that build reports, is `live`). An edit that breaks an element's
   literal style row that passed (a token of the wrong kind, a value the row doesn't take, a name
   removed) is refused instead, as `propose`, `transaction` and a verifying scrub frame answer any
-  write check: the compiler's own refusal, its id and words, at the row in its Contract source. A
-  row already failing before the edit is the build's to report, and isn't refused (LLP 1121 D3,
-  D7; QUEUE names the rows not judged so). A `live` edit reaches running development builds as a batch, with
+  write check. The refusal is the first diagnostic of the proposed design's build, with its file
+  and location: another row, or a failure the file already had, may come before the broken
+  row. The server builds the design in memory as far as the view (tens of milliseconds); when
+  the background build passed for the design as it is, the edit moves no motion value written
+  into the views, and its tokens reach only rows the check judges, the first failing row is
+  that diagnostic. Otherwise it builds the app whole, to the first refusal, which costs as much
+  as a build. A write that breaks no new row leaves existing failures to the background build
+  (LLP 1121 D3, D7).
+  A `live` edit reaches running development builds as a batch, with
   no reload (see [The live table](#the-live-table-llp-1121-stage-4-12)); a `rebuild` one reloads.
   `propose` through the JS target's dev loop is also `rebuild` when the edit moves a token its pages
   write inline, which the loop's design read marks (a `font-weight` number, an SVG attribute's

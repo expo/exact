@@ -340,6 +340,7 @@ final class BarPress: NSObject {
 /// which Exact then leaves alone.
 final class NavigationStack {
     let proxy = NavigationDelegateProxy()
+    let faceTint = BarFaceTintView()
     var showsBar: Bool
     let order: Int
     let label: String
@@ -509,6 +510,10 @@ extension NavigationHost {
         stack.proxy.host = self
         stacks[ObjectIdentifier(nav)] = stack
         nav.delegate = stack.proxy
+        stack.faceTint.changed = { [weak self, weak nav] in
+            if let nav { self?.retintBarFaces(in: nav) }
+        }
+        nav.navigationBar.addSubview(stack.faceTint)
         return stack
     }
 
@@ -540,10 +545,7 @@ extension NavigationHost {
     /// authored source changed, then run the route hatch — before UIKit lays
     /// the stack out (LLP 1075.003 §3.2, §3.5 "projected defaults"). A plain
     /// tab (PlainTabIOS) has no bar: its route's header is its content.
-    /// Whether a header it lifted keeps its room until the batch being
-    /// applied ends (`coverLifted`).
-    @discardableResult
-    func prepareRoutes(_ routes: [RouteController], in stack: UIViewController) -> Bool {
+    func prepareRoutes(_ routes: [RouteController], in stack: UIViewController) {
         let nav = stack as? UINavigationController
         if let nav {
             hatchNavigation(nav)
@@ -620,13 +622,12 @@ extension NavigationHost {
             c.hatched = true
             c.ownedScroll = scroller
         }
-        let waits = coverLifted(routes)
+        coverLifted(routes)
         // A route's header shown or hidden in place; a push or pop sets the
         // bar in `willShow` instead, with UIKit's transition.
         if let nav, nav.transitionCoordinator == nil, let top = nav.topViewController as? RouteController, routes.contains(top) {
             showBar(nav, animated: nav.view.window != nil)
         }
-        return waits
     }
 
     /// The header shape and the bar a route shows in its stack
@@ -657,11 +658,10 @@ extension NavigationHost {
     /// layout with `reportCovers`, after the push had begun, so a pushed
     /// route's scroller was still below its header's height then, and every
     /// pushed level-1 title arrived inline and expanded only on a pull.
-    /// Covers reach the runtime outside a batch, after its scroll positions
-    /// are restored; lifted while one is applied, the cover and the runtime's
-    /// answer come after it, and true says so: `sync` then gives UIKit the
-    /// stack after them (`syncAfterBatch`).
-    private func coverLifted(_ routes: [RouteController]) -> Bool {
+    /// Lifted while a batch is applied, the cover reaches the runtime after
+    /// it, and every sync until then holds a stack change (`liftHeld`): the
+    /// sync of the runtime's answer gives it to UIKit (`deliverCovers`).
+    private func coverLifted(_ routes: [RouteController]) {
         var lifted = false
         for c in routes {
             for node in (c.lifted.map({ [$0] }) ?? c.barNodes) + [c.scoped].compactMap({ $0 }) where covers[node.id] != .whole {
@@ -669,9 +669,9 @@ extension NavigationHost {
                 lifted = true
             }
         }
-        guard lifted else { return false }
+        guard lifted else { return }
+        if presenter.applying { liftHeld = true }
         presenter.afterBatch { [weak self] in self?.deliverCovers() }
-        return presenter.applying
     }
 
     /// Write the defaults an authored header gives a navigation item, and
@@ -1017,9 +1017,13 @@ extension NavigationHost {
         return appearance
     }()
 
-    /// Register a replacement before its first native layout. Resolve only
-    /// the containing route, preserving that stack's Back relationships.
+    /// Keep the primary owner in the root's authored scroller. For a route's
+    /// replacement, register it before its first native layout, preserving Back.
     func scrollBackendChanged(_ node: NodeView) {
+        if node === container {
+            fitOwner()
+            return
+        }
         for current in ViewPresentation.controllers(for: node) {
             if let route = current as? RouteController, route.host === self, let stack = route.stack {
                 guard route.collapseScroll === node || route.edgeScroll === node || (node.scrollView != nil && contentScroller(of: route) === node) else { return }
@@ -1202,7 +1206,9 @@ extension NavigationHost {
             c.barPresses.append(made.press)
             return made.bar
         }
-        let image = i.badge?.image ?? i.chip?.image(tint: presenter.views[i.id]?.carriedTint ?? presenter.viewport.tintColor) ?? i.symbol.flatMap { FaceSymbol.image($0, points: FaceSymbol.barItemPoints) }
+        let dimmed = c.navigationController?.navigationBar.tintAdjustmentMode == .dimmed
+        let image = i.badge?.image(dimmed: dimmed) ?? i.chip?.image(tint: presenter.views[i.id]?.carriedTint ?? presenter.viewport.tintColor,
+            dimmed: dimmed) ?? i.symbol.flatMap { FaceSymbol.image($0, points: FaceSymbol.barItemPoints) }
         // The same control as last time, still a menu or not and still a
         // picture or words: its item is kept and changed, as a hand-built
         // bar's is, so the glass animates what changed (a heart filling).

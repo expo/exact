@@ -28,6 +28,10 @@ pub(crate) struct Block {
     /// `app`, `route <name>` or `file`. Marked blocks are parts of one app
     /// and are compiled assembled, not one by one.
     pub(crate) check: Option<String>,
+    /// The JSON files shown before it in the same section, each a fence that
+    /// names it after the language (```` ```json cities.json ````): what a
+    /// `ts` block imports beside `app.ts`.
+    pub(crate) files: Vec<(String, String)>,
 }
 
 impl Block {
@@ -78,6 +82,7 @@ pub(crate) fn blocks() -> Vec<Block> {
         let mut design: Option<String> = None;
         let mut marker: Option<String> = None;
         let mut pending: Option<String> = None;
+        let mut files: Vec<(String, String)> = Vec::new();
         let mut split: Vec<(String, String)> = Vec::new();
         let mut after_split = false;
         for (index, line) in text.lines().enumerate() {
@@ -92,7 +97,11 @@ pub(crate) fn blocks() -> Vec<Block> {
                             contract: contract.clone(),
                             design: design.clone(),
                             check: pending.take(),
+                            files: files.clone(),
                         };
+                        if let Some(name) = block.info.strip_prefix("json ") {
+                            files.push((name.trim().to_string(), block.body.clone()));
+                        }
                         if block.info == "ts" && after_split {
                             let parts: Vec<(&str, &str)> = split
                                 .iter()
@@ -130,6 +139,7 @@ pub(crate) fn blocks() -> Vec<Block> {
                         if line.starts_with('#') {
                             contract = None;
                             design = None;
+                            files.clear();
                             after_split = false;
                         }
                     }

@@ -132,7 +132,14 @@ mod tests {
         for ts in [Transform::identity(), Transform::from_rotate(30.0)] {
             let record = |tint| {
                 let mut r = Recorder::new();
-                r.image(&image, (0., 0., 10., 10.), &[], ts, tint);
+                r.image(
+                    &image,
+                    (0., 0., 10., 10.),
+                    &[],
+                    ts,
+                    tint,
+                    exact_kernel::ImageRendering::Auto,
+                );
                 r.ops
             };
             assert_ne!(record(None), record(Some([255, 0, 0, 255])));
@@ -160,13 +167,27 @@ mod tests {
         r.begin(100., 100., 1.);
         r.row_begin(1, (0., 0.), None);
         r.slot_begin(9);
-        r.image(&bitmap, dst, &[], ts, None);
+        r.image(
+            &bitmap,
+            dst,
+            &[],
+            ts,
+            None,
+            exact_kernel::ImageRendering::Auto,
+        );
         r.slot_end();
         r.row_end(dst);
         let plain = set(&r.ops).unwrap().to_vec();
         r.begin(100., 100., 1.);
         assert!(r.slot_again(1, 9));
-        r.image(&bitmap, dst, &[], ts, Some([255, 0, 0, 255]));
+        r.image(
+            &bitmap,
+            dst,
+            &[],
+            ts,
+            Some([255, 0, 0, 255]),
+            exact_kernel::ImageRendering::Auto,
+        );
         r.slot_end();
         let tinted = set(&r.ops).unwrap();
         assert_ne!(plain, tinted);
@@ -184,19 +205,43 @@ mod tests {
     }
 
     #[test]
-    fn a_culled_tinted_image_leaves_no_tint_for_the_next_picture() {
+    fn a_culled_image_leaves_no_tint_or_sampling_for_the_next_picture() {
         let bitmap = picture();
-        let mut r = Recorder::new();
         let ts = Transform::identity();
         let dst = (0., 0., 10., 10.);
-        r.push_clip(&Shape::rect((20., 20., 10., 10.)), ts);
-        r.image(&bitmap, dst, &[], ts, Some([255, 0, 0, 255]));
-        r.pop_clip();
-        r.image(&bitmap, dst, &[], ts, None);
-        let mut at = 0;
-        while at < r.ops.len() {
-            assert_ne!(r.ops[at], super::super::picture::IMAGE_TINT);
-            at = super::super::stream::end(&r.ops, at).unwrap();
+        for mode in [
+            exact_kernel::ImageRendering::Auto,
+            exact_kernel::ImageRendering::CrispEdges,
+            exact_kernel::ImageRendering::Pixelated,
+        ] {
+            let mut r = Recorder::new();
+            r.begin(100., 100., 1.);
+            r.push_clip(&Shape::rect((20., 20., 10., 10.)), ts);
+            r.image(&bitmap, dst, &[], ts, Some([255, 0, 0, 255]), mode);
+            r.pop_clip();
+            r.image(
+                &bitmap,
+                dst,
+                &[],
+                ts,
+                None,
+                exact_kernel::ImageRendering::Auto,
+            );
+            let mut at = 0;
+            let mut drawn = 0;
+            while at < r.ops.len() {
+                assert_ne!(r.ops[at], super::super::picture::IMAGE_TINT);
+                assert_ne!(
+                    r.ops[at],
+                    super::super::picture::IMAGE_RENDERING,
+                    "{mode:?}"
+                );
+                if matches!(r.ops[at], IMAGE | IMAGE_RRECT) {
+                    drawn += 1;
+                }
+                at = super::super::stream::end(&r.ops, at).unwrap();
+            }
+            assert_eq!(drawn, 1);
         }
     }
 
@@ -216,7 +261,14 @@ mod tests {
         if let Some(image) = image {
             // Reaching past the card, whose clip is pending around it.
             let content = (16.0, 8.0, 320.0, 200.0);
-            r.image(image, content, &[Shape::rect(content)], ts, None);
+            r.image(
+                image,
+                content,
+                &[Shape::rect(content)],
+                ts,
+                None,
+                exact_kernel::ImageRendering::Auto,
+            );
         }
         r.slot_end();
         r.pop_clip();
@@ -246,7 +298,14 @@ mod tests {
         assert!(again.slot_again(1, 9));
         let content = (16.0, 8.0, 320.0, 200.0);
         let ts = Transform::identity();
-        again.image(&bitmap, content, &[Shape::rect(content)], ts, None);
+        again.image(
+            &bitmap,
+            content,
+            &[Shape::rect(content)],
+            ts,
+            None,
+            exact_kernel::ImageRendering::Auto,
+        );
         again.slot_end();
         whole.begin(400.0, 800.0, 2.0);
         assert_eq!(
@@ -274,5 +333,41 @@ mod tests {
         assert!(!r.slot_again(2, 9), "no such row");
         r.row_free(1);
         assert!(!r.slot_again(1, 9), "the row was freed");
+    }
+
+    #[test]
+    fn image_sampling_reaches_both_canvas_drawings_and_the_default_is_restored() {
+        use exact_kernel::ImageRendering;
+        let image = picture();
+        for ts in [Transform::identity(), Transform::from_rotate(30.)] {
+            let mut r = Recorder::new();
+            r.begin(100., 100., 1.);
+            for mode in [
+                ImageRendering::CrispEdges,
+                ImageRendering::Pixelated,
+                ImageRendering::Auto,
+            ] {
+                r.image(&image, (20., 20., 10., 10.), &[], ts, None, mode);
+            }
+            let mut at = 0;
+            let mut mode = 0;
+            let mut modes = Vec::new();
+            while at < r.ops.len() {
+                match r.ops[at] {
+                    super::super::picture::IMAGE_RENDERING => mode = r.ops[at + 1],
+                    IMAGE | IMAGE_RRECT => {
+                        modes.push(mode);
+                        mode = 0;
+                        assert_eq!(
+                            r.ops[at],
+                            if ts.is_identity() { IMAGE_RRECT } else { IMAGE }
+                        );
+                    }
+                    _ => {}
+                }
+                at = super::super::stream::end(&r.ops, at).unwrap();
+            }
+            assert_eq!(modes, [1, 2, 0]);
+        }
     }
 }

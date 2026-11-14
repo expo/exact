@@ -147,6 +147,8 @@ final class ControlHost: NSObject {
     var appliedRange: [UInt32: String] = [:]
     /// A radio's group from the kernel (`exact_radio_group`; x2apps survey #2).
     var radioGroup: ((UInt32) -> RadioGroup)?
+    /// A painted group's keys from the kernel (`exact_role_keys`; LLP 1166.000 D2).
+    var roleKeys: ((_ view: UInt32, _ key: String?, _ focused: UInt32?) -> RoleKeys?)?
     /// A select's choice the bound value has not caught up with yet.
     var picked: [UInt32: String] = [:]
     /// Each `progress`'s activity indicator (ProgressIOS.swift): a view,
@@ -287,14 +289,15 @@ final class ControlHost: NSObject {
     /// Asks for every face again at its next read.
     func facesChanged() { faces.removeAll() }
 
-    /// Configures again a control whose accent follows the tint (`AccentColor`,
-    /// `Highlight`) when the tint changes: a native button's configuration draws
-    /// colours made from its value (`carriedAccent`), and a share of it is a value
-    /// control's own tint (`ownTintColor`). Not while UIKit dims the tint, which it
-    /// shows unchanged after, nor for a control still leaving after its owner went.
+    /// A native button's configuration stores colours made from the owner's tint. A value control
+    /// stores a share as its own tint. Refresh them when that tint changes, except while UIKit dims
+    /// it, or after a leaving control's owner has gone.
     func tintChanged(_ owner: NodeView) {
         guard owner.tintAdjustmentMode != .dimmed, presenter.views[owner.id] === owner,
-              owner.style["accent_color"]?.namesTint == true, let control = controls[owner.id] else { return }
+              let control = controls[owner.id] else { return }
+        let face = face(owner.id)
+        guard owner.style["accent_color"]?.namesTint == true || [face.rows.button, face.rows.title, face.rows.subtitle, face.rows.symbol]
+            .contains(where: { $0.values.contains(where: \.namesTint) }) else { return }
         configure(control, owner, on: nil)
     }
 

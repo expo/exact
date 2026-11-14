@@ -58,9 +58,9 @@ const NATIVE_PORTS = 'iOS simulator: a Unix socket; --device: a free TCP port; m
 
 // host/apple/build.mjs's flags, which `ios` and `mac` both run: each documents its own, and takes the rest.
 const APPLE = ['--painted-benchmark', '--watchos', '--watch-sim <udid>', '--ios', '--tvos', '--device', '--run', '--no-install', '--prebuild', '--release', '--host', '--embed', '--bundle', '--distribution', '--unsigned', '--development', '--extensions <kinds>', '--test', '--only <Class,…>',
-  '--archive <out.ipa>', '--sim <udid|name>', '--phone <udid|name>', '--url <url>', '--optimize <speed|size>', '--link <plan>', '--widget-gallery'];
+  '--archive <out.ipa>', '--sim <udid|name>', '--phone <udid|name>', '--url <url>', '--optimize <speed|size|balanced>', '--link <plan>', '--widget-gallery'];
 const appleRest = (documented) => APPLE.filter((spec) => !documented.some(([row]) => specs(row).some((d) => name(d) === name(spec))));
-const OPTIMIZE = ['--optimize speed|size', 'production Rust and ExactKit; default size on iOS/tvOS and embeds, speed on Mac; a game keeps speed and refuses size; app.json host.ios|macos.optimize overrides the default'];
+const OPTIMIZE = ['--optimize speed|size|balanced', 'production Rust and ExactKit; default balanced on iOS/tvOS, size for embeds, speed on Mac; a game keeps speed and refuses size and balanced; app.json host.ios|macos.optimize overrides the default'];
 const PREBUILD = ['--prebuild', 'start the build apart from this shell and return; its log: .exact/<ios|macos>-build.log'];
 /** A build verb's `--json` (`reportBuilt`), with what else its object names and the flags it refuses. */
 const jsonBuilt = (more = '', refuses = '') => ['--json', `one JSON object on stdout, its last line: the artifact's path, target, trust${more} (a failure: code, error); the build's own output on stderr${refuses}`];
@@ -164,10 +164,10 @@ it: web builds the app (web-build); ios, macos and windows build when the build 
 older than its sources, saying so on stderr; windows drives at app.json's window size. Each test launches the app fresh with its own
 store, after its first data has landed; its leading lines (size, epoch, fail fetch …) override flags. Exit 1 when a test fails.
 Host     unnamed: one app.json ships, chosen as verify's (verify --help) and macos or linux too; none here: refused, saying why.
-Server   runs server.ts once a run on DB=.exact/test/db.sqlite, empty at the start and shared by its tests: a reset per
-         test is docs/recipes/rest-backend.md's; refuses a live server or an entry ignoring DB. Nothing is left running.
-Backend  test web never starts a Snapback backend: start snapback4 dev on app.ts’s selected origin’s port
-         first; checked before launch. The app's own server.ts is managed as above. EXACT_PORT is the page’s.
+Server   restarts empty per test (DB=.exact/test/db.sqlite; database:false too); an ancestor's stays shared; else refuses a live server or ignored DB.
+Runs     to completion; nothing is left running.
+Backend  start snapback4 dev on app.ts’s selected origin’s port first; checked before launch.
+         A server this run did not start stays shared. EXACT_PORT is the page’s.
 Lines    tap, type, expect text|tree|state|disabled|refusal, clock data|settle|+<ms>|until state …, reload, back, fail|pass
          fetch, request <METHOD> "/path" [json] [as <persona>] [expect <status>]: docs/recipes/tests.md;
          all: docs/contract-grammar.md "Authored tests".`,
@@ -185,7 +185,7 @@ Ports    --port <n> or EXACT_PORT chooses the page’s port; otherwise web: head
     flags: DRIVE.filter(naming(DRIVE_FIRST, true)),
     more: DRIVE.filter(naming(DRIVE_FIRST, false)),
     internal: ['--test <file>', ...DRIVE_INTERNAL],
-    body: `Gallery: ios|macos widget|activity <entry> tree|state|screenshot|clock · drag: tap <target> drag dx dy [hold ms during "read"] [then dx dy …] (one iOS touch).
+    body: `Gallery: ios|macos widget|activity <entry> tree|state|screenshot|clock · drag: tap <target> drag dx dy [hold ms during "read"] [then dx dy …] (one iOS touch; into keyboard needs --touch platform and keyboard up).
 Ops      a target is a testId, else a view's exact text or label
   tree [<target>|--ax] · logs · layout|perf [<target>] · resize <w>x<h> · close · back
   state [<name>] [--full]  a state, resource or field, dotted: groceries.0.done; >8 KB: sizes
@@ -218,8 +218,8 @@ light and dark on the screen it opens to. The tests are app.test.contract's, the
 beside it, as test runs them. Each test's last screen is checked the same way in the test's own session (web: at
 both widths; ios runs them with UIKit's bars). A real-time relaunch checks what a passing test stored.
 One report: the build if it built, compiler warnings (as contract build prints them), the tests, check's findings (each
-once, naming the screens it was on), the relaunch, then "verify: clean" or "verify: N problems". A clean verify
-is done. One screenshot of each screen goes to .exact/verify/ (the first screen's per width and scheme, each
+once, naming the screens it was on), tree --ax's (each screen's accessibility tree, read once), the relaunch, then
+"verify: clean" or "verify: N problems". A clean verify is done. One screenshot of each screen goes to .exact/verify/ (the first screen's per width and scheme, each
 test's named by the test, the relaunch's): look at them when the features work.
 Large    each of those screens again at the largest text size (ios: the simulator's, put back
          after; web: a 53 px root, iOS's body there, at 390x844, and the tests run again there
@@ -228,21 +228,21 @@ Large    each of those screens again at the largest text size (ios: the simulato
          projects into its navigation bar and its tab bar. A smaller or fixed font is the tell, as is a line-clamp
          in a list's row or hyphens="auto" on several words (a UILabel hyphenates only a word longer
          than its line; grouped list rows hyphenate as cells do). Counted ("3 at the largest text size"), never failing.
-Native   windows: headless at app.json's window size, then the desktop's window (windows-window.png); android: the APK, light and dark. Neither checks, reads the largest text or scrolls yet.
+Native   windows: headless at app.json's window size, then the desktop's window (windows-window.png); android: the APK, light and dark. Neither checks, reads the accessibility tree or the largest text, or scrolls yet.
 Scroll   ios: ~15 s of real touches on a long first-screen list, once per build (host/apple/feel): "like UIKit", or
          a counted finding per metric the app can fix; Exact's own one uncounted line; load > cores: physics only.
-Runs     to completion: exit 1 when the build, a test, a launch or the relaunch fails; the findings (check's, the relaunch's,
-         the largest text size's, scrolling's) and the compiler's warnings are counted, never fail it but under --strict. A
+Runs     to completion: exit 1 when the build, a test, a launch or the relaunch fails; the findings (check's, tree --ax's, the
+         relaunch's, the largest text size's, scrolling's) and the compiler's warnings are counted, never fail it but under --strict. A
          screen no test ends on is not checked: end a test there. Its first line says about how long it takes (its last run's time): wait that once.
-Server   an app with its own (server.ts, the rest pattern's): verify runs it where app.ts calls it, on an empty database
-         (DB=.exact/verify/db.sqlite), through the relaunch, then stops it; one already answering there (a dev server) is
-         refused, named, never written to; so is a server entry that does not read DB (process.env.DB), with the fix.
+Server   an app's own: restarts empty per test, database:false too; relaunch replays the chosen test first.
+         DB=.exact/verify/db.sqlite is removed after. Remote servers stay shared; an ancestor's is shared by test and agent --test.
+         A dev server already answering is refused, as is an entry that does not read DB unless server.database is false.
 Ports    none to choose: test's and agent's (headless Chrome over a pipe; a simulator's socket).`,
     example: 'bun exact.mjs verify            # bun exact.mjs verify ios once at the end, for an iPhone app',
   },
   ios: {
     line: 'build for an iOS simulator; macOS installs it (--run launches)',
-    usage: 'bun exact.mjs ios [--run|--prebuild|--no-install] [--json] [--release] [--sim <udid|name>] [--device [--phone <udid|name>]] [--url <url>] [--optimize speed|size]',
+    usage: 'bun exact.mjs ios [--run|--prebuild|--no-install] [--json] [--release] [--sim <udid|name>] [--device [--phone <udid|name>]] [--url <url>] [--optimize speed|size|balanced]',
     common: ['ios [--run] [--sim <name>]    build for a simulator; --run launches it'],
     flags: [
       ['--run', 'also launch it (in Simulator.app, or on the phone); returns once launched'],
@@ -294,7 +294,7 @@ Ports    none. Runs to completion.`,
   },
   mac: {
     line: 'build the macOS app (--run launches it here)',
-    usage: 'bun exact.mjs mac [--run|--prebuild] [--json] [--release] [--bundle] [--url <url>] [--optimize speed|size]',
+    usage: 'bun exact.mjs mac [--run|--prebuild] [--json] [--release] [--bundle] [--url <url>] [--optimize speed|size|balanced]',
     flags: [
       ['--run', 'assemble the .app and launch it when built, in the foreground (its log here) until it quits'],
       jsonBuilt(', signing (an identity\'s SHA-1, or ad-hoc)', '; not with --run, --prebuild or --test'),
@@ -567,7 +567,7 @@ Ports    none; send makes one HTTPS request. Runs to completion.`,
   // exact2's own verb that makes an app (scripts/exact.mjs new), not one of an app's.
   new: {
     line: 'a new app outside this repo, using this checkout',
-    usage: 'bun <exact2>/scripts/exact.mjs new <path> [--name <name>] [--bundle-id <id>] [--with ios,mac,linux,android,windows]\n       bun <exact2>/scripts/exact.mjs new <path> --game [--assets]',
+    usage: 'bun <exact2>/scripts/exact.mjs new <path> [--name <name>] [--bundle-id <id>] [--with ios,mac,linux,android,windows] [--rust]\n       bun <exact2>/scripts/exact.mjs new <path> --game [--assets]',
     flags: [
       ['--name <name>', 'app only: the name people see (app.json app.name); default: the path\'s last part, capitalised'],
       ['--bundle-id <id>', 'app only: the reverse-DNS id (app.json app.id); default: com.example.<name>-<hex>'],
@@ -575,6 +575,7 @@ Ports    none; send makes one HTTPS request. Runs to completion.`,
       ['--online', 'use the server without a local device'],
       ['--snapback', 'write a guestbook wired to the Snapback backend above the app'],
       ['--port <n>', 'the Snapback origin’s port with --snapback (default 4400)'],
+      ['--rust', 'app only: the data sources in Rust (data/, with apple/ and web/ host crates) instead of app.ts'],
       ['--game', 'a game (game/README.md): a Rust world under Contract\'s menus'],
       ['--assets', 'with --game: declare game.assets'],
       ['--update', 'rewrite an existing app\'s generated files (its exact.mjs update runs this)'],
@@ -582,7 +583,9 @@ Ports    none; send makes one HTTPS request. Runs to completion.`,
     ],
     body: `The app is eight files and no Rust: app.contract, app.ts, app.test.contract, app.json, exact.mjs,
 AGENTS.md, package.json and .gitignore. A native verb (ios, mac, linux, android, windows) names its platform
-in app.json the first time it runs and builds in a workspace generated under .exact/ (LLP 1153 D1). Give
+in app.json the first time it runs and builds in a workspace generated under .exact/ (LLP 1153 D1). With --rust,
+app.ts is a Rust crate instead: data/ answers the sources, apple/ and web/ link it, in the app's own Cargo
+workspace (docs/reference.md, "Rust data sources"). Give
 --name and --bundle-id here, before the first build: a later change to the id makes the next build cold
 and leaves the old app installed. Then cd there: its exact.mjs runs everything, and bun exact.mjs help
 lists its verbs. Read docs/start-here-site.md first for a website, else docs/start-here.md.

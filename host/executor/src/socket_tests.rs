@@ -16,7 +16,7 @@ use std::{
     sync::{
         atomic::{AtomicUsize, Ordering},
         mpsc::{channel, Receiver, RecvTimeoutError, Sender},
-        Arc, Mutex,
+        Arc, Condvar, Mutex,
     },
     time::{Duration, Instant},
 };
@@ -31,6 +31,10 @@ struct Peer {
     sent: Mutex<Vec<String>>,
     buffered: AtomicUsize,
     frames: AtomicUsize,
+    confirmed: AtomicUsize,
+    flushed: (Mutex<bool>, Condvar),
+    waiting_close: (Mutex<bool>, Condvar),
+    reader_progress: Mutex<Option<Sender<bool>>>,
 }
 
 struct Scripted(Arc<Peer>);
@@ -61,6 +65,9 @@ impl MessageSource for Socket {
         unreachable!("a two-way socket reads events")
     }
     fn next_event(&mut self) -> Result<Event, HostError> {
+        if let Some(progress) = self.sender.0.reader_progress.lock().unwrap().as_ref() {
+            progress.send(true).unwrap();
+        }
         loop {
             self.signal.check()?;
             match self.rx.recv_timeout(Duration::from_millis(5)) {
@@ -78,6 +85,14 @@ impl MessageSource for Socket {
     }
     fn sender(&self) -> Option<Arc<dyn MessageSender>> {
         Some(self.sender.clone())
+    }
+}
+
+impl Drop for Socket {
+    fn drop(&mut self) {
+        if let Some(progress) = self.sender.0.reader_progress.lock().unwrap().as_ref() {
+            let _ = progress.send(false);
+        }
     }
 }
 
@@ -103,6 +118,18 @@ impl MessageSender for Sender_ {
             .unwrap()
             .push(format!("close {code} {reason}"));
         Ok(())
+    }
+    fn wait_close(&self, timeout: Duration) -> bool {
+        *self.0.waiting_close.0.lock().unwrap() = true;
+        self.0.waiting_close.1.notify_all();
+        let (lock, changed) = &self.0.flushed;
+        let (done, _) = changed
+            .wait_timeout_while(lock.lock().unwrap(), timeout, |done| !*done)
+            .unwrap();
+        if *done {
+            self.0.confirmed.fetch_add(1, Ordering::SeqCst);
+        }
+        *done
     }
     fn buffered_amount(&self) -> usize {
         self.0.buffered.load(Ordering::Relaxed)
@@ -505,4 +532,176 @@ fn a_quiet_socket_ends_as_a_timeout_and_a_message_starts_the_count_again() {
     );
     // The socket asked with no idle timeout is still read.
     assert_eq!(core.shared.state.lock().unwrap().running.len(), 1);
+}
+
+#[test]
+fn a_message_between_forget_and_release_keeps_the_reader_for_close_confirmation() {
+    let (core, peer, woke) = setup();
+    let (progress, progressed) = channel();
+    *peer.reader_progress.lock().unwrap() = Some(progress);
+    core.run_owned(socket(1), None).unwrap();
+    next(&core, &woke);
+    assert!(progressed.recv_timeout(Duration::from_secs(5)).unwrap());
+    let wire = feed(&peer, 0);
+    let before = peer.clone();
+    *core.shared.before_stream_release.lock().unwrap() = Some(Box::new(move || {
+        assert!(before.sent.lock().unwrap().is_empty());
+        wire.send(frame("between forgetting and close submission"))
+            .unwrap();
+        assert!(
+            progressed.recv_timeout(Duration::from_secs(5)).unwrap(),
+            "the reader dropped the socket before release could submit its close"
+        );
+        // The reader has discarded the message and is waiting for another event.
+        assert!(before.sent.lock().unwrap().is_empty());
+    }));
+    std::thread::scope(|scope| {
+        let peer = peer.clone();
+        scope.spawn(move || {
+            let (lock, changed) = &peer.waiting_close;
+            let (waiting, _) = changed
+                .wait_timeout_while(lock.lock().unwrap(), Duration::from_secs(5), |waiting| {
+                    !*waiting
+                })
+                .unwrap();
+            assert!(*waiting, "release never waited for its submitted close");
+            assert_eq!(*peer.sent.lock().unwrap(), ["close 1000 "]);
+            *peer.flushed.0.lock().unwrap() = true;
+            peer.flushed.1.notify_all();
+        });
+        core.forget_before_suspend(|_| false);
+    });
+    assert_eq!(peer.confirmed.load(Ordering::SeqCst), 1);
+    ended(&core);
+    assert!(core.shared.sockets.lock().unwrap().is_empty());
+    assert!(
+        core.drain().is_empty(),
+        "a forgotten message reached the runner"
+    );
+}
+
+#[test]
+fn a_suspending_release_confirms_the_transport_close_before_returning() {
+    let (core, peer, woke) = setup();
+    core.run_owned(socket(1), None).unwrap();
+    next(&core, &woke);
+    std::thread::scope(|scope| {
+        let peer = peer.clone();
+        scope.spawn(move || {
+            let (lock, changed) = &peer.waiting_close;
+            let (waiting, _) = changed
+                .wait_timeout_while(lock.lock().unwrap(), Duration::from_secs(5), |waiting| {
+                    !*waiting
+                })
+                .unwrap();
+            assert!(*waiting, "the owner never waited for the close write");
+            assert_eq!(*peer.sent.lock().unwrap(), ["close 1000 "]);
+            *peer.flushed.0.lock().unwrap() = true;
+            peer.flushed.1.notify_all();
+        });
+        core.forget_before_suspend(|_| false);
+    });
+    assert_eq!(
+        peer.confirmed.load(Ordering::SeqCst),
+        1,
+        "queueing is not completion"
+    );
+    assert_eq!(*peer.sent.lock().unwrap(), ["close 1000 "]);
+}
+
+#[test]
+fn a_suspending_release_aborts_when_the_transport_never_confirms() {
+    let (core, peer, woke) = setup();
+    core.run_owned(socket(1), None).unwrap();
+    next(&core, &woke);
+    core.forget_before_suspend(|_| false);
+    assert_eq!(peer.confirmed.load(Ordering::SeqCst), 0);
+    ended(&core);
+    assert!(core.shared.sockets.lock().unwrap().is_empty());
+}
+
+#[test]
+#[ignore = "async lane: a loopback close over URLSession and portable sockets"]
+fn a_suspending_release_finishes_the_platform_and_portable_close() {
+    use std::io::{Read, Write};
+    for portable in [false, true] {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("ws://127.0.0.1:{}", listener.local_addr().unwrap().port());
+        let (closed, seen) = channel();
+        let peer = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut head = Vec::new();
+            while !head.ends_with(b"\r\n\r\n") {
+                let mut byte = [0];
+                stream.read_exact(&mut byte).unwrap();
+                head.push(byte[0]);
+            }
+            let head = String::from_utf8(head).unwrap();
+            let key = head
+                .lines()
+                .find_map(|line| {
+                    line.split_once(':')
+                        .filter(|(name, _)| name.eq_ignore_ascii_case("sec-websocket-key"))
+                        .map(|(_, value)| value.trim())
+                })
+                .unwrap();
+            let accept = websocket::accept_key(key);
+            write!(stream, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n").unwrap();
+            let mut header = [0; 2];
+            stream.read_exact(&mut header).unwrap();
+            assert_eq!(header[0], 0x88);
+            assert_ne!(header[1] & 0x80, 0);
+            let mut mask = [0; 4];
+            stream.read_exact(&mut mask).unwrap();
+            let mut payload = vec![0; (header[1] & 0x7f) as usize];
+            stream.read_exact(&mut payload).unwrap();
+            for (i, byte) in payload.iter_mut().enumerate() {
+                *byte ^= mask[i % 4];
+            }
+            assert_eq!(payload, 1000u16.to_be_bytes());
+            closed.send(()).unwrap();
+            stream.write_all(&[0x88, 2, 3, 232]).unwrap();
+        });
+        let (wake, woke) = channel();
+        let core = Core::start(
+            None,
+            &format!("net.websocket {url}"),
+            Box::new(move || {
+                let _ = wake.send(());
+            }),
+        )
+        .streams_on(move || {
+            let host = ibex2::host::Host::new();
+            if portable {
+                host.with_socket_transport(Box::new(
+                    ibex2::transport::websocket::TcpSocketTransport::default(),
+                ))
+            } else {
+                host
+            }
+        });
+        let mut request = socket(1);
+        request.request.url = url;
+        core.run_owned(request, None).unwrap();
+        next(&core, &woke);
+        let sender = core
+            .shared
+            .sockets
+            .lock()
+            .unwrap()
+            .get(&1)
+            .unwrap()
+            .sender
+            .clone();
+        core.forget_before_suspend(|_| false);
+        assert!(
+            sender.wait_close(Duration::ZERO),
+            "the freeze returned before the transport confirmed its close (portable={portable})"
+        );
+        seen.recv_timeout(Duration::from_secs(5)).unwrap();
+        peer.join().unwrap();
+    }
 }

@@ -1,4 +1,5 @@
 import XCTest
+import ExactSnapshot
 @testable import ExactKit
 
 /// An `app:/` file is read as the data module's `readFile` reads it: a
@@ -89,6 +90,34 @@ final class AppFilesLinkTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: photo), PNG.bytes)
         XCTAssertNil(AppFileWalk.destination(data, ["photos"]))
     }
+
+    #if canImport(WidgetKit)
+    func testASnapshotReadsAnAppImageWithoutFollowingAnyLink() throws {
+        let files = FileManager.default, id = "com.example.snapshot-links"
+        let roots = SnapshotRasters.appRoots(group: base, appID: id)
+        let data = try XCTUnwrap(roots["data"])
+        try files.createDirectory(at: data.appendingPathComponent("photos"), withIntermediateDirectories: true)
+        try PNG.write(to: data.appendingPathComponent("photos/a.png"))
+        for (link, target) in [("leaf-in", data.appendingPathComponent("photos/a.png")),
+                               ("leaf-out", base.appendingPathComponent("private/secret.png")),
+                               ("ancestor-in", data.appendingPathComponent("photos")),
+                               ("ancestor-out", base.appendingPathComponent("private"))] {
+            try files.createSymbolicLink(at: data.appendingPathComponent(link), withDestinationURL: target)
+        }
+        let rasters = SnapshotRasters()
+        func decode(_ suffix: String) -> SnapshotRasters.Decoded? {
+            rasters.decode("app:/data/" + suffix, roots: [], appGroup: base, appID: id,
+                           box: CGSize(width: 1, height: 1), fit: "contain", scale: 1)
+        }
+        XCTAssertEqual(decode("photos/a.png")?.natural, CGSize(width: 1, height: 1))
+        for suffix in ["leaf-in", "leaf-out", "ancestor-in/a.png", "ancestor-out/secret.png"] {
+            XCTAssertNil(decode(suffix), suffix)
+        }
+        try files.moveItem(at: data.appendingPathComponent("photos"), to: data.appendingPathComponent("old-photos"))
+        try files.createSymbolicLink(at: data.appendingPathComponent("photos"), withDestinationURL: data.appendingPathComponent("old-photos"))
+        XCTAssertNil(decode("photos/a.png"), "a cached image does not admit a replacement link")
+    }
+    #endif
 
     private enum PNG {
         /// A 1 × 1 opaque PNG.

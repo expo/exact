@@ -16,6 +16,9 @@ use contract_types::{Checked, Ty};
 use std::fmt::Write as _;
 use std::path::Path;
 
+mod sharing;
+pub use sharing::shared_expressions;
+
 mod components;
 pub use components::{lean_components, lean_components_path};
 

@@ -969,10 +969,10 @@ package final class TextSelection {
     /// the ink and any inline background inside it, then the selected glyphs
     /// in the selection's colour, or in their own where they keep it (`ink`),
     /// clipped to the fill.
-    func draw(_ node: NodeView, paragraph: Paragraph, spec: Spec, in ctx: CGContext, dirty: NSRect) {
+    func draw(_ node: NodeView, paragraph: Paragraph, spec: Spec, in ctx: CGContext, dirty: NSRect, lineRange: Range<Int>? = nil) {
         guard let selection = range(node), selection.length > 0 else { return }
         let box = node.paragraphBox(), focused = PageFacts.hasFocus(node.window)
-        let lines = paragraph.selectedLines(selection, align: spec.align, in: box, dirty: dirty)
+        let lines = paragraph.selectedLines(selection, align: spec.align, in: box, dirty: dirty).filter { lineRange?.contains($0.line) != false }
         guard !lines.isEmpty else { return }
         let ink = Self.ink(focused: focused).cgColor, keepsFixed = Self.keepsFixedInk(dark: node.drawsDark)
         var paint = spec, changed = false

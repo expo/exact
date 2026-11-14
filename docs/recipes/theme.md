@@ -52,10 +52,12 @@ component App
 - **`AccentColor`** is the app's tint: filled buttons, a plain button's text, the focus ring.
   A filled button's label stays white, so keep both sides at 3:1 under white: a pale dark
   side is warned (`tamber-contrast`).
-- **Icons** are an `icons` block: `sf` is what Apple draws, `svg` (a one-colour file under
-  `assets/`) for the others. The web host every app has needs it (`tamber-icon-missing`); with
-  no SVG, write the role if there is one (`symbol:play-fill`, drawn everywhere), else `symbol:sf/<name>`, blank on the web. A row draws `image "symbol:icon.play"`,
-  coloured by `color` and sized by its font ([symbols](symbols.md)).
+- **Icons:** `app.tamber`'s `icons` block names `sf` for Apple and `svg` under `assets/`
+  elsewhere. Without `sf`, Apple draws a template path or rasterizes the SVG
+  (watchOS needs `sf`); `-exact-symbol-rendering="multicolor"` keeps colours.
+  The web needs SVG (`tamber-icon-missing`). Prefer a role;
+  `sf/<name>` is blank on the web. Use `image "symbol:icon.play"`; `color` tints it,
+  its font sizes it ([symbols](symbols.md)).
 - **The scheme:** `setScheme("light" | "dark" | "system")` sets the app's (in its action, and a
   `mount` task for a kept one); `color-scheme`
   fixes a subtree in one. Modes the person picks (Dim, Black) are axes ([a brand](tamber.md)).

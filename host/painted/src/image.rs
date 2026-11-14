@@ -10,6 +10,17 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+/// A non-template icon's file under the app's `assets/`, as on the web.
+pub(crate) fn file_icon(source: &str) -> Option<&str> {
+    let icon = exact_kernel::Icon::parse(source.strip_prefix("symbol:")?)?;
+    (icon.path.is_empty() && !icon.svg.is_empty()).then_some(icon.svg)
+}
+
+/// Symbols drawn from a path, without loading a picture.
+pub(crate) fn is_symbol(source: &str) -> bool {
+    source.starts_with("symbol:") && file_icon(source).is_none()
+}
+
 #[cfg(test)]
 #[path = "image/allocation_tests.rs"]
 mod allocation_tests;
@@ -29,6 +40,7 @@ mod decode_tests;
 mod jpeg_decode;
 #[path = "image/package.rs"]
 mod package;
+pub(crate) mod sampling;
 pub use package::Ask as PackageAsk;
 #[path = "image/png.rs"]
 mod png_decode;
@@ -61,6 +73,7 @@ struct View {
     accepted: Option<RequestId>,
     requested_for: (f32, f32),
     requested_fit: exact_kernel::ObjectFit,
+    requested_rendering: exact_kernel::ImageRendering,
     requested_scale: f32,
     lease: Option<RasterLease>,
     desired: (f32, f32),
@@ -78,6 +91,7 @@ struct View {
     /// How the box fits the picture, whatever the box: what an SVG picture
     /// is drawn for (`svg_picture::plan`).
     object_fit: exact_kernel::ObjectFit,
+    rendering: exact_kernel::ImageRendering,
     /// The box changed size while it showed a part: from then on it gets the
     /// whole picture (a box that animates would ask for a part a frame).
     resized: bool,
@@ -386,6 +400,7 @@ impl Images {
                 accepted: None,
                 requested_for: (0., 0.),
                 requested_fit: node.style.object_fit,
+                requested_rendering: Default::default(),
                 requested_scale: scale,
                 lease: None,
                 desired: (0., 0.),
@@ -395,6 +410,7 @@ impl Images {
                 symbol_size: None,
                 fit: None,
                 object_fit: node.style.object_fit,
+                rendering: Default::default(),
                 resized: false,
                 part: false,
                 retries: 0,
@@ -410,12 +426,19 @@ impl Images {
                 (node.frame.width - left - right - border[1] - border[3]).max(0.) * scale,
                 (node.frame.height - top - bottom - border[0] - border[2]).max(0.) * scale,
             );
+            if file_icon(source).is_some() {
+                if let Some(size) = crate::paint::button::image_size(kernel, &node) {
+                    view.desired = (size * scale, size * scale);
+                }
+            }
             view.fit = plain_box(node.style).then_some(node.style.object_fit);
             view.object_fit = node.style.object_fit;
+            view.rendering =
+                node.computed_row(exact_kernel::StyleId::ImageRendering, |s| s.image_rendering);
             // LLP 1011 §3: a symbol is a font-relative box no file fills (the
             // paint walk strokes a portable role's path into it, `symbol`),
             // never a file request and never the previously accepted raster.
-            if source.starts_with("symbol:") {
+            if is_symbol(source) {
                 if let Some((request, _)) = view.request.take() {
                     self.backend.cancel(request);
                 }
@@ -833,6 +856,7 @@ impl Images {
                         view.request = Some((request, decode.full()));
                         view.requested_for = view.desired;
                         view.requested_fit = view.object_fit;
+                        view.requested_rendering = view.rendering;
                         view.requested_scale = scale;
                         view.part = !decode.crop.whole();
                         view.refusal = None;
@@ -888,8 +912,9 @@ impl Images {
         // A package's picture is answered through the host's turn, not the
         // workers: nothing here to wait on.
         self.views.values().any(|v| {
-            (!self.boot_visible_only || v.visible && !v.errored && v.symbol_size.is_none())
+            (!self.boot_visible_only || v.visible && !v.errored)
                 && !v.source.is_empty()
+                && !is_symbol(&v.source)
                 && !self.package.serves(&v.source)
                 && match v
                     .source_id
@@ -948,6 +973,7 @@ impl Images {
             // holds nothing back.
             if self.views.values().all(|v| {
                 v.source.is_empty()
+                    || is_symbol(&v.source)
                     || self.package.serves(&v.source)
                     || remote::is_remote(&v.source)
                     || matches!(
@@ -982,12 +1008,9 @@ impl Images {
         let live: Vec<_> = live
             .into_iter()
             .filter(|id| {
-                kernel.node(*id).is_some_and(|n| {
-                    !n.props
-                        .str(PropId::ImageSource)
-                        .unwrap_or("")
-                        .starts_with("symbol:")
-                })
+                kernel
+                    .node(*id)
+                    .is_some_and(|n| !is_symbol(n.props.str(PropId::ImageSource).unwrap_or("")))
             })
             .collect();
         self.sync_visible(kernel, &live, scale, |_| false);
@@ -1090,6 +1113,14 @@ fn plan_view(
     if header.is_svg() {
         return svg_picture::plan(header, view.desired, svg_ask(view, scale), available);
     }
+    if view.rendering != exact_kernel::ImageRendering::Auto {
+        let natural = header.metadata.natural;
+        if let Ok(decode) = png_decode::DecodePlan::new(header, (natural.width, natural.height)) {
+            if decode.peak_bytes() <= available {
+                return Ok(decode);
+            }
+        }
+    }
     plan(
         header,
         drawn_size(header, view.desired, view.object_fit, scale),
@@ -1182,6 +1213,19 @@ fn resize_changes_view(header: png_decode::Header, view: &View, scale: f32) -> b
     let (previous, next) = (view.requested_for, view.desired);
     if header.is_svg() {
         return svg_picture::resize_changes(header, svg_ask(view, scale), previous, next);
+    }
+    if view.rendering != view.requested_rendering {
+        return true;
+    }
+    // The source's own samples serve every size; a thumbnail the budget
+    // forced follows the box as `auto`'s does.
+    let natural = header.metadata.natural;
+    if view.rendering != exact_kernel::ImageRendering::Auto
+        && view
+            .request
+            .is_some_and(|(_, full)| (full.width, full.height) == (natural.width, natural.height))
+    {
+        return false;
     }
     resize_changes_decode(
         header,

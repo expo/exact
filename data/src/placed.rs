@@ -15,6 +15,7 @@ use exact_runner::{
     Request, Store, Target, Work,
 };
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex};
 
@@ -246,7 +247,7 @@ enum Spawn<D> {
     Move(fn(D) -> Obtain<D>),
     /// The instance is built there from what the template on this thread
     /// knows (a TypeScript module: bytecode, identity, directories, plan).
-    Build(fn(&D) -> Obtain<D>),
+    Build(fn(&D, Arc<AtomicBool>) -> Obtain<D>),
 }
 
 /// A source with a placement.
@@ -271,6 +272,7 @@ pub struct Placed<D> {
     /// The Canvas 2D roster, read at construction (LLP 1056 D1).
     canvas_surfaces: Vec<(String, usize)>,
     owner: Option<Arc<Mutex<OwnerQueue>>>,
+    retired: Arc<AtomicBool>,
     recorded: BTreeMap<u64, Recorded>,
     hosted: HashMap<u64, u64>,
     sent: HashSet<(Key, u64)>,
@@ -308,10 +310,15 @@ fn moved<D: DataSource + Send + 'static>(source: D) -> Obtain<D> {
 
 impl<D: DataSource + 'static> Placed<D> {
     /// `template`, placed; on `Worker` the owner thread builds its own
-    /// instance from `build(&template)` at activation, and the template stays
-    /// here for identity, configuration and replacement. For a source that
-    /// cannot be sent — one that owns a VM.
-    pub fn built(template: D, placement: Placement, build: fn(&D) -> Obtain<D>) -> Self {
+    /// instance from `build(&template, retired)` at activation. The template
+    /// stays here for identity, configuration and replacement. For a source that
+    /// cannot be sent — one that owns a VM. Its waits must observe `retired`,
+    /// set when its owner retires, without waiting for another owner turn.
+    pub fn built(
+        template: D,
+        placement: Placement,
+        build: fn(&D, Arc<AtomicBool>) -> Obtain<D>,
+    ) -> Self {
         Self::with_spawn(template, placement, Spawn::Build(build))
     }
 
@@ -332,6 +339,7 @@ impl<D: DataSource + 'static> Placed<D> {
             placement,
             spawn,
             owner: None,
+            retired: Arc::default(),
             recorded: BTreeMap::new(),
             hosted: HashMap::new(),
             sent: HashSet::new(),
@@ -808,7 +816,10 @@ impl<D: DataSource + 'static> exact_runner::DataSourceWrapper for Placed<D> {
             ));
         }
         let obtain: Obtain<D> = match self.spawn {
-            Spawn::Build(build) => build(self.here()?),
+            Spawn::Build(build) => {
+                let retired = self.retired.clone();
+                build(self.here()?, retired)
+            }
             Spawn::Move(moved) => {
                 let mut source = self
                     .inner
@@ -829,7 +840,9 @@ impl<D: DataSource + 'static> exact_runner::DataSourceWrapper for Placed<D> {
     /// template is what gets validated.
     fn activate_for_validation(&mut self) -> Result<(), DataError> {
         self.validation = true;
+        self.retired.store(true, Ordering::Release);
         self.owner = None;
+        self.retired = Arc::default();
         self.here()?.activate_for_validation()
     }
 
@@ -1334,8 +1347,9 @@ impl<D: DataSource + 'static> exact_runner::DataSourceWrapper for Placed<D> {
 
 impl<D> Drop for Placed<D> {
     fn drop(&mut self) {
-        // Closing the channel ends the owner after its current turn; the
-        // runner's thread never waits on it (LLP 1027.002 D5).
+        // A built source's waiter observes retirement without needing its
+        // owner to return first. No queued turn starts after retirement.
+        self.retired.store(true, Ordering::Release);
         self.owner.take();
     }
 }

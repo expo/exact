@@ -5,7 +5,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { availableParallelism } from 'node:os';
 import { resolve } from 'node:path';
-import { iosAssets, plistFile } from './assets.mjs';
+import { appleAssets, appleAssetCatalogInventory, rasterIconAssets, iosAssets, plistFile } from './assets.mjs';
 import { encodePng } from '../../scripts/png.mjs';
 
 const read = (cmd, args, opts = {}) => spawnSync(cmd, args, { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, ...opts });
@@ -14,6 +14,20 @@ const read = (cmd, args, opts = {}) => spawnSync(cmd, args, { encoding: 'utf8', 
  * Plans embed the current schema digest. App entries need the test app's `appId` to boot. */
 export function compileFixtures(root, run, env, dir, prefix, appId) {
   const contract = args => run(env.EXACT_CONTRACT, ['build', ...args]);
+  const iconApp = resolve(dir, 'entries/raster-icons');
+  mkdirSync(resolve(iconApp, 'assets'), { recursive: true });
+  writeFileSync(resolve(iconApp, 'app.json'), JSON.stringify({ app: { id: appId, name: 'Raster icons' }, host: { ios: {}, macos: {} } }));
+  writeFileSync(resolve(iconApp, 'app.tamber'), 'tamber icons\n\nicons\n  icon.two = icon(svg "two.svg")\n');
+  writeFileSync(resolve(iconApp, 'assets/two.svg'), '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20" viewBox="0 0 24 24"><path fill="#ff0000" d="M0 0h12v24H0Z"/><path fill="#0000ff" d="M12 0h12v24H12Z"/></svg>');
+  writeFileSync(resolve(iconApp, 'app.contract'), 'component App\n  view\n    column\n      button\n        image "symbol:icon.two" -exact-symbol-rendering="multicolor"\n        text "Colours"\n      image "symbol:icon.two" -exact-symbol-rendering="multicolor" width=80 testId="raster-wide"\n');
+  contract([resolve(iconApp, 'app.contract'), '-o', env[`${prefix}_RASTER_ICONS_PLAN`] = resolve(dir, 'raster-icons.plan')]);
+  const iconBundle = env[`${prefix}_RASTER_ICONS_BUNDLE`] = resolve(dir, 'RasterIcons.bundle');
+  mkdirSync(iconBundle, { recursive: true });
+  writeFileSync(resolve(iconBundle, 'Info.plist'), plistFile({ CFBundleIdentifier: 'dev.exact.raster-icons', CFBundlePackageType: 'BNDL' }));
+  appleAssets({ dir: iconApp, name: 'Raster icons', manifest: {} }, iconBundle,
+    { platform: prefix === 'EXACT' ? 'macos' : 'ios', icons: [{ svg: 'two.svg', viewBox: '0 0 24 24' }] });
+
+  contract([resolve(root, 'host/apple/tests/fixtures/fragment.contract'), '-o', env[`${prefix}_FRAGMENT_PLAN`] = resolve(dir, 'fragment.plan')]);
   if (prefix === 'TEST_RUNNER_EXACT') {
     // LaunchColorIOSTests reads the build's XML and compiled catalogue as an app bundle.
     const fixtures = env[`${prefix}_LAUNCH_COLOR_FIXTURES`] = resolve(dir, 'launch-colors');
@@ -28,12 +42,31 @@ export function compileFixtures(root, run, env, dir, prefix, appId) {
       writeFileSync(resolve(bundle, 'Info.plist'), plistFile({ CFBundleIdentifier: `dev.exact.launch.${name}`, CFBundlePackageType: 'BNDL', ...keys }));
     }
   }
+  contract([resolve(root, 'host/apple/tests/fixtures/navigation-scroller.contract'), '-o', env[`${prefix}_NAVIGATION_SCROLLER_PLAN`] = resolve(dir, 'navigation-scroller.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/overflowing-tabs.contract'), '-o', env[`${prefix}_OVERFLOWING_TABS_PLAN`] = resolve(dir, 'overflowing-tabs.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/scroll-snap.contract'), '-o', env[`${prefix}_SCROLL_SNAP_PLAN`] = resolve(dir, 'scroll-snap.plan')]);
+  contract([resolve(root, 'host/apple/tests/fixtures/fixed-page.contract'), '-o', env[`${prefix}_FIXED_PAGE_PLAN`] = resolve(dir, 'fixed-page.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/arrangement-sizing.contract'), '-o', env[`${prefix}_ARRANGEMENT_SIZING_PLAN`] = resolve(dir, 'arrangement-sizing.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/canvas-capture.contract'), '-o', env[`${prefix}_CANVAS_CAPTURE_PLAN`] = resolve(dir, 'canvas-capture.plan')]);
   // A test that writes its own manifest names the app the tests link (`SheetFixture`'s `data`).
   env[`${prefix}_TEST_APP_ID`] = appId;
+  contract([resolve(root, 'host/apple/tests/fixtures/page-freeze.contract'), '-o', env[`${prefix}_PAGE_FREEZE_PLAN`] = resolve(dir, 'page-freeze.plan')]);
+  const clicks = resolve(dir, 'page-freeze-sound');
+  mkdirSync(resolve(clicks, 'assets'), { recursive: true });
+  const wave = Buffer.alloc(44 + 8820);
+  wave.write('RIFF'); wave.writeUInt32LE(wave.length - 8, 4); wave.write('WAVEfmt ', 8); wave.writeUInt32LE(16, 16);
+  wave.writeUInt16LE(1, 20); wave.writeUInt16LE(1, 22); wave.writeUInt32LE(44100, 24); wave.writeUInt32LE(88200, 28);
+  wave.writeUInt16LE(2, 32); wave.writeUInt16LE(16, 34); wave.write('data', 36); wave.writeUInt32LE(8820, 40);
+  writeFileSync(resolve(clicks, 'assets/click.wav'), wave);
+  const pulse = readFileSync(resolve(root, 'host/apple/tests/fixtures/page-freeze.contract'), 'utf8')
+    .replace('beats=4', 'beats=1').replace('steps=[]', 'steps=[Step(beat=0, src="assets/click.wav", gain=1, group="pulse", note=-1, velocity=100, channel=0, duration=0.1, haptic="")]')
+    .replace('  view\n', '  action stop\n    playing = false\n  action stopWithSound\n    playing = false\n    playSound("assets/click.wav")\n  view\n')
+    + '      button "Stop" testId="stop" press=stop\n      button "Stop with sound" testId="stop-with-sound" press=stopWithSound\n';
+  writeFileSync(resolve(clicks, 'app.contract'), 'sound "assets/click.wav"\n' + pulse);
+  contract([resolve(clicks, 'app.contract'), '-o', env[`${prefix}_PAGE_FREEZE_SOUND_PLAN`] = resolve(dir, 'page-freeze-sound.plan')]);
+  writeFileSync(resolve(clicks, 'no-sequence.contract'), ('sound "assets/click.wav"\n' + pulse)
+    .replace(/  sequence pulse when playing\n    play\([^\n]+\n/, ''));
+  contract([resolve(clicks, 'no-sequence.contract'), '-o', env[`${prefix}_PAGE_FREEZE_NO_SEQUENCE_PLAN`] = resolve(dir, 'page-freeze-no-sequence.plan')]);
   // A box's length read against the document's environment stops a test (LLP 1123 D9).
   env[`${prefix}_STRICT_LOCAL_INSETS`] = '1';
   contract([resolve(root, 'host/apple/tests/fixtures/headless-reply.contract'), '-o', env[`${prefix}_HEADLESS_REPLY_PLAN`] = resolve(dir, 'headless-reply.plan')]);
@@ -79,12 +112,14 @@ export function compileFixtures(root, run, env, dir, prefix, appId) {
   // NavigationBarIOSTests': a header whose controls share and add a control.
   contract([resolve(root, 'host/apple/tests/fixtures/bar-share.contract'), '-o', env[`${prefix}_BAR_SHARE_PLAN`] = resolve(dir, 'bar-share.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/dialog-sheet-reads.contract'), '-o', env[`${prefix}_DIALOG_SHEET_READS_PLAN`] = resolve(dir, 'dialog-sheet-reads.plan')]);
+  contract([resolve(root, 'host/apple/tests/fixtures/route-backdrop.contract'), '-o', env[`${prefix}_ROUTE_BACKDROP_PLAN`] = resolve(dir, 'route-backdrop.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/intersect-route.contract'), '-o', env[`${prefix}_INTERSECT_ROUTE_PLAN`] = resolve(dir, 'intersect-route.plan')]);
   // KeyboardSheetIOSTests': a sheet's field, its keyboard toolbar and the keyboard's overlap as a value.
   contract([resolve(root, 'host/apple/tests/fixtures/keyboard-sheet.contract'), '-o', env[`${prefix}_KEYBOARD_SHEET_PLAN`] = resolve(dir, 'keyboard-sheet.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/progress-contexts.contract'), '-o', env[`${prefix}_PROGRESS_CONTEXTS_PLAN`] = resolve(dir, 'progress-contexts.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/agent-unmounted.contract'), '-o', env[`${prefix}_AGENT_UNMOUNTED_PLAN`] = resolve(dir, 'agent-unmounted.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/fractional-borders.contract'), '-o', env[`${prefix}_FRACTIONAL_BORDERS_PLAN`] = resolve(dir, 'fractional-borders.plan')]);
+  contract([resolve(root, 'host/apple/tests/fixtures/painted-groups.contract'), '-o', env[`${prefix}_PAINTED_GROUPS_PLAN`] = resolve(dir, 'painted-groups.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/top-layer-pins.contract'), '-o', env[`${prefix}_TOP_LAYER_PINS_PLAN`] = resolve(dir, 'top-layer-pins.plan')]);
   // PositionAreaRegionIOSTests' pages: Chrome's position-area table, and mirrored.
   contract([resolve(root, 'host/apple/tests/fixtures/position-area-region.contract'), '-o', env[`${prefix}_POSITION_AREA_PLAN`] = resolve(dir, 'position-area-region.plan')]);
@@ -149,6 +184,8 @@ export function compileFixtures(root, run, env, dir, prefix, appId) {
       writeFileSync(resolve(bundle, 'Contents/Info.plist'), plistFile({ CFBundleIdentifier: id, CFBundlePackageType: bundle === app ? 'APPL' : 'XPC!', CFBundleExecutable: 'Fixture' }));
     writeFileSync(resolve(catalog, 'Contents.json'), JSON.stringify({ info: { version: 1, author: 'xcode' } }));
     writeFileSync(resolve(catalog, 'WidgetInk.colorset/Contents.json'), JSON.stringify({ info: { version: 1, author: 'xcode' }, colors: [{ idiom: 'universal', color: { 'color-space': 'srgb', components: { red: '1.0', green: '0.0', blue: '0.0', alpha: '1.0' } } }] }));
+    const rasterApp = { dir: iconApp, manifest: {}, appleIcons: [{ svg: 'two.svg', viewBox: '0 0 24 24' }] };
+    rasterIconAssets(appleAssetCatalogInventory(rasterApp, 'macos'), rasterApp, catalog);
     run('xcrun', ['actool', '--compile', resources, '--platform', 'macosx', '--minimum-deployment-target', '14.0', '--target-device', 'mac', catalog]);
     writeFileSync(resolve(resources, 'assets/widget.png'), encodePng({ width: 1, height: 1, data: Buffer.from([255, 0, 0, 255]) }));
     env.EXACT_SNAPSHOT_ASSETS_EXTENSION = extension;
@@ -256,9 +293,13 @@ export async function iosTestRuns({ pkg, products, destination, udid, env, canva
   const touchOnly = hostedTests(testDir, 'touch').filter(selected);
   const hostedOnly = hostedTests(testDir).filter(selected).filter(t => !touchOnly.includes(t));
   const failures = [];
+  // A test still running at its allowance fails, and the run goes on with the next test in a new
+  // process: a test that hangs (as a share sheet waiting on a simulator's `sharingd` can) costs its
+  // allowance, not the rest of the run
   const testRun = (xctestrun, selection, runEnv, parallel = true) => {
     try {
       runApple('xcodebuild', ['test-without-building', '-xctestrun', xctestrun, '-destination', destination, '-collect-test-diagnostics', 'never',
+        '-test-timeouts-enabled', 'YES', '-default-test-execution-time-allowance', '600',
         '-parallel-testing-enabled', parallel ? 'YES' : 'NO', ...(parallel ? ['-parallel-testing-worker-count', '2'] : []), ...selection], { cwd: pkg, stdio: 'inherit', env: runEnv });
     } catch (e) { failures.push(e); }
   };

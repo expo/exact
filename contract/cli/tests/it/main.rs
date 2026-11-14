@@ -181,6 +181,7 @@ mod realworld_then;
 mod recorder_start;
 mod recorder_transcript;
 mod records;
+mod recovery;
 mod refreshes;
 mod refusal_remedies;
 mod rem;
@@ -300,6 +301,7 @@ mod voip_calls;
 mod vscode_grammar;
 mod wakelock;
 mod warnings;
+mod warnings_role_keys;
 mod warnings_screens;
 mod warnings_time;
 mod when;
@@ -307,3 +309,7 @@ mod window_commands;
 mod windows_shortcuts;
 
 mod properties;
+
+mod child_derive_costs;
+
+mod shared_derives;

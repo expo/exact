@@ -2,6 +2,7 @@
 use super::*;
 use ibex2::boundary::HostError;
 use ibex2::stdlib::fetch_async::{Collected, FetchEvents, HeaderCaps};
+use std::sync::atomic::AtomicBool;
 use std::sync::{mpsc, Weak};
 use std::time::{Duration, Instant};
 
@@ -114,6 +115,7 @@ pub(super) struct Held {
     key: Equal,
     reply: ReplyState,
     taken: bool,
+    pub(super) store: bool,
     started: Instant,
     answered_at: Option<Arc<Mutex<Option<Answered>>>>,
     observer: Option<Observer>,
@@ -159,6 +161,7 @@ impl Held {
             secrets: definition.secrets,
             request: Some(definition.request),
             taken: false,
+            store: true,
             started: Instant::now(),
             answered_at: Some(Arc::new(Mutex::new(None))),
             observer,
@@ -200,6 +203,7 @@ pub type Observer = Arc<dyn Fn(&str, Observation) + Send + Sync>;
 /// reach them through [`Control`]: they are compiled into every build.
 struct Location {
     state: Mutex<Destination>,
+    journal_pending: Arc<AtomicBool>,
     changed: Condvar,
     threads: Mutex<usize>,
     exited: Condvar,
@@ -270,6 +274,7 @@ impl Preloads {
             .collect();
         let count = cache.preloads.len();
         let destination = Arc::new(Location {
+            journal_pending: cache.journal_pending.clone(),
             state: Mutex::new(Destination::Staging(Box::new(cache))),
             changed: Condvar::new(),
             threads: Mutex::new(0),
@@ -294,10 +299,7 @@ impl Preloads {
     }
     /// Drain the bounded launch journal; the host chooses where to write it.
     pub fn take_journal(&self) -> Vec<Fact> {
-        update(&self.destination, |cache| {
-            std::mem::take(&mut cache.journal)
-        })
-        .unwrap_or_default()
+        take_journal(&self.destination)
     }
 }
 /// A launch's control remains usable after the executor adopts its owner.
@@ -478,10 +480,7 @@ impl Control {
     }
     /// Drain facts before or after adoption.
     pub fn take_journal(&self) -> Vec<Fact> {
-        update(&self.destination, |cache| {
-            std::mem::take(&mut cache.journal)
-        })
-        .unwrap_or_default()
+        take_journal(&self.destination)
     }
     /// Settle a complete reply without an executor or a wait.
     pub fn settle(&self, request: &RequestOut) -> Option<(Outcome, CompletionTiming)> {
@@ -520,10 +519,44 @@ fn update<T>(location: &Location, f: impl FnOnce(&mut cache::Cache) -> T) -> Opt
             let result = f(state.cache.as_mut()?);
             cache::serve_ready(&mut state);
             rouse(&shared, &state);
+            #[cfg(test)]
+            shared.worker_notifications.fetch_add(1, Ordering::Relaxed);
             shared.ready.notify_all();
             Some(result)
         }
         Destination::Closed => None,
+    }
+}
+
+// The pending bit is cleared under the same lock as every writer. Adoption
+// moves that lock from Location to Shared without moving the bit (LLP 1171 D1).
+fn take_journal(location: &Location) -> Vec<Fact> {
+    if !location.journal_pending.load(Ordering::Acquire) {
+        return Vec::new();
+    }
+    let mut destination = location.state.lock().unwrap();
+    match &mut *destination {
+        Destination::Staging(cache) => cache.take_preload_journal(),
+        Destination::Adopted(shared, _) => {
+            let Some(shared) = shared.upgrade() else {
+                location.journal_pending.store(false, Ordering::Release);
+                return Vec::new();
+            };
+            drop(destination);
+            let mut state = shared.state.lock().unwrap();
+            match state.cache.as_mut() {
+                Some(cache) => cache.take_preload_journal(),
+                // A retired executor discarded its cache and the facts in it.
+                None => {
+                    location.journal_pending.store(false, Ordering::Release);
+                    Vec::new()
+                }
+            }
+        }
+        Destination::Closed => {
+            location.journal_pending.store(false, Ordering::Release);
+            Vec::new()
+        }
     }
 }
 
@@ -588,7 +621,7 @@ impl Core {
             .unwrap()
             .cache
             .as_mut()
-            .map(|cache| std::mem::take(&mut cache.journal))
+            .map(cache::Cache::take_preload_journal)
             .unwrap_or_default()
     }
     /// Boot may fulfil complete replies from its initial requests, in ticket
@@ -733,11 +766,7 @@ pub(super) fn reserve_front(state: &mut State) -> bool {
         return true;
     }
     let job = state.jobs[0].front().expect("a preload waiter");
-    let more = if handed_off(job) {
-        0
-    } else {
-        job.limit - job.charge
-    };
+    let more = job.limit - job.charge;
     if more > BYTES[0].saturating_sub(state.bytes[0]) {
         return false;
     }
@@ -864,6 +893,7 @@ fn taken(cache: &mut cache::Cache, i: usize, ticket: u64) {
     }
     if !held.taken {
         cache.journal.push(held.fact(Event::Taken));
+        cache.journal_pending.store(true, Ordering::Release);
         held.taken = true;
     }
 }
@@ -880,6 +910,7 @@ pub(super) fn drop_held(cache: &mut cache::Cache, i: usize, event: Event) {
     };
     if event != Event::NeverTaken || !held.taken {
         cache.journal.push(held.fact(event));
+        cache.journal_pending.store(true, Ordering::Release);
     }
     held.request = None;
     held.key = Equal::default();
@@ -921,6 +952,15 @@ pub(super) fn drop_urls(cache: &mut cache::Cache, urls: &[String]) {
     for i in 0..cache.preloads.len() {
         if urls.contains(&cache.preloads[i].key.url) {
             drop_held(cache, i, Event::DroppedByWrite);
+        }
+    }
+}
+pub(super) fn withhold_store(cache: &mut cache::Cache, request: &Request) {
+    let key = Equal::of(request);
+    for held in &mut cache.preloads {
+        if held.key == key && matches!(held.reply, ReplyState::Pending { .. }) {
+            // Asking withholds the HTTP copy; admission drops the hold (LLP 1162 D4).
+            held.store = false;
         }
     }
 }
@@ -1271,6 +1311,7 @@ fn start_indices(
                 held.observer.clone().map(|o| (held.name.clone(), o)),
             );
             cache.journal.push(held.fact(Event::Sent));
+            cache.journal_pending.store(true, Ordering::Release);
             Some(start)
         })
         .flatten();
@@ -1314,3 +1355,39 @@ fn start_indices(
 #[cfg(test)]
 #[path = "preload_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[test]
+fn an_empty_journal_drain_takes_neither_lock_before_or_after_adoption() {
+    for adopted in [false, true] {
+        let set = Preloads::start(Vec::new(), "", ibex2::host::Host::new);
+        let control = set.control();
+        let location = control.destination.clone();
+        let core = Core::with_owners_on(
+            (0..WORKERS).map(|_| None).collect(),
+            "",
+            Box::new(|| {}),
+            Arc::new(ibex2::host::Host::new),
+        );
+        let _staging = if adopted {
+            assert!(core.adopt_preloads(set).is_ok());
+            None
+        } else {
+            Some(set)
+        };
+        let state = core.shared.state.lock().unwrap();
+        let destination = location.state.lock().unwrap();
+        let (done, drained) = mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            for _ in 0..100 {
+                assert!(control.take_journal().is_empty());
+            }
+            done.send(()).unwrap();
+        });
+        let result = drained.recv_timeout(Duration::from_secs(10));
+        drop(destination);
+        drop(state);
+        reader.join().unwrap();
+        result.expect("an empty drain waited for a cache lock");
+    }
+}

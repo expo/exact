@@ -24,6 +24,7 @@ pub mod anatomy;
 mod atoms;
 mod box_transform;
 mod bundled;
+pub use bundled::image_svg_paths;
 mod buttons;
 mod cells;
 mod class;
@@ -67,12 +68,14 @@ mod overflow;
 pub mod params;
 mod popover_surface;
 mod resource_args;
+mod roles;
 mod root_names;
 mod routes;
 mod row_look;
 mod scale;
 mod scroll_bounds;
 mod shape_types;
+mod sharing;
 mod shorthands;
 mod sites;
 mod sounds;
@@ -163,7 +166,10 @@ pub fn package_unband(message: &str) -> String {
     theme::packages::unband(message)
 }
 /// What a design is checked against (LLP 1121 D2): the schema's roles.
-pub use theme::retained::retention_only;
+pub use theme::retained::{
+    before_view, first_refusal, offer_design_scan, retention_only, take_design_scan,
+    with_design_scan, DesignScan,
+};
 pub use theme::rows;
 pub use theme::{retention, synthetic_candidates};
 pub use warnings::{warnings, MAX_WARNINGS};
@@ -216,6 +222,7 @@ pub(crate) struct Lowerer<'a> {
     sites: Option<Sites>,
     text_styles: Option<&'a mut warnings::TextStyles>,
     pub types: &'a Types,
+    sharing: sharing::Sharing,
     pub root: &'a contract_syntax::Component,
     pub canvas_targets: std::collections::BTreeSet<String>,
     pub ty_ids: BTreeMap<String, TypesId>,
@@ -346,9 +353,9 @@ pub fn lower(
     _analysis: &Analysis,
     asset_root: Option<&Path>,
 ) -> Result<Plan, LowerError> {
-    lower_with_sites(checked, _analysis, asset_root, false, Profile::Web, None)
+    lower_all(checked, _analysis, asset_root, false, Profile::Web, None)
         .map(|(plan, _)| plan)
-        .map_err(|all| theme::shown_errors(all).swap_remove(0))
+        .map_err(|mut all| all.swap_remove(0))
 }
 
 /// Lower, reporting every independent refusal: each element and each of its
@@ -371,6 +378,10 @@ pub fn lower_all(
             span: checked.expanded.root.span,
         }]);
     }
+    let (mut asset_errors, asset_warnings) = asset_root
+        .filter(|_| !theme::retained::stops_at_retention())
+        .map(|root| bundled::check(&checked.expanded.root.view, root))
+        .unwrap_or_default();
     let mut text_styles = warnings::TextStyles::new();
     let result = lower_with_sites(
         checked,
@@ -381,8 +392,24 @@ pub fn lower_all(
         warned.as_ref().map(|_| &mut text_styles),
     );
     if let Some(out) = warned {
-        out.extend(warnings::with_text_styles(checked, &text_styles));
+        out.extend(warnings::with_text_styles(
+            checked,
+            &text_styles,
+            asset_warnings,
+        ));
     }
+    let result = match result {
+        Ok(built) if asset_errors.is_empty() => Ok(built),
+        Ok(_) => {
+            asset_errors.truncate(MAX_REFUSALS);
+            Err(asset_errors)
+        }
+        Err(errors) => {
+            asset_errors.extend(errors);
+            asset_errors.truncate(MAX_REFUSALS);
+            Err(asset_errors)
+        }
+    };
     result.map_err(theme::shown_errors)
 }
 
@@ -416,6 +443,7 @@ fn lower_with_sites(
         sites: capture_sites.then(|| Sites::declared(ex)),
         text_styles,
         types,
+        sharing: sharing::Sharing::new(ex),
         root,
         canvas_targets: file
             .components
@@ -537,10 +565,8 @@ fn lower_body(
     if theme::retained::stops_at_retention() {
         return Err(Vec::new());
     }
-    // A literal file outside `assets/` would build and not ship
-    // (expo/exact-build#4); only an app's compile knows its folders.
-    if asset_root.is_some() {
-        l.errors.extend(bundled::outside(&root.view));
+    if theme::retained::stops_at_refusal() && !l.errors.is_empty() {
+        return Err(Vec::new());
     }
     l.declare_decorations(file)?;
     l.declare_atoms(file)?;
@@ -664,6 +690,7 @@ fn lower_body(
     }
     // Bodies.
     let scope = types.component_scope(root, root_types);
+    l.sharing.root_scope = scope.clone();
     for (i, s) in root.states.iter().enumerate() {
         if ex.owners[i] == Owner::Root && !(i == 0 && file.routes.is_some()) {
             let code = l.expr_code(&s.expr, &scope, 0)?;
@@ -795,6 +822,9 @@ fn lower_body(
             view[0].span(),
         ));
     }
+    if theme::retained::stops_before_view() {
+        return Err(Vec::new());
+    }
     l.host_transforms = tags::host_transform_recipients(l, view);
     l.nodes(view, None, None, &scope, 0, None)?;
     if !l.errors.is_empty() {
@@ -805,6 +835,7 @@ fn lower_body(
     // instance is created — in its owning arm's scope, now that the arms
     // exist, or, for a use outside every region, at the boot render.
     for (i, owner) in ex.owners.iter().enumerate() {
+        l.sharing.instance = ex.state_instances[i];
         let state = &root.states[i];
         match *owner {
             Owner::Root => {}
@@ -826,7 +857,9 @@ fn lower_body(
                             ),
                             span: state.span,
                         })?;
+                l.sharing.arm = Some(id);
                 let init = l.expr_code(&state.expr, &arm_scope, 0)?;
+                l.sharing.arm = None;
                 l.b.set_slot_init(l.slots[i], init);
                 l.b.set_slot_owner(l.slots[i], id);
             }
@@ -926,24 +959,6 @@ impl<'a> Lowerer<'a> {
     /// Lower sibling nodes under (`parent`, `arm`); `parent_tag` is the
     /// nearest enclosing element's tag (a region does not change it).
     #[allow(clippy::too_many_arguments)]
-    fn nodes(
-        &mut self,
-        nodes: &[Node],
-        parent: Option<NodesId>,
-        arm: Option<ArmsId>,
-        scope: &Scope,
-        locals: u16,
-        parent_tag: Option<&str>,
-    ) -> Result<(), LowerError> {
-        for (order, n) in nodes.iter().enumerate() {
-            if let Err(e) = self.node(n, parent, arm, order as u32, scope, locals, parent_tag) {
-                self.errors.push(e);
-            }
-        }
-        Ok(())
-    }
-
-    #[allow(clippy::too_many_arguments)]
     fn node(
         &mut self,
         n: &Node,
@@ -1025,6 +1040,9 @@ impl<'a> Lowerer<'a> {
                 let (_r, arms) =
                     self.b
                         .region(RegionKind::When, parent, arm, order, subject, unit, 2);
+                if let Some(sites) = &mut self.sites {
+                    sites.region(*tag);
+                }
                 let mut inner = scope.clone();
                 inner.push_none();
                 self.arm_scopes.insert((*tag, 0), (arms[0], inner.clone()));
@@ -1048,6 +1066,9 @@ impl<'a> Lowerer<'a> {
                 let (_r, arms) =
                     self.b
                         .region(RegionKind::Each, parent, arm, order, subject, key, 1);
+                if let Some(sites) = &mut self.sites {
+                    sites.region(*tag);
+                }
                 self.arm_scopes.insert((*tag, 0), (arms[0], inner.clone()));
                 self.nodes(body, None, Some(arms[0]), &inner, locals, parent_tag)
             }
@@ -1063,6 +1084,9 @@ impl<'a> Lowerer<'a> {
                 let (_r, arms) =
                     self.b
                         .region(RegionKind::Match, parent, arm, order, code, unit, 2);
+                if let Some(sites) = &mut self.sites {
+                    sites.region(*tag);
+                }
                 let mut some_scope = scope.clone();
                 some_scope.push_some_of(&some.0, subject_ty);
                 self.arm_scopes

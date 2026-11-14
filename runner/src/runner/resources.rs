@@ -27,6 +27,11 @@ pub(crate) struct ResourceRow {
     pub(super) stale: bool,
     /// No answer yet because the source is not ready: the resource reads pending.
     pub(super) awaiting: bool,
+    /// Its kept entry, waiting for its identifying arguments (LLP 1027.005 D3).
+    pub(super) waiting: Option<super::kept_wait::Waiting>,
+    /// Its kept seed was admitted this launch: departing its identity
+    /// consumes it (LLP 1027.005 D3).
+    pub(super) kept_admitted: bool,
     pub(super) member: Option<each::Member>,
     /// While a boot from a rendered page settles, a list's answers for the
     /// elements it makes (LLP 1048.000 D6). Boxed: every commit copies each
@@ -62,8 +67,14 @@ impl<D: DataSource> Runner<D> {
 
     /// What an ask of resource `i` read, from the store's counts before it:
     /// any read makes it the device's, and one beyond its draws of
-    /// randomness a reader of what the store holds.
-    pub(super) fn note_reads(&mut self, i: usize, reads_before: usize, draws_before: usize) {
+    /// randomness a reader of what the store holds. Returns whether this ask
+    /// read what the store holds.
+    pub(super) fn note_reads(
+        &mut self,
+        i: usize,
+        reads_before: usize,
+        draws_before: usize,
+    ) -> bool {
         let reads = self.store.reads() - reads_before;
         let draws = self.store.entropy_draws() - draws_before;
         let row = &mut self.resources[i];
@@ -71,6 +82,7 @@ impl<D: DataSource> Runner<D> {
         row.entropy_reader |= draws > 0;
         row.contents_reader |= reads > draws;
         row.reads_known = true;
+        reads > draws
     }
 
     /// What resource `i`'s answer from a rendered page read, which the render

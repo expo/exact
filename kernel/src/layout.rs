@@ -31,6 +31,7 @@ mod publication;
 mod rebuild;
 pub mod size_cache;
 mod table;
+pub(crate) mod text_item;
 mod titles;
 pub use publication::compute;
 
@@ -107,6 +108,7 @@ struct MeasureContext {
     kind: alert::Kind,
     pass: u64,
     height_measured: bool,
+    text_item: Option<Frame>,
     // At most LEAF_OFFERS per live leaf; text/style invalidation clears them.
     measurements: Vec<Measurement>,
     // @ref LLP 1043.000 §8 — the shapes an admitted auto-height leaf is
@@ -1013,12 +1015,13 @@ impl LayoutTree {
         let leaves = &mut self.work.1;
         let mut measure = |inputs: LayoutInput,
                            node,
-                           context: Option<&mut MeasureContext>,
+                           mut context: Option<&mut MeasureContext>,
                            style: &taffy::Style| {
             #[cfg(test)]
             {
                 *leaves += 1;
             }
+            let slot = context.as_ref().map(|c| c.slot);
             let mut first_baseline = None;
             let mut line_height = 0.0;
             let native_slot = context
@@ -1079,12 +1082,9 @@ impl LayoutTree {
                 // exactly upstream's border-box known dimensions (old Patch 7).
                 _ => inputs.known_dimensions.height.is_some(),
             };
-            let mut output = taffy::compute_leaf_layout(
-                inputs,
-                style,
-                crate::style::resolve_calc,
-                |known, space| {
-                    let Some(context) = context else {
+            let (mut output, placement) =
+                text_item::compute(arena, slot, inputs, style, |known, space| {
+                    let Some(context) = context.as_deref_mut() else {
                         return Size::ZERO;
                     };
                     // Width probes leave a cached layout's height proof intact. Reset
@@ -1298,16 +1298,15 @@ impl LayoutTree {
                         width: metrics.width,
                         height: metrics.height,
                     }
-                },
-            );
-            let centered = native_slot.is_some_and(|slot| {
-                crate::FieldKind::from_props(arena.props(slot)) != crate::FieldKind::Textarea
+                });
+            if inputs.run_mode == taffy::tree::RunMode::PerformLayout {
+                if let Some(context) = context {
+                    context.text_item = placement;
+                }
+            }
+            let offset = placement.map(|item| item.y).unwrap_or_else(|| {
+                text_item::baseline_offset(arena, slot, inset, line_height, &output)
             });
-            let offset = if centered {
-                (output.size.height - inset.top - inset.bottom - line_height) / 2.0
-            } else {
-                0.0
-            };
             output.baselines =
                 Baselines::from_first(first_baseline.map(|b| b + inset.top + offset));
             output

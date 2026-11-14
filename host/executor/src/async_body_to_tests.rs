@@ -67,7 +67,220 @@ fn unchanged(files: &Files) {
 }
 
 #[test]
+fn a_file_upload_writes_its_response_to_the_destination() {
+    let _turn = crate::tests::one_at_a_time();
+    for independent in [false, true] {
+        let files = Files::new();
+        std::fs::write(files.0.join("tmp/input"), b"upload").unwrap();
+        std::fs::write(files.0.join("cache/a"), b"old").unwrap();
+        let (core, opened, woke) = serving_on(&format!("{GRANTS}\nfs.read app:/tmp"), true);
+        core.set_app_roots(files.roots());
+        let mut request = download("/bytes/17", "app:/cache/a").body_from("app:/tmp/input");
+        request.method = "POST".into();
+        if independent {
+            request = request.independent_http(1024);
+        }
+        core.run(job(1, request), None).unwrap();
+        let done = collect(&core, &woke, 1);
+        assert!(
+            matches!(&done[0].1, Outcome::Response(r)
+                if r.status == 200 && r.body.is_empty() && r.body_written() == Some(17)),
+            "{done:?}"
+        );
+        wait(&core, |s| s.running.is_empty() && s.bytes == [0, 0]);
+        assert_eq!(
+            std::fs::read(files.0.join("cache/a")).unwrap(),
+            (0..17).map(|i| (i * 31) as u8).collect::<Vec<_>>()
+        );
+        assert_eq!(files.cache(), ["a"]);
+        assert_eq!(*opened.lock().unwrap(), ["https://example.test/bytes/17"]);
+        let state = core.shared.state.lock().unwrap();
+        assert_eq!(state.counts, [0, 0]);
+        assert_eq!(state.book.reservations(), (0, 0, 0));
+        assert!(state.book.downloads.is_empty());
+        assert!(state.book.uploads.is_empty());
+    }
+}
+
+#[test]
+fn a_file_upload_refuses_an_unwritable_destination_before_contact() {
+    let _turn = crate::tests::one_at_a_time();
+    let grants = format!("{GRANTS}\nfs.read app:/tmp");
+    let read_only = "net.fetch https://example.test\nfs.read app:/tmp";
+    for independent in [false, true] {
+        for (app, scope, path) in [
+            (grants.as_str(), None, "app:/cache/missing/a"),
+            (read_only, None, "app:/cache/a"),
+            (grants.as_str(), Some(read_only), "app:/cache/a"),
+        ] {
+            let files = Files::new();
+            std::fs::write(files.0.join("tmp/input"), b"upload").unwrap();
+            std::fs::write(files.0.join("cache/a"), b"old").unwrap();
+            let (core, opened, woke) = serving_on(app, true);
+            core.set_app_roots(files.roots());
+            let mut request = download("/bytes/17", path).body_from("app:/tmp/input");
+            request.method = "POST".into();
+            request.grants = scope.map(str::to_string);
+            if independent {
+                request = request.independent_http(1024);
+            }
+            core.run(job(1, request), None).unwrap();
+            let done = collect(&core, &woke, 1);
+            assert!(
+                matches!(&done[0].1, Outcome::Failed { kind: FailureKind::Refused, message }
+                    if message.starts_with("exactBodyTo app:/cache/")),
+                "{done:?}"
+            );
+            wait(&core, |s| s.running.is_empty() && s.bytes == [0, 0]);
+            assert!(opened.lock().unwrap().is_empty(), "refused upload was sent");
+            unchanged(&files);
+            let state = core.shared.state.lock().unwrap();
+            assert_eq!(state.counts, [0, 0]);
+            assert_eq!(state.book.reservations(), (0, 0, 0));
+            assert!(state.book.downloads.is_empty());
+            assert!(state.book.uploads.is_empty());
+        }
+    }
+}
+
+#[test]
+fn a_cancelled_file_upload_discards_its_prepared_destination_without_contact() {
+    let _turn = crate::tests::one_at_a_time();
+    for interruption in ["abort", "deadline", "retire"] {
+        let files = Files::new();
+        std::fs::write(files.0.join("tmp/input"), b"upload").unwrap();
+        std::fs::write(files.0.join("cache/a"), b"old").unwrap();
+        let (mut core, opened, woke) = serving_on(&format!("{GRANTS}\nfs.read app:/tmp"), true);
+        core.set_app_roots(files.roots());
+        let (prepared, hook) = Gate::at(Phase::Prepare, 1);
+        *core.machine.as_ref().unwrap().reader_hook.lock().unwrap() =
+            Some(Arc::new(move |phase, run| {
+                if matches!(phase, ReaderPhase::Finished(_)) {
+                    hook(Phase::Prepare, run);
+                }
+                Ok(())
+            }));
+        let mut request = download("/bytes/17", "app:/cache/a")
+            .body_from("app:/tmp/input")
+            .independent_http(1024)
+            .timeout(60_000);
+        request.method = "POST".into();
+        core.run(job(1, request), None).unwrap();
+        let run = prepared.wait();
+        assert_eq!(files.cache().len(), 2, "destination was not staged");
+        match interruption {
+            "deadline" => {
+                core.machine.as_ref().unwrap().timer.expire(run);
+                assert!(matches!(
+                    &collect(&core, &woke, 1)[0].1,
+                    Outcome::Failed {
+                        kind: FailureKind::Timeout,
+                        ..
+                    }
+                ));
+            }
+            "retire" => core.retire(),
+            _ => {
+                core.cancel(&[1]);
+                wait(&core, |s| {
+                    s.running.iter().any(|r| r.ticket == 1 && r.terminal)
+                });
+            }
+        }
+        {
+            let state = core.shared.state.lock().unwrap();
+            assert_eq!(state.counts, [0, 1]);
+            assert!(state.bytes[1] > 0);
+        }
+        prepared.release();
+        wait(&core, |s| s.running.is_empty() && s.bytes == [0, 0]);
+        assert!(opened.lock().unwrap().is_empty());
+        assert_eq!(std::fs::read(files.0.join("cache/a")).unwrap(), b"old");
+        let mut names = files.cache();
+        names.retain(|name| name != "exact-children.lock");
+        assert_eq!(names, ["a"]);
+        let state = core.shared.state.lock().unwrap();
+        assert_eq!(state.counts, [0, 0]);
+        assert_eq!(state.book.reservations(), (0, 0, 0));
+        assert!(state.book.downloads.is_empty());
+        assert!(state.book.uploads.is_empty());
+    }
+}
+
+#[test]
+fn a_stalled_root_initializer_does_not_hold_the_independent_starter() {
+    let _turn = crate::tests::one_at_a_time();
+    for deadline in [true, false] {
+        let files = Files::new();
+        let (core, opened, woke) = serving_on(GRANTS, true);
+        core.set_app_roots(files.roots());
+        let (held, hook) = Gate::at(Phase::Prepare, 1);
+        *core.shared.roots_checked.lock().unwrap() = Some(Arc::new(move || {
+            hook(Phase::Prepare, (1, 0));
+        }));
+        core.run(
+            job(
+                1,
+                download("/bytes/100", "app:/cache/a")
+                    .independent_http(1024)
+                    .timeout(60_000),
+            ),
+            None,
+        )
+        .unwrap();
+        held.wait();
+        let run = {
+            let state = core.shared.state.lock().unwrap();
+            let run = &state.running[0];
+            (run.ticket, run.generation)
+        };
+        if deadline {
+            core.machine.as_ref().unwrap().timer.expire(run);
+            assert!(matches!(
+                &collect(&core, &woke, 1)[0].1,
+                Outcome::Failed {
+                    kind: FailureKind::Timeout,
+                    ..
+                }
+            ));
+        } else {
+            core.cancel(&[1]);
+            wait(&core, |s| {
+                s.running.iter().any(|r| r.ticket == 1 && r.terminal)
+            });
+        }
+        core.run(
+            job(
+                2,
+                Request::get("https://example.test/bytes/1").independent_http(1024),
+            ),
+            None,
+        )
+        .unwrap();
+        let done = collect(&core, &woke, 1);
+        assert!(matches!(&done[0], (2, Outcome::Response(_))), "{done:?}");
+        wait(&core, |s| !s.running.iter().any(|r| r.ticket == 2));
+        assert_eq!(*opened.lock().unwrap(), ["https://example.test/bytes/1"]);
+        {
+            let state = core.shared.state.lock().unwrap();
+            assert_eq!(state.counts, [0, 1]);
+            assert!(state.bytes[1] > 0);
+            assert_eq!(state.book.reservations(), (1, 1, 1));
+        }
+        held.release();
+        physically_ended(&core);
+        assert_eq!(*opened.lock().unwrap(), ["https://example.test/bytes/1"]);
+        assert!(files.cache().is_empty());
+        let state = core.shared.state.lock().unwrap();
+        assert_eq!(state.counts, [0, 0]);
+        assert_eq!(state.bytes, [0, 0]);
+        assert_eq!(state.book.reservations(), (0, 0, 0));
+    }
+}
+
+#[test]
 fn a_stalled_write_and_cleanup_keep_the_charge_origin_and_lane_place() {
+    let _turn = crate::tests::one_at_a_time();
     for independent in [false, true] {
         let files = Files::new();
         std::fs::write(files.0.join("cache/a"), b"old").unwrap();
@@ -136,6 +349,7 @@ fn a_stalled_write_and_cleanup_keep_the_charge_origin_and_lane_place() {
 
 #[test]
 fn an_abort_or_deadline_before_publish_leaves_no_file_or_contact_after_preparation() {
+    let _turn = crate::tests::one_at_a_time();
     for phase in [Phase::Prepare, Phase::Publish] {
         for deadline in [false, true] {
             let files = Files::new();
@@ -188,6 +402,7 @@ fn an_abort_or_deadline_before_publish_leaves_no_file_or_contact_after_preparati
 
 #[test]
 fn a_rename_wins_over_an_abort_or_deadline_that_arrives_after_it() {
+    let _turn = crate::tests::one_at_a_time();
     let files = Files::new();
     let (core, _, woke) = serving_on(GRANTS, true);
     core.set_app_roots(files.roots());
@@ -217,6 +432,7 @@ fn a_rename_wins_over_an_abort_or_deadline_that_arrives_after_it() {
 
 #[test]
 fn a_forgotten_safe_request_or_retirement_cleans_up_a_stalled_file_body() {
+    let _turn = crate::tests::one_at_a_time();
     for retire in [false, true] {
         let files = Files::new();
         std::fs::write(files.0.join("cache/a"), b"old").unwrap();
@@ -261,6 +477,7 @@ fn a_forgotten_safe_request_or_retirement_cleans_up_a_stalled_file_body() {
 
 #[test]
 fn a_redirect_writes_only_the_last_hop() {
+    let _turn = crate::tests::one_at_a_time();
     let files = Files::new();
     let (core, opened, woke) = serving_on(GRANTS, true);
     core.set_app_roots(files.roots());
@@ -285,6 +502,7 @@ fn a_redirect_writes_only_the_last_hop() {
 
 #[test]
 fn two_independent_file_bodies_write_their_own_files_while_both_are_in_flight() {
+    let _turn = crate::tests::one_at_a_time();
     let files = Files::new();
     let (core, _, woke) = serving_on(GRANTS, true);
     core.set_app_roots(files.roots());
@@ -323,6 +541,7 @@ fn two_independent_file_bodies_write_their_own_files_while_both_are_in_flight() 
 
 #[test]
 fn a_grant_refusal_on_the_first_or_redirected_hop_cleans_up_the_destination() {
+    let _turn = crate::tests::one_at_a_time();
     for redirected in [false, true] {
         let files = Files::new();
         std::fs::write(files.0.join("cache/a"), b"old").unwrap();
@@ -352,6 +571,7 @@ fn a_grant_refusal_on_the_first_or_redirected_hop_cleans_up_the_destination() {
 
 #[test]
 fn a_completed_reply_forgotten_during_cleanup_keeps_its_admission_place() {
+    let _turn = crate::tests::one_at_a_time();
     let files = Files::new();
     let (core, _, _) = serving_on(GRANTS, true);
     core.set_app_roots(files.roots());

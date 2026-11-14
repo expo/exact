@@ -26,6 +26,7 @@ fn typed(value: &Expr) -> bool {
     match value {
         Expr::Str(t, _) => TYPES.iter().any(|k| t.eq_ignore_ascii_case(k)),
         Expr::Ternary(_, a, b, _) => typed(a) && typed(b),
+        Expr::Let { body, .. } => typed(body),
         _ => false,
     }
 }

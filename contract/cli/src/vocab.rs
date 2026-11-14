@@ -937,7 +937,7 @@ fn only_on(name: &str) -> Option<&'static str> {
         return Some("a `textarea` with `markup=\"markdown\"`: one HTML `dir` word per source line (a Markdown paragraph broken over three source lines takes three), in order, which the web, macOS and iOS draw as that line's base direction; a line past the last word takes the last, so one word sets every line. A list is bound to what the app derives from the value: a literal says one word (`lower-paragraph-dirs-literal`). Words stay with their lines through edits until the app's next words, and a line an edit adds takes the word above it. A line without a word takes the field's `direction`; `auto` is the line's first strong letter outside its syntax and atoms. Linux, Windows and Android show the source as a plain field and ignore it (LLP 1045 D11)");
     }
     if name == "decorations" {
-        return Some("plain `textarea`: paint only, each span's name a `decoration` declaration (color, background-color, text-decoration, text-shadow); the web paints it where `createValueRange` exists, Apple, Linux and Windows all but its text-shadow, Android and the terminal not yet (LLP 1114.007)");
+        return Some("plain `textarea`: paint only, each span's name a `decoration` declaration (color, background-color, text-decoration, text-shadow); the web paints it where `createValueRange` exists, Linux and Windows paint it, Apple paints all but text-shadow, Android and the terminal not yet (LLP 1114.007)");
     }
     // `title` is every element's, HTML's tooltip; `head`'s is the document's.
     if tags::HEAD_FIELDS.contains(&name) && name != "title" {

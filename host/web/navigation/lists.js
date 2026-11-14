@@ -12,7 +12,7 @@ const concreteRole = /^(?:alert|alertdialog|application|article|banner|blockquot
   const r = el.getAttribute("role");
   return r === "list" || r === "listitem" || r === "directory" ? r : r?.split(/[\t\n\f\r ]+/).find((r) => concreteRole.test(r))?.toLowerCase();
 };
-// Concrete ARIA, DPUB and Graphics roles; document.rs `role_is` has the same vocabulary.
+// Concrete roles from kernel/tables/schema.json; aria-roles.test.mjs holds them equal.
 export function listItem(el, owner) {
   const p = el.parentElement;
   owner ??= listOwner(p?.hasAttribute("data-exact-list-item") ? p.parentNode : p);

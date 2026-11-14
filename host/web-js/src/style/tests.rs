@@ -189,6 +189,7 @@ fn a_bound_accent_role_leaves_the_inherited_accent_unset() {
 #[test]
 fn mapped_clears_and_invalid_values_keep_declarations_but_none_removes_them() {
     for (id, invalid) in [
+        (StyleId::ZIndex, "2.5"),
         (StyleId::Cursor, "not-a-cursor"),
         (StyleId::ClipPath, "circle(20%)"),
         (StyleId::ColorScheme, "orange"),

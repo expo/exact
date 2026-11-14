@@ -9,6 +9,8 @@
 //! reuses the host's element and CSS rules (`exact_web::host::template`),
 //! and `exact-web` already depends on `contract`.
 
+#[cfg(test)]
+mod aria_tests;
 mod base_scale;
 #[cfg(test)]
 mod base_scale_tests;
@@ -34,12 +36,16 @@ mod measures_tests;
 mod modes;
 #[cfg(test)]
 mod modes_tests;
+#[cfg(test)]
+mod module_tests;
 mod paint;
 #[cfg(test)]
 mod paint_tests;
 mod presence;
 #[cfg(test)]
 mod presence_tests;
+#[cfg(test)]
+mod reader_tests;
 mod reads;
 mod sized;
 mod style;
@@ -410,7 +416,7 @@ fn main() -> ExitCode {
         }
     } else {
         // Every refusal, each naming its own file (LLP 1054 L9), as `contract build` prints them.
-        let (compiled, warnings) = contract::compile_path_all_with_warnings(path, sites);
+        let (compiled, warnings) = contract::compile_path_all_with_warnings(path, true);
         warned = warnings;
         match compiled {
             Ok((p, m)) => {
@@ -630,6 +636,23 @@ fn main() -> ExitCode {
                 out_files.css.len(),
                 if count == 1 { "" } else { "s" }
             );
+            if let Some(map) = &map {
+                let costs = map.component_code_costs(&plan);
+                let top: Vec<_> = costs
+                    .iter()
+                    .take(5)
+                    .map(|(name, instances, bytes)| {
+                        format!(
+                            "{name}: {bytes} B ({instances} instance{})",
+                            if *instances == 1 { "" } else { "s" }
+                        )
+                    })
+                    .collect();
+                println!(
+                    "  own plan code by component (shared bodies counted per use): {}",
+                    top.join(", ")
+                );
+            }
             ExitCode::SUCCESS
         }
         Err(e) => {

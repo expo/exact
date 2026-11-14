@@ -1329,6 +1329,46 @@
       ]
     },
     {
+      "name": "a query on the launch's root visit spends no id; a later open of another root query is a new visit",
+      "table": "plain",
+      "steps": [
+        {
+          "verb": "launch",
+          "arg": "/?agent=1&q=a",
+          "expected": {"tab": "landing", "tabs": [{"name": "landing", "stack": [{"id": 0, "name": "landing", "url": "/?agent=1&q=a", "tab": "landing", "params": {"item": "", "year": ""}}]}], "next": 1},
+          "refusal": null
+        },
+        {
+          "verb": "open",
+          "arg": "/?q=b",
+          "expected": {"tab": "landing", "tabs": [{"name": "landing", "stack": [{"id": 1, "name": "landing", "url": "/?q=b", "tab": "landing", "params": {"item": "", "year": ""}}]}], "next": 2},
+          "refusal": null
+        }
+      ]
+    },
+    {
+      "name": "a query on another tab's root at launch spends no id",
+      "table": "interview",
+      "steps": [
+        {
+          "verb": "launch",
+          "arg": "/search?q=a",
+          "expected": {
+            "tab": "search",
+            "tabs": [
+              {"name": "home", "stack": [{"id": 0, "name": "home", "url": "/", "tab": "home", "params": {"person": "", "post": "", "question": ""}}]},
+              {"name": "prompts", "stack": [{"id": 1, "name": "prompts", "url": "/prompts", "tab": "prompts", "params": {"person": "", "post": "", "question": ""}}]},
+              {"name": "messages", "stack": [{"id": 2, "name": "messages", "url": "/messages", "tab": "messages", "params": {"person": "", "post": "", "question": ""}}]},
+              {"name": "search", "stack": [{"id": 3, "name": "search", "url": "/search?q=a", "tab": "search", "params": {"person": "", "post": "", "question": ""}}]},
+              {"name": "profile", "stack": [{"id": 4, "name": "profile", "url": "/profile", "tab": "profile", "params": {"person": "", "post": "", "question": ""}}]}
+            ],
+            "next": 5
+          },
+          "refusal": null
+        }
+      ]
+    },
+    {
       "name": "root replace accepts its query and refuses another route",
       "table": "interview",
       "steps": [
@@ -1549,5 +1589,5 @@
   ],
   "law_locations": {"interview": ["/", "/post/42", "/post/42#reply", "/prompt/5/write?x=1", "/unknown/"], "messages": ["/", "/t/7/contact", "/t/7/contact#top", "/new?x=1"], "plain": ["/", "/item/7#moves", "/item/7/edit", "/archive/2026/a%2Fb"]},
   "oracle": {"browser": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/152.0.0.0 Safari/537.36", "date": "2026-09-14", "canonical": "const u = new URL(\"https://x\" + (input.startsWith(\"/\") ? input : \"/\" + input)); u.pathname + u.search", "fragments": "the same URL's u.hash.slice(1), read 2026-10-30 in HeadlessChrome/146 (Playwright chromium_headless_shell-1243)", "location_of": "an http(s) URL's u.pathname + u.search + u.hash; another scheme's rule is the router's, its hash Chrome's", "components": "encodeURIComponent(input)", "search": "new URL(url, \"https://x\").searchParams.get(name) ?? \"\""},
-  "decisions": {"replace_root": "At depth 1, replace accepts only the tab's own root route (query or parameter changes), retaining its id; a different route leaves the value unchanged with one refusal.", "chain_leaf": "The leaf preserves its canonical incoming location, including query and escape spelling; ancestors format only their own parameters.", "parameter_names": "Whole-segment ASCII identifiers: [A-Za-z_$][A-Za-z0-9_$]*.", "ids": "Seed roots in declared tab order from zero before opening the launch chain; refuse before next exceeds the largest exactly representable JavaScript integer."}
+  "decisions": {"replace_root": "At depth 1, replace accepts only the tab's own root route (query or parameter changes), retaining its id; a different route leaves the value unchanged with one refusal.", "chain_leaf": "The leaf preserves its canonical incoming location, including query and escape spelling; ancestors format only their own parameters.", "parameter_names": "Whole-segment ASCII identifiers: [A-Za-z_$][A-Za-z0-9_$]*.", "ids": "Seed roots in declared tab order from zero, the launch's own tab at its chain's root visit, before opening the launch chain; refuse before next exceeds the largest exactly representable JavaScript integer."}
 }

@@ -7,6 +7,9 @@ use contract_syntax::Span;
 use sha2::{Digest, Sha256};
 use std::io::Write;
 
+#[path = "component_costs.rs"]
+mod component_costs;
+
 /// Compiler-owned locations for plan nodes and named declarations.
 /// Source files resolve through each span's identity, including slot fills and
 /// declarations imported separately from their component call sites.
@@ -248,7 +251,6 @@ impl SourceMap {
         }
     }
 
-    /// Serialize beside the final plan bytes. A bake changes the plan's resource
     /// What each component costs the plan (LLP 1054 L10): every use is
     /// inlined, so a component's plan nodes are its instances' nodes,
     /// including those of the components it uses. `(component, instances,

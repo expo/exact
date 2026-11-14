@@ -88,12 +88,14 @@ test('the event-stream parser reads lines, fields and cursors as HTML does (LLP 
   const split = eventStream(64), bytes = enc('data: é\n\n');
   assert.deepEqual([...split(bytes.slice(0, 7)), ...split(bytes.slice(7))], [{ event: '', id: '', data: 'é' }]);
   // The ceiling counts UTF-8 bytes, as the native parser does (host/executor/src/stream.rs `EventStream`):
-  // an event's data and its line feeds, and any line up to the ceiling and 64 bytes more.
+  // an event's data as delivered, the line feeds joining its fields included, and any line up to the ceiling and
+  // 64 bytes more.
   const accepts = (s) => { try { eventStream(16)(enc(s)); return true; } catch (e) { assert.match(e.message, /ceiling/); return false; } };
   assert.deepEqual([
     `data: ${'é'.repeat(7)}a\n\n`, `data: ${'é'.repeat(8)}\n\n`, `data: ${'語'.repeat(5)}\n\n`, `data: ${'😀'.repeat(4)}\n\n`,
     `data: ${'é'.repeat(4)}\ndata: ${'é'.repeat(4)}\n\n`, `x: ${'語'.repeat(25)}\n`, `x: ${'語'.repeat(26)}\n`,
-  ].map(accepts), [true, false, true, false, false, true, false]);
+    `data: ${'é'.repeat(7)}\ndata: a\n\n`, `data: ${'é'.repeat(8)}\ndata:\n\n`,
+  ].map(accepts), [true, true, true, true, false, true, false, true, false]);
 });
 
 test('the event-stream line ceiling counts a leading BOM before stripping it', async () => {

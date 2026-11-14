@@ -148,6 +148,55 @@ fn the_authors_scroll_into_view_ends_the_fragments_hold() {
 }
 
 #[test]
+fn a_new_router_activation_ends_the_previous_fragments_hold() {
+    let mut p = boot();
+    let _ = open(&mut p, "moves", None);
+    // Hold the previous fragment as while its pictures load.
+    p.fragment_anchor = Some((id(&p, "target"), p.person_scrolls));
+    let activation = p.fragment_seen;
+    p.tap(id(&p, "to-moves")).unwrap();
+    assert!(p.fragment_seen > activation);
+    assert!(
+        p.fragment_anchor.is_none(),
+        "the old target stops holding before the new scroll runs"
+    );
+    assert!(
+        p.fragment_armed.is_some(),
+        "the new fragment still waits for its content"
+    );
+}
+
+#[test]
+fn an_activation_already_taken_or_superseded_scrolls_nothing() {
+    let mut p = boot();
+    let _ = open(&mut p, "moves", None);
+    let port = open(&mut p, "to-moves", None);
+    let visit = p.host.router_op().unwrap().top as f64;
+    let taken = p.fragment_seen as f64;
+    assert!(taken > 1., "an older activation to replay");
+    let target = id(&p, "target");
+    // As while the route's pictures load.
+    p.fragment_anchor = Some((target, p.person_scrolls));
+    for activation in [taken, taken - 1.] {
+        p.scroll_to_fragment(&[
+            exact_plan::Value::Number(visit),
+            exact_plan::Value::str("nothing"),
+            exact_plan::Value::Number(activation),
+        ]);
+        assert_eq!(
+            p.scroll_of(port).1,
+            500.,
+            "activation {activation}: still at #moves"
+        );
+        assert_eq!(
+            p.fragment_anchor.map(|(t, _)| t),
+            Some(target),
+            "activation {activation}: the current hold stays"
+        );
+    }
+}
+
+#[test]
 fn no_such_element_says_so_and_leaves_the_route_at_its_top() {
     let mut p = boot();
     let port = open(&mut p, "nothing", None);

@@ -55,6 +55,10 @@ package struct Run: Hashable {
     /// CSS `font-feature-settings`: a metric, applied after `numeric` and
     /// `ligatures` and winning for the same feature.
     package var features: [FontFeature] = []
+    /// Opacity groups from the outermost inline box inward; each alpha is relative to its parent.
+    package var opacity: [InlineOpacity] = []
+    /// An inherited background can belong to an ancestor's group.
+    package var backgroundOpacity: [InlineOpacity] = []
     package var color: [Double]? = nil
     package var decoration: String = ""
     /// The lines its decorating ancestors draw through it, each in that
@@ -82,7 +86,7 @@ package struct Run: Hashable {
     /// `NSTextView` leaves it (LLP 1115.000 D7.9). Paint, never metrics.
     package var fixedInk = false
     /// Its own `text-shadow` (offset x, y, blur, r g b a) when the
-    /// paragraph's runs differ (`Spec.gatherShadows`), and its
+    /// paragraph cannot share it (`Spec.gatherShadows`), and its
     /// `-webkit-text-stroke` (width, r g b a): paint (LLP 1077 D3, D7).
     package var shadow: [Double]? = nil
     package var stroke: [Double]? = nil
@@ -104,6 +108,7 @@ package struct Run: Hashable {
               lhs.italic == rhs.italic, lhs.lineHeight == rhs.lineHeight,
               lhs.letterSpacing == rhs.letterSpacing, lhs.numeric == rhs.numeric, lhs.ligatures == rhs.ligatures, lhs.stretch == rhs.stretch,
               lhs.variations == rhs.variations, lhs.features == rhs.features, lhs.color == rhs.color,
+              lhs.opacity == rhs.opacity, lhs.backgroundOpacity == rhs.backgroundOpacity,
               lhs.decoration == rhs.decoration, lhs.underlineColor == rhs.underlineColor,
               lhs.strikeColor == rhs.strikeColor, lhs.href == rhs.href,
               lhs.hidden == rhs.hidden, lhs.fixedInk == rhs.fixedInk, lhs.background == rhs.background, lhs.backgroundBox == rhs.backgroundBox,
@@ -136,6 +141,8 @@ package struct Run: Hashable {
         hasher.combine(variations)
         hasher.combine(features)
         hasher.combine(color)
+        hasher.combine(opacity)
+        hasher.combine(backgroundOpacity)
         hasher.combine(decoration)
         hasher.combine(underlineColor)
         hasher.combine(strikeColor)
@@ -224,7 +231,7 @@ package struct Spec: Hashable {
     package var language = ""
     /// CSS `text-shadow` (LLP 1077 D3) shared by every run: offset x, y and
     /// blur in points, then the colour's r g b a (0–255), resolved for the
-    /// appearance. Nil when the runs' own differ (`gatherShadows`).
+    /// appearance. Nil when it must stay with the runs (`gatherShadows`).
     package var shadow: [Double]? = nil
     /// CSS `text-box-trim` (0 none, 1 trim-start, 2 trim-end, 3 trim-both)
     /// and `text-box-edge`'s over (0 text, 1 cap, 2 ex) and under (0 text,

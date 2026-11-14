@@ -357,7 +357,11 @@ extension Agent {
         var clip: [[String: Any]] = []
         for (n, kind) in clippers.reversed() {
             clip.append(["id": Int(n.id), "kind": kind])
-            if host.window != nil, !host.convert(host.bounds, to: nil).intersects(n.convert(n.bounds, to: nil)) { clipped = true }
+            if host.window != nil {
+                let intersects = kind == "overflow" ? n.overflowClipIntersects(host.convert(host.bounds, to: n))
+                    : host.convert(host.bounds, to: nil).intersects(n.convert(n.bounds, to: nil))
+                if !intersects { clipped = true }
+            }
         }
         node["scroll"] = scroll
         node["clip"] = clip

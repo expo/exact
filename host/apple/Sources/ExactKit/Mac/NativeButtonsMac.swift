@@ -200,8 +200,8 @@ final class NativeButtonMac: NSButton {
                 title.addAttribute(.foregroundColor, value: color, range: NSRange(location: 0, length: title.length))
                 attributedTitle = title
             }
-            if let color = ButtonConfigurationMac.color(rows.symbol["tint_color"], appearance: owner.effectiveAppearance, accent: written.accent), let base = image {
-                let path = written.face.symbol.map(FaceSymbol.isPath) == true
+            if written.face.symbol.map(FaceSymbol.isOriginal) != true, let color = ButtonConfigurationMac.color(rows.symbol["tint_color"], appearance: owner.effectiveAppearance, accent: written.accent), let base = image {
+                let path = written.face.symbol.map(FaceSymbol.isCustom) == true
                 let shown = path ? FaceSymbol.tinted(base, color)
                     : base.withSymbolConfiguration(NSImage.SymbolConfiguration(paletteColors: [color]))
                         ?? (base.isTemplate ? FaceSymbol.tinted(base, color) : nil)
@@ -263,8 +263,8 @@ final class NativeButtonMac: NSButton {
             return
         }
         if name == "Enter" { return }
-        // An authored radio group's arrows (Radios.swift, `ariaRadioKey`).
-        if owner.presenter?.controls.radioKey(owner, name, held: KeyCodes.held(event.modifierFlags)) == true { return }
+        // A painted radio group's or tablist's keys (RoleKeys.swift).
+        if owner.presenter?.controls.roleKey(owner, name, held: KeyCodes.held(event.modifierFlags)) == true { return }
         super.keyDown(with: event)
     }
     /// Return's press of a dialog's default button: AppKit's own click, its

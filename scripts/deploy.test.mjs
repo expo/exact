@@ -1212,3 +1212,43 @@ test('adding editing and removing only a sunset publishes a new signed sequence'
     expect(writes).toBe(before);
   }
 });
+
+// The captured deploy with producer boundaries doubled: an existing iOS stream must reach classification on Linux.
+test.each(['new', 'invalid', 'authenticated'])('deploy skips a native bake only for an authenticated cohort (%s)', async state => {
+  const root = mkdtempSync(resolve(import.meta.dir, '../target/deploy-bundle-'));
+  const sourceRoot = resolve(root, 'exact-source-capture-fixture/source'), exactRoot = resolve(sourceRoot, 'exact');
+  const app = { id: 'com.exact.bundle', name: 'bundle', displayName: 'Bundle', dir: exactRoot, workspace: exactRoot, target: root,
+    manifest: { host: { ios: {} }, deploy: { signing: { key: 'test', keys: { test: 'public' } } } } };
+  const bundle = { plan: { bytes: Buffer.from('plan'), sha256: sha256(Buffer.from('plan')), formatVersion: 4, kernelSchema: '0'.repeat(16) }, assets: [] };
+  const build = fixtureBuild('a'.repeat(32), bundle);
+  build.trust = 'production';
+  build.compat.inputs = { platform: 'ios', store: { L: 'A' }, keys: { test: 'public' }, executors: [] };
+  const cohort = cohortReceipt(build), stream = { channel: 'prod', compatibilityId: build.compat.id };
+  const calls = [], output = [];
+  const bindings = {
+    ROOT: exactRoot, canonicalPath: x => x, basename: path => path.split('/').at(-1), dirname, inside: (parent, child) => child.startsWith(parent + '/'),
+    process: { env: {}, stderr: { write() {} } }, console: { log: text => output.push(text) },
+    resolveApp: () => app, requireReleasePins() {}, channelOf: () => 'prod', validateChannel: x => x,
+    channelOrigin: () => root, openOrigin: () => ({ writable: true, describe: () => root }), nativePlatforms: () => ['ios'],
+    loadSigner: () => ({ keyId: 'test' }), namesNative: () => true,
+    bake: () => root, bakeJs: () => root, readBundle: () => bundle, readBuilds: () => [{ ...build, compat: { ...build.compat, inputs: { ...build.compat.inputs, platform: 'web' } } }],
+    buildFor: () => { calls.push('native bake'); return build; },
+    holdBundles() {}, rustPackage: () => false, resolve, sealedSourceEnv: (_, env) => env,
+    streams: async () => state === 'authenticated' ? [{ stream, head: {}, cohort, platform: 'ios' }] : state === 'new' ? [] : [{ stream, platform: 'ios', problem: 'unauthenticated' }],
+    streamCandidates: async () => [{ row: { kind: 'stream', platform: 'ios', ...stream }, compat: build.compat, build, bundle }],
+    classify: async () => ({ snapshot: {}, rows: [{ kind: 'stream', platform: 'ios', ...stream, receipt: cohort, action: 'bundle' }] }),
+    streamBundle, publishStream: async () => { calls.push('publish'); return { kind: 'stream', action: 'published', seq: 8, head: { sha256: 'b'.repeat(64) } }; },
+    refuse: message => { throw Error(message); },
+  };
+  const source = readFileSync(DEPLOY, 'utf8');
+  const fn = source.slice(source.indexOf('async function deployCaptured('), source.indexOf('/** An explicitly supplied'));
+  const deploy = new Function(...Object.keys(bindings), fn + ';return deployCaptured;')(...Object.values(bindings));
+  try {
+    expect(await deploy({ _: ['bundle'], platform: ['ios'], keys: root, yes: true, json: true }, {
+      version: 1, run: resolve(root, 'run'), sourceRoot, exactRoot, release: 'update', app,
+      snapshot: { id: 'snapshot', sources: [{ repo: resolve(root, 'live'), roles: ['exact'], commit: 'a'.repeat(40) }] },
+    })).toBe(0);
+    expect(calls).toEqual(state === 'authenticated' ? ['publish'] : ['native bake', 'publish']);
+    expect(JSON.parse(output.at(-1)).published[0].seq).toBe(8);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

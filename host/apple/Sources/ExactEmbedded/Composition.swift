@@ -24,6 +24,9 @@ import ExactNumerals
 #if EXACT_LINK_TIPS
 import ExactTips
 #endif
+#if EXACT_LINK_PRESENCE
+import ExactPresence
+#endif
 public enum ExactComposition {
     public static let app: ExactApp = {
         // The linked capabilities' Swift halves (LLP 1047.001 D4), before
@@ -51,6 +54,9 @@ public enum ExactComposition {
         #endif
         #if EXACT_LINK_TIPS
         ExactTips.install()
+        #endif
+        #if EXACT_LINK_PRESENCE
+        ExactPresence.install()
         #endif
         let app = ExactApp.shared
         return app

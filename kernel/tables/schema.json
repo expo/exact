@@ -1,6 +1,141 @@
 {
   "schemaVersion": 1,
   "_about": "The single declaration authority for the kernel's node types, props, style rows, enum vocabularies, and opcodes. build.rs generates the Rust types, the wire codec, the style mask, and the schema digest from this file. Nothing here is hand-mirrored anywhere else; a second copy of any table is a defect. Prop 253 (fieldStyle) was retired by LLP 1104 r8, and prop 18 (hitSlop, which nothing read) for the `hit_slop_*` style rows; never reuse either number.",
+  "_ariaRoles": "Concrete roles from WAI-ARIA 1.3 (https://www.w3.org/TR/wai-aria-1.3/#role_definitions), DPUB-ARIA 1.1 (https://www.w3.org/TR/dpub-aria-1.1/) and Graphics-ARIA 1.0 (https://www.w3.org/TR/graphics-aria-1.0/). The compiler and web document host read the generated ARIA_ROLES; a web test holds navigation/lists.js to this vocabulary (LLP 1166.002 D3).",
+  "ariaRoles": [
+    "alert",
+    "alertdialog",
+    "application",
+    "article",
+    "banner",
+    "blockquote",
+    "button",
+    "caption",
+    "cell",
+    "checkbox",
+    "code",
+    "columnheader",
+    "combobox",
+    "comment",
+    "complementary",
+    "contentinfo",
+    "definition",
+    "deletion",
+    "dialog",
+    "directory",
+    "doc-abstract",
+    "doc-acknowledgments",
+    "doc-afterword",
+    "doc-appendix",
+    "doc-backlink",
+    "doc-biblioentry",
+    "doc-bibliography",
+    "doc-biblioref",
+    "doc-chapter",
+    "doc-colophon",
+    "doc-conclusion",
+    "doc-cover",
+    "doc-credit",
+    "doc-credits",
+    "doc-dedication",
+    "doc-endnote",
+    "doc-endnotes",
+    "doc-epigraph",
+    "doc-epilogue",
+    "doc-errata",
+    "doc-example",
+    "doc-footnote",
+    "doc-foreword",
+    "doc-glossary",
+    "doc-glossref",
+    "doc-index",
+    "doc-introduction",
+    "doc-noteref",
+    "doc-notice",
+    "doc-pagebreak",
+    "doc-pagefooter",
+    "doc-pageheader",
+    "doc-pagelist",
+    "doc-part",
+    "doc-preface",
+    "doc-prologue",
+    "doc-pullquote",
+    "doc-qna",
+    "doc-subtitle",
+    "doc-tip",
+    "doc-toc",
+    "document",
+    "emphasis",
+    "feed",
+    "figure",
+    "form",
+    "generic",
+    "graphics-document",
+    "graphics-object",
+    "graphics-symbol",
+    "grid",
+    "gridcell",
+    "group",
+    "heading",
+    "image",
+    "img",
+    "insertion",
+    "link",
+    "list",
+    "listbox",
+    "listitem",
+    "log",
+    "main",
+    "mark",
+    "marquee",
+    "math",
+    "menu",
+    "menubar",
+    "menuitem",
+    "menuitemcheckbox",
+    "menuitemradio",
+    "meter",
+    "navigation",
+    "none",
+    "note",
+    "option",
+    "paragraph",
+    "presentation",
+    "progressbar",
+    "radio",
+    "radiogroup",
+    "region",
+    "row",
+    "rowgroup",
+    "rowheader",
+    "scrollbar",
+    "search",
+    "searchbox",
+    "sectionfooter",
+    "sectionheader",
+    "separator",
+    "slider",
+    "spinbutton",
+    "status",
+    "strong",
+    "subscript",
+    "suggestion",
+    "superscript",
+    "switch",
+    "tab",
+    "table",
+    "tablist",
+    "tabpanel",
+    "term",
+    "textbox",
+    "time",
+    "timer",
+    "toolbar",
+    "tooltip",
+    "tree",
+    "treegrid",
+    "treeitem"
+  ],
   "nodeTypes": [
     {
       "id": 0,
@@ -633,6 +768,12 @@
       "name": "accessibilityControls",
       "kind": "str",
       "_comment": "@ref LLP 1075.003 §3.7: aria-controls, the HTML id of the element a control controls; a tab names its tabpanel."
+    },
+    {
+      "id": 309,
+      "name": "accessibilityActiveDescendant",
+      "kind": "str",
+      "_comment": "@ref LLP 1166.001 D1: aria-activedescendant, the HTML id of the active option while this element keeps keyboard focus; empty for none."
     },
     {
       "id": 222,
@@ -2269,6 +2410,10 @@
       ],
       "default": "content-box"
     },
+    "ImageRendering": {
+      "values": ["auto", "crisp-edges", "pixelated"],
+      "default": "auto"
+    },
     "ObjectFit": {
       "values": [
         "fill",
@@ -2768,7 +2913,7 @@
       "default": "none"
     }
   },
-  "_styles": "Each row is one mask bit. codec: dimension (u8 kind + f32; kind 0 auto, 1 points, 2 percent as authored 0-100 points, 3-6 an env(safe-area-inset-top/right/bottom/left) length with the f32 the points added, 7 calc(<percent> ± <px>) with a second f32 the points, 8-13 an env(viewport-segment-width/height/top/left/bottom/right x y) length with the f32 the points added and then two u8 indices x then y — LLP 1078 D3; 14-23 viewport vw/vh/vmin/vmax/svw/svh/lvw/lvh/dvw/dvh with f32 the percentage; 24 a calculation after a zero f32 (style/calc/wire.rs, LLP 1116 D5): a tree node by node, each a u8 tag (0 a value, 1 env(), 2 a sum, 3 a product, 4 a negation, 5 an inversion, 6 min, 7 max, 8 clamp), then a value’s f64 and u8 unit (0 a number, 1 a percentage, 2 px, 3-12 a viewport unit, 128 rem); an env()’s u8 (0-3 a safe-area-inset edge, 4-7 a var(--exact-safe-area-inset-top/right/bottom/left), its content owner's local inset, which only a tree holds — LLP 1123 D5, D9; 8-13 a viewport-segment variable followed by its two u8 indices, 16-35 a layout region's inset, 16 + region × 4 + edge, 36-39 an env(titlebar-area-x/y/width/height), which only a tree holds); a list’s u8 count and its children; clamp’s three presence bytes, each before its argument; or, for a value whose env() has a fallback, tag 9 and the text as written as a string (u32 length, UTF-8), which the row reads once substituted (CSS Environment Variables 1 §3). A tree is admitted only when it is within CSS Values 4 §10.8’s limits, its own §10.13 text parses back to it and no other kind holds it; a text only when the row reads it as one. Kind 25 is an env(-exact-<region>-inset-<edge>) layout region's inset, the f32 the points added, then a u8 region (0 safe-area-corners, 1 layout-margins, 2 layout-margins-corners, 3 readable-content, 4 readable-content-corners) and a u8 edge (0 top, 1 right, 2 bottom, 3 left), LLP 1123 D10) | line-height (u8: 0 normal, 1 number followed by f32, 2 length followed by f32) | f32 | u8 (keyword bits; keywords names the enum) | u16 | u32 | i32 | color (tagged ColorValue, src/wire/codec.rs) | vec2 (f32 f32) | auto-color (u8: 0 auto, 1 followed by color) | current-color (u8: 0 currentcolor, 1 followed by color) | tracks (CSS grid-template grammar Taffy can lay out: none, named lines, px, %, fr, auto, min/max-content, calc()/min()/max()/clamp() over px and %, fit-content(px or %), minmax(), and fixed/auto-fill/auto-fit repeat(); canonical CSS text on the wire) | placement (CSS grid placement: auto, nonzero numeric or named lines and positive numeric or named spans; canonical CSS text on the wire) | aspect-ratio (CSS text: auto, a ratio, or both) | background-image (CSS text: none or gradient layers, LLP 1066) | paint (CSS text: none, currentcolor, or a colour) | dasharray (CSS text: none or a list of numbers) | transform (CSS text: a transform list) | paint-order (CSS text: normal, or fill/stroke/markers) | marker (CSS text: none or url(#id)) | transform-origin (CSS text: one to three lengths, percentages or keywords) | transitions (`_transitions`) | animations (`_animations`) | drag-timeline, animation-timeline, animation-range, timeline-scope, timeline-name, view-timeline-inset (CSS text: the timeline rows, LLP 1057.003) | box-shadow, text-shadow, filter, backdrop-filter, clip-path, shape-outside, corner-shape, mask-image, rotate-axis, symbol-palette, font-variations, font-features, position-try-fallbacks (CSS text, parsed by the types named in build/codec.rs) | enum:<Name> (u8). admitsAuto applies to dimension rows only; Auto on a non-admitting row is a typed decode rejection. refusesPercent marks a dimension row CSS gives no percentage (column-width): a percentage there, alone or inside a calculation, is refused when set and a typed decode rejection. Every length row (each dimension, line-height, font-size, letter-spacing, the gaps, border widths and radii, shape-margin, border-spacing) also takes CSS `rem` and `em` through `set_dynamic`; the row holds the pixels the kernel resolves at the end of each commit against the host's root font size (LLP 1069.000 D3), so every reader and the wire see pixels. Every length row also takes CSS `ch` and `lh` at a fixed 8×16 px cell (LLP 1101 D3). terminal: how a terminal entry admits the row (LLP 1101 §4) — cell (lengths only in `ch`/`lh`, a percentage, `auto` or 0), admit, or quantize (the host approximates it); a row without one is refused in a terminal entry. layout: a change re-runs layout. text: a change invalidates text measurement. inherited: the row follows CSS inheritance — a node without its own row takes the nearest logical ancestor's computed value, else the initial value (LLP 1035.000 D1); the kernel marks the descendants an inherited change reaches. Defaults are the storage defaults AND the semantic defaults — this table is the one default authority, and the defaults are CSS's: a bare node is a block, content-box, flex-direction row, flex-shrink 1 (rules/RULES.md: the web is the standard). A colour row's default may name a role from `colors` (`\"CanvasText\"`), as CSS's initial `color` is a system colour; a host with the platform's colour shows that, never a snapshot (LLP 1095 stage 2). hosts (LLP 1159.000 D2): what a native host does with the row other than draw it as written, a list of { host: ios | macos | linux | windows | android, or painted for every host that draws with exact-painted's paint walk (linux, windows, android); on: box (an element outside an svg) or svg (one inside), where the entry is limited to one; fidelity: none (the node draws as if the row were unset) or best-effort (it differs as why says); why }. A host with no entry has no known gap, which is not a measurement. The compiler's style-undrawn lint, `contract vocab` and scripts/svgparity.mjs read it; no wire does, so it is outside the digest.",
+  "_styles": "Each row is one mask bit. codec: dimension (u8 kind + f32; kind 0 auto, 1 points, 2 percent as authored 0-100 points, 3-6 an env(safe-area-inset-top/right/bottom/left) length with the f32 the points added, 7 calc(<percent> ± <px>) with a second f32 the points, 8-13 an env(viewport-segment-width/height/top/left/bottom/right x y) length with the f32 the points added and then two u8 indices x then y — LLP 1078 D3; 14-23 viewport vw/vh/vmin/vmax/svw/svh/lvw/lvh/dvw/dvh with f32 the percentage; 24 a calculation after a zero f32 (style/calc/wire.rs, LLP 1116 D5): a tree node by node, each a u8 tag (0 a value, 1 env(), 2 a sum, 3 a product, 4 a negation, 5 an inversion, 6 min, 7 max, 8 clamp), then a value’s f64 and u8 unit (0 a number, 1 a percentage, 2 px, 3-12 a viewport unit, 128 rem); an env()’s u8 (0-3 a safe-area-inset edge, 4-7 a var(--exact-safe-area-inset-top/right/bottom/left), its content owner's local inset, which only a tree holds — LLP 1123 D5, D9; 8-13 a viewport-segment variable followed by its two u8 indices, 16-35 a layout region's inset, 16 + region × 4 + edge, 36-39 an env(titlebar-area-x/y/width/height), which only a tree holds); a list’s u8 count and its children; clamp’s three presence bytes, each before its argument; or, for a value whose env() has a fallback, tag 9 and the text as written as a string (u32 length, UTF-8), which the row reads once substituted (CSS Environment Variables 1 §3). A tree is admitted only when it is within CSS Values 4 §10.8’s limits, its own §10.13 text parses back to it and no other kind holds it; a text only when the row reads it as one. Kind 25 is an env(-exact-<region>-inset-<edge>) layout region's inset, the f32 the points added, then a u8 region (0 safe-area-corners, 1 layout-margins, 2 layout-margins-corners, 3 readable-content, 4 readable-content-corners) and a u8 edge (0 top, 1 right, 2 bottom, 3 left), LLP 1123 D10) | line-height (u8: 0 normal, 1 number followed by f32, 2 length followed by f32) | f32 | u8 (keyword bits; keywords names the enum) | u16 | u32 | i32 | auto-i32 (u8: 0 auto, 1 followed by i32) | color (tagged ColorValue, src/wire/codec.rs) | vec2 (f32 f32) | auto-color (u8: 0 auto, 1 followed by color) | current-color (u8: 0 currentcolor, 1 followed by color) | tracks (CSS grid-template grammar Taffy can lay out: none, named lines, px, %, fr, auto, min/max-content, calc()/min()/max()/clamp() over px and %, fit-content(px or %), minmax(), and fixed/auto-fill/auto-fit repeat(); canonical CSS text on the wire) | placement (CSS grid placement: auto, nonzero numeric or named lines and positive numeric or named spans; canonical CSS text on the wire) | aspect-ratio (CSS text: auto, a ratio, or both) | background-image (CSS text: none or gradient layers, LLP 1066) | paint (CSS text: none, currentcolor, or a colour) | dasharray (CSS text: none or a list of numbers) | transform (CSS text: a transform list) | paint-order (CSS text: normal, or fill/stroke/markers) | marker (CSS text: none or url(#id)) | transform-origin (CSS text: one to three lengths, percentages or keywords) | transitions (`_transitions`) | animations (`_animations`) | drag-timeline, animation-timeline, animation-range, timeline-scope, timeline-name, view-timeline-inset (CSS text: the timeline rows, LLP 1057.003) | box-shadow, text-shadow, filter, backdrop-filter, clip-path, shape-outside, corner-shape, mask-image, rotate-axis, symbol-palette, font-variations, font-features, position-try-fallbacks (CSS text, parsed by the types named in build/codec.rs) | enum:<Name> (u8). admitsAuto applies to dimension rows only; Auto on a non-admitting row is a typed decode rejection. refusesPercent marks a dimension row CSS gives no percentage (column-width): a percentage there, alone or inside a calculation, is refused when set and a typed decode rejection. Every length row (each dimension, line-height, font-size, letter-spacing, the gaps, border widths and radii, shape-margin, border-spacing) also takes CSS `rem` and `em` through `set_dynamic`; the row holds the pixels the kernel resolves at the end of each commit against the host's root font size (LLP 1069.000 D3), so every reader and the wire see pixels. Every length row also takes CSS `ch` and `lh` at a fixed 8×16 px cell (LLP 1101 D3). terminal: how a terminal entry admits the row (LLP 1101 §4) — cell (lengths only in `ch`/`lh`, a percentage, `auto` or 0), admit, or quantize (the host approximates it); a row without one is refused in a terminal entry. layout: a change re-runs layout. text: a change invalidates text measurement. inherited: the row follows CSS inheritance — a node without its own row takes the nearest logical ancestor's computed value, else the initial value (LLP 1035.000 D1); the kernel marks the descendants an inherited change reaches. Defaults are the storage defaults AND the semantic defaults — this table is the one default authority, and the defaults are CSS's: a bare node is a block, content-box, flex-direction row, flex-shrink 1 (rules/RULES.md: the web is the standard). A colour row's default may name a role from `colors` (`\"CanvasText\"`), as CSS's initial `color` is a system colour; a host with the platform's colour shows that, never a snapshot (LLP 1095 stage 2). hosts (LLP 1159.000 D2): what a native host does with the row other than draw it as written, a list of { host: ios | macos | linux | windows | android, or painted for every host that draws with exact-painted's paint walk (linux, windows, android); on: box (an element outside an svg) or svg (one inside), where the entry is limited to one; fidelity: none (the node draws as if the row were unset) or best-effort (it differs as why says); why }. A host with no entry has no known gap, which is not a measurement. The compiler's style-undrawn lint, `contract vocab` and scripts/svgparity.mjs read it; no wire does, so it is outside the digest.",
   "styles": [
     {
       "bit": 0,
@@ -3133,8 +3278,8 @@
       "bit": 35,
       "field": "z_index",
       "terminal": "admit",
-      "codec": "i32",
-      "default": 0,
+      "codec": "auto-i32",
+      "default": "auto",
       "cold": true
     },
     {
@@ -3341,6 +3486,7 @@
     {
       "bit": 57,
       "field": "box_shadow",
+      "capability": "shadows",
       "codec": "box-shadow",
       "_comment": "@ref LLP 1077 D4: CSS `box-shadow`, `none` or a list (at most 8) of shadows, each `inset? <length>{2,4} <color>` in any order, painted as CSS paints outer and inset shadows; it replaced LLP 1064's four shadow rows. A missing colour is refused (LLP 1064 D1).",
       "cold": true
@@ -3382,6 +3528,7 @@
     {
       "bit": 62,
       "field": "rotate",
+      "capability": "rotate",
       "codec": "f32",
       "default": 0,
       "cold": true
@@ -3785,7 +3932,7 @@
       "field": "animation",
       "codec": "animations",
       "_comment": "@ref LLP 1055 D5: CSS `animation`, each entry with its resolved @keyframes (grammar: `_animations`).",
-      "cold": true
+      "separate": true
     },
     {
       "bit": 112,
@@ -4005,6 +4152,7 @@
     {
       "bit": 141,
       "field": "background_image",
+      "capability": "gradients",
       "snapshot": "admit",
       "watch": "admit",
       "codec": "background-image",
@@ -4082,6 +4230,7 @@
     {
       "bit": 151,
       "field": "text_shadow",
+      "capability": "shadows",
       "codec": "text-shadow",
       "inherited": true,
       "_comment": "@ref LLP 1077 D3: CSS `text-shadow`, `none` or one shadow (no list, no spread), under the glyphs and decorations; a missing colour is currentcolor. Inherited, as in CSS."
@@ -4089,6 +4238,7 @@
     {
       "bit": 152,
       "field": "mask_image",
+      "capability": "gradients",
       "rare": true,
       "codec": "mask-image",
       "_comment": "@ref LLP 1077 D2: CSS `mask-image`, `none` or one gradient in background-image's grammar (LLP 1066), its alpha over the border box. Not inherited."
@@ -4096,6 +4246,7 @@
     {
       "bit": 153,
       "field": "corner_shape",
+      "capability": "corners",
       "rare": true,
       "codec": "corner-shape",
       "_comment": "@ref LLP 1077 D1: CSS `corner-shape`, one to four of round | squircle | square | bevel | scoop | notch | superellipse(K), plus -exact-continuous (Apple's continuous curve on every host; declared in LLP 1001). Shapes the corners `border-radius` sizes."
@@ -4103,6 +4254,7 @@
     {
       "bit": 154,
       "field": "text_stroke_width",
+      "capability": "text_stroke",
       "codec": "f32",
       "default": 0,
       "inherited": true,
@@ -4111,6 +4263,7 @@
     {
       "bit": 155,
       "field": "text_stroke_color",
+      "capability": "text_stroke",
       "codec": "current-color",
       "default": "currentcolor",
       "inherited": true,
@@ -4126,6 +4279,7 @@
     {
       "bit": 157,
       "field": "rotate_axis",
+      "capability": "rotate",
       "codec": "rotate-axis",
       "_comment": "@ref LLP 1077 D8: the axis of CSS `rotate` (`x`, `y`, `z` or three numbers), set with `rotate`'s angle by the one `rotate` attribute; initial z. The angle is `rotate` (bit 62), which the engine animates.",
       "cold": true
@@ -4170,6 +4324,7 @@
     {
       "bit": 163,
       "field": "symbol_palette",
+      "capability": "symbol_palette",
       "codec": "symbol-palette",
       "inherited": true,
       "_comment": "@ref LLP 1077 D10: not CSS. A symbol's palette, one to three colours, under `-exact-symbol-rendering: palette`. Inherited."
@@ -4866,6 +5021,13 @@
       "layout": true,
       "default": 0,
       "_comment": "The left side of `local_inset_top`'s override."
+    },
+    {
+      "bit": 247,
+      "field": "image_rendering",
+      "codec": "enum:ImageRendering",
+      "inherited": true,
+      "_comment": "CSS Images 3 §5.3: auto smooths; crisp-edges uses nearest-neighbour sampling; pixelated uses nearest-neighbour at the nearest integer scale, then smooths to the requested size."
     }
   ],
   "_transitions": "The `transition` row is CSS `transition` (LLP 1002): count u8 (≤8), then per declaration property u8 (0 all, then 1 + `Property`: 1 translate, 2 scale, 3 rotate, 4 opacity, 5 height, 6 stroke-dashoffset, 7 r, 8 color, 9 background-color, 10 fill, 11 stroke, 12 cx, 13 cy, 14 x, 15 y, 16 rx, 17 ry, 18 border-top-color, 19 border-right-color, 20 border-bottom-color, 21 border-left-color, 22 -exact-tint-color, 23 box-shadow — LLP 1062; 24, box-shadow's colour alone, is refused; 25 font-weight, 26 font-stretch, 27 font-variation-settings — LLP 1019 §13 D10; 28 is CSS's `border-color` shorthand; 29 is a path's `d`, LLP 1055.000 D15), duration f32 s, delay f32 s, easing u8 (0 linear, 1 ease, 2 ease-in, 3 ease-out, 4 ease-in-out, 5 cubic-bezier + 4×f32, 6 steps + u16 count + u8 position, 7 spring + f32 stiffness/damping/mass, 8 linear() + u8 count + count×(f32 input, f32 output)). Its Rust type lives in exact-motion; the kernel owns the bytes.",
@@ -6822,6 +6984,54 @@
     ["radius.md", {"px": 17, "measured": "ios-button-medium-corner"}, {"px": 6, "measured": "mac-push-regular-corner"}, "=control-radius", {"px": 8, "guideline": "m3-shape"}, 0],
     ["radius.lg", "=grouped-card-radius", "=grouped-card-radius", "=surface-radius", {"px": 12, "guideline": "m3-shape"}, 0],
     ["radius.full", "full", "full", "full", "full", 0]
+  ],
+  "_roles": "@ref LLP 1166.000 D1: keys for painted composite roles. Each row: role; memberRoles (a trailing * matches a role prefix) and memberTags (HTML elements); scope (child elements, or descendants belonging to their nearest tablist or menu, as the web's ROVES selector does); axis (both, horizontal, vertical; horizontal arrows mirror the group's computed direction); orientation (aria-orientation=vertical or a host sidebar override makes it vertical); wraps; press (an arrow presses its destination when it moves); ends (Home and End); tabEntry (the checked or selected eligible member, else the first, or null for no stop). Eligibility excludes disabled, aria-disabled=true, inert and unshown members and requires host focusability; the focused member remains the move's origin. Tab entry excludes authored negative tabindex; while a member is focused only it may be the stop, and a focused negative tabindex leaves none.",
+  "roles": [
+    {
+      "role": "radiogroup",
+      "memberRoles": [
+        "radio"
+      ],
+      "memberTags": [],
+      "scope": "children",
+      "axis": "both",
+      "orientation": false,
+      "wraps": true,
+      "press": true,
+      "ends": false,
+      "tabEntry": "aria-checked"
+    },
+    {
+      "role": "tablist",
+      "memberRoles": [
+        "tab"
+      ],
+      "memberTags": [],
+      "scope": "descendants",
+      "axis": "horizontal",
+      "orientation": true,
+      "wraps": true,
+      "press": false,
+      "ends": true,
+      "tabEntry": "aria-selected"
+    },
+    {
+      "role": "menu",
+      "memberRoles": [
+        "menuitem*"
+      ],
+      "memberTags": [
+        "button",
+        "a[href]"
+      ],
+      "scope": "descendants",
+      "axis": "vertical",
+      "orientation": false,
+      "wraps": true,
+      "press": false,
+      "ends": true,
+      "tabEntry": null
+    }
   ],
   "_controls": "LLP 1121 D9 (stage 8 C): each native control's parameters a design can set (accent-color, or a colour role it reads) and how each host Exact ships honours one: [control (a `:state` after it: that state's), parameter, ios, macos, web, linux, windows, terminal, android], each host `exact`, `best-effort` (the platform alters it) or `none` (the platform's own stands), `: why` after it saying so. Measured by scripts/measure-controls.mjs, recorded with provenance in docs/control-roles-measured.md, which a test holds this table to; the compiler's tamber-unreachable lint reads it. A new parameter is a role first (LLP 1095 §3).",
   "controls": [

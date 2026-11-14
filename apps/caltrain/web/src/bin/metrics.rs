@@ -206,15 +206,11 @@ fn main() {
         for i in 0..20 {
             let mut mask = StyleMask::default();
             mask.set(StyleId::TextColor);
-            let patch = StyleProps {
-                text_color: ColorValue::Fixed(Color(if i % 2 == 0 {
-                    0x112233ff
-                } else {
-                    0x445566ff
-                })),
-                mask,
-                ..StyleProps::default()
-            };
+            let patch = StyleProps::default().with_rows(|rows| {
+                rows.text_color =
+                    ColorValue::Fixed(Color(if i % 2 == 0 { 0x112233ff } else { 0x445566ff }));
+                rows.mask = mask;
+            });
             let op = Op::SetStyle {
                 id: root,
                 patch: Box::new(patch),

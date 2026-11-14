@@ -8,6 +8,21 @@ import { pngPixels, pngBytes, resizePixels, bitmapPixels } from './image.mjs';
 import { appleCommand } from './toolchain.mjs';
 import { encodePng } from '../../scripts/png.mjs';
 
+test('the portable SVG catalog rasterizer preserves viewport, colours and alpha', () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-svg-raster-'));
+  try {
+    const source = resolve(dir, 'two.svg'), output = resolve(dir, 'two.png');
+    writeFileSync(source, '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20" viewBox="10 20 40 20"><path fill="#ff0000" d="M10 20h20v20H10Z"/><path fill="#0000ff" opacity=".5" d="M30 20h20v20H30Z"/></svg>');
+    const result = spawnSync(process.execPath, [resolve(import.meta.dir, 'image.mjs'), '-s', 'format', 'png', '-Z', '192', source, '--out', output], { encoding: 'utf8', timeout: 30_000 });
+    expect(result.status, result.stderr).toBe(0);
+    const image = pngPixels(readFileSync(output));
+    expect([image.width, image.height]).toEqual([192, 96]);
+    const sample = x => [...image.data.subarray((192 * 20 + x) * 4, (192 * 20 + x) * 4 + 4)];
+    expect(sample(40)).toEqual([255, 0, 0, 255]);
+    expect(sample(140)).toEqual([0, 0, 255, 128]);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 // PngSuite: https://github.com/nothings/stb/tree/master/tests/pngsuite
 // Golden RGBA bytes use stbi_load_16, scaled to eight bits with nearest rounding.
 const references = {

@@ -268,6 +268,15 @@ impl<'a> Reader<'a> {
         }
     }
 
+    /// An `auto` keyword (0), or an integer (1 followed by i32).
+    pub fn auto_i32(&mut self) -> Result<Option<i32>, DecodeError> {
+        match self.u8()? {
+            0 => Ok(None),
+            1 => self.i32().map(Some),
+            tag => Err(DecodeError::BadAutoI32(tag)),
+        }
+    }
+
     /// Read and validate a grid template from its canonical CSS text.
     pub fn tracks(&mut self) -> Result<GridTracks, DecodeError> {
         self.tracks_for_style()
@@ -623,6 +632,14 @@ impl Writer {
         }
     }
 
+    /// Write `auto` separately from every integer, including zero.
+    pub fn auto_i32(&mut self, n: Option<i32>) {
+        self.u8(u8::from(n.is_some()));
+        if let Some(n) = n {
+            self.i32(n);
+        }
+    }
+
     /// Append a grid track list.
     pub fn tracks(&mut self, t: &GridTracks) {
         self.string(t.css());
@@ -718,7 +735,7 @@ mod tests {
         // schema. The literal makes an accidental removal of that coupling a
         // test failure whenever the byte snapshot above is intentionally moved.
         // Recomputed when the schema changes; the digest test prints the value.
-        assert_eq!(SCHEMA_DIGEST, 0x2fda_1335_eadf_64b6);
+        assert_eq!(SCHEMA_DIGEST, 0x5be26f14d8657297);
     }
 
     #[test]

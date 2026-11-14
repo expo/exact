@@ -6,6 +6,7 @@ import AppKit
 #endif
 import XCTest
 import ExactCore
+import CExact
 @testable import ExactKit
 
 /// Stage 9 A2 (LLP 1121 D10): a native control's face draws an svg-only
@@ -16,6 +17,131 @@ import ExactCore
 /// FaceSymbolIOSTests'; here the token, and AppKit's.
 ///   bun host/apple/build.mjs --test   (and --test --ios)
 final class FaceSymbolTests: XCTestCase {
+    @MainActor func testRasterIconsKeepTheirColoursGeometryAndScale() throws {
+        let path = try XCTUnwrap(ProcessInfo.processInfo.environment["EXACT_RASTER_ICONS_BUNDLE"])
+        let bundle = try XCTUnwrap(Bundle(path: path))
+        let token = try XCTUnwrap(FaceSymbol.of(["symbol": "", "symbolAsset": "two.svg", "symbolMulticolor": true]))
+        XCTAssertTrue(FaceSymbol.isOriginal(token))
+        XCTAssertEqual(FaceSymbol.observed(token, icon: "icon.two"), "icon.two")
+        #if os(iOS)
+        for scale in [1.0, 2.0, 3.0] {
+            let image = try XCTUnwrap(FaceSymbol.image(token, points: 40, bundle: bundle,
+                traits: UITraitCollection(displayScale: scale)))
+            XCTAssertEqual(image.cgImage?.width, Int(64 * scale), "the selected rendition keeps its pixels at control and page sizes")
+            XCTAssertEqual(image.size, CGSize(width: 40, height: 20))
+            XCTAssertEqual(image.renderingMode, .alwaysOriginal)
+            let item = UIBarButtonItem(image: image, style: .plain, target: nil, action: nil)
+            item.tintColor = .green
+            XCTAssertEqual(item.image?.renderingMode, .alwaysOriginal)
+            try assertRasterColours(try XCTUnwrap(image.cgImage))
+            let pageImage = try XCTUnwrap(FaceSymbol.image(token, points: 17, bundle: bundle, traits: UITraitCollection(displayScale: scale)))
+            XCTAssertEqual(pageImage.cgImage?.width, Int(64 * scale), "a 64-point page image keeps the full rendition before layout")
+            XCTAssertEqual(pageImage.size, CGSize(width: 17, height: 8.5))
+        }
+        #else
+        let image = try XCTUnwrap(FaceSymbol.image(token, points: 40, bundle: bundle))
+        XCTAssertEqual(image.size, CGSize(width: 40, height: 20))
+        XCTAssertFalse(image.isTemplate)
+        let button = NSButton(image: image, target: nil, action: nil)
+        button.contentTintColor = .green
+        XCTAssertFalse(try XCTUnwrap(button.image).isTemplate)
+        try assertRasterColours(try XCTUnwrap(image.cgImage(forProposedRect: nil, context: nil, hints: nil)))
+        #endif
+        let session = ExactApp.shared.makeSession(label: "raster-geometry")
+        defer { session.destroy() }
+        session.runtime.on {
+            exact_set_symbol_measure(session.runtime.rt, { _, name, count, points, weight, out in
+                guard let out, let name,
+                      let path = ProcessInfo.processInfo.environment["EXACT_RASTER_ICONS_BUNDLE"], let bundle = Bundle(path: path) else { return 0 }
+                let text = String(decoding: UnsafeBufferPointer(start: name, count: count), as: UTF8.self)
+                guard let size = SymbolMeasure.size(text, points: CGFloat(points), weight: CGFloat(weight), bundles: [bundle]) else { return 0 }
+                out[0] = Float(size.width); out[1] = Float(size.height)
+                return 1
+            })
+        }
+        let plan = try XCTUnwrap(ProcessInfo.processInfo.environment["EXACT_RASTER_ICONS_PLAN"])
+        XCTAssertNil(session.boot(plan: try Data(contentsOf: URL(fileURLWithPath: plan)), size: CGSize(width: 300, height: 300)).error)
+        let wide = try XCTUnwrap(session.presenter.views.values.first { $0.props["testId"] == "raster-wide" })
+        XCTAssertEqual(wide.frame.width, 80, accuracy: 0.01)
+        XCTAssertEqual(wide.frame.height, 40, accuracy: 0.01)
+        #if os(iOS)
+        let readout = ReadoutView(bundle: bundle)
+        readout.show(try XCTUnwrap(ChipFace(wide, readout: true)), ReadoutFacts())
+        let readoutImage = try XCTUnwrap((readout.stack.arrangedSubviews.first as? UIImageView)?.image)
+        XCTAssertEqual(readoutImage.renderingMode, .alwaysOriginal)
+        try assertRasterColours(try XCTUnwrap(readoutImage.cgImage))
+        #else
+        let readout = try XCTUnwrap(MacBarFace(wide, readout: true, bundle: bundle))
+        try assertRasterColours(try XCTUnwrap(readout.image.cgImage(forProposedRect: nil, context: nil, hints: nil)))
+        let item = NSToolbarItem(itemIdentifier: .init("raster"))
+        item.image = FaceSymbol.image(token, bundle: bundle)
+        var face = ButtonFace()
+        face.symbol = token
+        face.rows.symbol["tint_color"] = .array([.number(0), .number(255), .number(0), .number(255)])
+        ToolbarInkMac().button(item, node: wide, face: face, painted: false, enabled: true, target: self, action: NSSelectorFromString("unused:"))
+        let toolbarImage = try XCTUnwrap((item.view as? NSButton)?.image)
+        try assertRasterColours(try XCTUnwrap(toolbarImage.cgImage(forProposedRect: nil, context: nil, hints: nil)))
+        #endif
+        let template = try XCTUnwrap(FaceSymbol.assetToken("two.svg", multicolor: false))
+        XCTAssertTrue(Self.isTemplate(FaceSymbol.image(template, points: 40, bundle: bundle)))
+        XCTAssertEqual(FaceSymbol.of(["symbol": "heart", "symbolAsset": "two.svg"]), "heart")
+    }
+
+    @MainActor func testNativeButtonsApplyTheSFSymbolRenderingMode() throws {
+        var face = ButtonFace()
+        face.symbol = "cloud.sun.fill"
+        face.rows.symbol["symbol_rendering"] = .string("multicolor")
+        #if os(iOS)
+        let button = UIButton()
+        ButtonConfigurationIOS.apply(face, to: button, traits: UITraitCollection(userInterfaceStyle: .light), accent: .green)
+        let config = try XCTUnwrap(button.configuration)
+        let source = try XCTUnwrap(config.image)
+        let image = config.preferredSymbolConfigurationForImage.flatMap { source.applyingSymbolConfiguration($0) } ?? source
+        let cgImage = try XCTUnwrap(UIGraphicsImageRenderer(size: CGSize(width: 100, height: 100)).image { _ in
+            image.draw(in: CGRect(x: 0, y: 0, width: 100, height: 100))
+        }.cgImage)
+        #else
+        let button = NSButton()
+        _ = ButtonConfigurationMac.apply(face, to: button, appearance: NSAppearance(named: .aqua)!, accent: .green)
+        let image = try XCTUnwrap(button.image)
+        let cgImage = try XCTUnwrap(image.cgImage(forProposedRect: nil, context: nil, hints: nil))
+        #endif
+        var pixels = [UInt8](repeating: 0, count: 100 * 100 * 4)
+        try pixels.withUnsafeMutableBytes { storage in
+            let context = try XCTUnwrap(CGContext(data: storage.baseAddress, width: 100, height: 100,
+                bitsPerComponent: 8, bytesPerRow: 400, space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            context.draw(cgImage, in: CGRect(x: 0, y: 0, width: 100, height: 100))
+        }
+        var yellow = 0
+        for at in stride(from: 0, to: pixels.count, by: 4) {
+            let red = Int(pixels[at]), green = Int(pixels[at + 1]), blue = Int(pixels[at + 2])
+            if red > 120 && green > 60 && blue < red / 2 { yellow += 1 }
+        }
+        XCTAssertGreaterThan(yellow, 20, "the sun keeps its SF multicolour ink under a green control tint")
+        #if os(iOS)
+        face.symbol = Self.token
+        face.rows.symbol["tint_color"] = .array([0, 255, 0, 255])
+        ButtonConfigurationIOS.apply(face, to: button, traits: button.traitCollection, accent: nil)
+        XCTAssertNotNil(button.configuration?.imageColorTransformer, "a template path still takes its authored tint under multicolor")
+        #endif
+    }
+
+    private func assertRasterColours(_ image: CGImage) throws {
+        var bytes = [UInt8](repeating: 0, count: 40 * 20 * 4)
+        try bytes.withUnsafeMutableBytes { storage in
+            let context = try XCTUnwrap(CGContext(data: storage.baseAddress, width: 40, height: 20,
+                bitsPerComponent: 8, bytesPerRow: 160, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            context.draw(image, in: CGRect(x: 0, y: 0, width: 40, height: 20))
+        }
+        let sample = { (x: Int) in Array(bytes[((10 * 40 + x) * 4)..<((10 * 40 + x) * 4 + 4)]) }
+        for (x, expected) in [(15, [255, 0, 0, 255]), (25, [0, 0, 255, 255])] {
+            for (actual, wanted) in zip(sample(x), expected) {
+                XCTAssertLessThanOrEqual(abs(Int(actual) - wanted), 2)
+            }
+        }
+    }
+
     static let square = "M 2 2 L 22 2 L 22 22 L 2 22 Z"
     static var token: String { FaceSymbol.token(path: square, viewBox: "0 0 24 24")! }
     static let svgProps = ["imageSource": "symbol:icon||0 0 24 24|M2 2 L22 2 L22 22 L2 22 Z|icons/x.svg", "symbolName": "",

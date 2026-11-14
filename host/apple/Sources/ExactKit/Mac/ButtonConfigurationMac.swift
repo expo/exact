@@ -107,11 +107,13 @@ enum ButtonConfigurationMac {
         }
         let symbolFont = font(titleFont, rows: rows.symbol)
         let symbolWeight = rows.symbol["font_weight"]?.number.map(Int.init) ?? TextEngine.controlWeight(titleFont)
-        button.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: symbolFont.pointSize, weight: weight(symbolWeight))
+        let rendering = rows.symbol["symbol_rendering"]?.string
+        let symbolTint = color(rows.symbol["tint_color"], appearance: appearance, accent: accent) ?? button.contentTintColor ?? .controlTextColor
+        button.symbolConfiguration = FaceSymbol.configuration(NSImage.SymbolConfiguration(pointSize: symbolFont.pointSize, weight: weight(symbolWeight)), rendering: rendering, tint: symbolTint)
         // An svg-only icon's path (stage 9 A2): a template image at the symbol's point size.
         var image = face.symbol.flatMap { FaceSymbol.image($0, points: symbolFont.pointSize) }
-        if let tint = color(rows.symbol["tint_color"], appearance: appearance, accent: accent), let source = image {
-            if face.symbol.map(FaceSymbol.isPath) == true {
+        if face.symbol.map(FaceSymbol.isOriginal) != true, let tint = color(rows.symbol["tint_color"], appearance: appearance, accent: accent), let source = image {
+            if face.symbol.map(FaceSymbol.isCustom) == true {
                 image = FaceSymbol.tinted(source, tint) // (a path has no palette)
             } else {
                 // Palette colours belong to the symbol, independently of the label.
@@ -119,6 +121,10 @@ enum ButtonConfigurationMac {
                 image = source.withSymbolConfiguration(config)
                 image?.isTemplate = false
             }
+        }
+        if rendering != nil, face.symbol.map(FaceSymbol.isCustom) != true {
+            image = image?.withSymbolConfiguration(button.symbolConfiguration!)
+            if rendering != "monochrome" { image?.isTemplate = false }
         }
         button.image = image
         if image == nil { button.imagePosition = .noImage }

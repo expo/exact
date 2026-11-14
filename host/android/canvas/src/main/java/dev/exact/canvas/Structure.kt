@@ -74,7 +74,7 @@ internal class Structure {
         32 -> i + 2; 33 -> i + 3; 40 -> i + 27; 41 -> fontAxesEnd(b, i)
         45 -> i + 2 + b.get(i + 1)
         46 -> i + 1
-        47 -> i + 2
+        47, 49 -> i + 2
         48 -> i + 10
         else -> throw IllegalStateException("op ${b.get(i)} at $i")
     }

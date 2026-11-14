@@ -11,11 +11,10 @@ const DEJAVU: &[u8] = include_bytes!("../../../../scripts/fixtures/fonts/assets/
 
 fn spec(text: &str, white_space: WhiteSpace) -> Spec {
     crate::paint::text_spec(
-        &StyleProps {
-            font_size: 16.0,
-            white_space,
-            ..Default::default()
-        },
+        &StyleProps::default().with_rows(|rows| {
+            rows.font_size = 16.0;
+            rows.white_space = white_space;
+        }),
         text,
     )
 }

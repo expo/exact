@@ -8,7 +8,9 @@
 // strikethrough, so the field draws those lines itself, at its font's
 // underline position, under the range's visual segments. Nothing is
 // repainted while text is marked; the paint catches up when it commits.
-// `text-shadow` is not painted here.
+// `text-shadow` is not painted here. On macOS 27.0.1 and scene-backed
+// iOS 27.0, TextKit 2 draws `.shadow` in text storage but not as a rendering
+// attribute. FieldShadowTests checks rendering-colour and storage-shadow controls.
 #if os(macOS)
 import AppKit
 #else

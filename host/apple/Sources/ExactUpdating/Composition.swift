@@ -24,6 +24,9 @@ import ExactNumerals
 #if EXACT_LINK_TIPS
 import ExactTips
 #endif
+#if EXACT_LINK_PRESENCE
+import ExactPresence
+#endif
 import ExactUpdates
 public enum ExactComposition {
     public static let app: ExactApp = {
@@ -52,6 +55,9 @@ public enum ExactComposition {
         #endif
         #if EXACT_LINK_TIPS
         ExactTips.install()
+        #endif
+        #if EXACT_LINK_PRESENCE
+        ExactPresence.install()
         #endif
         let app = ExactApp.shared
         ExactUpdates.install(on: app)

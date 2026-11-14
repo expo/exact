@@ -88,7 +88,7 @@ fn a_host_that_throws_the_switch_shows_the_neutral_column() {
         read(StyleId::BackgroundColor, "ground").background_color,
         Some(role("-exact-background"))
     );
-    let radius = |style: StyleProps| style.border_radius_top_left;
+    let radius = |style: StyleProps| style.border_radius_top_left.clone();
     assert_eq!(
         radius(read(StyleId::BorderRadiusTopLeft, "card-radius")),
         Dimension::Points(12.0)

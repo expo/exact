@@ -85,12 +85,12 @@ final class Viewport: ScrollView {
     /// bar, 1 page"), which a page that does not scroll on that axis has
     /// none of, as a hand-built view controller's root has none: a route
     /// that holds a list showed three pairs where UIKit's list shows one.
-    /// Each axis has its indicator while its content reaches past the port.
+    /// Each axis it scrolls has its indicator while its content reaches past the port.
     package override func layoutSubviews() {
         super.layoutSubviews()
         let inset = adjustedContentInset
-        let x = contentSize.width + inset.left + inset.right > bounds.width + 0.5
-        let y = contentSize.height + inset.top + inset.bottom > bounds.height + 0.5
+        let x = scrollsX && contentSize.width + inset.left + inset.right > bounds.width + 0.5
+        let y = scrollsY && contentSize.height + inset.top + inset.bottom > bounds.height + 0.5
         if showsHorizontalScrollIndicator != x { showsHorizontalScrollIndicator = x }
         if showsVerticalScrollIndicator != y { showsVerticalScrollIndicator = y }
     }

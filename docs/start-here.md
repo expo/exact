@@ -49,6 +49,7 @@ For an SDK-named folder such as `exact`, `--name Everbloom` supplies the crate p
 a prefix that still collides gains `-app`. The prefix stays in `package.json`'s `name` across
 updates and directory renames. Authored host crates keep their own names.
 `bun <exact2>/scripts/exact.mjs setup` takes a few minutes, a first macOS or iOS build ten to fifteen on a laptop, later builds a minute or two.
+Before a platform's first build, `bun <exact2>/scripts/exact.mjs setup --check --platform ios` (or `macos`, `android`, …) names what it lacks, the Xcode it needs among them: `exact new`'s table shows the web's rows alone.
 Run each once and let it finish, in the background with a completion notification if your tool has one, rather than polling its log.
 
 On Linux or Windows through WSL, install the [iOS cross tools](../README.md#1-install-the-tools)
@@ -62,7 +63,7 @@ which it took. Your shell commands have no such help, so keep one directory.
 |`bun exact.mjs …`|What it does|
 |---|---|
 |`contract build app.contract --json --errors-only`|A CI gate: `[]` and exit zero mean no errors (omit `--errors-only` to include warnings); it rewrites the types `app.ts` imports and type-checks it.|
-|`verify`, `verify ios`|Builds, runs `app.test.contract` and each other `*.test.contract` beside it, `check`s the first screen and where each test ends (light, dark, two widths), relaunches once on real time, and reads those screens (on the web, also the ones the tests pass through) at the largest text size, where what spills is the app's layout to fix (the web comparison leaves out content iOS projects into its navigation bar and its tab bar, whose items UIKit keeps at one size), with a remedy that keeps the text's size (no `line-clamp` in a list's row; `hyphens="auto"` only on a text of one word, which a UILabel breaks between syllables when it is longer than its line); `verify ios` also plays real touches on a long list on the first screen, once per build, and says `scrolling: like UIKit` or what a person would notice, each with UIKit's value and its cause, counting only what the app can fix: one report. A clean run on the app's platform is done.|
+|`verify`, `verify ios`|Builds, runs `app.test.contract` and each other `*.test.contract` beside it, `check`s the first screen and where each test ends (light, dark, two widths), reads each of those screens' accessibility tree once (`tree --ax`: a control with no name, or one a screen reader reaches though hidden or behind an open modal; counted as `check`'s findings are), relaunches once on real time, and reads those screens (on the web, also the ones the tests pass through) at the largest text size, where what spills is the app's layout to fix (the web comparison leaves out content iOS projects into its navigation bar and its tab bar, whose items UIKit keeps at one size), with a remedy that keeps the text's size (no `line-clamp` in a list's row; `hyphens="auto"` only on a text of one word, which a UILabel breaks between syllables when it is longer than its line); `verify ios` also plays real touches on a long list on the first screen, once per build, and says `scrolling: like UIKit` or what a person would notice, each with UIKit's value and its cause, counting only what the app can fix: one report. A clean run on the app's platform is done.|
 |`agent web --storage s1 "clock data" "tap add" "check both"`|Drives the app by hand, to see why something fails; `--keep-storage` reopens saved data.|
 |`web`, `ios --run`, `windows --run`|For a person watching: its URL, rebuilds on save; a simulator; a window (from SSH, on the signed-in desktop). A second web loop of the same target for this app refuses, naming the first URL and PID.|
 |`share`|For a person to try an iPhone app on their own phone: prints an AppDrop link that installs it. Run it when the app is ready for them, and again after each change they should see; send the link it prints.|
@@ -157,6 +158,9 @@ For EAS Build, use [iOS](recipes/eas-ios.md) or [Android](recipes/eas-android.md
 |a number field, a stepper's `step`|`number-field`, `stepper`|
 |a pick from six or more options (a picker)|`select`|
 |a chat that opens at its newest message|`chat-thread`|
+|a chat header with an avatar, and day pills|`chat-header`|
+|a voice note's waveform, a bubble's tail (SVG in a row)|`waveform-and-tail`|
+|data the app ships and only reads (a JSON file `app.ts` imports)|`shipped-data`|
 |a long list or grid that loads more|`long-lists`|
 |a document or article longer than a screen, a long Markdown note|`long-text`|
 |a welcome at first launch|`first-launch`|
@@ -307,7 +311,8 @@ a shaped domain refusal for its action to handle
 ([fetch with loading, error and retry](recipes/fetch-loading-error.md)). The clock and
 randomness are refused there; time comes as an argument. A date from a value
 works (`new Date(ms)`, `Intl.DateTimeFormat`). `console.log` appears in the agent’s
-`logs` and its last lines in a failed test’s notes. It imports its own `.ts`/`.js` and pure-JS npm
+`logs`, its last lines in a failed test’s notes, and the device’s log, in a release build too
+(Android: a development build only), where anyone with the device can read it: keep tokens and personal data out of it. It imports its own `.ts`/`.js` and pure-JS npm
 packages (ESM or CommonJS, a `browser` build first); one needing Node (`fs`, `Buffer`), the DOM or a native
 addon is refused by name. Type an untyped one with `@types/<name>` or `declare module '<name>';` in a `.d.ts`.
 
@@ -338,7 +343,10 @@ const sources: Sources = {
 export const answer: Answer = (source, args, store, storage, native) => sources[source](args, store, storage, native);
 ```
 
-**The tests** drive by `testId` on every host, each from empty storage (an app's own server's database is empty at the start of a run and shared by its tests):
+**The tests** drive by `testId` on every host, each from empty client storage. An
+owned server restarts empty for each test, including with `database: false`. Remote
+servers stay shared. Only `test` and `agent --test` share an ancestor's server, saying so;
+`verify` refuses an answering local server, including an ancestor's:
 
 ```contract-test
 test "an item is added, a repeat refused, checked off and kept"

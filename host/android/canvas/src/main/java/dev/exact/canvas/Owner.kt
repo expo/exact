@@ -654,8 +654,8 @@ internal object Exact {
         if (o != null) { o.input(); o.call(f) } else { f(); turned() }
     }
 
-    fun moduleEvent(id: Int, slot: Int, generation: Int, kind: String, payload: String) =
-        field { Native.moduleEvent(id, slot, generation, kind, payload) }
+    fun moduleEvent(id: Int, slot: Int, generation: Int, session: Long, kind: String, payload: String) =
+        field { Native.moduleEvent(id, slot, generation, session, kind, payload) }
 
     fun fieldFocused(id: Int, generation: Int, focused: Boolean) = field { Native.fieldFocused(id, generation, focused) }
     fun fieldEdited(id: Int, generation: Int, seq: Int, value: String, start: Int, end: Int) =
@@ -718,7 +718,19 @@ internal object Exact {
     /** A turn on exact2's thread, which asks for a display frame while a canvas input's samples wait. */
     fun wake() { owner?.call {} }
     fun presence(answer: String) { val o = owner; if (o != null) o.call { Native.presence(answer) } else Native.presence(answer) }
-    fun hidden(hidden: Boolean) { val o = owner; if (o != null) o.call { Native.hidden(hidden) } else Native.hidden(hidden) }
+    private var pageHidden = false
+    /** Execution sources: a started Activity, or a successfully promoted microphone, call or screen-capture
+     * foreground service with a live claim. Agent claims grant no device execution. */
+    internal fun executionEligible(): Boolean = !pageHidden || Claims.keepsExecution
+    /** The page freeze drops gated streams before returning; socket close handshakes finish asynchronously. */
+    fun hidden(hidden: Boolean) { pageHidden = hidden; publishExecution() }
+    internal fun executionChanged() { if (pageHidden) publishExecution() }
+    private fun publishExecution() {
+        val hidden = pageHidden
+        val eligible = executionEligible()
+        val o = owner
+        if (o != null) o.sync { Native.hidden(hidden, eligible) } else Native.hidden(hidden, eligible)
+    }
     /** The store's writes on disk before the activity goes to the background, so a kill after its stop loses none
      * committed before (exact2 writes them on a thread of its own): at most [ms]. Whether every commit was written
      * ([Native.storeDrain]). */

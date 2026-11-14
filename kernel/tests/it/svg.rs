@@ -212,7 +212,7 @@ fn motion_hears_the_animation_row_and_svg_targets() {
     w.animations(&node.style.animation);
     let bytes = w.into_vec();
     let mut r = exact_kernel::wire::codec::Reader::new(&bytes);
-    assert_eq!(r.animations().unwrap(), node.style.animation);
+    assert_eq!(r.animations().unwrap(), *node.style.animation);
 }
 
 /// LLP 1055.000 D15: `display: none` on a node or an ancestor cancels its

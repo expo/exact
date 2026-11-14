@@ -41,7 +41,7 @@ extension Presenter {
     /// Each scroller's bands (LLP 1130 D3, LLP 1131 D2): at the page's area's
     /// edges, through the status bar's and the home indicator's; through the
     /// control bars between it and its page's or route's edge; none for every
-    /// other. After a batch's frames and a change of the margins.
+    /// other. After a batch's frames or a change of the viewport or its margins.
     func reachPageEdges() {
         let m = pageMargins, area = viewportSize
         // Control bars are iOS 26's, where UIKit draws the edge effect over them (LLP 1131 D4).

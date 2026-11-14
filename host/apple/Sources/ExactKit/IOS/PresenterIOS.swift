@@ -9,6 +9,10 @@ package final class Presenter {
     var documentLanguage = ""
     var documentDirection = "ltr"
     static let signposts = OSSignposter(subsystem: "com.exact.host", category: "scroll")
+    var clipboardHandlerCount = 0
+    #if DEBUG
+    var clipboardAncestryWalks = 0
+    #endif
     var autofocusProcessed: Set<ObjectIdentifier> = []
     weak var autofocusedThisTurn: NodeView? // taken out of the window this turn, it has not had its autofocus (NodeViewIOS)
     var pressHandoff: PressHandoff? // the press whose work may hand its control's focus on (PressHandoffIOS)
@@ -311,6 +315,7 @@ package final class Presenter {
     /// A restart: every view goes.
     func reset() {
         resetting = true; defer { resetting = false }
+        resetFragments()
         MainActor.assumeIsolated { HeldState.retire(self) } // before its views leave the map (HeldState.swift)
         WakeLock.hold(self, false) // the new host's first batch says it again
         releaseOrientationLock()
@@ -397,7 +402,8 @@ package final class Presenter {
     /// Replacing a node with the same HTML id cannot inherit it.
     private var pendingFocus: (node: NodeView, name: String?, selectText: Bool, reason: String)?
     private var deliveringFocus = false; lazy var elementScrolls = ElementScrolls(self) // held `scrollIntoView` requests (IntoView.swift)
-    var personScrolls = 0, fragmentArm: (activation: Int, scrolls: Int)?, fragmentSeen = 0, fragmentHeld: String? // the person's drags of a scroller; the activation a router change asked a fragment's scroll for and their count then, which one since cancels; the last armed; the fragment's request held (Fragment.swift)
+    var personScrolls = 0, fragmentArm: (activation: Int, scrolls: Int)?, fragmentSeen = 0
+    var fragmentHeld: FragmentHold?
     var pendingFocusObservation: [String: String]? {
         guard let pending = pendingFocus else { return nil }
         return ["target": pending.name ?? "#\(pending.node.id)", "reason": pending.reason]
@@ -440,11 +446,11 @@ package final class Presenter {
         while let next = top?.presentedViewController, !next.isBeingDismissed { top = next }
         let scope: UIView? = top === window.rootViewController ? window : top?.presentationController?.containerView ?? top?.view
         guard let scope else { return false }
-        var listed: [NodeView] = []
+        var listed: [NodeView] = [], start: Int? // where a focused member of a painted group that is no stop stands among them
         func walk(_ view: UIView) {
             if view.isHidden || (view as? NodeView)?.props["inert"] == "true" { return }
             if let node = view as? NodeView, views[node.id] === node, Self.tabbable(node),
-               !fields || node.field != nil || node.textArea != nil { listed.append(node) }
+               !fields || node.field != nil || node.textArea != nil { listed.append(node) } else if view.isFirstResponder, (view as? NodeView)?.paintedGroup != nil { start = listed.count }
             view.subviews.forEach(walk)
         }
         walk(scope)
@@ -457,7 +463,8 @@ package final class Presenter {
         let focused = order.firstIndex { $0.isFirstResponder || $0.field?.isFirstResponder == true || $0.textArea?.isFirstResponder == true }
         if fields, focused.map({ backward ? $0 == 0 : $0 == order.count - 1 }) ?? true { return false }
         let next = focused.map { (backward ? $0 - 1 + order.count : $0 + 1) % order.count } ?? (backward ? order.count - 1 : 0)
-        let target = order[next]
+        // From a focused member of a painted group that is no stop (`tabindex=-1`, LLP 1166.000 D1), the stop after or before its place.
+        let target = focused == nil ? start.map { backward ? ($0 > 0 ? listed[$0 - 1] : order[order.count - 1]) : ($0 < listed.count ? listed[$0] : order[0]) } ?? order[next] : order[next]
         let responder: UIView = target.headerField ?? target.textArea ?? target.field ?? target
         chooseFocus(target)
         let became = responder.becomeFirstResponder()
@@ -470,8 +477,8 @@ package final class Presenter {
     private static func tabbable(_ v: NodeView) -> Bool {
         if v.formDisabled || v.inert || v.cssVisibilityHidden || v.bounds.width == 0 || v.bounds.height == 0 { return false }
         if let index = v.explicitTabIndex, index < 0 { return false }
-        // A radio group is one stop (x2apps survey #2), an authored one too.
-        return v.ariaRadioGroup != nil ? v.ariaRadioTabStop : v.field != nil || v.textArea != nil || v.handlers.contains("press") || v.canBecomeFirstResponder && (!v.isRadio || v.radioTabStop)
+        // A radio group is one stop (x2apps survey #2), as is a painted radio group or tablist (LLP 1166.000).
+        return v.roleTabStop ?? (v.field != nil || v.textArea != nil || v.handlers.contains("press") || v.canBecomeFirstResponder && (!v.isRadio || v.radioTabStop))
     }
 
     lazy var popoverEvents = PopoverEvents(self)
@@ -836,6 +843,7 @@ package final class Presenter {
                 ApplyProfile.time("pass.text") { paintPresentedText() }
                 paintChangedText()
                 if !boxFilters.isEmpty { boxFilters.render() }
+                refreshPixelatedImages()
                 videoVisibility?.changed()
                 let q = waiting
                 waiting = []
@@ -860,6 +868,13 @@ package final class Presenter {
         let anewFrom = placedAnew.count
         let rowsOnly = onlyListRows(batch)
         if batch.controls { controls.facesChanged() }
+        #if os(iOS)
+        var contextReferencesChanged = batch.ops.contains {
+            let source = views[$0.id] ?? leaving[$0.id]?.view
+            return $0.props["contextPopover"] != nil || $0.clear.contains("contextPopover")
+                || $0.op == .destroy && (source?.props["contextPopover"] != nil || source?.hasInlineContextPopover == true)
+        }
+        #endif
         // An op inside an animation UIKit has open only if its view showed in the last frame (`moveOrPlace`).
         func applyOp(_ op: BatchOp, _ kind: BatchOp.Kind, _ id: UInt32) {
             switch kind {
@@ -912,8 +927,12 @@ package final class Presenter {
                 if v.kind == "list" { listViews[id] = v }
                 if v.isParagraph { textViews[id] = v }
             case .paragraph:
+                #if os(iOS)
+                if views[id]?.hasInlineContextPopover == true || op.runs.contains(where: { $0.props["contextPopover"] != nil }) { contextReferencesChanged = true }
+                #endif
                 applyParagraph(id, op.runs)
             case .props:
+                fragmentOffsetsWritten(op)
                 if flats.isFlat(id) { if flats.props(id, op) { return }; flats.promote(id) }
                 if let view = views[id] { anchorChanges.noteProps(op, on: view) }
                 views[id]?.applyProps(set: op.props, clear: op.clear)
@@ -957,6 +976,9 @@ package final class Presenter {
             case .exit:
                 if flats.isFlat(id) { flats.promote(id) }
                 beginExit(id)
+                #if os(iOS)
+                if leaving[id]?.members.contains(where: { $0.props["contextPopover"] != nil || $0.hasInlineContextPopover }) == true { contextReferencesChanged = true }
+                #endif
             case .flight:
                 if let from = (op.payload["from"] as? NSNumber)?.uint32Value, flats.isFlat(from) { flats.promote(from) }
                 beginFlight(op)
@@ -1046,6 +1068,15 @@ package final class Presenter {
             if animating { moveOrPlace(kind == .create ? nil : views[id] ?? leaving[id]?.view) { applyOp(op, kind, id) } } else { applyOp(op, kind, id) }
         }
         schemes.end(); regridMoved() // every override and move made: the traits before anything reads them
+        #if os(iOS)
+        // A reference changes default corners and shadow even when the material stays the same.
+        if contextReferencesChanged {
+            for popover in carrying("popover") where popover.props["defaultSurface"] == "true" {
+                popover.updateMaterial()
+                popover.setNeedsDisplay()
+            }
+        }
+        #endif
         flats.flush()
         // A view the flush promoted and mounted may have moved its children.
         while !gridMoved.isEmpty { regridMoved(); flats.flush() }
@@ -1086,6 +1117,7 @@ package final class Presenter {
         // control exists, so retarget guides in this same batch after sync.
         focusGuides.sync()
         #endif
+        attachRegionPopovers()
         ApplyProfile.time("pass.menus") { menus.sync() }
         glassGroups.reconcile()
         positionContexts()
@@ -1142,6 +1174,7 @@ package final class Presenter {
     /// `parent`'s children, in order: its views as subviews of its container,
     /// then its flat leaves' layers among them (LLP 1068 §6.1).
     func placeChildren(_ parent: NodeView, _ ids: [UInt32]) {
+        let ids = regionPopoverChildren(ids, of: parent)
         #if os(iOS)
         if #available(iOS 27.1, *) { arrangements.record(parent, children: ids) }
         #endif

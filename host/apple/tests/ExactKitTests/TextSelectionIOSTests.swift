@@ -57,6 +57,15 @@ final class TextSelectionIOSTests: XCTestCase {
         return held.textInputView.convert(CGPoint(x: rect.midX, y: rect.midY), to: node)
     }
 
+    func testCaretStaysWithinItsColumnFragment() throws {
+        let p = mounted([text(1, "Alpha\nbeta\ngamma\ndelta", style: ["line_height": "20px", "white_space": "pre", "user_select": "text"]),
+                         ["op": "roots", "ids": [1]], frame(1, 0, h: 60, w: 220),
+                         ["op": "fragments", "id": 1, "fragments": [[0, 0, 100, 60, 0, 2, 0, 10], [120, 0, 100, 40, 2, 4, 120, -40]]]])
+        let input = try XCTUnwrap(p.textSelection.install(try node(p, 1)))
+        XCTAssertLessThan(input.index(at: CGPoint(x: 5, y: 55)), 11,
+                          "the first fragment owns only Alpha and beta")
+    }
+
     func testCaretAndSelectionFollowThePaintedFractionalBaseline() throws {
         let p = mounted([text(1, "Hxg", style: ["font_size": 13.0, "line_height": "normal", "user_select": "text"], handlers: ["contextmenu"]),
                          ["op": "roots", "ids": [1]], frame(1, 0)])

@@ -17,9 +17,10 @@
 // without it, an installed app without the gallery skips that phase with a reason.
 //   bun scripts/smoke-touch.mjs [--build] [--sim <udid|name>]
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { open } from './agent.mjs';
+import { open, runTests } from './agent.mjs';
+import { parseDrag } from './agent-drag.mjs';
 import { HOST_DEV, resolveApp } from './app.mjs';
 import { appleArtifacts } from '../host/apple/build.mjs';
 import { chooseSimulator } from '../host/apple/devices.mjs';
@@ -133,6 +134,62 @@ for (const timing of ['agent', 'platform']) {
   } catch (error) {
     check(false, `${timing}: ${error.message}`);
   } finally { await s.close(); }
+}
+
+// The default interactive dismissal (LLP 1115 D9.1), with the finger held
+// below the resized viewport. Read the keyboard before the synthesizer lifts.
+{
+  const dir = mkdtempSync(resolve(ROOT, 'target/exact-keyboard-touch-'));
+  const plan = resolve(dir, 'caret.plan');
+  const compiler = resolve(process.env.CARGO_TARGET_DIR ?? resolve(ROOT, 'target'), 'debug/contract');
+  const c = spawnSync(compiler, ['build', resolve(ROOT, 'scripts/fixtures/caret-reveal.contract'), '-o', plan], { cwd: ROOT, encoding: 'utf8' });
+  let s;
+  try {
+    if (c.status !== 0) throw Error(`keyboard fixture did not compile: ${c.error?.message ?? c.stderr}`);
+    s = await open({ host: 'ios', app: 'caltrain', plan, touch: 'platform' }); usedTouches = true;
+    await s.clock('settle');
+    let refused = false;
+    try { await s.tap('list', { drag: { dx: 0, dy: 10, into: 'keyboard' } }); }
+    catch (e) { refused = e.message.includes('keyboard up at the press'); }
+    check(refused, 'keyboard: into keyboard was accepted with the keyboard down');
+    await s.type('note', 'keys');
+    await s.clock('settle');
+    const keyboard = (await s.state()).keyboard;
+    if (!keyboard?.visible) throw Error('the software keyboard did not rise');
+    const layout = await s.layout(), id = byTestId(await s.tree(), 'list').id;
+    const box = layout.nodes.find(n => n.id === id);
+    const x = 8, y = Math.min(layout.viewport.h - 20, keyboard.top - 100);
+    const from = [x - box.x, y - box.y];
+    const end = Math.min(keyboard.top + 80, layout.screen.h - layout.screen.y - layout.safeArea.bottom - 20);
+    if (!(end > keyboard.top + 20 && y > 0)) throw Error(`no room for a keyboard drag: ${JSON.stringify({ keyboard, layout })}`);
+    refused = false;
+    try { await s.tap('list', { drag: { dx: 0, dy: layout.screen.h - layout.screen.y - y + 1, from, into: 'keyboard' } }); }
+    catch (e) { refused = e.message.includes('bottom safe area'); }
+    check(refused, 'keyboard: into keyboard was accepted past the screen');
+    const short = await s.tap('list', { drag: parseDrag(s, `0 30 from ${from.join(' ')} over 300 hold 1000 during "state"`) });
+    check(short.during?.[0]?.keyboard?.visible && Math.abs(short.during[0].keyboard.top - keyboard.top) < 2,
+      `keyboard: a short drag moved or dismissed the keyboard: ${JSON.stringify(short.during)}`);
+    await s.clock('settle');
+    const held = await s.tap('list', { drag: parseDrag(s, `0 ${end - y} from ${from.join(' ')} over 300 hold 1000 into keyboard during "state"`) });
+    const followed = held.during?.[0]?.keyboard;
+    check(held.delivery === 'platform' && followed?.visible && followed.interactive && Math.abs(followed.top - end) < 2,
+      `keyboard: top ${followed?.top} did not follow the held finger at ${end}: ${JSON.stringify(followed)}`);
+    console.log(`keyboard: held finger ${end}, keyboard.top ${followed?.top}; short drag kept keyboard.top ${short.during?.[0]?.keyboard?.top}`);
+    await s.close(); s = null;
+    const file = resolve(dir, 'keyboard.test.contract');
+    writeFileSync(file, `test "drag into the keyboard"
+  type "note" "keys"
+  clock settle
+  tap "list" drag 0 ${end - y} from ${from.join(' ')} over 300 hold 1000 into keyboard during "state"
+  expect state note == "keys"
+`);
+    const authored = await runTests({ host: 'ios', app: 'caltrain', plan, file, touch: 'platform' });
+    check(authored.passed === 1 && authored.failed === 0, `keyboard: authored drag failed: ${JSON.stringify(authored)}`);
+    const implicit = await runTests({ host: 'ios', app: 'caltrain', plan, file });
+    check(implicit.failed === 1 && implicit.results[0].failures.some(f => f.includes('iOS --touch platform')),
+      `keyboard: an authored drag without --touch platform was not refused: ${JSON.stringify(implicit)}`);
+  } catch (error) { check(false, `keyboard: ${error.message}`); }
+  finally { await s?.close(); rmSync(dir, { recursive: true, force: true }); }
 }
 
 // A grouped list's rows under real touches: each tap aims at what UIKit

@@ -166,10 +166,9 @@ fn a_progress_is_a_busy_progressbar_box_the_page_draws_a_ring_in() {
     );
     assert!(css.contains("justify-self:start;"), "a block's: {css}");
     // A hidden one stays hidden: its grid is not written over `none`.
-    let hidden_style = StyleProps {
-        display: exact_kernel::Display::None,
-        ..StyleProps::default()
-    };
+    let hidden_style = StyleProps::default().with_rows(|rows| {
+        rows.display = exact_kernel::Display::None;
+    });
     let hidden = NodeFacts {
         style: &hidden_style,
         ..facts
@@ -178,10 +177,9 @@ fn a_progress_is_a_busy_progressbar_box_the_page_draws_a_ring_in() {
     assert!(!css.contains("display:grid"), "{css}");
     // In a grid or a flex container it stretches as the kernel's does.
     for display in [exact_kernel::Display::Grid, exact_kernel::Display::Flex] {
-        let grid = StyleProps {
-            display,
-            ..StyleProps::default()
-        };
+        let grid = StyleProps::default().with_rows(|rows| {
+            rows.display = display;
+        });
         let parent = NodeFacts {
             id: 2,
             node_type: NodeType::View,
@@ -235,10 +233,9 @@ fn a_progress_or_canvas_follows_the_parents_justify_items() {
             (NodeType::Canvas, &empty, "canvas", PositionType::Static),
             (NodeType::Canvas, &empty, "canvas", PositionType::Absolute),
         ] {
-            let style = StyleProps {
-                position_type,
-                ..StyleProps::default()
-            };
+            let style = StyleProps::default().with_rows(|rows| {
+                rows.position_type = position_type;
+            });
             let node = NodeFacts {
                 id: 1,
                 node_type: kind,
@@ -265,10 +262,9 @@ fn a_progress_or_canvas_follows_the_parents_justify_items() {
 #[test]
 fn a_date_or_time_control_takes_the_field_look_unless_the_author_has_it() {
     let marked = |ty: &str, appearance| {
-        let style = StyleProps {
-            appearance,
-            ..StyleProps::default()
-        };
+        let style = StyleProps::default().with_rows(|rows| {
+            rows.appearance = appearance;
+        });
         let mut props = PropList::default();
         props.set(PropId::Type, PropValue::Str(ty.into()));
         super::props_of(&NodeFacts {
@@ -300,10 +296,9 @@ fn a_date_or_time_control_takes_the_field_look_unless_the_author_has_it() {
 #[test]
 fn a_textfield_appearance_is_native_and_marked_for_the_page() {
     let marks = |appearance| {
-        let style = StyleProps {
-            appearance,
-            ..StyleProps::default()
-        };
+        let style = StyleProps::default().with_rows(|rows| {
+            rows.appearance = appearance;
+        });
         let mut props = PropList::default();
         props.set(PropId::Type, PropValue::Str("number".into()));
         let out = super::props_of(&NodeFacts {
@@ -715,4 +710,19 @@ fn a_frame_grants_its_guest_fullscreen() {
         written(NodeType::Video, PropId::Src, PropValue::Str("a.mp4".into())).get("allow"),
         None
     );
+}
+
+#[test]
+fn an_active_descendant_is_written_as_the_aria_attribute() {
+    for value in ["option-apple", ""] {
+        let out = written(
+            NodeType::TextInput,
+            PropId::AccessibilityActiveDescendant,
+            PropValue::Str(value.into()),
+        );
+        assert_eq!(
+            out.get("aria-activedescendant").map(String::as_str),
+            Some(value)
+        );
+    }
 }

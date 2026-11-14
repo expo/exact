@@ -87,7 +87,14 @@ enum Op {
     ),
     TextBlur(f32),
     Border(border::BorderFill, Transform),
-    Image(Arc<Bitmap>, Rect4, Vec<Shape>, Transform, Option<[u8; 4]>),
+    Image(
+        Arc<Bitmap>,
+        Rect4,
+        Vec<Shape>,
+        Transform,
+        Option<[u8; 4]>,
+        exact_kernel::ImageRendering,
+    ),
     Island(Arc<Pixmap>, Rect4, Transform, u8),
     PlaneBegin([f32; 9]),
     PlaneEnd,
@@ -196,8 +203,16 @@ impl Backend for Recorder {
         clips: &[Shape],
         ts: Transform,
         tint: Option<[u8; 4]>,
+        rendering: exact_kernel::ImageRendering,
     ) {
-        self.push(Op::Image(image.clone(), dst, clips.to_vec(), ts, tint));
+        self.push(Op::Image(
+            image.clone(),
+            dst,
+            clips.to_vec(),
+            ts,
+            tint,
+            rendering,
+        ));
     }
     fn supports_island_image(&self) -> bool {
         true
@@ -302,8 +317,8 @@ impl Tape {
                 }
                 Op::TextBlur(sigma) => b.text_blur(*sigma),
                 Op::Border(part, ts) => b.fill_border(part, t(*ts)),
-                Op::Image(image, dst, clips, ts, tint) => {
-                    b.image(image, *dst, clips, t(*ts), *tint)
+                Op::Image(image, dst, clips, ts, tint, rendering) => {
+                    b.image(image, *dst, clips, t(*ts), *tint, *rendering)
                 }
                 Op::Island(pixels, dst, ts, mode) => {
                     b.island_image(pixels.clone(), *dst, t(*ts), *mode)

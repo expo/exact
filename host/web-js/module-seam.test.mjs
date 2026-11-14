@@ -460,3 +460,86 @@ test('an implementation that is its own substitute answers under the agent, behi
     rmSync(dir, { recursive: true, force: true });
   }
 }, 600_000);
+
+// A page's app-scoped list (LLP 1133.030 D12 item 2) in a real page: what a send, a due time and a DOM event see.
+test.each(['send', 'extension', 'key', 'frame'])('an app list is current where %s reads it', async mode => {
+  const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
+    const path = new URL(request.url).pathname;
+    if (path === '/') return new Response('<div id="exact-root"></div>', { headers: { 'content-type': 'text/html' } });
+    if (path.endsWith('/names.js')) return new Response('export const sourceTypes = {};', { headers: { 'content-type': 'text/javascript' } });
+    const local = resolve(root, '.' + path);
+    const file = existsSync(local) ? local : resolve(root, 'host/web', path.split('/').at(-1));
+    return existsSync(file) ? new Response(hostFixtureFile(file), { headers: { 'content-type': 'text/javascript' } }) : new Response('Not found', { status: 404 });
+  } });
+  let browser;
+  try {
+    browser = await suiteBrowser();
+    const page = await browser.newPage();
+    await page.goto(`${server.url}?agent&epoch=100000&storage=one`);
+    await page.evaluate(async mode => {
+      const rt = await import('/host/web-js/rt.js');
+      const { modules } = await import('/host/web-js/modules.js');
+      rt.clock.agent = true; rt.data.appId = 'review-list';
+      const rows = {}, list = extension => ({ state: 'alarms', key: 'tag', scope: 'app', due: {
+        after: 'duration', into: 'at', fires: { state: `${extension}-fired` },
+      }, tap: { choices: { stop: { retire: true } } } });
+      for (const extension of (mode === 'extension' ? ['first', 'second'] : ['first'])) {
+        rows[extension] = [`${extension}.schedule`, true, { effect: true, list: list(extension) }, null, 'always', {}];
+        rows[`${extension}Read`] = [`${extension}.read`, false, { listed: { state: 'alarms', fields: ['tag', 'state', 'delivered'] } }, ['[', {}], '', {}];
+      }
+      rows.patch = ['first.patch', true, { effect: true, update: { state: 'alarms', key: 'tag', set: { a: true } } }, null, 'always', {}];
+      modules(rows);
+      globalThis.schedule = (tag, extension = 'first') => exact.extensions.call({ extension, send: 'schedule', args: { tag, duration: 10 } });
+      globalThis.entries = extension => exact.extensions.call({ extension, source: 'read' });
+      globalThis.rt = rt;
+    }, mode);
+    if (mode === 'send') {
+      // The runner applies a send, or refuses it, before the call returns.
+      expect(await page.evaluate(() => {
+        rt.Hosts.first('app', { tag: 'a', duration: 10 });
+        const listed = exact.extensions.declared().alarms.map(e => e.tag);
+        rt.Hosts.patch('app', { tag: 'a' });
+        const patched = exact.extensions.declared().alarms[0].a;
+        rt.Hosts.patch('app', { tag: 'missing' });
+        return { listed, patched, refused: rt.journal.at(-1) };
+      })).toEqual({ listed: ['a'], patched: true, refused: 't=0 patch: refused: NotFoundError' });
+    } else if (mode === 'extension') {
+      await page.evaluate(() => schedule('same')); await page.evaluate(() => schedule('same', 'second'));
+      await page.evaluate(() => { rt.advance(10); });
+      expect(await page.evaluate(() => entries('first'))).toEqual([{ tag: 'same', state: 'first-fired', delivered: true }]);
+      expect(await page.evaluate(() => entries('second'))).toEqual([{ tag: 'same', state: 'second-fired', delivered: true }]);
+      expect(await page.evaluate(() => exact.extensions.declared().alarms.map(e => e.state))).toEqual(['second-fired']);
+    } else if (mode === 'key') {
+      // The due entry fires before the event's handler runs, which decides the default as it returns.
+      await page.evaluate(() => schedule('key'));
+      expect(await page.evaluate(async () => {
+        const { on, onKey } = await import('/host/web-js/events.js');
+        const input = document.createElement('input'); document.body.append(input);
+        const seen = [], announced = [];
+        exact.announceModule = key => { if (key === 'first.read') announced.push(exact.extensions.declared().alarms[0].delivered); };
+        rt.every(10, () => { seen.push(exact.extensions.declared().alarms[0].delivered); return true; }, true, 'due');
+        on(input, 'keydown', () => { seen.push('key'); rt.Hosts.preventDefault(); rt.Hosts.stopPropagation(); }, onKey);
+        on(document.body, 'keydown', () => seen.push('bubble'), onKey);
+        rt.clock.now = 10;
+        const event = new KeyboardEvent('keydown', { key: 'a', bubbles: true, cancelable: true });
+        input.dispatchEvent(event);
+        return { seen, prevented: event.defaultPrevented, announced, due: rt.journal.filter(l => l.includes(': due')).length };
+      })).toEqual({ seen: [true, 'key'], prevented: true, announced: [true], due: 1 });
+    } else {
+      expect(await page.evaluate(async () => {
+        const callbacks = [], seen = [];
+        performance.now = () => 0;
+        globalThis.requestAnimationFrame = callback => { callbacks.push(callback); return callbacks.length; };
+        globalThis.cancelAnimationFrame = () => {};
+        const { timerWaits } = await import('/host/web-js/timer-waits.js'); timerWaits();
+        rt.every(0, () => { seen.push('wait'); return true; }, true, 'wait', 1);
+        rt.frames(() => { seen.push('frame'); return true; }, 'frame');
+        rt.clock.agent = false;
+        rt.paint();
+        callbacks.shift()(performance.now());
+        rt.clock.agent = true;
+        return seen;
+      })).toEqual(['wait', 'frame']);
+    }
+  } finally { await browser?.close(); server.stop(true); }
+}, 30000);

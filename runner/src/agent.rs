@@ -624,7 +624,7 @@ pub fn node<D: DataSource>(runner: &Runner<D>, id: u32) -> String {
                 let b = plan.binding(b);
                 b.kind == BindingKind::Style
                     && StyleId::from_bit(b.id as u32) == Some(row)
-                    && !crate::vm::is_literal(plan.code(b.expr))
+                    && !crate::vm::is_literal(plan, plan.code(b.expr))
             })
         })
     };
@@ -842,6 +842,7 @@ fn state_with<D: DataSource>(runner: &Runner<D>, request: &str) -> String {
         page.restores,
         page.in_background()
     );
+    let _ = write!(s, ",\"frozen\":{}", page.frozen);
     s.push_str(",\"gpuTier\":");
     quote(page.gpu_tier(), &mut s);
     s.push('}');
@@ -851,9 +852,14 @@ fn state_with<D: DataSource>(runner: &Runner<D>, request: &str) -> String {
         s.push_str(&runner.faults().json());
     }
     s.push_str(",\"derives\":{");
-    for (i, row) in plan.derives.iter().enumerate() {
+    for (i, row) in plan
+        .derives
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| !r.unsettled)
+    {
         let name = plan.str(row.name);
-        if i > 0 {
+        if !s.ends_with('{') {
             s.push(',');
         }
         quote(name, &mut s);

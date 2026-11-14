@@ -168,10 +168,33 @@ fn report_all(
 
 /// The warnings as text, in their rank's order (`contract::warning_rank`),
 /// with the SF Symbols only the web draws blank in one line
-/// (`contract::web_only_line`).
+/// (`contract::web_only_line`), and the literal colours that stay one in
+/// dark mode in one line past one (`warning_rank::one_scheme_line`).
 fn print_warnings(warnings: &[contract::CompileError]) {
+    use contract_lower::warning_rank::{one_scheme_close, one_scheme_line, one_scheme_site};
     let (web, rest): (Vec<_>, Vec<_>) = warnings.iter().partition(|w| contract::web_only(w));
+    let sites: Vec<String> = rest
+        .iter()
+        .filter(|w| one_scheme_site(&w.id, &w.message))
+        .map(|w| w.to_string())
+        .collect();
+    let close = rest.iter().find(|w| one_scheme_close(&w.id, &w.message));
+    let one = match close {
+        Some(close) if sites.len() > 1 => Some(one_scheme_line(&close.to_string(), &sites)),
+        _ => None,
+    };
+    let mut said = false;
     for warning in rest {
+        if let Some(line) = one.as_ref().filter(|_| {
+            one_scheme_site(&warning.id, &warning.message)
+                || one_scheme_close(&warning.id, &warning.message)
+        }) {
+            if !said {
+                eprintln!("{line}{}", contract::excerpt(warning));
+                said = true;
+            }
+            continue;
+        }
         eprintln!("{warning}{}", contract::excerpt(warning));
     }
     if let Some(first) = web.first() {
@@ -337,6 +360,21 @@ fn build(options: &Options) -> ExitCode {
         );
         // Every use is inlined: name what the plan's size is made of.
         if let Some(map) = &map {
+            let code = map.component_code_costs(&plan);
+            let top: Vec<_> = code
+                .iter()
+                .take(5)
+                .map(|(name, instances, bytes)| {
+                    format!(
+                        "{name}: {bytes} B ({instances} instance{})",
+                        if *instances == 1 { "" } else { "s" }
+                    )
+                })
+                .collect();
+            println!(
+                "  own plan code by component (shared bodies counted per use): {}",
+                top.join(", ")
+            );
             let costs = map.component_costs();
             if !costs.is_empty() {
                 let top: Vec<String> = costs

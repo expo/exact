@@ -6,8 +6,12 @@ use std::time::Instant;
 
 #[path = "fail_backend.rs"]
 mod fail_backend;
+#[path = "inline_opacity_tests.rs"]
+mod inline_opacity;
 #[path = "input_clock_tests.rs"]
 mod input_clock;
+#[path = "popover_tests.rs"]
+mod popover;
 #[path = "projection_discriminator_tests.rs"]
 mod projection_discriminator;
 const APP: &str = r#"component App
@@ -64,6 +68,7 @@ fn ready(p: &mut Presenter<()>) {
         assert!(p.poll_content_region().is_none());
     }
 }
+
 #[test]
 fn non_cpu_region_refuses_before_plan_font_or_device_work() {
     for choice in [PainterChoice::Auto, PainterChoice::Gpu] {
@@ -1346,4 +1351,91 @@ fn an_accepted_retained_press_commits_and_blurs_the_focused_field() {
     assert_eq!((p.focus, p.edited), (None, None), "focus left the field");
     assert_eq!(p.host.runner().slot("draft"), Some(&Value::str("typed")));
     assert_eq!(p.host.runner().slot("blurred"), Some(&Value::Bool(true)));
+}
+
+#[test]
+fn moving_exclusions_publish_owned_fragments_and_keep_original_run_metadata() {
+    let _service = crate::content_region::test_service();
+    let source = r##"component App
+  state left = 40
+  action move
+    left = left + 80
+  view
+    column width=400 height=500
+      button press=move testId="move" height=32
+        text "Move"
+      view id="owner" width=400 height=200 overflow-x="hidden" overflow-y="hidden"
+        view id="content" width=400 height=200 position="relative"
+          text testId="paragraph" width=400 height=180 font-size=16 text-align="justify"
+            text "One two three four five six seven eight nine ten eleven twelve thirteen fourteen. " href="https://example.test/original" color="#cc0000"
+            text "More words flow around the moving circle and keep their original source ranges. One two three four five six seven eight nine ten." color="#0000cc"
+          view position="absolute" left=left top=0 width=120 height=120 wrap-flow="both" shape-outside="circle()"
+        text "Preparing content" id="pending" position="absolute"
+"##;
+    let mut p = region_from(source);
+    p.frame();
+    ready(&mut p);
+    let original = p.frame();
+    let key = p.host.kernel().node(id(&p, "paragraph")).unwrap().key;
+    let snapshot = p.host.content_region().unwrap().text_snapshot(key).unwrap();
+    let paragraph = snapshot.paragraph.fragments().to_vec();
+    let request = snapshot.request.clone();
+    assert!(!paragraph.is_empty());
+    assert_eq!(snapshot.runs.len(), 2);
+    let runs: Vec<_> = snapshot
+        .runs
+        .iter()
+        .map(|r| (r.leaf, r.bytes.clone(), r.utf16.clone(), r.link.clone()))
+        .collect();
+    assert_eq!(
+        runs[0].3.as_ref().unwrap().1.as_ref(),
+        "https://example.test/original"
+    );
+    assert_eq!(runs[0].1.end, runs[1].1.start);
+    assert_eq!(runs[1].1.end, request.source().bytes());
+    let gate = crate::content_region::test_hooks::next_text();
+    for time in [1., 2.] {
+        assert!(p
+            .host
+            .dispatch_at(id(&p, "move"), Event::Press, time)
+            .is_none());
+        assert!(p.after_commit().is_none());
+        if time == 1. {
+            gate.entered();
+        }
+    }
+    assert_eq!(p.frame().data(), original.data());
+    let snapshot = p.host.content_region().unwrap().text_snapshot(key).unwrap();
+    assert!(!snapshot.current);
+    assert_eq!(snapshot.paragraph.fragments(), paragraph);
+    drop(gate);
+    ready(&mut p);
+    let moved = p.frame();
+    assert_ne!(moved.data(), original.data());
+    let snapshot = p.host.content_region().unwrap().text_snapshot(key).unwrap();
+    assert!(snapshot.current);
+    assert_eq!(snapshot.request.stamp(), request.stamp());
+    assert!(Arc::ptr_eq(snapshot.request.source(), request.source()));
+    assert_eq!(
+        snapshot.request.exclusions(),
+        &[exact_kernel::FlowShape::Circle {
+            cx: 260.,
+            cy: 60.,
+            r: 60.
+        }]
+    );
+    assert_ne!(snapshot.paragraph.fragments(), paragraph);
+    assert_eq!(
+        snapshot
+            .runs
+            .iter()
+            .map(|r| (r.leaf, r.bytes.clone(), r.utf16.clone(), r.link.clone()))
+            .collect::<Vec<_>>(),
+        runs
+    );
+    assert!(snapshot
+        .paragraph
+        .layout_runs()
+        .flat_map(|r| r.glyphs)
+        .any(|g| g.run() == 1));
 }

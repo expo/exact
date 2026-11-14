@@ -130,6 +130,7 @@ fn image_revisions_and_mips_preserve_alpha_and_group_opacity() {
                 &[],
                 Transform::identity(),
                 None,
+                exact_kernel::ImageRendering::Auto,
             );
         }
         compare(&cpu.finish().unwrap(), &ink.finish().unwrap());

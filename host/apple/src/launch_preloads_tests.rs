@@ -11,6 +11,39 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::Duration;
 const HANG: Duration = Duration::from_secs(10);
 
+#[test]
+fn request_ticket_order_keeps_ties_and_all_ticket_bits() {
+    for n in [0, 1, 16, 21, 64, 257] {
+        let tickets = [0, 1, 1 << 63, u64::MAX];
+        let mut requests: Vec<_> = (0..n)
+            .map(|i| exact_runner::RequestOut {
+                ticket: tickets[(i * 17 + i / 5) % tickets.len()],
+                target: i.to_string(),
+                request: exact_runner::Request::get("https://example.invalid/"),
+                class: exact_runner::RequestClass::Read,
+                forced: false,
+            })
+            .collect();
+        let expected: Vec<_> = tickets
+            .into_iter()
+            .flat_map(|ticket| {
+                requests
+                    .iter()
+                    .filter(move |request| request.ticket == ticket)
+                    .map(|request| (request.ticket, request.target.clone()))
+            })
+            .collect();
+        sort_requests(&mut requests);
+        assert_eq!(
+            requests
+                .iter()
+                .map(|request| (request.ticket, request.target.clone()))
+                .collect::<Vec<_>>(),
+            expected
+        );
+    }
+}
+
 struct Server {
     address: std::net::SocketAddr,
     requests: Receiver<String>,
@@ -229,6 +262,9 @@ thread_local! { static LOCAL: std::cell::RefCell<Option<LaunchPreloads>> = const
 fn local() -> Option<LaunchPreloads> {
     LOCAL.with(|l| l.borrow().clone())
 }
+fn linked() -> Option<Box<dyn LaunchWork>> {
+    local().map(|launch| Box::new(launch) as Box<dyn LaunchWork>)
+}
 fn fixture() -> LaunchPreloads {
     crate::store::PLATFORM
         .with(|p| *p.borrow_mut() = Some(Arc::new(ibex2::secrets::MemoryStore::new())));
@@ -293,7 +329,7 @@ impl std::ops::DerefMut for Driven {
 fn boot(source: Source, plan: &[u8], candidate: bool, wakes: Sender<()>) -> (Driven, String) {
     let mut bridge = Bridge::with_links(Links {
         io: Some(IoLinks {
-            preloads: local,
+            preloads: linked,
             endow: memory_endow,
             start: start_io,
             ..IoLinks::LINKED
@@ -464,7 +500,7 @@ fn discarding_a_prepared_batch_does_not_mark_an_unrelated_reply_as_preload_conte
     let thread = Box::new(std::thread::current());
     let mut bridge = Bridge::with_links(Links {
         io: Some(IoLinks {
-            preloads: local,
+            preloads: linked,
             endow: memory_endow,
             start: start_io,
             ..IoLinks::LINKED
@@ -594,11 +630,16 @@ fn foreground_waits_for_opened_and_can_start_after_adoption() {
         .unwrap()
         .encode();
     let (_bridge, _) = boot(source.clone(), &empty, false, wake);
+    launch.journal();
     launch.signal(true, factory(&source));
     launch.signal(true, factory(&source));
     server.request();
     server.release(0);
     assert_eq!(server.count.load(Ordering::Acquire), 1);
+    assert!(launch
+        .journal()
+        .iter()
+        .any(|fact| fact.outcome == crate::executor::PreloadEvent::Sent));
 }
 
 #[test]
@@ -957,7 +998,7 @@ fn a_timeline_leaves_launch_preloads_for_the_app_boot() {
         let bytes = widget_plan();
         let mut entry = Bridge::with_links(Links {
             io: Some(IoLinks {
-                preloads: local,
+                preloads: linked,
                 endow: memory_endow,
                 start: start_io,
                 ..IoLinks::LINKED
@@ -1018,7 +1059,7 @@ fn a_plan_only_selection_disables_named_taking_before_the_first_batch_and_dispat
             ready(&launch);
             let mut bridge = Bridge::with_links(Links {
                 io: Some(IoLinks {
-                    preloads: local,
+                    preloads: linked,
                     endow: memory_endow,
                     start: start_io,
                     ..IoLinks::LINKED
@@ -1116,7 +1157,7 @@ fn prepared_generations_disable_names_before_settlement_but_keep_equal_preloads(
                     let launch = fixture();
                     let mut bridge = Bridge::with_links(Links {
                         io: Some(IoLinks {
-                            preloads: local,
+                            preloads: linked,
                             endow: memory_endow,
                             start: start_io,
                             ..IoLinks::LINKED
@@ -1212,4 +1253,47 @@ fn prepared_generations_disable_names_before_settlement_but_keep_equal_preloads(
             }
         }
     }
+}
+
+#[test]
+fn empty_launch_journal_drains_take_no_lock_and_late_facts_are_not_lost() {
+    let launch = LaunchPreloads::default();
+    {
+        let journal = launch.0.journal.lock().unwrap();
+        let reader = launch.clone();
+        let (done, drained) = channel();
+        let thread = std::thread::spawn(move || {
+            for _ in 0..100 {
+                assert!(reader.journal().is_empty());
+            }
+            done.send(()).unwrap();
+        });
+        let result = drained.recv_timeout(HANG);
+        drop(journal);
+        thread.join().unwrap();
+        result.expect("an empty drain waited for the journal lock");
+    }
+    let writer = launch.clone();
+    let thread = std::thread::spawn(move || {
+        for i in 0..1000 {
+            writer.record_fact(PreloadFact {
+                name: i.to_string(),
+                origin: String::new(),
+                outcome: crate::executor::PreloadEvent::DroppedBySecret,
+            });
+        }
+    });
+    let mut facts = Vec::new();
+    while !thread.is_finished() {
+        facts.extend(launch.journal());
+        std::thread::yield_now();
+    }
+    thread.join().unwrap();
+    facts.extend(launch.journal());
+    assert_eq!(facts.len(), 1000);
+    assert!(facts
+        .iter()
+        .enumerate()
+        .all(|(i, fact)| fact.name == i.to_string()));
+    assert!(launch.journal().is_empty());
 }

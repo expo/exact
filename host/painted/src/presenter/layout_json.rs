@@ -130,6 +130,7 @@ impl<D: DataSource> Presenter<D> {
                 .filter(|s| s.starts_with("symbol:"))
             {
                 let name = &source[7..];
+                let file = crate::image::file_icon(source).is_some();
                 let reason = if name == "sf/" || name.is_empty() {
                     "empty"
                 } else if !name.starts_with("sf/") && exact_kernel::symbol_path(name).is_none() {
@@ -137,11 +138,14 @@ impl<D: DataSource> Presenter<D> {
                 } else {
                     "platform"
                 };
-                detail.push_str(",\"symbol\":{\"found\":false,\"source\":");
+                let _ = write!(detail, ",\"symbol\":{{\"found\":{file},\"source\":");
                 quote(source, &mut detail);
                 detail.push_str(",\"name\":");
                 quote(name.strip_prefix("sf/").unwrap_or(name), &mut detail);
-                let _ = write!(detail, ",\"reason\":\"{reason}\"}}");
+                if !file {
+                    let _ = write!(detail, ",\"reason\":\"{reason}\"");
+                }
+                detail.push('}');
             }
             let _ = write!(detail, "}},\"observed\":{{\"clock\":{}}}}}", num(clock));
             s.push_str(",\"node\":");

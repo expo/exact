@@ -385,8 +385,10 @@ export async function open({
           perf: true,
           ...(frames?.spanSince != null ? { span_since: frames.spanSince } : {}),
         });
-        if (r.world.perf.tickSpans.error) throw Error(r.world.perf.tickSpans.error);
-        return { target, tick: r.world.tick, restarted: r.world.restarted, ...r.world.perf.tickSpans };
+        const spans = r.world.perf.tickSpans;
+        if (spans.error) throw Error(spans.error);
+        if (!spans.incarnation || !spans.generation) throw Error('perf world: a read names no world incarnation or recording generation; no difference is defined');
+        return { target, tick: r.world.tick, restarted: r.world.restarted, ...spans };
       }
       if (frames?.live != null) {
         // A live window (LLP 1079 D4): the page's clock follows the wall for `live` ms, and the driver's follows the

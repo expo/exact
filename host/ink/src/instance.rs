@@ -30,6 +30,7 @@ pub mod flags {
     pub const TINT: u32 = 1;
     pub const STOP_RAMP: u32 = 1 << 2;
     pub const REPEAT: u32 = 1 << 3;
+    pub const PIXELATED: u32 = 1 << 26;
     pub const NEAREST: u32 = 1 << 4;
     pub const COLOR_GLYPH: u32 = 1 << 5;
     pub const CLIP0: u32 = 1 << 6;
@@ -82,6 +83,7 @@ pub struct Instance {
     /// Ring: inner radii; Shadow: sigma; Layer: opacity in x.
     /// Gradient: linear endpoints, radial center/radii, or conic center/angle.
     /// Pattern: tile x/y/width/height in local coordinates.
+    /// Pixelated image: nearest integer enlargement on x/y.
     /// Blend/replace: destination origin in xy, replacement image origin in zw.
     pub param: [f32; 4],
 }

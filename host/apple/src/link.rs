@@ -97,7 +97,7 @@ impl Grammars {
 #[derive(Clone, Copy)]
 pub struct IoLinks {
     /// The process-start work, independent of any session.
-    pub preloads: fn() -> Option<crate::launch_preloads::LaunchPreloads>,
+    pub preloads: fn() -> Option<Box<dyn crate::launch_preloads::LaunchWork>>,
     /// Bind the app's grants: [`crate::store::endowed`].
     pub endow: fn(&str, &str, bool) -> crate::store::Endowed,
     /// Read the stores only on an explicitly requested refresh.
@@ -120,8 +120,8 @@ pub type StartIo = fn(
 impl IoLinks {
     /// The platform's.
     pub const LINKED: IoLinks = IoLinks {
-        preloads: crate::launch_preloads::current,
-        endow: crate::store::endowed,
+        preloads: crate::launch_preloads::linked,
+        endow: crate::store::endowed::<true>,
         snapshot: crate::store::snapshot_for,
         start: crate::executor::start_io,
     };
@@ -245,7 +245,14 @@ impl<D: DataSource> Links<D> {
             activities: false,
             grammars: Grammars::of(uses),
             io: if uses.has(Capability::Io) {
-                Some(IoLinks::LINKED)
+                Some(IoLinks {
+                    endow: if uses.has(Capability::Presence) {
+                        crate::store::endowed::<true>
+                    } else {
+                        crate::store::endowed::<false>
+                    },
+                    ..IoLinks::LINKED
+                })
             } else {
                 None
             },
@@ -279,6 +286,31 @@ mod tests {
     #[test]
     fn all_holds_every_capability() {
         assert!(Capability::ALL.iter().all(|c| ALL.has(*c)));
+    }
+
+    #[test]
+    fn io_links_the_presence_vault_only_when_selected() {
+        struct Empty;
+        impl DataSource for Empty {
+            fn query(
+                &mut self,
+                _: &str,
+                _: &[exact_plan::Value],
+            ) -> Result<exact_plan::Value, exact_runner::DataError> {
+                unreachable!()
+            }
+        }
+
+        let grants = "secret.keep token user-presence optional";
+        let memory = std::sync::Arc::new(ibex2::secrets::MemoryStore::new());
+        crate::store::PLATFORM.with(|p| *p.borrow_mut() = Some(memory));
+        for linked in [Uses::NONE.with(Capability::Io), ALL] {
+            let io = Links::<Empty>::of(linked).io.unwrap();
+            let endowed = (io.endow)(grants, "com.example.link.presence", false);
+            assert!(endowed.unbound.is_none(), "{:?}", endowed.unbound);
+            assert_eq!(endowed.presence.is_some(), linked.has(Capability::Presence));
+        }
+        crate::store::PLATFORM.with(|p| *p.borrow_mut() = None);
     }
 
     /// D5: a plan that uses what the archive doesn't link is named and

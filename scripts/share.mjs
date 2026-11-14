@@ -120,6 +120,9 @@ async function main(argv) {
   const ipa = resolve(app.dir, '.exact/share', `${app.name}.ipa`);
   rmSync(ipa, { force: true });
   mkdirSync(dirname(ipa), { recursive: true });
+  // The bake bundles app.ts with rolldown from this checkout's node_modules; without it Bun spins silently.
+  if (!['rolldown', 'rolldown.exe'].some((bin) => existsSync(resolve(ROOT, 'node_modules/.bin', bin))))
+    return fail('node_modules_missing', `share: exact's node_modules is missing: run \`bun install --frozen-lockfile\` in ${ROOT} (every build's type check imports rolldown from it)`);
   say(`share: building ${app.displayName ?? app.name} for iPhone (build ${revision + 1}); the first build takes minutes.`);
   // An app with an update store starts its own stream: this build is a tester's, not a release in one.
   const streamed = app.manifest.deploy?.store?.ios !== '0';

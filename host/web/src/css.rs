@@ -33,7 +33,8 @@ pub struct Skipped {
 pub const HAIRLINE: &str = "var(--exact-hairline, 1px)";
 
 /// The `cssText` for a node's set rows, plus what was skipped.
-/// Keep `em` for the browser: a control's font can differ from the kernel's.
+/// Keep `em` and viewport units for the browser: its control fonts and viewport
+/// variants can differ from the kernel's.
 pub fn css_text(style: &StyleProps, font_names: &[String]) -> (String, Vec<Skipped>) {
     css_text_in(style, font_names, false)
 }
@@ -55,7 +56,7 @@ fn css_text_in(
         let Some((unit, n)) = style
             .relative
             .get(id)
-            .filter(|(unit, _)| relative || *unit == Unit::Em)
+            .filter(|(unit, _)| relative || matches!(unit, Unit::Em | Unit::Viewport(_)))
         else {
             return false;
         };
@@ -68,12 +69,19 @@ fn css_text_in(
                 num_into(out, n);
                 out.push_str("em");
             }
+            Unit::Viewport(unit) => {
+                num_into(out, n);
+                out.push_str(unit.name());
+            }
             // @ref LLP 1115 D3 — a text style is the ramp's size at CSS's
             // `medium`, in `rem`, so it follows the browser's root size.
             // @ref LLP 1137 — a length ramp likewise.
             Unit::TextStyle(_) | Unit::Ramp(_) => {
                 let medium = exact_kernel::style::relative::MEDIUM;
-                num_into(out, n * unit.basis(medium, medium, 1.0) / medium);
+                num_into(
+                    out,
+                    n * unit.basis(medium, medium, 1.0, &exact_kernel::Env::default()) / medium,
+                );
                 out.push_str("rem");
             }
             Unit::TextStyleAtMost(_) => out.push_str(&unit.capped_css(n)),

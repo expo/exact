@@ -38,6 +38,7 @@ let capabilities: [(name: String, target: String, define: String)] = [
     ("auth_session", "ExactAuthSession", "EXACT_LINK_AUTH_SESSION"),
     ("numerals", "ExactNumerals", "EXACT_LINK_NUMERALS"),
     ("tips", "ExactTips", "EXACT_LINK_TIPS"),
+    ("presence", "ExactPresence", "EXACT_LINK_PRESENCE"),
 ].filter { links($0.name) }
 
 // `swift test` builds every target a package declares, and the two UIKit
@@ -87,6 +88,7 @@ let core: [Target] = [
     .target(name: "ExactAuthSession", dependencies: ["ExactKit"], path: "Sources/ExactAuthSession"),
     .target(name: "ExactNumerals", dependencies: ["ExactKit"], path: "Sources/ExactNumerals"),
     .target(name: "ExactTips", dependencies: ["ExactKit"], path: "Sources/ExactTips"),
+    .target(name: "ExactPresence", dependencies: ["ExactKit", "CExact"], path: "Sources/ExactPresence"),
     .target(name: "ExactLaunchParts", dependencies: ["ExactKit"], path: launchParts,
             swiftSettings: launchPartsTarget.map { [.unsafeFlags(["-target", $0])] } ?? []),
     .target(name: "ExactComposition", dependencies: [.target(name: "ExactKit")] + (composition == "updating" ? [.target(name: "ExactUpdates")] : [])
@@ -96,6 +98,7 @@ let core: [Target] = [
 ]
 
 let executables: [Target] = [
+    // The live watch driver owns its lifecycle; it has no ExactKit page-facts producer.
     .executableTarget(name: "ExactWatch", dependencies: ["ExactCore", "ExactSnapshot"], path: "Sources/ExactWatch", swiftSettings: devTools),
     .executableTarget(name: "ExactMac", dependencies: ["ExactKit", "ExactComposition", "ExactLaunchParts"], path: "Sources/ExactMac"),
     .executableTarget(name: "ExactIOS", dependencies: ["ExactKit", "ExactComposition", "ExactLaunchParts"], path: "Sources/ExactIOS",
@@ -109,7 +112,9 @@ let executables: [Target] = [
 // loop, and no clock (LLP 1033 D4a).
 let tests: [Target] = [
     .target(name: "ExactPackage", path: "modules", exclude: ["ExactExtensions.swift", "ExactNativeModule.swift", "ExactNativeViews.swift", "ExactServices.swift", "ExactTamber.swift"], sources: ["ExactPackage.swift"]),
+    .target(name: "MediaCaptureImplementation", dependencies: ["ExactPackage"], path: "tests/MediaCaptureImplementation"),
     .target(name: "SignInImplementation", dependencies: ["ExactPackage"], path: "tests/SignInImplementation"),
+    .target(name: "PasskeysImplementation", dependencies: ["ExactPackage"], path: "tests/PasskeysImplementation"),
     .target(name: "ExactWidgetTimeline", dependencies: ["ExactCore"], path: "widget", exclude: ["Timeline.swift"], sources: ["WidgetTimelineWaiters.swift"]),
     // The sound arm's C mixer (LLP 1096 D8), rendered offline by the tests,
     // and its AVAudioEngine calls (ARC, cleaning up on a caught exception, as
@@ -120,7 +125,7 @@ let tests: [Target] = [
     .target(name: "ExactNowPlaying", path: "videoarm", exclude: ["VideoArm.swift", "PictureInPicture.swift"], sources: ["NowPlaying.swift"]),
     // The share extension's Swift (LLP 1133.024 D4), which links no Exact runtime; build.mjs compiles the appex itself.
     .target(name: "ExactShare", path: "share"),
-    .testTarget(name: "ExactKitTests", dependencies: ["ExactPackage", "SignInImplementation", "ExactWidgetTimeline", "ExactCore", "ExactSnapshot", "ExactKit", "ExactUpdates", "ExactGroupedLists", "ExactMarkdown", "ExactSurfaces", "ExactDrag", "ExactMediaPicker", "ExactAuthSession", "ExactNumerals", "ExactTips", "ExactSoundRender", "ExactNowPlaying", "ExactShare"], path: "tests/ExactKitTests",
+    .testTarget(name: "ExactKitTests", dependencies: ["ExactPackage", "MediaCaptureImplementation", "SignInImplementation", "PasskeysImplementation", "ExactWidgetTimeline", "ExactCore", "ExactSnapshot", "ExactKit", "ExactUpdates", "ExactGroupedLists", "ExactMarkdown", "ExactSurfaces", "ExactDrag", "ExactMediaPicker", "ExactAuthSession", "ExactNumerals", "ExactTips", "ExactPresence", "ExactSoundRender", "ExactNowPlaying", "ExactShare"], path: "tests/ExactKitTests",
                 resources: [.copy("ColorFixtures"), .copy("SnapshotFixtures")], swiftSettings: devTools + gallerySettings + caltrainSettings),
 ]
 
@@ -150,6 +155,7 @@ let package = Package(
         .library(name: "ExactAuthSession", targets: ["ExactAuthSession"]),
         .library(name: "ExactNumerals", targets: ["ExactNumerals"]),
         .library(name: "ExactTips", targets: ["ExactTips"]),
+        .library(name: "ExactPresence", targets: ["ExactPresence"]),
         .executable(name: "ExactWatch", targets: ["ExactWatch"]),
         .executable(name: "ExactMac", targets: ["ExactMac"]),
         .executable(name: "ExactIOS", targets: ["ExactIOS"]),

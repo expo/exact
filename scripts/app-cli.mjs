@@ -114,17 +114,38 @@ export function warningLines(dir, host, warnings) {
   const noted = warnings.filter(information).length, counted = warnings.length - noted;
   const count = `compiler: ${[(counted || !noted) && `${counted} warning${counted === 1 ? '' : 's'}`, noted && `${noted} note${noted === 1 ? '' : 's'} (not counted)`].filter(Boolean).join(' and ')}`;
   if (!fresh.length) return [`${count}, as before (${where} lists them; bun exact.mjs contract build quotes each line)`];
+  // The colours' one line is the whole set's, said when any of its lines is new (a changed colour at the same site).
+  const colour = (w) => / warning \[lower-colour-one-scheme\] /.test(w), anyColour = fresh.some(colour);
+  const said = oneScheme(warnings.filter((w) => !webOnly(w))).filter((w) => fresh.includes(w) || (colour(w) && anyColour && !warnings.includes(w)));
   // In the compiler's order (`contract::warning_rank`), the symbols only the web draws blank one line: 21 of them hid
   // the euxy port's header warning.
   const web = fresh.filter(webOnly), one = web.length === 1;
   const group = web.length ? [`${web[0].split(' warning [')[0]} warning [lower-symbol-platform] ${web.length} SF Symbol use${one ? '' : 's'} draw${one ? 's' : ''} blank on the web, here first: an icon token or a role draws on every host (${where} lists each, and how)`] : [];
-  return [...fresh.filter((w) => !webOnly(w)), ...group, `${count}${fresh.length < warnings.length ? `, ${fresh.length} new (above)` : ''}; ${where} lists them all`];
+  return [...said, ...group, `${count}${fresh.length < warnings.length ? `, ${fresh.length} new (above)` : ''}; ${where} lists them all`];
 }
 
 /** A compiler warning that is information, not a problem: `tamber-unreachable` names a control whose host draws the
  *  platform's own look, which the author should know of and cannot change (LLP 1121 D9, amended 2026-10-30). A drive
  *  and verify say it but do not count it. contract's `warning_rank::information` is the same test. */
 export const information = (w) => / warning \[(tamber-unreachable|style-undrawn)\] /.test(w);
+
+/** The colours that stay one in dark mode (`lower-colour-one-scheme`), past one, as one line: their closing line with
+ *  the first three sites' `file:line`, theme tokens included, at the first's place (LLP 1168.000 D7.2: a chat app said
+ *  31 in every build). `contract build --json` lists each, with a token's own repair. contract_lower's
+ *  `warning_rank::one_scheme_line` is the same. */
+export function oneScheme(warnings) {
+  const said = (w) => /warning \[lower-colour-one-scheme\] /.test(w), closing = (w) => /warning \[lower-colour-one-scheme\] these /.test(w);
+  const close = warnings.find(closing), sites = warnings.filter((w) => said(w) && !closing(w));
+  if (!close || sites.length < 2) return warnings;
+  const place = (w) => w.split(' warning [')[0], line = (w) => place(w).replace(/:\d+$/, '');
+  const shown = [...sites.slice(0, 3).map(line), ...(sites.length > 3 ? ['…'] : [])].join(', ');
+  let message = close.split('] ').slice(1).join('] ').replace(/^(these \d+ (?:\S+ )*?(?:colours|tokens)) /, `$1 (${shown}) `)
+    .replace('each line above says how to repair it', '`contract build --json` says how to repair each')
+    .replace(" (each token's line says its own repair)", " (`contract build --json` says each token's repair)");
+  if (!message.includes('`contract build --json`')) message += ' `contract build --json` names each.';
+  const one = `${place(sites[0])} warning [lower-colour-one-scheme] ${message}`;
+  return warnings.flatMap((w) => (w === sites[0] ? [one] : w === close || sites.includes(w) ? [] : [w]));
+}
 
 /** A compiler warning only the web's picture shows: an SF Symbol drawn blank where the web is the one target besides
  *  Apple's (contract's `web_only`). Its first use names the targets, `ships web (…), where it is blank`; a later one,
@@ -299,6 +320,22 @@ async function verbRun({ dir, name, game = false, exact2, args }, reply) {
     for (const line of feedback.nudge(dir, { verb, host, exit, ms: Date.now() - started, args: rest, interrupted })) console.error(line);
   } catch {}
   return exit; };
+  // A verb that builds the app bundles app.ts with rolldown from this checkout's node_modules (the web's build and
+  // every native bake); without it Bun's auto-install spins silently instead of failing. A web drive of a site
+  // already built (`--web-dist`, or a `--url` that is not a path: a path is the app's own, built first, as
+  // `drivesWeb` below) and `serve` of a build build nothing; a native `--url` (live reload) still bakes.
+  // (Read as `drivesWeb` reads it, after `--backend <url>` is taken out below.)
+  const backend = rest.indexOf('--backend'), driven = backend < 0 ? rest : rest.filter((_, i) => i !== backend && i !== backend + 1);
+  const builtSite = (verb === 'test' || verb === 'agent') && host === 'web'
+    && driven.some((a, i) => (a === '--url' && !driven[i + 1]?.startsWith('/')) || a === '--web-dist');
+  const builds = ['web', 'web-build', 'test', 'agent', 'verify', 'ios', 'mac', 'linux', 'windows', 'android'].includes(verb) && !builtSite;
+  if (builds && !['rolldown', 'rolldown.exe'].some((bin) => existsSync(resolve(exact2, 'node_modules/.bin', bin)))) {
+    const error = `exact's node_modules is missing: run \`bun install --frozen-lockfile\` in ${exact2} (every build's type check imports rolldown from it)`;
+    console.error(`${verb}: ${error}`);
+    // Under `--json` the one object on stdout says so too: a build's `{code, error}`, a drive's or verify's `{error, exit}`.
+    if (rest.includes('--json')) { if (reply) reply({ code: 'node_modules_missing', error }); else console.log(JSON.stringify({ error, exit: 1 })); }
+    return log(1);
+  }
   // A drive with no host the app ships here runs nowhere, and says why (verify runs its semantics check alone).
   if (host === null && verb !== 'verify') {
     const { why } = shippedHost(verb, declared);
@@ -530,22 +567,16 @@ if (verb === 'contract') {
   if (verb === 'serve' && !rest.includes('--lan')) rest.push('--loopback');
   if (jsonBuilt) return log(await jsonBuild(spawned, [resolve(exact2, verbs[verb][0]), ...verbs[verb].slice(1), ...rest], verb, reply));
   if (verb !== 'test') return log(await withCargoFault(await script(verbs[verb], rest)));
-  // An app with a server of its own (the rest pattern's) has it run for the tests, where app.ts calls it, on an empty
-  // database kept through them: as verify runs it, by the same code (LLP 1116.007 D2).
-  const { withAppServer } = await import(resolve(exact2, 'scripts/verify.mjs'));
-  return log(await withAppServer(dir, async () => {
-    let failed = 0;
-    // None authored: app.test.contract, whose absence the driver names.
-    const files = tests.length ? tests : (await import(resolve(exact2, 'scripts/app.mjs'))).authoredTests(dir);
-    for (const file of files.length ? files : [resolve(dir, 'app.test.contract')]) {
-      if (files.length > 1) console.log(`# ${relative(process.cwd(), file)}`);
-      const code = await script(verbs.test, ['--test', file, ...rest]);
-      // A signal passed to this file's drive was a request to stop the run, not a failing test.
-      if (stopped) return code || 128 + (constants.signals[stopped] ?? 0);
-      failed = code || failed;
-    }
-    return failed;
-  }, { verb: 'test', optional: true }));
+  // Each file's agent owns its server, so it can restart between that file's tests.
+  let failed = 0;
+  const files = tests.length ? tests : (await import(resolve(exact2, 'scripts/app.mjs'))).authoredTests(dir);
+  for (const file of files.length ? files : [resolve(dir, 'app.test.contract')]) {
+    if (files.length > 1) console.log(`# ${relative(process.cwd(), file)}`);
+    const code = await script(verbs.test, ['--test', file, ...rest]);
+    if (stopped) return log(code || 128 + (constants.signals[stopped] ?? 0));
+    failed = code || failed;
+  }
+  return log(failed);
 }
 
 /** The verbs whose build reports its artifact under `--json` (help.mjs `reportBuilt`). */
@@ -583,7 +614,7 @@ async function webBuildQuiet(spawned, args, dir) {
       stream.on('data', (chunk) => { const lines = (rest + chunk).split('\n'); rest = lines.pop(); lines.forEach(line); });
       streams.push(new Promise((done) => stream.on('end', () => { if (rest) line(rest); done(); })));
     }
-  });
+  }, { EXACT_WARNINGS_WHOLE: '1' }); // each warning, which `warningLines` groups and lists
   await Promise.all(streams);
   for (const said of warningLines(dir, 'web', [...new Set(warnings)])) console.error(said);
   return code;

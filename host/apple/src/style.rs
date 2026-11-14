@@ -621,7 +621,7 @@ pub(crate) fn push_color_value(out: &mut String, c: ColorValue) {
 
 /// The platform colour `c` names here (`{"sys": …}` on the wire): a role's, or
 /// a `-exact-platform-color()`'s where it has a name for this platform.
-fn native_name(c: ColorValue) -> Option<std::borrow::Cow<'static, str>> {
+pub(super) fn native_name(c: ColorValue) -> Option<std::borrow::Cow<'static, str>> {
     match c {
         // An id past the table names no role: its transparent fallback.
         ColorValue::Role(id) => exact_kernel::style::roles::role_of(id).map(|r| {

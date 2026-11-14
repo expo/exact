@@ -74,7 +74,7 @@ panic = "abort"
 strip = false
 
 # A native production build that optimizes for size over speed (LLP 1047.001
-# D9): the default for iOS/tvOS apps and embeds, except games. Mac apps opt in with
+# D9): the default for embeds. Apps opt in with `host.ios.optimize` or
 # `host.macos.optimize: "size"`; `--optimize` overrides the manifest. Its own
 # directory keeps builds for speed and size from rebuilding each other.
 [profile.size]
@@ -83,6 +83,26 @@ opt-level = "z"
 lto = "fat"
 
 [profile.size.build-override]
+strip = false
+
+# The iOS and tvOS app default (LLP 1047.001 D9, "balanced"): size, except
+# the five crates LLP 1167's chat replay spent the most time in, at opt-level
+# 3; ExactKit builds with -O. A crate joins the list only with a measurement.
+[profile.balanced]
+inherits = "size"
+
+[profile.balanced.package.exact-kernel]
+opt-level = 3
+[profile.balanced.package.exact-runner]
+opt-level = 3
+[profile.balanced.package.taffy]
+opt-level = 3
+[profile.balanced.package.exact-apple]
+opt-level = 3
+[profile.balanced.package.exact-data]
+opt-level = 3
+
+[profile.balanced.build-override]
 strip = false
 
 # The wasm shipped to browsers: size over speed (the runner's work is sub-millisecond;

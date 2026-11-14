@@ -35,6 +35,14 @@
   delete global.__exact_time;
   var tracker = global.HermesInternal;
   time.refuseClock(tracker);
+  // What the runtime itself says through `console`: natively a line that is
+  // not the app's, so no host writes it to the platform's log
+  // (js/src/console.js, LLP 1027.009 D1); in a browser realm, its console.
+  var runtimeLine =
+    global.__exact_runtime_line ||
+    function (line) {
+      if (global.console) global.console.error(line);
+    };
   // The runtime's own journal line (LLP 1097 D8): a failed storage
   // operation, an unhandled rejection. Natively it is the runner's journal
   // (`logs`) as it is; a realm without that door writes it to its console.
@@ -45,7 +53,7 @@
     } catch (e) {
       written = undefined;
     }
-    if (written !== "1" && global.console) global.console.error(String(line));
+    if (written !== "1") runtimeLine(String(line));
   }
   // The bake answers on an engine without some of Intl's constructors, where `new Intl.Collator()` says only
   // "undefined cannot be used as a constructor" (expo/exact#447). At bake such an error names the ones missing.
@@ -272,6 +280,7 @@
     } catch (e) {
       promise = Promise.reject(e);
     }
+    op.promise = promise;
     promise.then(
       function (value) {
         landed(op, true, value);
@@ -282,8 +291,7 @@
     );
   }
   function landed(op, ok, value) {
-    // A late completion of an operation already failed (a timed-out
-    // continuation the store then finishes) must not clear the new head.
+    // A revoked image's late completion must not clear the next head.
     if (op.settled) return;
     op.settled = true;
     if (head === op) {
@@ -298,6 +306,11 @@
   function headOwner() {
     return head ? owner(head.call) : null;
   }
+  // Native image cancellation uses Ibex's identity on the original Promise.
+  // Other promises may resolve to raw capabilities (a database or statement).
+  global.__exact_storage_promise = function () {
+    return head && (head.method === "compressImage" || head.method === "transformImage") ? head.promise : undefined;
+  };
   // Neither Ibex's abort hooks nor a browser's dependent signal can be stopped by a listener on the caller's signal.
   var abortHooks = global.__exact_ibex2_abort_hooks;
   delete global.__exact_ibex2_abort_hooks;
@@ -375,6 +388,7 @@
     host: host,
     binary: binary,
     journal: journal,
+    runtimeLine: runtimeLine,
     pending: pending,
     work: work,
     background: background,
@@ -692,7 +706,8 @@
   // waiting on nothing of its own.
   // A handler a module calls back (LLP 1133.016 D9): the `tools` export's, its value as JSON text.
   function tool(name, args) {
-    var f = global.exact.tools && global.exact.tools[name],
+    var handlers = global.exact.tools,
+      f = handlers && Object.prototype.hasOwnProperty.call(handlers, name) ? handlers[name] : undefined,
       text = function (v) {
         return JSON.stringify(v === undefined ? null : v);
       },
@@ -948,13 +963,13 @@
     // behind it issued; the call keeps its other storage (LLP 1069.002
     // A1.5). Said so, and the caller delivers on.
     if (failed && head && headOwner() && headOwner().letGo && failAbandonedImage(String(message))) return "settled";
+    // Any other wait that failed fails only the answer whose operation is in flight. That operation stays at the
+    // head, now the module's, and the other let-go answers' queued storage starts once it completes.
+    var timedOut = failed ? headOwner() : null;
+    if (timedOut && timedOut.letGo) failStorage(timedOut, String(message));
     var owed = false;
     calls.forEach(function (c) {
       if (!c.letGo) return;
-      if (failed) {
-        c.lost = true;
-        storing.delete(c);
-      }
       if (c.storage > 0 && !c.lost) owed = true;
       else {
         c.replied = true;
@@ -962,6 +977,7 @@
       }
     });
     cleanUp();
+    if (failed) return timedOut && timedOut.letGo ? "settled" : "";
     if (!owed) return "";
     // Deliver only when the operation in flight is the let-go call's.
     // One queued behind a live answer stays there: delivering it here would
@@ -1196,7 +1212,7 @@
   // A compression whose wait gave up, and whose right to write the waiter
   // took away (LLP 1069.002 A1.5): it can write nothing now, so it is
   // failed and the queue moves on. Any other operation whose wait ran out
-  // may still write, so its queue waits for it, as before. Whether it was.
+  // may still write, so its queue waits for its actual completion.
   var IMAGE_ABANDONED = /^compressImage: timeout: the storage wait ran out/;
   function failAbandonedImage(message) {
     if (
@@ -1213,20 +1229,36 @@
     if (!head || owner(head.call) !== background) return "";
     return failAbandonedImage(JSON.parse(outcomeJson).failed.message) ? "1" : "";
   };
+  function failStorage(call, message) {
+    call.lost = true;
+    call.status = "failed";
+    call.error = storageError(message);
+    // Remove unsent work before any rejection can issue more work or a
+    // revoked image can release the queue's head.
+    var dropped = [];
+    queue = queue.filter(function (op) {
+      if (op.call !== call) return true;
+      dropped.push(op);
+      return false;
+    });
+    dropped.forEach(function (op) {
+      op.abandon();
+      landed(op, false, call.error);
+    });
+    if (head && head.call === call && !failAbandonedImage(message)) {
+      // Reject its promise now, but keep serialization until the host
+      // returns: an uncancellable sync or rename can still publish.
+      head.settle(false, call.error);
+      head.failed = true;
+      head.call = background;
+      background.storage++;
+      storing.add(background);
+    }
+    storing.delete(call);
+  }
   global.__exact_storage_failed = function (id, outcomeJson) {
     var call = calls.get(Number(id));
-    if (!call) return;
-    // The continuation will not land. Settle the head now, as a failed
-    // operation, so the queue advances. `lost` first: the answer's own
-    // rejection must not report success, and a later delivery of this same
-    // operation is ignored.
-    var message = JSON.parse(outcomeJson).failed.message;
-    call.lost = true;
-    // The code its message names (`compressImage: timeout: `), else `failed`.
-    if (head && head.call === call) landed(head, false, storageError(message));
-    call.status = "failed";
-    storing.delete(call);
-    call.error = storageError(message);
+    if (call) failStorage(call, JSON.parse(outcomeJson).failed.message);
   };
   // The answer a timer belongs to (time.js `timers`), or the refusal.
   function timerOwner(api) {

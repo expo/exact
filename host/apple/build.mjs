@@ -64,7 +64,7 @@ import { appleImplementations } from '../../js/bake/src/typescript.mjs';
 import { composedModule, moduleSeam, systemFrameworks } from './compose.mjs';
 import { associatedDomains, entitlementValue, grantEntitlements, macSigning, merchantEntitlement, signInEntitlement } from './presence.mjs';
 import { writeDataKeys } from './data-keys.mjs';
-import { backgroundKeys, declaredOrigin, interfaceStyle, localNetworking, memoryEntitlements, modulePlist, nfcKeys, startLocation, storeKeys, transportSecurity, updateActivation, withPackageKeys } from './plist.mjs';
+import { backgroundKeys, firstFrameKeys, declaredOrigin, interfaceStyle, localNetworking, memoryEntitlements, modulePlist, nfcKeys, startLocation, storeKeys, transportSecurity, updateActivation, withPackageKeys } from './plist.mjs';
 import { compileFixtures, iosTestRuns, macTests, onlyClasses } from './xctest.mjs';
 import { APPLE_STATIC_TREES, appIcon, appleRefusals, buildInfo, iosAssets, appleAssets, appleAssetCatalogInventory, copyNativeResources, signingOrder, helperEntitlements, plistFile, wrapFramework, signedGpuProduct, assertArchiveFrameworks } from './assets.mjs';
 import { auditLaunchParts, launchModules, launchPartsObjects, launchServices, serviceArgs, writeLaunchParts } from './launch-parts.mjs';
@@ -176,7 +176,7 @@ export function appleArtifacts(app, { destination = 'macos', composition, trust 
   // Only Swift paths need compiler policy; lock and bundle lookups must not validate it.
   const swift = () => {
     optimize ??= trust === 'production' ? appleProduction(app, platform).optimize : 'speed';
-    return resolve(app.target, 'apple-swift', `${destination}-${compiledTargets(app, trust)[platform]}${optimize === 'size' ? '-size' : trust === 'production' ? '-whole' : ''}`);
+    return resolve(app.target, 'apple-swift', `${destination}-${compiledTargets(app, trust)[platform]}${optimize === 'size' || optimize === 'balanced' ? `-${optimize}` : trust === 'production' ? '-whole' : ''}`);
   };
   return { owner, namespace, target, product, executable, products, composition, scratch: resolve(namespace, 'link'),
     get swift() { return swift(); }, get swiftLock() { return `${swift()}.lock`; },
@@ -925,7 +925,7 @@ async function main(args, lockHeld = false) {
   // the resolver's app-owned `embed` directory, with `ExactKit` at
   // `host/apple`. With --archive it also builds the IPA; --embed alone
   // builds no Swift. The sample hosts prove that the same pieces link.
-  const { link: appleLink, products: swiftCapabilities } = appleComposition(buildReceipt.graph, linksByPlan(production, args), app.manifest.link, bakedCompat.reach?.auth?.sessions === true);
+  const { link: appleLink, products: swiftCapabilities } = appleComposition(buildReceipt.graph, linksByPlan(production, args), app.manifest.link, bakedCompat);
   if (args.includes('--embed')) {
     const platform = ios ? (device ? 'ios' : 'ios-simulator') : 'macos';
     const gpu = hasGpu ? (frameworkBundles ? 'ExactGpu.framework/ExactGpu' : loadName) : null;
@@ -1287,8 +1287,7 @@ async function main(args, lockHeld = false) {
     if (roster) {
       provided = Object.keys(roster).filter(key => key.includes('-')); // its tags: beside them, `hatches`, `extensions` and `facts`, which no tag can be
       // LLP 1024 D3's first-frame tags, which the host reads before it loads the module.
-      const firstFrame = provided.filter(tag => roster[tag].firstFrame === true);
-      if (firstFrame.length && !tv) rosterKeys = { ExactFirstFrameModules: firstFrame };
+      rosterKeys = firstFrameKeys(roster, tv);
     } else if (routes.length) {
       const why = `host/apple: cannot qualify ${app.id}'s ${tv ? 'tvOS' : ios ? 'iOS' : 'macOS'} native-module roster.\n${causes.map(c => `  ${c}`).join('\n')}\n${noSimulator ? 'Install an iOS Simulator runtime (xcodebuild -downloadPlatform iOS), or add an iPhone simulator in Xcode' : 'Give each xcframework a slice for one route, or fix the failure a route names'}, and rebuild.${logs.length ? `\nLogs: ${logs.join(', ')}` : ''}`;
       const qualification = process.platform === 'linux' && existsSync(resolve(linkRoot, 'native-probes.json')) ? `\nOn Linux, set EXACT_NATIVE_ROSTERS to a simulator qualification for the compiled probe listed in ${resolve(linkRoot, 'native-probes.json')} (README.md).` : '';

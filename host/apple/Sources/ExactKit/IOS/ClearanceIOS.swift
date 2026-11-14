@@ -36,7 +36,13 @@ extension NavigationHost {
         let local = c.view.safeAreaInsets, box = node.convert(node.bounds, to: c.node)
         if top {
             guard off & 1 == 0, credit & 1 == 0, !Self.transparentBar(c.node) else { return 0 }
-            return min(local.top, max(0, box.minY))
+            // The box is laid out under the top cover last reported, which the
+            // kernel pads: a scroller taken under the bar in this report (a
+            // reason above it gone) still sits below the cover it gives up,
+            // and that room is UIKit's inset, not padding.
+            var padded: CGFloat = 0
+            if case .edges(let e)? = covers[c.node.id] { padded = e.top }
+            return min(local.top, max(0, box.minY - padded))
         }
         if off & 4 != 0 { return -sv.safeAreaInsets.bottom }
         guard credit & 4 == 0 else { return 0 }

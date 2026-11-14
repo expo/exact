@@ -263,9 +263,6 @@ fn an_empty_pump_delivers_a_refusal_from_waiting_admission() {
             )
             .unwrap();
     }
-    let replies: Vec<_> = (0..16)
-        .map(|_| replies.recv_timeout(Duration::from_secs(10)).unwrap())
-        .collect();
     p.executor
         .run(
             request(
@@ -282,7 +279,11 @@ fn an_empty_pump_delivers_a_refusal_from_waiting_admission() {
     assert!(p.host.runner().has_pending());
     assert!(!p.host.has_ordered_request_refusals());
     p.executor.cancel(&[1016]);
-    for reply in replies {
+    // A handoff reserves its outcome's ceiling as it starts, so the lane runs
+    // only as many as its bytes hold. The rest fill the sixteen while queued
+    // and start as those answer.
+    for _ in 0..16 {
+        let reply = replies.recv_timeout(Duration::from_secs(10)).unwrap();
         reply.send(Outcome::Storage(Vec::new()));
     }
     while p.host.runner().has_pending() {

@@ -167,6 +167,117 @@ fn a_popover_above_a_modal_keeps_the_modal_boundary() {
 }
 
 #[test]
+fn a_native_backdrop_hits_its_modal_below_a_later_popover() {
+    let mut r = fixture("", "");
+    let upper = view_of(r.kernel(), "upper").unwrap();
+    let lower = view_of(r.kernel(), "lower").unwrap();
+    let matches = ["upper", "upper-child", "pop"];
+    open(&mut r, &["lower", "upper", "pop"]);
+    r.top_layer_backdrop(Some((upper, [10.0, 10.0, 380.0, 780.0], None)));
+    read(&mut r, 20.0, 20.0, "pop", &["pop", "upper"], &matches);
+    read(&mut r, 350.0, 350.0, "upper", &["upper"], &matches);
+    read(
+        &mut r,
+        120.0,
+        120.0,
+        "upper-child",
+        &["upper-child", "upper"],
+        &matches,
+    );
+    for (x, y) in [(9.0, 350.0), (390.0, 350.0), (350.0, 9.0), (350.0, 790.0)] {
+        read(&mut r, x, y, "none", &[], &matches);
+    }
+    for region in [
+        None,
+        Some((lower, [0.0, 0.0, 400.0, 800.0], None)),
+        Some((upper, [0.0, 0.0, f64::NAN, 800.0], None)),
+        Some((upper, [0.0, 0.0, -1.0, 800.0], None)),
+        Some((
+            upper,
+            [0.0, 0.0, 400.0, 800.0],
+            Some([0.0, 0.0, f64::NAN, 1.0]),
+        )),
+    ] {
+        r.top_layer_backdrop(region);
+        read(&mut r, 350.0, 350.0, "none", &[], &matches);
+    }
+    r.top_layer_backdrop(Some((upper, [0.0, 0.0, 400.0, 800.0], None)));
+    open(&mut r, &[]);
+    read(&mut r, 350.0, 350.0, "page", &["page"], &["page"]);
+}
+
+#[test]
+fn a_native_backdrop_can_name_a_later_route_in_the_front_presentation() {
+    let mut r = fixture("", "popover=\"manual\"");
+    let lower = view_of(r.kernel(), "lower").unwrap();
+    let upper = view_of(r.kernel(), "upper").unwrap();
+    let pop = view_of(r.kernel(), "pop").unwrap();
+    r.top_layer_frames(
+        &[
+            (lower, [0.0, 0.0, 200.0, 200.0], None),
+            (upper, [100.0, 100.0, 200.0, 200.0], None),
+            (pop, [0.0, 0.0, 50.0, 50.0], None),
+        ],
+        Some(1),
+    );
+    let matches = ["upper", "upper-child", "pop"];
+    r.top_layer_backdrop(Some((pop, [0.0, 0.0, 400.0, 800.0], None)));
+    read(&mut r, 350.0, 350.0, "pop", &["pop"], &matches);
+    r.top_layer_backdrop(Some((lower, [0.0, 0.0, 400.0, 800.0], None)));
+    read(&mut r, 350.0, 350.0, "none", &[], &matches);
+}
+
+#[test]
+fn a_native_backdrop_is_independent_of_content_clips_and_pointer_events() {
+    let mut r = fixture("", "pointer-events=\"none\"");
+    let upper = view_of(r.kernel(), "upper").unwrap();
+    r.top_layer_frames(
+        &[(
+            upper,
+            [100.0, 100.0, 200.0, 200.0],
+            Some([110.0, 110.0, 30.0, 20.0]),
+        )],
+        None,
+    );
+    r.top_layer_backdrop(Some((upper, [0.0, 0.0, 400.0, 800.0], None)));
+    read(
+        &mut r,
+        350.0,
+        350.0,
+        "upper",
+        &["upper"],
+        &["upper", "upper-child"],
+    );
+    read(
+        &mut r,
+        120.0,
+        120.0,
+        "upper",
+        &["upper"],
+        &["upper", "upper-child"],
+    );
+    r.top_layer_backdrop(Some((
+        upper,
+        [0.0, 0.0, 400.0, 800.0],
+        Some([100.0, 100.0, 200.0, 200.0]),
+    )));
+    let matches = ["upper", "upper-child"];
+    for (x, y) in [(99.0, 120.0), (300.0, 120.0), (120.0, 99.0), (120.0, 300.0)] {
+        read(&mut r, x, y, "upper", &["upper"], &matches);
+    }
+    for (x, y) in [
+        (100.0, 120.0),
+        (299.0, 120.0),
+        (120.0, 100.0),
+        (120.0, 299.0),
+    ] {
+        read(&mut r, x, y, "none", &[], &matches);
+    }
+    r.top_layer_backdrop(None);
+    read(&mut r, 120.0, 120.0, "none", &[], &["upper", "upper-child"]);
+}
+
+#[test]
 fn selectors_reach_modal_descendants_under_an_inert_ancestor() {
     let mut r = fixture("inert=true", "");
     open(&mut r, &["upper", "pop"]);
@@ -353,6 +464,7 @@ fn a_native_content_viewport_scrolls_the_root_without_moving_its_clip() {
         .set_host_block(
             route,
             Some(exact_kernel::HostBlock {
+                tactic: Default::default(),
                 width: exact_kernel::BlockAxis::Is(200.0),
                 height: exact_kernel::BlockAxis::Is(200.0),
             }),

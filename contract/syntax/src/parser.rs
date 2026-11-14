@@ -472,10 +472,12 @@ impl Parser {
             .map(|t| &t.kind)
             .take_while(|k| !matches!(k, TokenKind::Newline | TokenKind::Indent | TokenKind::Eof))
             .collect();
-        let word = |k: &TokenKind| match k {
+        let word = |kind: &str, k: &TokenKind| match k {
             TokenKind::Ident(w) => Some(Hidden {
                 name: w.clone(),
+                kind: kind.into(),
                 component: None,
+                lines: None,
             }),
             _ => None,
         };
@@ -483,14 +485,14 @@ impl Parser {
             [TokenKind::Ident(k), rest @ ..] if k == "use" => self.hidden.extend(
                 rest.iter()
                     .take_while(|t| !matches!(t, TokenKind::Ident(w) if w == "from"))
-                    .filter_map(|t| word(t))
+                    .filter_map(|t| word(k, t))
                     .filter(|w| w.name != "as"),
             ),
             [TokenKind::Ident(k), name, ..] => {
                 if k == "component" && file.components.is_empty() {
                     self.first_refused = true;
                 }
-                self.hidden.extend(word(name));
+                self.hidden.extend(word(k, name));
             }
             _ => {}
         }

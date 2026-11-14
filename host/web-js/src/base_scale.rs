@@ -323,6 +323,8 @@ fn frame_value(
 /// [`returns`]' walk: the joined value `code` may return, its type where
 /// every way says one.
 fn walk(plan: &Plan, code: &[u8], arm: Option<exact_plan::ArmsId>, nested: u8) -> Option<Value> {
+    let (code, owner) = plan.read_code(code);
+    let arm = owner.unwrap_or(arm);
     let program: Vec<_> = exact_runner::vm::instructions(code)
         .collect::<Result<_, _>>()
         .ok()?;
@@ -400,10 +402,15 @@ fn walk(plan: &Plan, code: &[u8], arm: Option<exact_plan::ArmsId>, nested: u8) -
             Opcode::LoadSlot => {
                 stack.push(Value::typed(plan, plan.slots.get(ins.args[0] as usize)?.ty))
             }
-            Opcode::LoadDerive => stack.push(Value::typed(
-                plan,
-                plan.derives.get(ins.args[0] as usize)?.ty,
-            )),
+            Opcode::LoadDerive => {
+                let value = match plan.unsettled_body(ins.args[0] as u32) {
+                    Some(row) if nested < 64 => {
+                        walk(plan, plan.code(row.body), row.owner, nested + 1)?
+                    }
+                    _ => Value::typed(plan, plan.derives.get(ins.args[0] as usize)?.ty),
+                };
+                stack.push(value);
+            }
             Opcode::LoadResource => stack.push(Value::typed(
                 plan,
                 plan.resources.get(ins.args[0] as usize)?.ty,

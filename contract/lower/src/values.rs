@@ -169,6 +169,7 @@ fn spacing_tree(e: &Expr) -> bool {
         Expr::Str(s, _) => s == "auto",
         Expr::Ternary(_, a, b, _) => spacing_tree(a) && spacing_tree(b),
         Expr::Match { some, none, .. } => spacing_tree(some) && spacing_tree(none),
+        Expr::Let { body, .. } => spacing_tree(body),
         _ => numeric_literal(e).is_some(),
     }
 }
@@ -1019,6 +1020,9 @@ pub(crate) fn check_prop_value(
     ty: &Ty,
 ) -> Result<(), LowerError> {
     media::check(name, value, span)?;
+    if prop == PropId::AccessibilityRole {
+        crate::roles::check(value)?;
+    }
     let want = tags::prop_ty(prop);
     if prop == PropId::Popover
         && matches!(ty, Ty::Option(inner) if matches!(**inner, Ty::String | Ty::Enum(_) | Ty::Unknown))

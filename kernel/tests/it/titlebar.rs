@@ -79,7 +79,7 @@ fn each_variable_is_a_calculation_by_its_name() {
         style
             .set_dynamic(StyleId::PaddingLeft, &StyleValue::Text(with.clone().into()))
             .unwrap();
-        let Dimension::Compare(c) = style.padding_left else {
+        let Dimension::Compare(c) = style.padding_left.clone() else {
             panic!("{with}: a calculation");
         };
         let mut out = String::new();

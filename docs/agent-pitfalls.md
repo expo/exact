@@ -11,6 +11,14 @@ diagnose it. **Candidate diagnostic** marks one that could become a check cheapl
 
 This list holds what the [agent guide](contract-for-agents.md)'s rules don't make obvious.
 
+## Component calculations
+
+- **A child derive still runs at every read.** Its body is compiled once per
+  use, without caching its value. Keep large calculations in a root derive
+  when readers should share the evaluated result. A binding's failing child
+  calculation unsets that binding; a root derive's failure refuses the commit.
+  (Instance expression tests and the form fixture pair, 2026-11-13.)
+
 ## Layout
 
 - **A search field pushes a header button off a phone.** Under `--chrome agent`,
@@ -477,11 +485,8 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   the scroller right after the route's `header`. Fix: a `scroll flex=1 min-height=0`
   right after the `header`. It is the bar's scroller with nothing written, and
   `navigationScroll="id"` on the route names a different one
-  (docs/contract-for-agents.md, "Routes and web documents"). A pushed route whose
-  content is a plain `list` (its rows built in slices) still opens its large title
-  collapsed (issues/20261112-pushed-screen-large-title-bar-is-54-points.md).
-  The compiler refuses a name nothing in the
-  route carries, or one on a box that never scrolls (`lower-route-scroll`). **Candidate diagnostics:** the
+  (docs/contract-for-agents.md, "Routes and web documents"). The compiler refuses
+  a name nothing in the route carries, or one on a box that never scrolls (`lower-route-scroll`). **Candidate diagnostics:** the
   compiler could refuse a named scroller that is not right after the `header` (an
   iOS-only rule today, so not refused); the hosts could journal a route whose
   content overflows with nothing to scroll it (QUEUE.md).
@@ -637,6 +642,18 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   saved record (refresh the resource after each write, or key the child by a string or
   number from the answer). (Authoring bench, LLP 1087, ios19, ios22 and ios32
   t7-wizard, 2026-10-05/06.)
+- **A screen keyed on the signed-in user shows its kept answer on some relaunches only.**
+  A kept answer whose identifying argument is still `""` or `none`, or reads a
+  device-state resource on its placeholder, waits (`logs`: `feeds's kept answer is
+  waiting for its identifying arguments`) and shows when the argument reaches the
+  value it was kept for. Once the data module is ready, the resource is asked for the
+  empty id meanwhile; if that answer lands before the id, it is kept in the entry's
+  place and the id's arrival has nothing to show. An id from a resource that reads
+  no device state, on a placeholder that is not empty (`"nobody"`), is a known
+  mismatch, which `logs` names with the resource it read. A resource whose `when`
+  stays false until the id is set asks nothing for the empty id, so its kept answer
+  still waits. (A React Native port's diaries, 2026-11-13;
+  `runner/src/runner/kept_identity_tests.rs`.)
 - **A grouped-list row you lay out loses its side insets, or its content runs off the
   card.** Cause: the sheet gives a custom row (a `row` that is not a title/value row)
   its padding, and `padding="12px 0"` replaces all four sides, so the row's content

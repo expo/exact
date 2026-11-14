@@ -254,6 +254,7 @@ fn a_redirected_revalidation_retry_checks_its_original_origin_again() {
 
 #[test]
 fn observed_failures_and_file_reply_heads_invalidate_the_cache() {
+    let _turn = crate::tests::one_at_a_time();
     for file in [false, true] {
         for failed in [false, true] {
             let files = Files::new();

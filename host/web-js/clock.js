@@ -53,6 +53,8 @@ export function advance(to, wall, stop, timers = true) {
   if (!Number.isFinite(to)) return (say(`refused advance: NonFiniteClock (${to})`), journal.at(-1));
   if (Poisoned) return (say('refused advance: Poisoned'), journal.at(-1));
   to = Link.timerWait?.cutoff(to, wall) ?? to;
+  // A declared list's due entries fire at the cutoff, before authored timers (Runner::listed_due).
+  if (to >= clock.now) clock.listedDue?.(to);
   let fired = 0,
     stopped = false;
   for (;;) {

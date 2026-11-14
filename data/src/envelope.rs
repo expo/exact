@@ -49,7 +49,7 @@ pub fn encode_optional(
             ])
         })
         .collect();
-    let mut body = json!({"turn": 1, "reads": local.reads(), "topics": local.take_topics(), "writes": writes, "logs": logs});
+    let mut body = json!({"turn": 1, "reads": local.reads(), "draws": local.entropy_draws(), "topics": local.take_topics(), "writes": writes, "logs": logs});
     match result {
         Ok(Some(Answer::Now(value))) => body["value"] = Json::String(base64(&value.to_bytes())),
         // A long poll no host may run (LLP 1016.000 D8) is refused before it crosses: the envelope carries
@@ -135,7 +135,12 @@ pub fn apply_optional(
     for topic in &topics {
         store.observe_topic(topic);
     }
-    for _ in topics.len() as u64..json["reads"].as_u64().unwrap_or(0) {
+    // Draws of randomness cross as draws (LLP 1069.005 D2), each a read too
+    let draws = json["draws"].as_u64().unwrap_or(0);
+    for _ in 0..draws {
+        store.observe_entropy();
+    }
+    for _ in topics.len() as u64 + draws..json["reads"].as_u64().unwrap_or(0) {
         store.observe_external_read();
     }
     for write in json["writes"].as_array().into_iter().flatten() {
@@ -505,6 +510,14 @@ mod tests {
         }
         assert_eq!(live.get("a"), Some("2"));
         assert_eq!(live.reads(), 2);
+        // A draw crosses as a draw, beside a read of what the store holds
+        let mut drawing = Store::default();
+        drawing.observe_external_read();
+        drawing.observe_entropy();
+        let outcome = encode(Ok(Answer::Now(value.clone())), &mut drawing, vec![]);
+        let mut fresh = Store::default();
+        apply(outcome, &mut fresh, &mut logs).unwrap();
+        assert_eq!((fresh.reads(), fresh.entropy_draws()), (2, 1));
         assert_eq!(logs, vec!["hi".to_string()]);
 
         let mut request = Request::post_json("https://x.test", "{}").independent_http(4096);

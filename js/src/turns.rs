@@ -236,10 +236,12 @@ impl Module {
             .call("__exact_let_go", ["", "", ""])
             .is_ok_and(|r| r == "storage")
         {
-            if let Outcome::Failed { message, .. } = session.continuation()() {
+            if let Outcome::Failed { message, .. } = session.continuation(engine)() {
                 // A compression so failed is settled and what was queued
                 // behind it issued (LLP 1069.002 A1.5): a progress, and the
-                // chain's other storage is delivered on.
+                // chain's other storage is delivered on. Any other operation
+                // is the module's until it completes: the loop ends at it,
+                // and a background round delivers it and the chain behind.
                 if engine
                     .call("__exact_let_go", ["failed", &message, ""])
                     .is_ok_and(|r| r == "settled")

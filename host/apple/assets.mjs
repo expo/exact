@@ -169,7 +169,37 @@ export function appleAssetCatalogInventory(app, platform) {
     }
     if (composerIcon(app, platform)) catalogs.push({ path: relative(app.dir, path), files: catalogFiles(path) });
   }
+  for (const icon of platform === 'watchos' ? [] : app.appleIcons ?? []) {
+    const path = `assets/${icon.svg}`;
+    const bytes = readFileSync(resolve(app.dir, path));
+    catalogs.push({ path, kind: 'svg-icon-v1', viewBox: icon.viewBox,
+      sha256: createHash('sha256').update(bytes).digest('hex'), files: [] });
+  }
   return catalogs;
+}
+
+/** Raster icons keep their SVG viewport and alpha. Every rendition is drawn
+ * from the vector source, rather than enlarged from the 1x bitmap. */
+export function rasterIconAssets(icons, app, catalog) {
+  for (const icon of icons) {
+    const bytes = readFileSync(resolve(app.dir, icon.path));
+    if (createHash('sha256').update(bytes).digest('hex') !== icon.sha256)
+      throw new Error('an SVG icon changed after the bake; rebuild before packaging');
+    const svg = icon.path.slice('assets/'.length);
+    const name = `ExactIcon-${createHash('sha256').update(svg).digest('hex')}`;
+    const set = resolve(catalog, `${name}.imageset`);
+    mkdirSync(set, { recursive: true });
+    const source = resolve(set, 'source.svg');
+    writeFileSync(source, bytes);
+    const images = [1, 2, 3].map(scale => {
+      const filename = `icon@${scale}x.png`;
+      // sips decodes the SVG at the requested pixel size, keeping its viewport.
+      run('sips', ['-s', 'format', 'png', '-Z', String(64 * scale), source, '--out', resolve(set, filename)], { stdio: 'ignore' });
+      return { idiom: 'universal', filename, scale: `${scale}x` };
+    });
+    rmSync(source);
+    writeFileSync(resolve(set, 'Contents.json'), JSON.stringify({ images, info: { author: 'exact', version: 1 } }));
+  }
 }
 function catalogFiles(root) {
   const files = [];
@@ -252,10 +282,10 @@ export function appleRefusals(app, platform, { archive = false } = {}) {
 export function iosAssets(app, dir, device, options = {}) {
   return appleAssets(app, dir, { ...options, device, platform: options.tv ? 'tvos' : 'ios' });
 }
-export function appleAssets(app, dir, { platform = 'macos', device = false, catalog = false, requireIcon = catalog, kept = null, expected, expectedLaunchImage, launch = 'system' } = {}) {
+export function appleAssets(app, dir, { platform = 'macos', device = false, catalog = false, requireIcon = catalog, kept = null, expected, expectedLaunchImage, icons = [], launch = 'system' } = {}) {
   // tvOS takes the manifest's iOS section; the watch app's deployment target is watch.mjs's.
   const minimum = platform === 'watchos' ? '10.0' : app.manifest.host?.[platform === 'tvos' ? 'ios' : platform]?.minimumOS ?? (platform === 'macos' ? '14.0' : '17.0');
-  const catalogs = appleAssetCatalogInventory(app, platform);
+  const catalogs = appleAssetCatalogInventory({ ...app, appleIcons: icons }, platform);
   const selected = catalogs.find(entry => entry.path.endsWith('.icon'));
   if (expected !== undefined && JSON.stringify(catalogs) !== JSON.stringify(expected))
     throw new Error('Apple asset catalogs changed after the bake; rebuild before packaging');
@@ -278,7 +308,7 @@ export function appleAssets(app, dir, { platform = 'macos', device = false, cata
       rmSync(making, { recursive: true, force: true });
       mkdirSync(making, { recursive: true });
       try {
-        writeFileSync(resolve(making, 'keys.json'), JSON.stringify(appleAssets(app, making, { platform, device, catalog, requireIcon, expected: catalogs, expectedLaunchImage: launchImage, launch })));
+        writeFileSync(resolve(making, 'keys.json'), JSON.stringify(appleAssets(app, making, { platform, device, catalog, requireIcon, expected: catalogs, expectedLaunchImage: launchImage, icons, launch })));
         rmSync(made, { recursive: true, force: true });
         renameSync(making, made);
       } finally { rmSync(making, { recursive: true, force: true }); }
@@ -290,7 +320,8 @@ export function appleAssets(app, dir, { platform = 'macos', device = false, cata
   }
   const work = mkdtempSync(resolve(tmpdir(), 'exact-apple-assets-'));
   try {
-    const sources = catalogs.map(entry => {
+    const rasterIcons = catalogs.filter(entry => entry.kind === 'svg-icon-v1');
+    const sources = catalogs.filter(entry => !entry.kind).map(entry => {
       const copied = resolve(work, 'app', entry.path);
       cpSync(resolve(app.dir, entry.path), copied, { recursive: true });
       if (JSON.stringify(catalogFiles(copied)) !== JSON.stringify(entry.files))
@@ -298,6 +329,7 @@ export function appleAssets(app, dir, { platform = 'macos', device = false, cata
       return copied;
     });
     const assets = resolve(work, 'Generated.xcassets');
+    rasterIconAssets(rasterIcons, app, assets);
     // The launch image drawn is the bytes the inventory hashed, copied once.
     let picture = null;
     if (launchImage) {
@@ -315,7 +347,7 @@ export function appleAssets(app, dir, { platform = 'macos', device = false, cata
     const own = platform === 'tvos' ? brandAssets(catalogs)[0] : null, brand = platform === 'tvos' && !own ? tvIcon(app, assets) : null;
     const hasIcon = existsSync(resolve(assets, 'AppIcon.appiconset'));
     const iconName = selected ? basename(selected.path, '.icon') : own ?? brand ?? (hasIcon ? 'AppIcon' : null);
-    if (hasIcon || brand || keys.UILaunchScreen) {
+    if (hasIcon || brand || keys.UILaunchScreen || rasterIcons.length) {
       writeFileSync(resolve(assets, 'Contents.json'), JSON.stringify({ info: { author: 'exact', version: 1 } }));
       sources.push(assets);
     }
@@ -675,6 +707,10 @@ export const resourceIdentities = (appDir, manifest) => new Set(['macos', 'ios']
   .flatMap(platform => (manifest.host?.[platform]?.resources ?? []).map(({ from }) => fileIdentity(resolve(appDir, from))))
   .filter(Boolean));
 
+/** The app directories Exact owns (sources, assets, build output), which no `host.*.resources` `from` may be under;
+ *  app.schema.json and the shipped-data recipe list them too (LLP 1168.000 D7.1). */
+export const RESERVED_RESOURCE_ROOTS = new Set(['assets', 'deck', 'gpu', 'fonts', 'strings', 'web', 'apple', 'linux', 'src', 'data', 'modules', 'node_modules', 'target', 'dist']);
+
 /** Native files are binary inputs, never plan assets or TypeScript sources:
  *  `host.macos.resources` under the Mac's `Contents`, `host.ios.resources`
  *  (iOS and tvOS) under `IOS_RESOURCE_ROOT`, as resources only. */
@@ -683,10 +719,14 @@ export function nativeResourceMappings(manifest, platform = 'macos') {
   const mappings = manifest.host?.[platform]?.resources ?? [];
   const safe = path => typeof path === 'string' && path.length && !isAbsolute(path)
     && !path.includes('\\') && !path.includes('\0') && path.split('/').every(p => p && p !== '.' && p !== '..');
-  const reserved = new Set(['assets', 'deck', 'gpu', 'fonts', 'strings', 'web', 'apple', 'linux', 'src', 'data', 'modules', 'node_modules', 'target', 'dist']);
   const overlap = (a, b) => a === b || a.startsWith(b + '/') || b.startsWith(a + '/');
+  const reserved = RESERVED_RESOURCE_ROOTS;
   for (const [i, entry] of mappings.entries()) {
-    if (!safe(entry.from) || reserved.has(entry.from.split('/')[0]) || entry.from.startsWith('.'))
+    // A root Exact owns says which, and what to name instead (the chat benchmark's `data` was refused unexplained).
+    const root = typeof entry.from === 'string' ? entry.from.split('/')[0] : '';
+    if (safe(entry.from) && reserved.has(root))
+      throw new Error(`${key}.from "${entry.from}" is under \`${root}/\`, a directory Exact owns (each of ${[...reserved].map(name => `\`${name}/\``).join(', ')} holds sources, assets or build output); put the files in a directory of their own, such as \`${root === 'data' ? 'data-files' : `${root}-files`}/\``);
+    if (!safe(entry.from) || entry.from.startsWith('.'))
       throw new Error(`${key}.from must name a separate app-relative resource directory, outside source, asset and output roots`);
     if (!safe(entry.to) || !(mac ? /^(Resources|Helpers|Frameworks)\/.+/ : /^Resources\/.+/).test(entry.to)
       || MAC_RESOURCES_WRITTEN.some(name => overlap(entry.to, `Resources/${name}`))

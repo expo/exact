@@ -74,9 +74,11 @@ impl Module {
     /// A round's work: wait on the host's I/O worker for the completion of
     /// the operation in flight, as an answer's storage continuation does.
     pub(crate) fn background_dispatch(&mut self) -> Dispatch {
-        match self.storage.as_ref() {
-            Some(session) => Dispatch::Run(Work::Now(session.continuation())),
-            None => Dispatch::Missing,
+        match (self.storage.as_ref(), self.engine.as_mut()) {
+            (Some(session), Some(engine)) => {
+                Dispatch::Run(Work::Now(session.background_continuation(engine)))
+            }
+            _ => Dispatch::Missing,
         }
     }
 
@@ -196,14 +198,19 @@ impl Module {
         self.host.between_answers = false;
     }
 
-    /// The module's journal (LLP 1097 D8): the runtime's own lines as they
-    /// are, its `console` marked as the app's.
+    /// The module's journal (LLP 1097 D8): the runtime's own lines, those
+    /// through its door as they are and the rest as `console: …`, and each
+    /// line the app's `console` wrote marked with its method (LLP 1027.009
+    /// D1: [`exact_runner::Console::mark`]).
     pub(crate) fn journal_lines(&mut self) -> Vec<String> {
         let mut lines = std::mem::take(&mut self.host.journal);
         lines.extend(
-            self.take_logs()
+            self.take_lines()
                 .into_iter()
-                .map(|line| format!("console: {line}")),
+                .map(|(method, line)| match method {
+                    Some(method) => method.mark(&line),
+                    None => format!("console: {line}"),
+                }),
         );
         lines
     }
