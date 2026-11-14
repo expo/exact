@@ -1064,19 +1064,31 @@ fn storage_refusals_carry_a_stable_code() {
         .lines()
         .map(|l| l.split(' ').take(2).collect::<Vec<_>>().join(" "))
         .collect();
+    let (common, folder) = codes.split_at(5);
     assert_eq!(
-        codes,
+        common,
         [
             "Unavailable ENOENT",
             "Unavailable denied",
             "Unavailable ENOTDIR",
             "ok",
-            "Unavailable denied",
+            "Unavailable denied"
+        ]
+    );
+    // A folder read or copied from as a file is EISDIR, and the copy leaves
+    // no file. Unix only: the Windows app filesystem still refuses both with
+    // a message that carries no filesystem code, so they read as `failed`.
+    #[cfg(unix)]
+    assert_eq!(
+        folder,
+        [
             "Unavailable EISDIR",
             "Unavailable EISDIR",
             "Unavailable ENOENT"
         ]
     );
+    #[cfg(not(unix))]
+    let _ = folder;
 }
 
 /// No later UI request is needed to finish writes these answers already
