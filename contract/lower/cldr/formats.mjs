@@ -153,6 +153,14 @@ function record(l) {
   // Dates and times: the Gregorian calendar at UTC, of the wall time.
   const dtf = (o, tag = l) => new Intl.DateTimeFormat(`${tag}${tag.includes("-u-") ? "" : "-u"}-ca-gregory`, { timeZone: "UTC", ...o });
   // A date's names: its twelve months' (`{N}`), then, when it has a weekday (`{E}`), its seven, Sunday's first.
+  const monthsNumeric = (f, september) => {
+    const ascii = (v) => /^[0-9]+$/.test(v);
+    for (let m = 1; m <= 12; m++) {
+      const v = f.formatToParts(UTC(2026, m, 5)).find((q) => q.type === "month").value;
+      if (ascii(v) !== ascii(september) || toAscii(v) !== (september.length === 2 ? String(m).padStart(2, "0") : String(m))) return false;
+    }
+    return true;
+  };
   const date = (o) => {
     const f = dtf(o);
     let out = "", names = [], days = [];
@@ -161,7 +169,9 @@ function record(l) {
       if (p.type === "literal") out += literal(p.value);
       else if (p.type === "year") out += v === "2026" ? "{y}" : v === "26" ? "{yy}" : fail(`year ${v}`);
       else if (p.type === "day") out += v === "5" ? "{d}" : v === "05" ? "{dd}" : fail(`day ${v}`);
-      else if (p.type === "month" && (v === "9" || v === "09")) out += v === "9" ? "{M}" : "{MM}";
+      // A numeric month only when every month is written in September's digits: `dz` writes December's `12` in
+      // ASCII beside `༩`, so its months are names.
+      else if (p.type === "month" && (v === "9" || v === "09") && monthsNumeric(f, p.value)) out += v === "9" ? "{M}" : "{MM}";
       else if (p.type === "month") {
         out += "{N}";
         for (let m = 1; m <= 12; m++) names.push(literal(f.formatToParts(UTC(2026, m, 5)).find((q) => q.type === "month").value));
@@ -317,9 +327,10 @@ console.error(`${Object.keys(full).length} locales, ${refused.length} refused`);
 function oracle() {
   // de-AT, en-150, en-BG and rhg-BD set money's symbols or grouping apart
   // from a number's; de-u-nu-latn and en-u-hc-h23 are tables named with a
-  // Unicode extension, the second forcing its hour cycle.
+  // Unicode extension, the second forcing its hour cycle; dz writes one
+  // month's number in other digits than the rest.
   const LOCALES = ["en", "de", "fr", "ja", "ar", "ar-EG", "hi", "pt-BR", "en-GB", "de-CH", "es", "ru", "pl", "zh", "ko", "fa", "he", "sv", "fi", "mn", "my", "vi", "tr",
-    "de-AT", "en-150", "en-BG", "rhg-BD", "de-u-nu-latn", "en-u-hc-h23"];
+    "de-AT", "en-150", "en-BG", "rhg-BD", "de-u-nu-latn", "en-u-hc-h23", "dz"];
   const INSTANTS = [
     [0, 0], [-0.5, 60], [1790000000000.7, 345], [1790000000000, -720], [1791762120000, -420], [43200000, 0],
     [45000000, 0], [1800000, 0], [-62135596800000, 0], [253402300799999, 0], [951782400000, 0], [-1790000000000.7, 840],
