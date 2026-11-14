@@ -55,11 +55,16 @@ const LINE_PENALTY_MULTIPLIER: f64 = 4.0;
 /// `opportunities` are the paragraph's break opportunities in order, each as
 /// `(end, next)`: where a line breaking there ends (trailing space excluded)
 /// and where the next line starts, measured from the paragraph's start. The
-/// last entry is the paragraph's end (its `next` unused). A line's score is
-/// its unused width squared, the final line's included, plus a line penalty
-/// of 4 × `width` × `font_size`, plus 10,000 when the final line holds only
-/// the last word. Positions round up to 1/64 px (a layout unit) first, which
-/// settles exact ties; the earlier break wins a tie that remains.
+/// last entry is the paragraph's end (its `next` unused). `width` floors to
+/// 1/64 px (a layout unit); positions stay unrounded, as Blink's text break
+/// candidates do. A line fits when it is at most one layout unit wider than
+/// `width` (`AvailableWidthToFit`, matching Blink's greedy `LineBreaker`), and
+/// its unused width is measured from that, in `f32` as `ComputeScores` does.
+/// A line's score is its unused width squared, the final line's included,
+/// plus a line penalty of 4 × `width` × `font_size` (`SetupParameters`), plus
+/// 10,000 when the final line holds only the last word (`Optimize`). A tie
+/// goes to the later break: `ComputeScores` keeps a start whose score is `<=`
+/// the best so far.
 ///
 /// Returns the indices into `opportunities` where lines break (`lines` − 1 of
 /// them), or `None`, leaving the paragraph greedy, when the best breaking
@@ -77,8 +82,8 @@ pub fn balanced_breaks(
     {
         return None;
     }
-    let ceil = |x: f32| (f64::from(x) * 64.0).ceil() / 64.0;
-    let width64 = (f64::from(width) * 64.0).floor() / 64.0;
+    let width = (width * 64.0).floor() / 64.0;
+    let fit = width + 1.0 / 64.0;
     let line_penalty = LINE_PENALTY_MULTIPLIER * f64::from(width) * f64::from(font_size);
     // Node 0 is the paragraph's start; node `k` breaks at `opportunities[k - 1]`.
     let n = opportunities.len();
@@ -90,15 +95,12 @@ pub fn balanced_breaks(
     // `active`): starts and ends only move forward.
     let mut active = 0;
     for b in 1..=n {
-        let end = ceil(opportunities[b - 1].0);
+        // Blink's `start_edge`: a line starting before it overflows.
+        let edge = opportunities[b - 1].0 - fit;
         let first = active;
         for a in first..b {
-            let start = if a == 0 {
-                0.0
-            } else {
-                ceil(opportunities[a - 1].1)
-            };
-            let unused = width64 - (end - start);
+            let start = if a == 0 { 0.0 } else { opportunities[a - 1].1 };
+            let unused = start - edge;
             if unused < 0.0 {
                 active = a + 1;
                 continue;
@@ -106,11 +108,12 @@ pub fn balanced_breaks(
             if !score[a].is_finite() {
                 continue;
             }
+            let unused = f64::from(unused);
             let mut s = score[a] + unused * unused + line_penalty;
             if b == n && a + 1 == n && a > 0 {
                 s += LAST_WORD_ALONE_PENALTY;
             }
-            if s < score[b] {
+            if s <= score[b] {
                 score[b] = s;
                 from[b] = a;
                 count[b] = count[a] + 1;

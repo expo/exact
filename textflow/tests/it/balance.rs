@@ -106,3 +106,39 @@ fn balance_breaks_as_chrome_does_not_at_the_narrowest_width() {
         None
     );
 }
+
+// Equal scores go to the later break, as in Blink's ComputeScores (`<=`):
+// "aa aa / aa aa aa" and "aa aa aa / aa aa" each leave 3 and 0 unused.
+#[test]
+fn balance_ties_go_to_the_later_break() {
+    assert_eq!(
+        balanced_lines("aa aa aa aa aa", 1.0, 8.0, 1.0),
+        ["aa aa aa", "aa aa"]
+    );
+}
+
+// Four words of `word` px with 1px spaces between them.
+fn four_words(word: f32) -> Vec<(f32, f32)> {
+    (1..=4)
+        .map(|i| (i as f32 * (word + 1.0) - 1.0, i as f32 * (word + 1.0)))
+        .collect()
+}
+
+// A line fits when at most 1/64 px wider than the box, from unrounded
+// positions, as Blink's AvailableWidthToFit: two words a line at 61px while a
+// pair measures 61 + 1/128 or 61 + 1/64, not at 61 + 5/256.
+#[test]
+fn balance_fits_lines_a_layout_unit_wider_than_the_box() {
+    assert_eq!(
+        balanced_breaks(61.0, 16.0, &four_words(30.0 + 1.0 / 256.0), 2),
+        Some(vec![1])
+    );
+    assert_eq!(
+        balanced_breaks(61.0, 16.0, &four_words(30.0 + 1.0 / 128.0), 2),
+        Some(vec![1])
+    );
+    assert_eq!(
+        balanced_breaks(61.0, 16.0, &four_words(30.0 + 5.0 / 512.0), 2),
+        None
+    );
+}
