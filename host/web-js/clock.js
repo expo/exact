@@ -2,7 +2,7 @@
 // the wall clock `drive` and `paint` move it, under the agent the driver does.
 import { rt as Link } from './rt-link.js';
 import { beatAfter } from './beat.js';
-import { commit, journal, say, Poisoned, Rev, Sched, Clocked, Writes, Listener, Now, read, Invocation } from './rt.js';
+import { commit, journal, say, Poisoned, Rev, Sched, Clocked, Writes, Listener, Now, read, Invocation, Origin } from './rt.js';
 import { Mutations, Ticket } from './resources.js';
 import { start } from './mount.js';
 export const clock = { now: 0, timers: [], agent: false, epoch: 0 };
@@ -123,7 +123,7 @@ export function advance(to, wall, stop, timers = true) {
       };
     sample();
     Instant = wall ? (next?.wait || next?.change ? clock.now : at) : null;
-    const ok = fire(head ? () => Sched.next(head) : then ? () => Invocation.run(then.thenInvocation, () => commit(then.then, `${then.name} then`)) : next.action);
+    const ok = fire(head ? () => Sched.next(head) : then ? () => Origin.resume(then.thenOrigin, () => Invocation.run(then.thenInvocation, () => commit(then.then, `${then.name} then`))) : next.action);
     Instant = null;
     sample();
     if (repeat && clock.timers.includes(next))

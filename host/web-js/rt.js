@@ -404,7 +404,16 @@ export const Origin = {
       this.ask = was;
     }
   },
+  /** Run `f`, a commit deferred from one made under `origin` (a queued send's `next`, a `then`), under the least
+   * privileged of that origin and the one current now: its data code may read no more than the commit that made it,
+   * nor than a wake or a device event still running, which the runner's `data_origin` folds in too. */
+  resume(origin, f) {
+    const now = this.now();
+    return this.run(origin == null || RANK.indexOf(now) < RANK.indexOf(origin) ? now : origin, f);
+  },
 };
+// Who a call comes from, least privileged first (the runner's `CallOrigin`)
+const RANK = ['device', 'wake', 'tool', 'action', 'app'];
 /** A call's id follows its requests, replies, queued sends and `then`s (LLP 1133.023 D7); a person's commit has 0.
  * `run` and `letGo` are calls.js's once the app has tools: until then every commit is a person's. `pending` is what a
  * call waits for besides its requests, each with the call's `id`: a supersession a replacing commit has not published,
@@ -513,7 +522,7 @@ export function commit(f, what = 'commit', finished) {
     }
   }
   const [out, cmds, landed, finishes] = [Out, Commands, Landed, Finishes],
-    changed = Sched?.changed(queued), invocation = Invocation.id;
+    changed = Sched?.changed(queued), invocation = Invocation.id, origin = Origin.now();
   // A key handler's preventDefault/stopPropagation act on its event before the dispatch ends, a tree update a view
   // transition defers too (review C3).
   if (KeyEvent || Propagating)
@@ -582,11 +591,12 @@ export function commit(f, what = 'commit', finished) {
       Input?.arrive();
     }
     // An answer's `then` is armed, due now, once however many land: the next advance runs it as its own commit
-    // (LLP 1016.001 D3).
+    // (LLP 1016.001 D3), under its answer's invocation and origin (LLP 1133.002 D12).
     for (const m of landed)
       if (m.then) {
         m.due = armedAt();
         m.thenInvocation = invocation;
+        m.thenOrigin = origin;
         if (!clock.agent) drive();
       }
     Sched?.scan(true, changed); // a free queue's waiting send is due (LLP 1092 D3)
