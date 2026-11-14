@@ -20,7 +20,13 @@ struct HostBlock: Equatable {
             }
         }
     }
+    /// The ordered flips composed into physical side indices, low two bits first.
+    struct Tactic: Hashable {
+        var sides: UInt32 = 228 // top, right, bottom, left
+        static let none = Tactic()
+    }
     var width: Axis, height: Axis
+    var tactic: Tactic = .none
     /// A pane's: the block is its size.
     static func size(_ size: CGSize) -> HostBlock { HostBlock(width: .size(size.width), height: .size(size.height)) }
     /// A sheet's: as large as its content, at most this.
@@ -28,7 +34,7 @@ struct HostBlock: Equatable {
     /// A modal route fits an automatic size; its authored size and minimum win.
     static func fit(_ size: CGSize) -> HostBlock { HostBlock(width: .fit(size.width), height: .fit(size.height)) }
     /// A popover's position-area option (`PositionArea.place`).
-    static func region(_ size: CGSize) -> HostBlock { HostBlock(width: .region(size.width), height: .region(size.height)) }
+    static func region(_ size: CGSize, tactic: Tactic = .none) -> HostBlock { HostBlock(width: .region(size.width), height: .region(size.height), tactic: tactic) }
 
     struct Measurement {
         var used: CGSize
@@ -63,7 +69,7 @@ extension Runtime {
             for (view, block) in blocks {
                 let width = block?.width.wire, height = block?.height.wire
                 let lengths = [width?.length ?? 0, height?.length ?? 0, width?.policy ?? 0, height?.policy ?? 0].map { Float($0).bitPattern }
-                append([view, block == nil ? 5 : 4] + lengths)
+                append([view, block == nil ? 5 : 4] + lengths + (block.map { [$0.tactic.sides] } ?? []))
             }
             for (view, placement) in placements {
                 guard let placement else {
@@ -87,7 +93,7 @@ extension Runtime {
     func measureBlock(_ view: UInt32, in block: HostBlock) -> HostBlock.Measurement? {
         return on(busy: nil) {
             let width = block.width.wire, height = block.height.wire
-            let len = exact_measure_block(rt, view, Float(width.length), Float(height.length), UInt32(width.policy), UInt32(height.policy))
+            let len = exact_measure_block(rt, view, Float(width.length), Float(height.length), UInt32(width.policy), UInt32(height.policy), block.tactic.sides)
             guard len == 32 else { return nil }
             guard let out = UnsafeRawPointer(exact_out(rt)) else { return nil }
             let f = { (i: Int) in CGFloat(Float(bitPattern: UInt32(littleEndian: out.loadUnaligned(fromByteOffset: 4 * i, as: UInt32.self)))) }

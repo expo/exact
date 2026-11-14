@@ -2190,10 +2190,10 @@ menus and confirmations keep platform placement. Physical areas also accept
 `top span-left`, `bottom span-left`, `left`/`right` with `span-top`,
 `span-bottom` or `span-all`, and the four `top|bottom left|right` corners.
 Logical areas, `flip-x`, `flip-y`, named rules and area-dependent sizing are
-not implemented. Use fixed sizes, zero insets and default self-alignment
-for native parity; percentage margins are not resolved by the native layer.
-`flip-start` also exchanges `width` and `height` in CSS; the native layers keep
-the laid-out size, so give a popover that uses it equal ones.
+not implemented. Use zero insets and default self-alignment for native parity.
+Painted Apple popovers are sized in each option's region. Flips transform
+margins before percentages resolve there; `flip-start` also exchanges
+`width`/`height`, `min-width`/`min-height` and `max-width`/`max-height`.
 
 A route with `navigationPresentation="modal"` is the same sheet on the Mac
 (LLP 1115.002 D7.4), as large as its content (an authored `width` or `height`

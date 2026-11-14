@@ -29,8 +29,13 @@ enum PositionAreaRegionTable {
         (300, 100, "bottom span-right", "flip-inline", CGRect(x: 300, y: 120, width: 100, height: 54)),
         (300, 560, "bottom span-right", "flip-block", CGRect(x: 300, y: 506, width: 100, height: 54)),
         (60, 100, "bottom span-left", "flip-inline", CGRect(x: 0, y: 120, width: 100, height: 54)),
+        (100, 500, "bottom span-right", "flip-start", CGRect(x: 140, y: 500, width: 180, height: 60)),
+        (100, 500, "bottom span-right", "flip-start", CGRect(x: 140, y: 500, width: 160, height: 90)),
+        (100, 500, "bottom span-right", "flip-start", CGRect(x: 160, y: 510, width: 180, height: 36)),
+        (100, 500, "bottom span-right", "flip-start", CGRect(x: 144, y: 526, width: 180, height: 36)),
+        (100, 550, "bottom span-right", "flip-start flip-block", CGRect(x: 160, y: 500, width: 180, height: 60)),
     ]
-    // (The last three rows' popovers hold six boxes, the fixtures say.)
+    // Rows from 17 onward hold six boxes.
     /// A row in a right-to-left document, as Chrome mirrors it (checked there).
     static func mirrored(_ row: (CGFloat, CGFloat, String, String, CGRect)) -> (CGFloat, CGFloat, String, String, CGRect) {
         let area = row.2.split(separator: " ").map { $0.replacingOccurrences(of: "left", with: "L").replacingOccurrences(of: "right", with: "left").replacingOccurrences(of: "L", with: "right") }.joined(separator: " ")
