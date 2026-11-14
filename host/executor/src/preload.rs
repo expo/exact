@@ -710,6 +710,9 @@ fn eligible(request: &Request, class: RequestClass, forced: bool, work: bool) ->
         )
 }
 fn find(cache: &cache::Cache, request: &Request) -> Option<usize> {
+    if waiting_for_name(cache, request) {
+        return None;
+    }
     if cache.preload_names {
         if let Some(name) = &request.preload {
             let url = cache::identity(&request.url);
@@ -739,10 +742,14 @@ fn matching(cache: &cache::Cache, request: &Request, equal_body: bool) -> Option
     let key = Equal::of(request);
     let now = (cache.clock)();
     cache.preloads.iter().position(|p| {
-        p.key == key
-            && p.request
-                .as_ref()
-                .is_some_and(|r| (r.body == request.body) == equal_body)
+        (if equal_body {
+            p.key == key
+        } else {
+            p.key.same_cache_key(&key)
+        }) && p
+            .request
+            .as_ref()
+            .is_some_and(|r| (r.body == request.body) == equal_body)
             && live_at(p, now)
     })
 }
@@ -771,17 +778,22 @@ pub(super) fn pending_due(cache: &cache::Cache) -> Option<Instant> {
         .filter(|due| (cache.clock)() < *due)
         .min()
 }
+fn waiting_for_name(cache: &cache::Cache, request: &Request) -> bool {
+    cache.preload_names
+        && cache
+            .preload_launch_due
+            .is_some_and(|due| (cache.clock)() < due)
+        && request.preload.as_ref().is_some_and(|name| {
+            !cache.preloads.iter().any(|p| p.name == name.as_ref())
+                && !cache.preload_defined.contains(name.as_ref())
+        })
+}
 pub(super) fn waiting(state: &State, job: &Job) -> bool {
     eligible(&job.request, job.class, job.forced, job.work.is_some())
         && state.cache.as_ref().is_some_and(|c| {
             let now = (c.clock)();
             c.preload_definitions_due.is_some_and(|due| now < due)
-                || (c.preload_names
-                    && c.preload_launch_due.is_some_and(|due| now < due)
-                    && job.request.preload.as_ref().is_some_and(|name| {
-                        !c.preloads.iter().any(|p| p.name == name.as_ref())
-                            && !c.preload_defined.contains(name.as_ref())
-                    }))
+                || waiting_for_name(c, &job.request)
                 || find(c, &job.request).is_some_and(|i| can_take(c, &job.request, i))
         })
 }
@@ -968,7 +980,7 @@ pub(super) fn drop_held(cache: &mut cache::Cache, i: usize, event: Event) {
     cache.release(bytes);
     // Cancellation settles before the transport can report its failure (LLP 1162 D4).
     if let Some((url, _)) = invalidates {
-        cache::drop_urls(cache, &[url], None);
+        cache::drop_entries(cache, &[url]);
     }
 }
 // Completion wins over a later timer observation (LLP 1162.000 D1).
@@ -1002,11 +1014,9 @@ pub(super) fn expire(cache: &mut cache::Cache) {
         }
     }
 }
-pub(super) fn drop_urls(cache: &mut cache::Cache, urls: &[String], keep: Option<(usize, usize)>) {
+pub(super) fn drop_urls(cache: &mut cache::Cache, urls: &[String]) {
     for i in 0..cache.preloads.len() {
-        if keep != Some((i, cache.preloads[i].generation))
-            && urls.contains(&cache.preloads[i].key.url)
-        {
+        if urls.contains(&cache.preloads[i].key.url) {
             drop_held(cache, i, Event::DroppedByWrite);
         }
     }

@@ -1,6 +1,82 @@
 use super::*;
 
 #[test]
+fn a_named_read_waits_past_an_equal_hold_until_its_name_or_the_launch_ends() {
+    for asynchronous in [false, true] {
+        for prefetch in [false, true] {
+            for end in 0..5 {
+                let server = Server::new();
+                let (set, clock) = fresh_clock(&server, Vec::new());
+                let control = set.control();
+                if end != 4 {
+                    control.launch_pending(Some(Duration::from_secs(5)));
+                }
+                let (core, woke) = server.core(asynchronous, true);
+                adopt(&core, set);
+                server.plan(
+                    "/feed",
+                    Plan::new(200, &[("Cache-Control", "max-age=60")], b"equal"),
+                );
+                if prefetch {
+                    core.run(job(1, server.request("/feed").prefetch()), None)
+                        .unwrap();
+                } else {
+                    let mut def = definition(&server, "/feed");
+                    def.name.clear();
+                    control.extend(vec![def], &core.grants, Arc::new(|_, _| {}));
+                }
+                ready(&core, 1);
+                if prefetch {
+                    assert!(collect(&core, &woke).2.cached);
+                }
+                let request = job(2, server.request("/feed").preload("feed").unwrap());
+                core.run(request, None).unwrap();
+                if end != 4 {
+                    let (completed, running, queued, waits) = {
+                        let state = core.shared.state.lock().unwrap();
+                        (
+                            state.completed[0].len(),
+                            state.running.len(),
+                            state.jobs[0].len(),
+                            state.jobs[0].front().is_some_and(|j| waiting(&state, j)),
+                        )
+                    };
+                    assert_eq!((completed, running, queued, waits), (0, 0, 1, true));
+                    assert_eq!(server.count(), 1);
+                    match end {
+                        0 => {
+                            let release = held_plan(&server, "/feed", b"named");
+                            let mut def = definition(&server, "/feed");
+                            def.request = def.request.header("X-Trace", "launch");
+                            control.extend(vec![def], &core.grants, Arc::new(|_, _| {}));
+                            server.seen(2);
+                            assert!(core.shared.state.lock().unwrap().completed[0].is_empty());
+                            release.send(()).unwrap();
+                        }
+                        1 => control.launch_pending(None),
+                        2 => control.defined("feed"),
+                        _ => {
+                            *clock.lock().unwrap() += Duration::from_secs(5);
+                            control.test_tick();
+                        }
+                    }
+                }
+                let (ticket, outcome, timing) = collect(&core, &woke);
+                assert_eq!(ticket, 2);
+                assert!(timing.cached);
+                let expected = if end == 0 {
+                    b"named".as_slice()
+                } else {
+                    b"equal"
+                };
+                assert!(matches!(outcome, Outcome::Response(r) if r.body == expected));
+                assert_eq!(server.count(), if end == 0 { 2 } else { 1 });
+            }
+        }
+    }
+}
+
+#[test]
 fn the_launch_deadline_sends_a_named_read_without_the_function_reporting_its_end() {
     for asynchronous in [false, true] {
         for after_adoption in [false, true] {

@@ -46,6 +46,455 @@ fn runtime(server: &Server, asynchronous: bool) -> (Core, Receiver<()>) {
 }
 
 #[test]
+fn a_redirected_hold_removes_the_original_urls_stale_http_entry() {
+    for asynchronous in [false, true] {
+        for prefetch in [false, true] {
+            let server = Server::new();
+            let (core, woke) = runtime(&server, asynchronous);
+            let control = core.preloads.lock().unwrap().as_ref().unwrap().control();
+            let clock = Arc::new(Mutex::new(Instant::now()));
+            let now = clock.clone();
+            control.test_clock(Arc::new(move || *now.lock().unwrap()));
+            server.plan(
+                "/moved",
+                Plan::new(200, &[("Cache-Control", "max-age=0")], b"old"),
+            );
+            assert!(!read(&core, &woke, &server, 10, "/moved").1);
+            server.plan("/moved", Plan::new(302, &[("Location", "/new")], b""));
+            server.plan(
+                "/new",
+                Plan::new(200, &[("Cache-Control", "max-age=60")], b"new"),
+            );
+            start(&core, &server, server.request("/moved"), prefetch);
+            ready(&core, 1);
+            if prefetch {
+                let (_, outcome, timing) = collect(&core, &woke);
+                assert!(timing.cached);
+                assert!(matches!(outcome, Outcome::Response(r) if r.body == b"new"));
+            }
+            *clock.lock().unwrap() += HOLD;
+            control.test_tick();
+            core.run(
+                job(2, server.request("/moved").cache(CacheMode::OnlyIfCached)),
+                None,
+            )
+            .unwrap();
+            let (ticket, outcome, timing) = collect(&core, &woke);
+            assert_eq!(ticket, 2);
+            assert!(!timing.cached);
+            assert!(matches!(
+                outcome,
+                Outcome::Failed {
+                    kind: FailureKind::Network,
+                    ..
+                }
+            ));
+            assert_eq!(server.count(), 3);
+            server.plan("/moved", Plan::new(200, &[], b"after"));
+            let (reply, cached) = ask(
+                &core,
+                &woke,
+                job(3, server.request("/moved").cache(CacheMode::ForceCache)),
+            );
+            assert!(!cached);
+            assert_eq!(reply.body, b"after");
+            assert_eq!(server.count(), 4);
+        }
+    }
+}
+
+fn post_pair(
+    core: &Core,
+    server: &Server,
+    prefetch: bool,
+    failure: bool,
+    first_timeout: Option<u32>,
+) -> ([Request; 2], [Sender<()>; 2]) {
+    let requests = std::array::from_fn(|i| {
+        let mut request = server.request("/query");
+        request.method = "POST".into();
+        request.body = vec![i as u8];
+        if i == 0 {
+            request.timeout_ms = first_timeout;
+        }
+        request
+    });
+    let releases = std::array::from_fn(|i| {
+        let (release, held) = channel();
+        let mut plan = Plan::new(200, &[], &[i as u8]);
+        plan.held = Some(held);
+        plan.disconnect = failure && i == 0;
+        server.plan("/query", plan);
+        if prefetch {
+            core.run(job(i as u64 + 1, requests[i].clone().prefetch()), None)
+                .unwrap();
+        } else {
+            core.preloads
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .control()
+                .extend(
+                    vec![Definition {
+                        name: format!("query{i}"),
+                        request: requests[i].clone(),
+                        deadline_ms: None,
+                        secrets: Vec::new(),
+                    }],
+                    &core.grants,
+                    Arc::new(|_, _| {}),
+                );
+        }
+        server.seen(i + 1);
+        release
+    });
+    assert!(core
+        .shared
+        .state
+        .lock()
+        .unwrap()
+        .cache
+        .as_ref()
+        .unwrap()
+        .preloads
+        .iter()
+        .all(|p| matches!(p.reply, ReplyState::Pending { .. })));
+    (requests, releases)
+}
+
+#[test]
+fn two_post_holds_keep_both_bodies_in_either_completion_order() {
+    for asynchronous in [false, true] {
+        for prefetch in [false, true] {
+            for reverse in [false, true] {
+                let server = Server::new();
+                let (core, woke) = runtime(&server, asynchronous);
+                let (requests, releases) = post_pair(&core, &server, prefetch, false, None);
+                for i in if reverse { [1, 0] } else { [0, 1] } {
+                    releases[i].send(()).unwrap();
+                    wait(&core, |s| {
+                        !matches!(
+                            s.cache.as_ref().unwrap().preloads[i].reply,
+                            ReplyState::Pending { .. }
+                        )
+                    });
+                    assert!(core
+                        .shared
+                        .state
+                        .lock()
+                        .unwrap()
+                        .cache
+                        .as_ref()
+                        .unwrap()
+                        .preloads
+                        .iter()
+                        .all(|p| !matches!(p.reply, ReplyState::Gone)));
+                }
+                ready(&core, 2);
+                if prefetch {
+                    for expected in 1..=2 {
+                        let (ticket, outcome, timing) = collect(&core, &woke);
+                        assert_eq!(ticket, expected);
+                        assert!(timing.cached);
+                        assert!(
+                            matches!(outcome, Outcome::Response(r) if r.body == [ticket as u8 - 1])
+                        );
+                    }
+                }
+                for (i, request) in requests.into_iter().enumerate() {
+                    let (reply, cached) = ask(&core, &woke, job(10 + i as u64, request));
+                    assert!(cached);
+                    assert_eq!(reply.body, [i as u8]);
+                }
+                assert_eq!(server.count(), 2);
+            }
+        }
+    }
+}
+
+#[test]
+fn a_failed_or_cancelled_post_hold_leaves_the_other_body_held_and_its_reader_sends_once() {
+    for asynchronous in [false, true] {
+        for prefetch in [false, true] {
+            for reverse in [false, true] {
+                for cancelled in [true, false] {
+                    let server = Server::new();
+                    let (core, woke) = runtime(&server, asynchronous);
+                    let control = core.preloads.lock().unwrap().as_ref().unwrap().control();
+                    let clock = Arc::new(Mutex::new(Instant::now()));
+                    let now = clock.clone();
+                    control.test_clock(Arc::new(move || *now.lock().unwrap()));
+                    let (requests, releases) = post_pair(
+                        &core,
+                        &server,
+                        prefetch,
+                        !cancelled,
+                        cancelled.then_some(1000),
+                    );
+                    let (fallback, held) = channel();
+                    let mut plan = Plan::new(200, &[], b"fallback");
+                    // Its ordinary head may drop the surviving hold after its readers take it (D1).
+                    plan.held = Some(held);
+                    server.plan("/query", plan);
+                    server.plan("/query", Plan::new(200, &[], b"unexpected"));
+                    if !prefetch {
+                        for (i, request) in requests.iter().enumerate() {
+                            core.run(job(i as u64 + 1, request.clone()), None).unwrap();
+                        }
+                    }
+                    if cancelled {
+                        *clock.lock().unwrap() += Duration::from_secs(2);
+                        control.test_tick();
+                        assert!(!matches!(
+                            core.shared
+                                .state
+                                .lock()
+                                .unwrap()
+                                .cache
+                                .as_ref()
+                                .unwrap()
+                                .preloads[1]
+                                .reply,
+                            ReplyState::Gone
+                        ));
+                    }
+                    for i in if reverse { [1, 0] } else { [0, 1] } {
+                        releases[i].send(()).unwrap();
+                        wait(&core, |s| {
+                            !matches!(
+                                s.cache.as_ref().unwrap().preloads[i].reply,
+                                ReplyState::Pending { .. }
+                            )
+                        });
+                        assert!(!matches!(
+                            core.shared
+                                .state
+                                .lock()
+                                .unwrap()
+                                .cache
+                                .as_ref()
+                                .unwrap()
+                                .preloads[1]
+                                .reply,
+                            ReplyState::Gone
+                        ));
+                    }
+                    ready(&core, 1);
+                    server.seen(3);
+                    core.run(job(10, requests[1].clone()), None).unwrap();
+                    wait(&core, |s| s.completed[0].iter().any(|d| d.ticket == 10));
+                    fallback.send(()).unwrap();
+                    for expected in [1, 2, 10] {
+                        let (ticket, outcome, timing) = collect(&core, &woke);
+                        assert_eq!(ticket, expected);
+                        assert_eq!(timing.cached, ticket != 1);
+                        let body = if ticket == 1 {
+                            b"fallback".as_slice()
+                        } else {
+                            &[1]
+                        };
+                        assert!(matches!(outcome, Outcome::Response(r) if r.body == body));
+                    }
+                    assert_eq!(server.count(), 3);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn ordinary_unsafe_reads_and_sends_still_drop_both_post_holds() {
+    for asynchronous in [false, true] {
+        for prefetch in [false, true] {
+            for pending in [false, true] {
+                for send in [false, true] {
+                    let server = Server::new();
+                    let (core, woke) = runtime(&server, asynchronous);
+                    let (_, releases) = post_pair(&core, &server, prefetch, false, None);
+                    if prefetch {
+                        core.cancel(&[1, 2]);
+                    }
+                    if !pending {
+                        for release in &releases {
+                            release.send(()).unwrap();
+                        }
+                        ready(&core, 2);
+                    }
+                    let mut request = server.request("/query");
+                    request.method = "POST".into();
+                    request.body = b"ordinary".to_vec();
+                    let mut request = job(10, request);
+                    if send {
+                        request.class = RequestClass::Ordered;
+                    }
+                    server.plan("/query", Plan::new(200, &[], b"ordinary"));
+                    assert!(!ask(&core, &woke, request).1);
+                    assert!(core
+                        .shared
+                        .state
+                        .lock()
+                        .unwrap()
+                        .cache
+                        .as_ref()
+                        .unwrap()
+                        .preloads
+                        .iter()
+                        .all(|p| matches!(p.reply, ReplyState::Gone)));
+                    if pending {
+                        for release in releases {
+                            release.send(()).unwrap();
+                        }
+                    }
+                    assert_eq!(server.count(), 3);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn different_bodies_bypass_the_http_copy_despite_different_redirect_or_cache_policies() {
+    for asynchronous in [false, true] {
+        for cache_policy in [false, true] {
+            let server = Server::new();
+            let (core, woke) = runtime(&server, asynchronous);
+            server.plan(
+                "/item",
+                Plan::new(200, &[("Cache-Control", "max-age=60")], b"empty"),
+            );
+            let holding = server.request("/item").cache(if cache_policy {
+                CacheMode::NoCache
+            } else {
+                CacheMode::Default
+            });
+            start(&core, &server, holding, false);
+            ready(&core, 1);
+            let mut request = server.request("/item");
+            request.body = b"different".to_vec();
+            if !cache_policy {
+                request.redirect = Redirect::Manual;
+            }
+            server.plan("/item", Plan::new(200, &[], b"different"));
+            let (reply, cached) = ask(&core, &woke, job(2, request));
+            assert!(!cached);
+            assert_eq!(reply.body, b"different");
+            assert_eq!(server.count(), 2);
+        }
+    }
+}
+
+#[test]
+fn refreshing_a_prefetch_leaves_http_entries_to_the_cache_rules() {
+    for asynchronous in [false, true] {
+        for no_store in [true, false] {
+            let server = Server::new();
+            let (core, woke) = runtime(&server, asynchronous);
+            let mode = if no_store {
+                CacheMode::NoStore
+            } else {
+                CacheMode::Default
+            };
+            if no_store {
+                server.plan(
+                    "/a",
+                    Plan::new(200, &[("Cache-Control", "max-age=60")], b"ordinary"),
+                );
+                assert!(!read(&core, &woke, &server, 10, "/a").1);
+            }
+            server.plan(
+                "/a",
+                Plan::new(200, &[("Cache-Control", "max-age=60")], b"prefetched"),
+            );
+            start(&core, &server, server.request("/a").cache(mode), true);
+            assert!(collect(&core, &woke).2.cached);
+            let (release, held) = channel();
+            let mut plan = Plan::new(200, &[("Cache-Control", "max-age=60")], b"refreshed");
+            plan.held = Some(held);
+            server.plan("/a", plan);
+            let mut refresh = job(2, server.request("/a").cache(mode));
+            refresh.forced = true;
+            core.run(refresh, None).unwrap();
+            server.seen(if no_store { 3 } else { 2 });
+            assert!(matches!(
+                core.shared
+                    .state
+                    .lock()
+                    .unwrap()
+                    .cache
+                    .as_ref()
+                    .unwrap()
+                    .preloads[0]
+                    .reply,
+                ReplyState::Gone
+            ));
+            if no_store {
+                release.send(()).unwrap();
+                let (ticket, outcome, timing) = collect(&core, &woke);
+                assert_eq!(ticket, 2);
+                assert!(!timing.cached);
+                assert!(matches!(outcome, Outcome::Response(r) if r.body == b"refreshed"));
+                server.plan("/a", Plan::new(200, &[], b"unexpected"));
+                let (reply, cached) = read(&core, &woke, &server, 3, "/a");
+                assert!(cached);
+                assert_eq!(reply.body, b"ordinary");
+            } else {
+                server.plan(
+                    "/a",
+                    Plan::new(200, &[("Cache-Control", "no-store")], b"after"),
+                );
+                core.run(job(3, server.request("/a")), None).unwrap();
+                wait(&core, |s| s.completed[0].iter().any(|d| d.ticket == 3));
+                release.send(()).unwrap();
+                for expected in 2..=3 {
+                    let (ticket, outcome, timing) = collect(&core, &woke);
+                    assert_eq!(ticket, expected);
+                    assert!(!timing.cached);
+                    let body = if ticket == 2 {
+                        b"refreshed".as_slice()
+                    } else {
+                        b"after"
+                    };
+                    assert!(matches!(outcome, Outcome::Response(r) if r.body == body));
+                }
+                let (reply, cached) = read(&core, &woke, &server, 4, "/a");
+                assert!(cached);
+                assert_eq!(reply.body, b"refreshed");
+            }
+            assert_eq!(server.count(), 3);
+        }
+    }
+}
+
+#[test]
+fn taking_an_unsafe_hold_preserves_an_entry_stored_after_its_exchange() {
+    for asynchronous in [false, true] {
+        for prefetch in [false, true] {
+            let server = Server::new();
+            let (core, woke) = runtime(&server, asynchronous);
+            let mut request = server.request("/query");
+            request.method = "POST".into();
+            server.plan("/query", Plan::new(200, &[], b"held"));
+            start(&core, &server, request.clone(), prefetch);
+            ready(&core, 1);
+            if prefetch {
+                assert!(collect(&core, &woke).2.cached);
+            }
+            server.plan(
+                "/query",
+                Plan::new(200, &[("Cache-Control", "max-age=60")], b"later"),
+            );
+            assert!(!read(&core, &woke, &server, 10, "/query").1);
+            assert!(ask(&core, &woke, job(11, request)).1);
+            let (reply, cached) = read(&core, &woke, &server, 12, "/query");
+            assert!(cached);
+            assert_eq!(reply.body, b"later");
+            assert_eq!(server.count(), 2);
+        }
+    }
+}
+
+#[test]
 fn a_prefetch_cache_hit_wakes_after_releasing_the_preloads_lock() {
     for asynchronous in [false, true] {
         let server = Server::new();
@@ -77,7 +526,7 @@ fn a_prefetch_cache_hit_wakes_after_releasing_the_preloads_lock() {
 }
 
 #[test]
-fn unsafe_holds_invalidate_http_entries_at_each_head_and_on_failure_without_dropping_themselves() {
+fn unsafe_holds_invalidate_http_entries_at_each_head_and_on_failure_without_dropping_holds() {
     for asynchronous in [false, true] {
         for prefetch in [false, true] {
             for failure in [false, true] {
@@ -182,9 +631,15 @@ fn unsafe_holds_invalidate_http_entries_at_each_head_and_on_failure_without_drop
                 assert!(ask(&core, &woke, job(1, request)).1);
             }
             server.plan("/cart", Plan::new(200, &[], b"new"));
-            let (reply, cached) = read(&core, &woke, &server, 2, "/cart");
+            let mut request = server.request("/cart");
+            request.redirect = Redirect::Manual;
+            let (reply, cached) = ask(&core, &woke, job(2, request));
             assert!(!cached);
             assert_eq!(reply.body, b"new");
+            server.plan("/cart", Plan::new(200, &[], b"unexpected"));
+            let (reply, cached) = read(&core, &woke, &server, 3, "/cart");
+            assert!(cached);
+            assert_eq!(reply.body, b"old");
             assert_eq!(server.count(), 3);
         }
     }

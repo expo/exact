@@ -588,11 +588,8 @@ pub(super) fn response(state: &mut State, ticket: u64, response: &mut Response, 
         store,
     } = exchange;
     if redirected {
-        if store {
-            cache.drop_key(&key);
-        }
         drop(previous);
-        cache.collect();
+        discard_redirected(cache, &key, store);
         return;
     }
     if response.status == 304 {
@@ -649,15 +646,20 @@ pub(super) fn store_preload(
 ) {
     // Only launch slots retain secret dependencies after expiry (LLP 1162.000 D3, D5).
     if cache.preloads[index].store
-        && !redirected
         && eligible(request, RequestClass::Read)
         && request.cache != CacheMode::NoStore
     {
+        let key = Key::of(request);
+        let store = !Directives::of(&request.headers).no_store;
+        if redirected {
+            discard_redirected(cache, &key, store);
+            return;
+        }
         store_response(
             cache,
-            Key::of(request),
+            key,
             started,
-            !Directives::of(&request.headers).no_store,
+            store,
             response,
             false,
             if cache.preloads[index].prefetch {
@@ -669,6 +671,13 @@ pub(super) fn store_preload(
             SystemTime::now(),
         );
     }
+}
+
+fn discard_redirected(cache: &mut Cache, key: &Key, store: bool) {
+    if store {
+        cache.drop_key(key);
+    }
+    cache.collect();
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -829,24 +838,30 @@ pub(super) fn invalidate(
     };
     match (invalidation, outcome) {
         (Some((url, true)), Outcome::Response(response)) => {
-            invalidate_head(cache, url, response.status, &response.headers, None)
+            invalidate_head(cache, url, response.status, &response.headers)
         }
-        (Some((url, _)), Outcome::Failed { .. }) => drop_urls(cache, &[identity(url)], None),
+        (Some((url, _)), Outcome::Failed { .. }) => drop_urls(cache, &[identity(url)]),
         _ => {}
     }
 }
-pub(super) fn invalidate_head(
+fn invalidate_head(cache: &mut Cache, url: &str, status: u16, headers: &[(String, String)]) {
+    drop_urls(cache, &invalidated_urls(url, status, headers));
+}
+pub(super) fn invalidate_preload_head(
     cache: &mut Cache,
     url: &str,
     status: u16,
     headers: &[(String, String)],
-    keep: Option<(usize, usize)>,
 ) {
+    // A hold's exchange invalidates entries, never holds (LLP 1162.000 D1, D5).
+    drop_entries(cache, &invalidated_urls(url, status, headers));
+}
+fn invalidated_urls(url: &str, status: u16, headers: &[(String, String)]) -> Vec<String> {
     if !(200..400).contains(&status) {
-        return;
+        return Vec::new();
     }
     let Ok(base) = url::Url::parse(url) else {
-        return;
+        return Vec::new();
     };
     let mut urls = vec![identity(url)];
     for name in ["location", "content-location"] {
@@ -858,10 +873,13 @@ pub(super) fn invalidate_head(
             }
         }
     }
-    drop_urls(cache, &urls, keep);
+    urls
 }
-pub(super) fn drop_urls(cache: &mut Cache, urls: &[String], keep: Option<(usize, usize)>) {
-    super::preload::drop_urls(cache, urls, keep);
+fn drop_urls(cache: &mut Cache, urls: &[String]) {
+    super::preload::drop_urls(cache, urls);
+    drop_entries(cache, urls);
+}
+pub(super) fn drop_entries(cache: &mut Cache, urls: &[String]) {
     for index in (0..cache.entries.len()).rev() {
         if urls.contains(&cache.entries[index].key.url) {
             cache.remove(index);
@@ -871,13 +889,6 @@ pub(super) fn drop_urls(cache: &mut Cache, urls: &[String], keep: Option<(usize,
 }
 #[allow(dead_code)] // Some shells expose no launch entry (LLP 1162.000 D4).
 pub(super) fn drop_preload_copy(cache: &mut Cache, index: usize) {
-    if cache.preloads[index].prefetch {
-        if let Some(request) = &cache.preloads[index].request {
-            cache.drop_key(&Key::of(request));
-        }
-        cache.collect();
-        return;
-    }
     for i in (0..cache.entries.len()).rev() {
         if cache.entries[i].preloads & (1 << index) != 0 {
             cache.remove(i);
@@ -896,7 +907,7 @@ pub(super) fn observe(shared: &Arc<Shared>, request: &mut ibex2::stdlib::fetch::
             if unsafe_method(method) {
                 if let Some(shared) = shared.upgrade() {
                     if let Some(cache) = shared.state.lock().unwrap().cache.as_mut() {
-                        invalidate_head(cache, url, status, headers.entries(), None);
+                        invalidate_head(cache, url, status, headers.entries());
                     }
                     #[cfg(test)]
                     shared.ready.notify_all();

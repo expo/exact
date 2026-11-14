@@ -303,13 +303,7 @@ fn start_indices(
                 move |method, url, status, headers| {
                     if cache::unsafe_method(method) {
                         update(&destination, |cache| {
-                            cache::invalidate_head(
-                                cache,
-                                url,
-                                status,
-                                headers.entries(),
-                                Some((i, generation)),
-                            )
+                            cache::invalidate_preload_head(cache, url, status, headers.entries())
                         });
                     }
                 },
