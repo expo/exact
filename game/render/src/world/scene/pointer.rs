@@ -99,10 +99,7 @@ impl CameraPointer {
                 // before that tick and apply the same limits.
                 let ticked = pan.translation(pan.delta);
                 let ticked = match bounds {
-                    Some([min, max]) => {
-                        let before = camera.position - tick_move * alpha;
-                        (before + ticked).clamp(min, max) - before
-                    }
+                    Some(bounds) => limited(camera.position - tick_move * alpha, ticked, bounds),
                     None => ticked,
                 };
                 pan.translation(sample.position - pan.position) + ticked * undrawn
@@ -117,10 +114,8 @@ impl CameraPointer {
         // Only the frame's own translation is limited: a camera with no
         // unshown pointer motion is drawn where its tick put it.
         let translation = match bounds {
-            Some([min, max]) if translation != Vec3::ZERO => {
-                (camera.position + translation).clamp(min, max) - camera.position
-            }
-            _ => translation,
+            Some(bounds) => limited(camera.position, translation, bounds),
+            None => translation,
         };
         if translation == Vec3::ZERO && turn == glam::Quat::IDENTITY {
             return;
@@ -149,4 +144,11 @@ impl CameraPointer {
             }
         }
     }
+}
+
+/// `step` from `from`, shortened on each axis so it ends inside `bounds`.
+/// The limits only shorten a pan's own move: an axis with no move stays, and
+/// a camera already outside is not pulled in (nor pushed further out).
+fn limited(from: Vec3, step: Vec3, [min, max]: [Vec3; 2]) -> Vec3 {
+    ((from + step).clamp(min, max) - from).clamp(step.min(Vec3::ZERO), step.max(Vec3::ZERO))
 }

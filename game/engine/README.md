@@ -530,8 +530,10 @@ direction, so a separately stored target must receive that same tick translation
 Set optional `bounds: Some([min, max])` to clamp the presented camera position
 in world space to the same limits the tick applies. The default `None` keeps
 today's unbounded translation. Infinite limits leave an axis unbounded; NaN or
-reversed bounds are ignored. Only the frame's own translation is limited: a frame
-with no unshown pointer motion draws the camera where its tick put it. Children
+reversed bounds are ignored. Only the frame's own translation is limited, and the
+limits only shorten it on each axis: a frame with no unshown pointer motion draws
+the camera where its tick put it, and a camera already outside the limits is not
+pulled in. Children
 receive the camera's clamped translation. Between ticks, the part of the latest
 tick not yet drawn is limited the same way, so a tick that stopped at a limit
 does not hold the drawn camera there when a newer sample turns back. This

@@ -448,6 +448,65 @@ fn pointer_pan_bounds_leave_a_camera_with_no_unshown_motion_where_its_tick_put_i
         current_contact: true,
     }));
     assert_eq!(feed.frame(&w, 1., 1.).camera_position, Vec3::X * 5.);
+
+    // With interpolation history, at fractional alpha, across a tick: the
+    // tick's own pan contribution is zero too, so nothing clamps the camera.
+    let mut sim = Sim::<OutsideBounds>::new(()).unwrap();
+    let mut feed = Feed::default();
+    let mut writes = Recording::default();
+    feed.feed_to(sim.world(), &mut writes).unwrap();
+    sim.advance(0., Clock::Seekable);
+    let down = |sim: &mut Sim<OutsideBounds>, phase, at_ms| {
+        sim.input(InputEvent::Pointer {
+            id: 1,
+            phase,
+            x: 0.,
+            y: 0.,
+            dx: 0.,
+            dy: 0.,
+            buttons: 1,
+            at_ms,
+            player: 0,
+        });
+    };
+    down(&mut sim, PointerPhase::Down, 0.);
+    down(&mut sim, PointerPhase::Move, 1.);
+    for until in [12.5, 20.8] {
+        sim.advance_with(until, Clock::Seekable, |w, left| {
+            if left < 2 {
+                feed.feed_to(w, &mut writes).unwrap();
+            }
+        });
+        assert!((sim.alpha() - 0.5).abs() < 0.01, "{}", sim.alpha());
+        let sample = sim.frame_pointer(feed.pointer_pan().unwrap()).unwrap();
+        feed.pointer_sample(Some(sample));
+        let shown = feed.frame(sim.world(), sim.alpha(), 1.).camera_position.x;
+        assert_eq!(shown, 5., "at {until} ms");
+    }
+}
+/// `Panning` with its camera at x=5, outside the bounds it presents.
+struct OutsideBounds;
+impl Game for OutsideBounds {
+    const ID: &'static str = "pointer-pan-outside";
+    const HZ: u32 = 120;
+    type Args = ();
+    fn setup(w: &mut World, args: &()) {
+        Panning::setup(w, args);
+        w.get_mut::<Transform>("camera").unwrap().position.x = 5.;
+    }
+    fn tick(w: &mut World, input: &Input, args: &()) {
+        Panning::tick(w, input, args);
+    }
+    fn present(p: &mut Present<'_>, args: &()) {
+        Panning::present(p, args);
+        let camera = p.named("camera").unwrap();
+        let mut pan = *p.get::<PointerPan>(camera).unwrap();
+        pan.bounds = Some([
+            Vec3::new(-2., f32::NEG_INFINITY, f32::NEG_INFINITY),
+            Vec3::new(2., f32::INFINITY, f32::INFINITY),
+        ]);
+        p.insert(camera, pan);
+    }
 }
 
 const EDGE: f32 = 1.;
