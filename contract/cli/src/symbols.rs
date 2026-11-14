@@ -379,20 +379,26 @@ fn symbols(path: &Path, name: Option<&str>, editor: bool) -> Result<String, Part
         }
     });
     let typed = checked.is_ok();
+    let mut left_out = Vec::new();
     let ((shapes, components, expanded), errors) = match checked {
         Ok(checked) => (checked, refused.join(Ok(())).err().unwrap_or_default()),
         // A refused check's inferences may be wrong where it refused; its
         // declarations' types are checked before anything is inferred.
-        Err(all) => (
-            (partial::declared(&file, &tables), Vec::new(), None),
-            refused.join::<()>(Err(all)).unwrap_err(),
-        ),
+        Err(all) => {
+            let (shapes, out) = partial::declared(&file, &tables);
+            left_out = out;
+            (
+                (shapes, Vec::new(), None),
+                refused.join::<()>(Err(all)).unwrap_err(),
+            )
+        }
     };
     let types = Types { shapes, components };
     let mut r = Resolver {
         file: &file,
         types: &types,
         typed,
+        left_out,
         whole: errors.is_empty(),
         graph: Graph {
             hidden: partial::shadows(&file, &refused.hidden),
@@ -434,6 +440,9 @@ struct Resolver<'a> {
     /// Whether the type check accepted the program: `types` holds only its
     /// declarations' otherwise.
     typed: bool,
+    /// Where each shape or function the check left out is declared: `types`
+    /// holds another declaration of its name, or none.
+    left_out: Vec<Span>,
     /// Whether nothing was refused.
     whole: bool,
     /// The component that is a members file's block, read on its own.
@@ -460,12 +469,15 @@ impl<'a> Resolver<'a> {
             let at = self
                 .graph
                 .define("shape", &shape.name, names.name(shape.span), None, None);
-            self.graph.definitions[at].ty = self.shape_typescript(&shape.name);
+            let checked = !self.left_out.contains(&shape.span);
+            if checked {
+                self.graph.definitions[at].ty = self.shape_typescript(&shape.name);
+            }
             for field in &shape.fields {
                 let at =
                     (self.graph).define("field", &field.name, field.span, None, Some(&shape.name));
                 let types = self.types;
-                let ty = types.shapes.field(&shape.name, &field.name);
+                let ty = (types.shapes.field(&shape.name, &field.name)).filter(|_| checked);
                 self.graph.definitions[at].ty = ty.and_then(|(_, ty)| self.typescript(ty, None));
             }
         }
@@ -499,7 +511,9 @@ impl<'a> Resolver<'a> {
             let at = self
                 .graph
                 .define("fn", &f.name, names.name(f.span), None, None);
-            self.graph.definitions[at].ty = self.fn_typescript(&f.name, &f.params);
+            if !self.left_out.contains(&f.span) {
+                self.graph.definitions[at].ty = self.fn_typescript(&f.name, &f.params);
+            }
         }
         for (ci, c) in self.file.components.iter().enumerate() {
             if self.members != Some(ci) {
