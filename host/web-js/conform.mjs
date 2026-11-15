@@ -868,7 +868,7 @@ async function activation(t, report, fail, url, browser) {
     page.searchParams.delete('agent');
     await ev(`location.href = ${JSON.stringify(page.href)}`).catch(() => {});
     const read = () => ev(`(() => { const c = document.querySelector('script[type="application/vnd.exact.checkpoint"]'), r = document.getElementById('exact-root');
-      return c && document.readyState === 'complete' && !/[?&]agent=/.test(location.search) ? { policy: c.dataset.activate, boot: r?.dataset.bootMs == null ? null : Number(r.dataset.bootMs),
+      return c && document.readyState === 'complete' && !['', '1'].includes(new URLSearchParams(location.search).get('agent')) ? { policy: c.dataset.activate, boot: r?.dataset.bootMs == null ? null : Number(r.dataset.bootMs),
         paint: performance.getEntriesByType('paint')[0]?.startTime ?? null, load: performance.getEntriesByType('navigation')[0]?.loadEventStart ?? null,
         modules: document.querySelectorAll('script[type=module]').length, preload: !!document.head.querySelector('link[rel=modulepreload][href="' + c.dataset.entry + '"]'),
         fetched: performance.getEntriesByType('resource').filter(e => e.initiatorType !== 'fetch' && e.name.endsWith('.js')).length,

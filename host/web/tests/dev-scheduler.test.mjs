@@ -313,7 +313,7 @@ test('the wasm page sends its build-channel reports one at a time, in order, and
   let stream, delivered=[], held=new Map();
   const slow={'pin.contrast':150};
   const context={TextEncoder,TextDecoder,URL,URLSearchParams,AbortController,AbortSignal,Response,setTimeout,clearTimeout,performance,crypto,Event,
-    console:{error(){}},location:{origin:'http://localhost',href:'http://localhost/',search:'?agent=1'},
+    console:{error(){}},location:{origin:'http://localhost',href:'http://localhost/?agent=1',search:'?agent=1'},
     EventSource:class {constructor(){stream=this;}},
     addEventListener(){},dispatchEvent(){},sessionStorage:{getItem:()=>null,setItem(){},removeItem(){}},
     document:{body:{appendChild:el=>el},head:{appendChild:el=>el},createElement:()=>({remove(){}}),getElementById:()=>null,querySelector:()=>null,

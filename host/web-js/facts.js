@@ -66,7 +66,7 @@ const AGENT_ADMITTED = true;
 // whichever of them the plan reads.
 let pageFacts, pageReaders = {}, pageFreezes = false, pageWatching = false, viewportChanged = () => {}, pageChanged = () => {};
 const reporter = () => pageFacts !== undefined ? pageFacts : typeof document === "object" && document.createElement
-  ? (pageFacts = pageReporter(AGENT_ADMITTED && typeof location === "object" && new URLSearchParams(location.search).has("agent"))) : null;
+  ? (pageFacts = pageReporter(AGENT_ADMITTED && typeof location === "object" && ["", "1"].includes(new URL(globalThis.performance?.getEntriesByType?.("navigation")[0]?.name ?? location.href).searchParams.get("agent")))) : null;
 function shareReporter() {
   const facts = reporter();
   if (!facts) return;

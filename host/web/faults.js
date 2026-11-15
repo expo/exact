@@ -6,7 +6,7 @@
 // is the page's, on `globalThis`, because the builds copy these modules; it
 // is armed by the carrier's startup script and its `faults`
 // operation, and a production bake has neither.
-const AGENT_ADMITTED = true; // false in a production bake (host/web/build.mjs, host/web-js/build.mjs)
+const AGENT_ADMITTED = true; // false in a release, as the release gate writes it (agent-gate.mjs, LLP 1069.007 D2)
 
 export function fixtureResponse(response) {
   if (!response || !Number.isInteger(response.status) || response.status < 200 || response.status > 599 || [301, 302, 303, 307, 308].includes(response.status)) throw new Error('answer fetch: status must be 200 through 599, excluding redirects');
@@ -78,9 +78,8 @@ export function parseFaults(spec) {
 }
 
 function launchTable() {
-  if (!AGENT_ADMITTED) return [];
   const params = new URL(globalThis.performance?.getEntriesByType?.('navigation')[0]?.name ?? globalThis.location?.href ?? 'http://x/').searchParams;
-  if (!params.has('agent')) return [];
+  if (!(AGENT_ADMITTED && ['', '1'].includes(params.get('agent')))) return [];
   if (!params.has('failFetch')) return [];
   const spec = globalThis.__exactLaunchFaults;
   if (typeof spec !== 'string' || !spec) throw new Error('fetch fixtures are missing from the browser carrier');

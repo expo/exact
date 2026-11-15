@@ -461,7 +461,7 @@ async function openWebUnlocked({
       if (msg.sessionId !== sessionId || msg.method !== 'Fetch.requestPaused') return;
       const { requestId, request, frameId } = msg.params, url = new URL(request.url);
       const carried = faultHeader && frameId === frameTree.frame.id && url.origin === page.origin
-        && url.searchParams.has('agent') && url.searchParams.get('failFetch') === '1';
+        && ['', '1'].includes(url.searchParams.get('agent')) && url.searchParams.get('failFetch') === '1';
       const headers = Object.entries(request.headers).filter(([name]) => name.toLowerCase() !== 'x-exact-faults');
       if (carried) headers.push(['X-Exact-Faults', faultHeader]);
       call('Fetch.continueRequest', { requestId, headers: headers.map(([name, value]) => ({ name, value })) })

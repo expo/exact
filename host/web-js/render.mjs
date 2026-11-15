@@ -444,7 +444,7 @@ export function pageServer(dist, render = renderer(dist), log = console.log) {
     // Laid out for the reader's viewport (LLP 1048.006), and kept per viewport.
     const viewport = viewportOf(header), key = `${location} ${JSON.stringify(viewport)}`;
     const query = new URL(location, 'http://render.invalid').searchParams;
-    const driven = render.production === false && query.has('agent') && query.get('failFetch') === '1';
+    const driven = render.production === false && ['', '1'].includes(query.get('agent')) && query.get('failFetch') === '1';
     let faults;
     if (driven) {
       const encoded = header('x-exact-faults') ?? '', bytes = Buffer.from(encoded, 'base64');

@@ -2093,6 +2093,8 @@ read once by the driver at launch, for a drive against a live backend on real ti
 `EXACT_AGENT_SEED`, `EXACT_AGENT_LOCALE`, `EXACT_AGENT_TIME_ZONE` and `EXACT_AGENT_EPOCH`
 (milliseconds), and `EXACT_AGENT_FORMAT_LOCALE` when given; direct agent launches can set these too. Web agent pages accept
 `?agent=1&seed=42&locale=fr-CA&timeZone=America/Toronto&epoch=1790000000000` (and `&formatLocale=`).
+`agent` alone, or `agent=` with its empty value, asks for agent mode as `agent=1` does; any other value, `agent=0`
+among them, asks for none, and a production build ignores the parameter (LLP 1069.007 D2).
 The driver supplies its own defaults unless an option (or `open({env: ...})`)
 overrides them. `clock +N` moves the date (`epochAtZero + performanceNow()`); `state.time`
 reports all five facts. Before the first host report, the runner

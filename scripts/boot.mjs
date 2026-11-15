@@ -50,7 +50,7 @@ const ALLOWED = new Set([...Object.keys(MODULES), ...Object.values(MODULES).flat
 // app logic. Pinned by hash and byte-capped; changing it means changing this
 // hash, in review.
 const CAPTURE = { path: 'host/web/capture.js', maxBytes: 1536,
-  sha256: 'd86d9114b5a227581aa9deb4391907ab96df37f477c0277e327fbece1392a40e' };
+  sha256: 'adbe55dd47b584fee60950d44247a4c91fe2165f34e5731e3633a328c6f8f21c' };
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const rootPath = path => relative(ROOT, path).replaceAll('\\', '/');
 

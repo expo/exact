@@ -20,8 +20,10 @@ host.typeControl = undefined;
 host.glidesSettled = undefined;
 host.scrollsSeen = undefined;
 host.agentInputLoading = undefined;
-export const AGENT_ADMITTED = true;
-// false in a production bake: host/web/build.mjs rewrites this line (LLP 1069.007 D2)
+export const AGENT_ADMITTED = true; // false in a release, as the release gate writes it (agent-gate.mjs, LLP 1069.007 D2)
+// The page's launch URL, its navigation's, which history entries the app pushes leave as it was (Navigation Timing):
+// agent mode and a drive's facts are the launch's (LLP 1069.007 D2)
+const launchURL = () => new URL(globalThis.performance?.getEntriesByType?.("navigation")[0]?.name ?? location.href);
 host.httpModule = undefined;
 host.pickerModule = undefined;
 host.documentsModule = undefined;
@@ -211,8 +213,8 @@ export const dataImports = {
     crypto.getRandomValues(new Uint8Array(host.wasm.memory.buffer, ptr, len));
   },
   agent_seed: () => {
-    const url = new URL(location.href), seed = Number(url.searchParams.get("seed") ?? 1);
-    if (!url.searchParams.has("agent") || ![
+    const url = launchURL(), seed = Number(url.searchParams.get("seed") ?? 1);
+    if (!(AGENT_ADMITTED && ["", "1"].includes(url.searchParams.get("agent"))) || ![
       "localhost",
       "127.0.0.1",
       "[::1]"
@@ -296,7 +298,7 @@ export function moduleCall(op, ptr, len) {
 export const encoder = new TextEncoder();
 export const decoder = new TextDecoder();
 export const t0 = performance.now();
-export const agentMode = AGENT_ADMITTED && new URL(location.href).searchParams.has("agent"), agentKeepsStore = !agentMode || new URL(location.href).searchParams.has("storage"), pendingStore = pageStore(loadAfterPaint);
+export const agentMode = AGENT_ADMITTED && ["", "1"].includes(launchURL().searchParams.get("agent")), agentKeepsStore = !agentMode || launchURL().searchParams.has("storage"), pendingStore = pageStore(loadAfterPaint);
 // `--storage` on the page (platformer R10); a nameless drive stays in memory
 // The driver's fetch faults (LLP 1103, faults.js, loaded with the first request): an injected failure's journal line is the runner's.
 if (agentMode) {

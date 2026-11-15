@@ -9,16 +9,24 @@ import { renderedPages } from '../web-js/rendered-pages.mjs';
 // route, and every History entry keeps them, so a reload relaunches with them. `formatLocale` (#952) among them.
 // One module serves both web hosts: the wasm glue and the JS target (rt.js) navigate through it.
 const DRIVE = 'agent=1&seed=3&locale=en-US&formatLocale=en-KR&timeZone=UTC';
+// The page's navigation entry names the URL the document launched at (Navigation Timing)
+const launchedAt = url => ({ getEntriesByType: type => type === 'navigation' ? [{ name: url }] : [] });
+// A platform at `path` in a document launched at `launch`
+const at = (path, launch = path) => ({ location: new URL(path, 'http://127.0.0.1:9'), performance: launchedAt(new URL(launch, 'http://127.0.0.1:9').href) });
 
 test('a drive\'s formatLocale stays out of the launch route', () => {
-  expect(launchLocation({ location: { pathname: '/detail/3', search: `?${DRIVE}&q=a` } })).toBe('/detail/3?q=a');
+  expect(launchLocation(at(`/detail/3?${DRIVE}&q=a`))).toBe('/detail/3?q=a');
   // An ordinary visit's own query is the route's.
-  expect(launchLocation({ location: { pathname: '/', search: '?formatLocale=x' } })).toBe('/?formatLocale=x');
+  expect(launchLocation(at('/?formatLocale=x'))).toBe('/?formatLocale=x');
+  // Agent mode is the launch's: a location Back returns to keeps its own `agent=1` in an ordinary launch, and a drive's
+  // location leaves the drive's parameters out
+  expect(launchLocation(at('/one?agent=1&locale=fr&keep=yes', '/'))).toBe('/one?agent=1&locale=fr&keep=yes');
+  expect(launchLocation(at(`/one?${DRIVE}&keep=yes`, `/?${DRIVE}`))).toBe('/one?keep=yes');
 });
 
 test('the launch keeps its fragment, after the query a drive leaves out (LLP 1153 D5)', () => {
-  expect(launchLocation({ location: { pathname: '/item/7', search: '', hash: '#moves' } })).toBe('/item/7#moves');
-  expect(launchLocation({ location: { pathname: '/item/7', search: `?${DRIVE}&q=a`, hash: '#moves' } })).toBe('/item/7?q=a#moves');
+  expect(launchLocation(at('/item/7#moves'))).toBe('/item/7#moves');
+  expect(launchLocation(at(`/item/7?${DRIVE}&q=a#moves`))).toBe('/item/7?q=a#moves');
   // A history entry's URL carries the fragment after the drive's facts, as the browser writes it.
   const saved = Object.getOwnPropertyDescriptor(globalThis, 'location');
   Object.defineProperty(globalThis, 'location', { configurable: true, value: { origin: 'http://127.0.0.1:9', href: `http://127.0.0.1:9/?${DRIVE}` } });
@@ -54,7 +62,7 @@ test('every History entry keeps a drive\'s formatLocale, so navigation and reloa
     expect(next.pathname).toBe('/next');
     expect(Object.fromEntries(next.searchParams)).toEqual({ page: '2', agent: '1', seed: '3', locale: 'en-US', formatLocale: 'en-KR', timeZone: 'UTC' });
     // Reloaded there, the launch route is the app's alone again.
-    expect(launchLocation({ location: { pathname: next.pathname, search: next.search } })).toBe('/next?page=2');
+    expect(launchLocation(at(next.pathname + next.search))).toBe('/next?page=2');
   } finally { if (saved) Object.defineProperty(globalThis, 'location', saved); else delete globalThis.location; }
 });
 
@@ -71,11 +79,14 @@ test('a History entry keeps a route whose first segment is empty, and a reload l
   } finally { if (saved) Object.defineProperty(globalThis, 'location', saved); else delete globalThis.location; }
 });
 
-test('a reload\'s launch has the visits Back returns to without loading a page, each as the launch reads its own', () => {
+test('a reload\'s launch has the visits Back returns to without loading a page, each as this launch reads it', () => {
   const entry = (path, sameDocument = true) => ({ url: `http://127.0.0.1:9${path}`, sameDocument });
-  const navigation = (entries, index) => ({ navigation: { entries: () => entries, currentEntry: { index } } });
+  // After a reload, the current entry is the URL the document launched at
+  const navigation = (entries, index) => ({ navigation: { entries: () => entries, currentEntry: { index } }, performance: launchedAt(entries[index]?.url) });
   // An entry of another document, which Back loads, and those before it are no visit of this launch.
-  expect(launchVisits(navigation([entry('/elsewhere', false), entry(`/?${DRIVE}`), entry('/settings#top'), entry('/preview')], 3))).toEqual(['/', '/settings#top']);
+  expect(launchVisits(navigation([entry('/elsewhere', false), entry(`/?${DRIVE}`), entry(`/settings?${DRIVE}#top`), entry(`/preview?${DRIVE}`)], 3))).toEqual(['/', '/settings#top']);
+  // Agent mode is the launch's: in an ordinary launch a visit's own `agent` is the app's query, kept as it is
+  expect(launchVisits(navigation([entry('/'), entry('/next?agent=1&locale=fr'), entry('/end')], 2))).toEqual(['/', '/next?agent=1&locale=fr']);
   expect(launchVisits(navigation([entry('/')], 0))).toEqual([]);
   expect(launchVisits({})).toEqual([]);
 });

@@ -20,7 +20,7 @@ test.each([false, true])('built wasm host admits agent parameters only in develo
   try {
     await buildHostGlue(ROOT, { production, out: root });
     const code = readFileSync(join(root, 'glue.js'), 'utf8');
-    const declarations = glueDeclarations(code, ['AGENT_ADMITTED', 'agentMode']);
+    const declarations = glueDeclarations(code, ['AGENT_ADMITTED', 'launchURL', 'agentMode']);
     const read = new Function('location', `${declarations}\nreturn agentMode;`);
     expect(read({ href: 'https://example.test/?agent' })).toBe(!production);
     const navigation = await import(join(root, 'navigation.js'));

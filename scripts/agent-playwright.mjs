@@ -296,7 +296,7 @@ export async function openPlaywrightWeb({ browser: name, plan, world, size, url:
     const carryFaults = async route => {
       const request = route.request(), url = new URL(request.url());
       const carried = faultHeader && request.isNavigationRequest() && request.frame() === page.mainFrame()
-        && url.origin === new URL(hosted.url).origin && url.searchParams.has('agent') && url.searchParams.get('failFetch') === '1';
+        && url.origin === new URL(hosted.url).origin && ['', '1'].includes(url.searchParams.get('agent')) && url.searchParams.get('failFetch') === '1';
       const headers = { ...request.headers() };
       delete headers['x-exact-faults'];
       if (carried) headers['x-exact-faults'] = faultHeader;

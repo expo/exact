@@ -10,7 +10,7 @@ import { bundleHostModule } from './glue.mjs';
 test('a viewport-only plan reads the tier the agent prefers', async () => {
   const media = new Map();
   Object.assign(globalThis, {
-    location: { search: '?agent' },
+    location: { search: '?agent', href: 'http://127.0.0.1/?agent' },
     document: { createElement: () => ({}), addEventListener() {}, documentElement: { style: { setProperty() {} } } },
     addEventListener() {}, matchMedia: query => ({ matches: false,
       addEventListener: (_, f) => media.set(query, f), removeEventListener: () => media.delete(query) }),

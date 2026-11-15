@@ -17,10 +17,10 @@ export function time() {
 }
 // A release build never enters agent mode (LLP 1069.007 D2): its build writes this false, as the wasm host's files
 // are gated.
-export const AGENT_ADMITTED = true;
+const AGENT_ADMITTED = true;
 /** Whether the agent drives this page (or a render does): the clock is then the driver's. */
 export const agentMode = () =>
-  !!globalThis.__exactRender || (AGENT_ADMITTED && new URLSearchParams(location.search).has('agent'));
+  !!globalThis.__exactRender || (AGENT_ADMITTED && ['', '1'].includes(new URL(globalThis.performance?.getEntriesByType?.('navigation')[0]?.name ?? location.href).searchParams.get('agent')));
 let Order = 0;
 export const order = () => Order++,
   // every task, for the agent's `state.tasks`

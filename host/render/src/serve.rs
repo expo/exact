@@ -1173,9 +1173,17 @@ fn driven(request: &Request, shared: &Shared) -> bool {
         .split_once('?')
         .map_or("", |(_, query)| query);
     !shared.delivery.production
-        && url::form_urlencoded::parse(query.as_bytes()).any(|(key, _)| key == "agent")
+        && asks_agent(query)
         && url::form_urlencoded::parse(query.as_bytes())
             .any(|(key, value)| key == "failFetch" && value == "1")
+}
+
+/// Whether a query asks for agent mode: its first `agent`, as
+/// `URLSearchParams.get` reads it, is empty or `1` (LLP 1069.007 D2).
+fn asks_agent(query: &str) -> bool {
+    url::form_urlencoded::parse(query.as_bytes())
+        .find(|(key, _)| key == "agent")
+        .is_some_and(|(_, value)| value.is_empty() || value == "1")
 }
 
 fn document<D: DataSource + 'static>(

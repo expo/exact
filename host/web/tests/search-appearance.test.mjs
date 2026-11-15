@@ -70,7 +70,7 @@ beforeAll(async () => {
       else serveStatic(resolve(wasmDist), req, res);
     });
     await new Promise(ok => wasmServer.listen(0, '127.0.0.1', ok));
-    wasmURL = `http://127.0.0.1:${wasmServer.address().port}/?agent=search-appearance`;
+    wasmURL = `http://127.0.0.1:${wasmServer.address().port}/?agent`;
   }
 }, 120000);
 afterAll(async () => {

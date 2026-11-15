@@ -2,6 +2,23 @@
 use super::*;
 
 #[test]
+fn a_query_asks_for_agent_mode_with_agent_alone_or_agent_1() {
+    for (query, asks) in [
+        ("", false),
+        ("agent", true),
+        ("agent=", true),
+        ("agent=1", true),
+        ("agent=0", false),
+        ("agent=true", false),
+        ("failFetch=1&agent", true),
+        ("agent=0&agent=1", false),
+        ("agent=1&agent=0", true),
+    ] {
+        assert_eq!(asks_agent(query), asks, "{query}");
+    }
+}
+
+#[test]
 fn a_socket_grant_is_a_connect_source() {
     let policy = csp(
         "net.fetch https://api.test\nnet.websocket wss://jetstream.test\nfs.read /x",

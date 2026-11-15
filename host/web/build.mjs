@@ -25,7 +25,8 @@ import { generatedInputFiles } from '../../game/inputs.mjs';
 // Developer builds bake development trust; EXACT_UPDATE_TRUST=production
 // requires signing keys, and the deploy verb always selects production.
 import { grantOrigins } from './navigation/grant-origins.js';
-import { buildHostGlue, gateAgent, modulePrelude } from '../web-js/glue.mjs';
+import { buildHostGlue, bundleModuleGlue, modulePrelude } from '../web-js/glue.mjs';
+import { gateAgent } from '../web-js/agent-gate.mjs';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -245,7 +246,7 @@ function outPath(given) {
   return path;
 }
 // After resolveApp, which names `bun install` when the packages are missing.
-const [{ rolldown }, { minifySync }] = await Promise.all([import('rolldown'), import('rolldown/experimental')]);
+const { minifySync } = await import('rolldown/experimental');
 // A game's web build is the wasm target (Charlie, 2026-09-29: "Game runtime
 // is fine to be on wasm"; LLP 1071 §8). For an app the JS target is the web
 // build, and what it refuses is an error; `--wasm` is internal (below).
@@ -451,7 +452,8 @@ function copyHostFiles(group) {
       : readFileSync(source.startsWith('target/web-host/') ? resolve(hostDir, name) : resolve(root, source), 'utf8');
     // Production ships executable code, without source comments and long
     // local names. Keep exports and property names intact across modules.
-    const result = minifySync(name, production ? gateAgent(code, name) : code, { module: !['module-prelude.js', 'module-binary.js', 'audio-session.js'].includes(name) });
+    const module = !['module-prelude.js', 'module-binary.js', 'audio-session.js'].includes(name);
+    const result = minifySync(name, production ? gateAgent(code, name, { sourceType: module ? 'module' : 'script' }) : code, { module });
     if (result.errors.length) throw new Error(`${name}: ${JSON.stringify(result.errors)}`);
     writeFileSync(resolve(stage, name), result.code);
   }
@@ -519,14 +521,8 @@ if (bakeOnly ? !!moduleInput : typeof exports.exact_module_artifact === 'functio
   pairedModule = Object.fromEntries(Object.entries(moduleCards(files, app.id)).map(([key, card]) => [key, { ...card, url: './' + MODULE_FILES[key] }]));
   writeFileSync(resolve(stage, 'app.hbc'), bytecode);
   copyHostFiles('module');
-  // Remove the module-glue → storage → fs/sqlite request chain's middle
-  // step. Keep the stateful adapters as shared modules: Rust requests also
-  // import them, and must share the same filesystem mutation queues, and
-  // the pickers' handles live in the page's one documents-glue.js.
-  const bundle = await rolldown({ input: resolve(root, 'host/web/module-glue.js'), platform: 'browser',
-    external: ['./storage-fs.js', './storage-sqlite.js', './documents-glue.js'], plugins: [{ name: 'agent-gate', transform: (code, id) => ({ code: gateAgent(code, id) }) }] });
-  try { await bundle.write({ file: resolve(stage, 'module-glue.js'), format: 'es', minify: true }); }
-  finally { await bundle.close(); }
+  // Remove the module-glue → storage → fs/sqlite request chain's middle step.
+  await bundleModuleGlue(root, resolve(stage, 'module-glue.js'), { production });
 }
 const bakedReceipt = readBake(app, 'web', 'wasm32-unknown-unknown', buildEnv.EXACT_BAKE_OUTPUT);
 writeFileSync(resolve(stage, 'app.version.json'), versionFile(bakedReceipt.embedded));
@@ -710,7 +706,8 @@ let authNote = '';
 if (authReach.sessions) {
   mkdirSync(resolve(stage, '.exact/auth'), { recursive: true });
   copyFileSync(resolve(root, 'host/web/auth-callback.html'), resolve(stage, '.exact/auth/callback'));
-  copyFileSync(resolve(root, 'host/web/auth-callback.js'), resolve(stage, '.exact/auth/callback.js'));
+  const callback = readFileSync(resolve(root, 'host/web/auth-callback.js'), 'utf8');
+  writeFileSync(resolve(stage, '.exact/auth/callback.js'), production ? gateAgent(callback, 'auth-callback.js', { sourceType: 'script' }) : callback);
   const docs = authClientMetadata(app, authReach.callbacks ?? []);
   for (const [name, doc] of Object.entries(docs)) writeFileSync(resolve(stage, `.exact/auth/${name}.json`), JSON.stringify(doc, null, 2) + '\n');
   authNote = `; auth: callback page${Object.keys(docs).length ? `, client metadata (${Object.keys(docs).join(', ')})` : ' (no origin: no client metadata)'}`;

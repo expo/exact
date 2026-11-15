@@ -72,8 +72,6 @@ function fixture(plan, blockDocument = false) {
   }
   globalThis.fixtureBoot = crypto.randomUUID();
   globalThis.fixturePlan = plan;
-  const agentURL = new URL(location.href); agentURL.searchParams.set('agent', '1');
-  history.replaceState(null, '', agentURL);
   const instantiate = WebAssembly.instantiateStreaming;
   let wrapped = false; // the app's own instantiation; its staged capabilities (LLP 1047.000) load as they are
   WebAssembly.instantiateStreaming = async (...args) => {
@@ -101,13 +99,12 @@ function fixture(plan, blockDocument = false) {
     } } } };
   };
 }
-// The JS target's fixture uses real agent query parameters, as the wasm
-// fixture does, and the same History recorders.
+// The JS target's fixture keeps the same History recorders as the wasm
+// fixture; each case opens its page with `?agent=1`, as a drive does, since
+// agent mode is the launch's (Navigation Timing), not a URL rewritten after it.
 function jsFixture(blockDocument = false) {
   if (blockDocument) { const image = new Image(); image.hidden = true; image.src = '/__test-document.svg'; document.documentElement.append(image); }
   globalThis.fixtureBoot = crypto.randomUUID();
-  const agentURL = new URL(location.href); agentURL.searchParams.set('agent', '1');
-  history.replaceState(null, '', agentURL);
   globalThis.historyCalls = [];
   for (const name of ['pushState', 'replaceState', 'go']) {
     const original = history[name].bind(history);
@@ -868,7 +865,7 @@ try {
       writeFileSync(dist + '/index.html', page.replace('<script type="module" src="./glue.js"></script>',
         `<script>(${fixture})(${JSON.stringify(plan)})</script><script type="module" src="./glue.js"></script>`));
     }
-    await call('Page.navigate', {url:url+'/'});
+    await call('Page.navigate', {url:url+'/?agent=1'});
     await until(`globalThis.exact?.ready?.then(()=>!!document.querySelector('[data-testid="first"]'))`);
     await evaluate('exact.ready');
     if (js) await evaluate(`(exact.agent = exact.agentSettled, true)`);

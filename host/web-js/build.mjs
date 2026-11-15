@@ -34,7 +34,8 @@ import { copyGpuCache } from './gpu-cache.mjs';
 import { absent, analyze, planRules, rootOf, tokens as pageTokens, written } from './page-style.mjs';
 import { writers } from './writers.mjs';
 import { namesStream } from './stream-names.mjs';
-import { bundleHostModule, gateAgent, localImports, stageHostGlue } from './glue.mjs';
+import { bundleHostModule, localImports, stageHostGlue } from './glue.mjs';
+import { gateAgent } from './agent-gate.mjs';
 import { contentName, contentNames } from './content-names.mjs';
 import { buildEditor, buildFlow, buildMarkdown, buildModule, buildMotion, moduleSourceDirs, undeclaredRustData, fresh, leafTaken, moduleGrants, webCompiler, inspectHooked, withInspectHooks, withoutDev, withRuntimeStamp } from './module.mjs';
 import { appDigest, developmentStore } from '../../scripts/agent-launch.mjs';
@@ -165,6 +166,9 @@ for (const [i, [a, aDir]] of tsMounts.entries()) for (const [b, bDir] of tsMount
 }
 const appRoots = [...new Set([resolve(appDir), realpathSync(appDir)])];
 const within = (path, dir) => path === dir || path.startsWith(dir + sep);
+// A classic host script the build copies as it is (`audio-session.js`, `auth-callback.js`), gated in a release as the
+// `.gen` loop gates the rest (LLP 1069.007 D2)
+const hostCopy = path => production ? gateAgent(readFileSync(resolve(root, path), 'utf8'), basename(path), { sourceType: 'script' }) : readFileSync(resolve(root, path));
 // Where a file sits in the captured layout (the app at the root, each mount
 // under its name), and back: an import resolves there, from any importer.
 const logical = path => {
@@ -249,6 +253,9 @@ try { compiler = webCompiler(); } catch (error) { rustMissing(error); }
 const cargo = spawnSync(compiler.cmd, [...compiler.pre, 'js', input, '-o', gen, '--app', appDir, ...(production ? [] : ['--sites']), ...(devReload ? ['--dev-reload'] : [])], { cwd: root, stdio: checkOnly ? ['ignore', 'ignore', 'pipe'] : 'inherit', encoding: 'utf8', env: { ...compiler.env, EXACT_JS_GPU_SURFACES: (gpuSurfaces ?? []).join(',') } });
 if (cargo.status !== 0) { if (checkOnly) process.stderr.write(cargo.stderr ?? ''); process.exit(cargo.status ?? 1); }
 compiler.done();
+// The compiler's output is the app's own code (`app.js`, `names.js`), as are the copies made of it, but for a host
+// file it writes (`paint.js`); every other file the build puts in `.gen` is the host's
+const appFiles = new Set(readdirSync(gen).filter(f => f.endsWith('.js') && !existsSync(resolve(here, f)) && !existsSync(resolve(root, 'host/web', f))));
 const leaves = [['markdown', buildMarkdown, 'markdown.wasm'], ['motion', buildMotion, 'motion.wasm'], ['editor', buildEditor, 'markup-editor.wasm'], ['flow', buildFlow, 'textflow.wasm']]
   .filter(([flag]) => existsSync(resolve(gen, `${flag}.flag`)));
 if (!checkOnly || prerequisitesOnly) {
@@ -771,7 +778,7 @@ if (siteBase !== '/') {
 
 const grantNames = Object.keys(await import('../web/grant-admission.js'))
   .filter(name => !['isCloudMetadata', 'isLocalNetwork'].includes(name));
-writeFileSync(resolve(gen, 'grant-network.js'), await bundleHostModule(root, 'navigation/network.js'));
+writeFileSync(resolve(gen, 'grant-network.js'), await bundleHostModule(root, 'navigation/network.js', { production }));
 // A production page whose every grant set is empty (no TypeScript grant, no Rust module, no native module, no page
 // module, no declared source) admits nothing, and says so without the parser (LLP 1047.002 D3): each export of admission answers as it
 // does for the empty set the compiler normalized (`admission-data.js` holds the same one), and the parser is not
@@ -807,7 +814,10 @@ const emptyGrantAdmission = () => {
 // navigation.js (the environment and page observations) or names.js
 // (every slot's type) would otherwise ride in every page's entry module.
 cpSync(resolve(root, 'host/web/frame-messages.js'), resolve(gen, 'frame-messages.js'));
-for (const f of ['navigation.js', 'names.js']) cpSync(resolve(gen, f), resolve(gen, 'agent-' + f));
+for (const f of ['navigation.js', 'names.js']) {
+  cpSync(resolve(gen, f), resolve(gen, 'agent-' + f));
+  if (appFiles.has(f)) appFiles.add('agent-' + f);
+}
 writeFileSync(resolve(gen, 'agent.js'), localImports(readFileSync(resolve(gen, 'agent.js'), 'utf8').replace("from './names.js'", "from './agent-names.js'").replace("from './navigation.js'", "from './agent-navigation.js'")));
 if (siteBase !== '/' && auth) throw new Error('host.web.base: auth callbacks currently require /; remove the base or use an app without auth.session, auth.apple or auth.google');
 // A page whose modules never spell `exactStream` is built without the stream reader (LLP 1047.003 D5): its fetch
@@ -831,7 +841,7 @@ if (ts) writeFileSync(resolve(gen, 'ts-data.js'), (seamLazy ? "import './held-ho
   .replace('__AUTH_IMPORT__', auth ? "import { install as signIn } from './auth.js';" : '')
   .replace('__AUTH_INSTALL__', auth ? `signIn(${JSON.stringify(grants)}, () => asking);` : '')
   .replace("'__FETCH_MODULE__'", JSON.stringify(fetchRefused ? './ts-fetch-refused.js' : './ts-fetch.js')));
-writeFileSync(resolve(gen, 'grant-admission.js'), admitsNothing ? emptyGrantAdmission() : await bundleHostModule(root, 'grant-admission.js'));
+writeFileSync(resolve(gen, 'grant-admission.js'), admitsNothing ? emptyGrantAdmission() : await bundleHostModule(root, 'grant-admission.js', { production }));
 // With nothing admitted no request leaves the page's origin, so the driver's faults (LLP 1103), which fail a request
 // that would have gone out, have nothing to fail: `fetchWith` keeps its asset path and loses faults.js.
 // Likewise the local network's reach and redirect gates (address-space.js, LLP 1133.036 D6), which check a tool's, a
@@ -969,12 +979,15 @@ writeFileSync(resolve(gen, 'main-server.js'), [
   '};',
 ].join('\n'));
 cpSync(resolve(here, 'checkpoint.js'), resolve(gen, 'checkpoint.js'));
-// A release admits no agent mode (LLP 1069.007 D2): every file that reads
-// `?agent` declares AGENT_ADMITTED, written false here, as host/web/build.mjs
-// gates the wasm host's. Lazy host modules pass through the same gate.
+// A release admits no agent mode (LLP 1069.007 D2): every read of `?agent` is
+// guarded by an AGENT_ADMITTED its file declares, written false here, as
+// host/web/build.mjs gates the wasm host's. Lazy host modules pass through the
+// same gate. Every file but the app's (`appFiles`) is held to it, the entries
+// this build writes among them: the app's lookups of its own `agent` read no
+// query.
 if (production) for (const f of readdirSync(gen).filter(f => f.endsWith('.js'))) {
   const code = readFileSync(resolve(gen, f), 'utf8');
-  writeFileSync(resolve(gen, f), gateAgent(code, f));
+  writeFileSync(resolve(gen, f), gateAgent(code, f, { host: !appFiles.has(f) }));
 }
 // A development page's storage is its app's (LLP 1116.004 D8): every app the dev server serves
 // shares its origin, so the app directory's digest (agent-launch.mjs `appDigest`) keys its files,
@@ -1074,8 +1087,9 @@ async function lazyModules(roots) {
     if (!source) { planned.set(name, { bytes: null, names: [] }); continue; }
     const from = resolve(root, source), code = name.endsWith('.js') || name.endsWith('.mjs') ? readFileSync(from, 'utf8') : null;
     // The adapters' own storage-environment.js names the app's development store, as the page's chunk does (above).
+    // A package's file is no host file (`host: false`): the gate holds Exact's own code
     const bytes = code == null ? readFileSync(from) : within(from, gen) ? code
-      : production ? gateAgent(code, name) : developmentStore(code, realpathSync(appDir), selected.variant?.name);
+      : production ? gateAgent(code, name, { host: !relative(root, from).split(sep).includes('node_modules') }) : developmentStore(code, realpathSync(appDir), selected.variant?.name);
     const names = [];
     if (code != null) for (const specifier of [...moduleImports(code), ...literalModuleURLs(code)]) {
       const dependency = publicDependency(name, specifier);
@@ -1125,7 +1139,7 @@ for (const name of ['style.css', ...services.map(([name]) => name)]) {
   if (copiedNames.has(name)) throw new Error(`host/web-js/build.mjs: a copied file names ${name}, which main.js names by its content`);
 }
 const named = (name, bytes) => copiedNames.has(name) ? name : contentFiles[name] = contentName(name, bytes);
-const audioSession = manifest.audio_session ? [['audio-session.js', readFileSync(resolve(root, 'host/web/audio-session.js'))]] : [];
+const audioSession = manifest.audio_session ? [['audio-session.js', hostCopy('host/web/audio-session.js')]] : [];
 for (const [name, bytes] of [
   ...leafFiles,
   // The module binds with the plan's declarations, not the bake's answers.
@@ -1256,6 +1270,9 @@ const prepareChunks = { name: 'exact-prepare-chunks', renderChunk(code, chunk, _
 const { choosesScheme } = await import(pathToFileURL(resolve(gen, 'names.js')).href);
 const schemeKey = `exact.state.${production ? '' : '@' + appDigest(realpathSync(appDir)) + '/'}#scheme`;
 const schemeMeta = schemeHead(choosesScheme ? schemeKey : null, { development: !production });
+// A development build admits agent mode (LLP 1069.007 D2) and says so before the title, which both renderers keep: the
+// capture script, the same text in every build, starts a page that waits for the reader under `?agent` only then.
+const agentMeta = production ? '' : '<meta name="exact-agent" content="admitted">\n';
 const attr = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
 // The manifest's favicons and Apple touch icon, else the shell's default favicon (LLP 1163 D7).
 const icon = webIconLinks(manifest, appDir, shell.match(/<link rel="icon"[^>]*>/)[0]);
@@ -1281,7 +1298,7 @@ writeFileSync(resolve(out, 'index.html'), `<!doctype html>
 <html lang="${attr(webManifest.lang)}">
 <meta charset="utf-8">
 <base href="${siteBase}">
-${schemeMeta}<title>${attr(manifest.name)}</title>
+${agentMeta}${schemeMeta}<title>${attr(manifest.name)}</title>
 <meta name="viewport" content="${viewport}">
 ${colorSchemeMeta(interfaceStyle(manifest))}${icon}
 ${preloads}<style>${sheet}${launchBackground(manifest)}</style>
@@ -1320,7 +1337,7 @@ if (production && !opt('--plan')) {
 if (auth) {
   mkdirSync(resolve(out, '.exact/auth'), { recursive: true });
   cpSync(resolve(root, 'host/web/auth-callback.html'), resolve(out, '.exact/auth/callback'));
-  cpSync(resolve(root, 'host/web/auth-callback.js'), resolve(out, '.exact/auth/callback.js'));
+  writeFileSync(resolve(out, '.exact/auth/callback.js'), hostCopy('host/web/auth-callback.js'));
   const { authClientMetadata } = await import('../../scripts/app.mjs');
   const callbacks = tsGrantSet.entries.map(([, source]) => source).filter(l => l.startsWith('auth.callback ')).map(l => trimGrant(l.slice(14)));
   const docs = authClientMetadata({ origin: manifest.app?.origin ?? null, displayName: manifest.app?.name ?? manifest.name, manifest }, callbacks);

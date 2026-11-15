@@ -1,7 +1,7 @@
 // A module realm's environment, captured before a module Worker hardens its
 // globals: storage's synchronous namespace and host clock, and under the
 // agent its repeatable random stream. The I/O adapters load on first use.
-const AGENT_ADMITTED = true; // false in a production bake: host/web/build.mjs rewrites this line (LLP 1069.007 D2)
+const AGENT_ADMITTED = true; // false in a release, as the release gate writes it (agent-gate.mjs, LLP 1069.007 D2)
 export const directories = Object.freeze({ data: 'app:/data', cache: 'app:/cache', temporary: 'app:/tmp' });
 // Code from a string runs on no host a data module runs on: Hermes compiles none, and throws `SyntaxError: Parsing
 // source code unsupported` at the call. The realm's `Function` and `eval` throw that too, so a package's guarded probe
@@ -45,7 +45,7 @@ const DEVELOPMENT_STORE = null;
 // apart from the app's own, as on native. null: this drive has no storage.
 export function storageKey(appId, href = launchHref()) {
   const params = new URL(href).searchParams, name = params.get('storage'), own = DEVELOPMENT_STORE ? `${appId}@${DEVELOPMENT_STORE}` : appId;
-  if (!(AGENT_ADMITTED && params.has('agent'))) return own;
+  if (!(AGENT_ADMITTED && ['', '1'].includes(params.get('agent')))) return own;
   if (name == null) return null;
   if (!/^[A-Za-z0-9._-]+$/.test(name) || name === '.' || name === '..') throw new Error("storage: one name of letters, digits, '.', '-' or '_'");
   return `${own}/agent/${name}`;
@@ -66,7 +66,7 @@ export function emptyRead(op, path) {
 // its PKCE verifiers predictable.
 export function agentSeed(href = launchHref()) {
   const url = new URL(href);
-  if (!AGENT_ADMITTED || !url.searchParams.has('agent') || !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)) return null;
+  if (!(AGENT_ADMITTED && ['', '1'].includes(url.searchParams.get('agent'))) || !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)) return null;
   const seed = Number(url.searchParams.get('seed') ?? 1);
   return Number.isSafeInteger(seed) && seed >= 0 && seed < 2 ** 32 ? seed : 1;
 }

@@ -112,16 +112,17 @@ export function hostModuleSources(root, entries = ['host/web/glue.js', 'host/web
   return [...seen];
 }
 
-// Gate sources before bundling: Rolldown can simplify a true branch even with
-// constant inlining disabled. Lazy modules pass through the same gate (LLP 1069.007 D2).
-export function gateAgent(code, name) {
-  const declaration = /\b(?:const|let|var) AGENT_ADMITTED(?:\$\d+)? = (?:true|false);/g;
-  const imported = /\bimport\s*\{[^}]*\bAGENT_ADMITTED\b[^}]*\}\s*from/;
-  if (/searchParams\.has\(["']agent["']\)|params\.has\(["']agent["']\)|URLSearchParams\([^)]*\)\.has\(["']agent["']\)/.test(code)
-      && !new RegExp(declaration.source).test(code) && !imported.test(code)) {
-    throw new Error(`${name} reads ?agent without AGENT_ADMITTED; a production build must not admit agent mode (LLP 1069.007 D2)`);
-  }
-  return code.replace(declaration, text => text.replace('= true', '= false'));
+/** The data module realm's glue, `module-glue.js`, as one file at `file`. Its storage, filesystem and documents
+ * adapters stay shared modules: Rust requests import them too, and must share the same filesystem mutation queues,
+ * and the pickers' handles live in the page's one documents-glue.js. Only a release gates its sources: a development
+ * build admits agent mode, so a drive keeps its seed and its scratch store (LLP 1069.007 D2). */
+export async function bundleModuleGlue(root, file, { production, minify = true }) {
+  const { rolldown } = await import('rolldown'), { gateAgent } = production ? await import('./agent-gate.mjs') : {};
+  const bundle = await rolldown({ input: resolve(root, 'host/web/module-glue.js'), platform: 'browser',
+    external: ['./storage-fs.js', './storage-sqlite.js', './documents-glue.js'],
+    plugins: production ? [{ name: 'agent-gate', transform: (code, id) => ({ code: gateAgent(code, id) }) }] : [] });
+  try { await bundle.write({ file, format: 'es', minify }); }
+  finally { await bundle.close(); }
 }
 
 /** Bundle one host entry; the wasm glue keeps navigation as its other shipped module. `unused`: the navigation
@@ -129,7 +130,7 @@ export function gateAgent(code, name) {
 export async function bundleHostModule(root, name, { grants = false, production = false, unused = [] } = {}) {
   const web = resolve(root, 'host/web');
   const external = name === 'glue.js' ? 'navigation.js' : grants ? 'grant-admission.js' : null;
-  const { rolldown } = await import('rolldown');
+  const { rolldown } = await import('rolldown'), { gateAgent } = production ? await import('./agent-gate.mjs') : {};
   const bundle = await rolldown({
     input: resolve(web, name),
     treeshake: false,

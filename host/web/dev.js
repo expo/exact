@@ -4,6 +4,8 @@ const es = typeof EventSource === "undefined" ? null : new EventSource("/__dev")
 const encoder = new TextEncoder();
 let overlay = null;
 const errors = new Map();
+// Whether a drive opened this page: `agent` alone or `agent=1`, as every web reader of the parameter asks
+const driven = () => ['', '1'].includes(new URL(globalThis.performance?.getEntriesByType?.('navigation')[0]?.name ?? location.href).searchParams.get('agent'));
 function show(message, source = "app") {
   if (message) errors.set(source, message); else errors.delete(source);
   const text = [...errors.values()].join("\n\n");
@@ -231,7 +233,7 @@ if (es) {
   // It covers whatever the app puts in that corner (a phone layout's tab bar),
   // so it can be put away; the choice is kept for this origin.
   const hidden = 'exact.dev.open.hidden';
-  if (!new URLSearchParams(location.search).has('agent') && localStorage.getItem(hidden) !== '1') {
+  if (!driven() && localStorage.getItem(hidden) !== '1') {
     const bar = document.body.appendChild(document.createElement('div'));
     bar.style = 'position:fixed;right:10px;bottom:10px;display:flex;align-items:center;background:#fff;border:1px solid #ccd3df;border-radius:8px;font:13px system-ui;z-index:2147483646';
     const opening = bar.appendChild(document.createElement('a'));
@@ -259,7 +261,7 @@ if (es) {
   const client = generationClient({ fetchGeneration: (message, signal) => fetchGeneration(message, signal, false, () => activeGeneration?.assets ?? firstAssets), programChanged: () => { clearTimeout(retry); location.reload(); },
     apply: async (candidate, current) => {
       if (!current()) return false;
-      if (trapped()) { if (new URLSearchParams(location.search).get('agent') !== '1') location.reload(); return false; }
+      if (trapped()) { if (!driven()) location.reload(); return false; }
       const t = performance.now();
       const names = candidate.surfaceAssets;
       const liveAssets = Array.isArray(names) && names.length && activeGeneration && sameModule(candidate.module, activeGeneration.module) && sameModule(candidate.rust, activeGeneration.rust)
@@ -1056,10 +1058,10 @@ if (es) {
         globalThis.exact.gpu.reloadAssets(new Map([[name,{bytes:new TextEncoder().encode(text)}]]),[name]).catch(error=>console.error(String(error)));
       }
       show(message.error, message.source); console.error("exact dev:", message.error); return; }
-    if (message.fresh) { if (new URLSearchParams(location.search).get('agent') !== '1') location.reload(); return; }
+    if (message.fresh) { if (!driven()) location.reload(); return; }
     if (message.gpu !== undefined) {
       // A drive owns its clock and code. Do not change either behind the driver.
-      if (new URLSearchParams(location.search).get('agent') === '1') return;
+      if (driven()) return;
       // A declared module's rebuild names it (LLP 1009 D6); the primary's does not.
       const versions = message.module ? (globalThis.exact.gpuVersions ??= {}) : globalThis.exact, key = message.module ? `gpu/${message.module}` : 'gpuVersion';
       versions[key] = message.gpu;

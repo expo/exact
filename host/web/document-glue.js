@@ -8,7 +8,7 @@
 // when a device has kept sign-in state. Real links work immediately.
 // Discrete edits and actions replay once, in order, on matching controls. An
 // active IME composition keeps the document in place through compositionend.
-const AGENT_ADMITTED = true; // false in a production bake: host/web/build.mjs rewrites this line (LLP 1069.007 D2)
+const AGENT_ADMITTED = true; // false in a release, as the release gate writes it (agent-gate.mjs, LLP 1069.007 D2)
 
 const IDLE_FALLBACK_MS = 200;
 // A keydown or keyup as kind 6's or 43's payload, as glue.js's `keyChord` writes it (#140).
@@ -33,7 +33,7 @@ function inertAncestor(el) {
 function preloadRuntime(checkpoint) {
   const logic = /"logic":(null|"(?:[^"\\]|\\.)*")/.exec(checkpoint?.textContent ?? "")?.[1];
   const files = ["./input-glue.js"];
-  if (!(AGENT_ADMITTED && new URL(location.href).searchParams.has("agent"))) files.push("./timer-glue.js");
+  if (!(AGENT_ADMITTED && ["", "1"].includes(new URL(globalThis.performance?.getEntriesByType?.("navigation")[0]?.name ?? location.href).searchParams.get("agent")))) files.push("./timer-glue.js");
   if (logic && logic !== "null") files.push("./module-glue.js", "./http-body.js", "./module-binary.js", "./module-prelude.js");
   let glue;
   for (const file of files) {

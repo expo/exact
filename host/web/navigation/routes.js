@@ -3,7 +3,7 @@ import { fold, launched, onFold, launchLocation, launchVisits } from "./environm
 import { inertAncestor } from "./layers.js";
 import { popoverObservation } from "./popover.js";
 // @ref LLP 1038 D6/D7/D11 — host projection and the last committed URL.
-const AGENT_ADMITTED = true; // false in a production bake: host/web/build.mjs rewrites this line (LLP 1069.007 D2)
+const AGENT_ADMITTED = true; // false in a release, as the release gate writes it (agent-gate.mjs, LLP 1069.007 D2)
 // @ref LLP 1047.002 D2.1 — the behaviours that act only on what a plan makes: a tablist's panels and the sidebar, a
 // split's list, a presented route (its frame, its slide down and Escape), a route's app bar, a clear bar. The JS
 // target's build writes false each one its plan cannot make (navigation.flag), and the bundler drops its code. A
@@ -468,7 +468,7 @@ export function historyURL(path) {
   url.pathname = route.pathname;
   url.search = route.search;
   url.hash = route.hash;
-  if (facts?.has("agent")) {
+  if (AGENT_ADMITTED && ["", "1"].includes(facts?.get("agent"))) {
     for (const key of agentParameters) {
       if (facts.has(key)) {
         url.searchParams.set(key, facts.get(key));
@@ -1339,4 +1339,4 @@ export const navigation = {
     },
   }),
 };
-export { queue, sheet, commit, root, log, settled, AGENT_ADMITTED, agentParameters, pop, last };
+export { queue, sheet, commit, root, log, settled, agentParameters, pop, last };

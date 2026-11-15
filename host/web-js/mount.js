@@ -28,7 +28,7 @@ import {
   presentRows,
   Why,
 } from './rt.js';
-import { clock, agentMode, AGENT_ADMITTED } from './clock.js';
+import { clock, agentMode } from './clock.js';
 import { at, mark, Mismatch } from './tree.js';
 import { Leave, exiting } from './pieces.js';
 import { Resources } from './resources.js';
@@ -558,11 +558,7 @@ export function checkpoint() {
     open = new Set(cp.open),
     readers = new Set(cp.readers);
   // A drive starts at zero even when its document was rendered on a wall clock.
-  const driven =
-    AGENT_ADMITTED &&
-    typeof location !== 'undefined' &&
-    new URLSearchParams(location.search).has('agent') &&
-    !globalThis.__exactRender;
+  const driven = typeof location !== 'undefined' && agentMode() && !globalThis.__exactRender;
   if (driven) for (const k of checkpointFaults(cp)) open.add(k);
   Checkpoint.revalidate = !!cp.revalidate;
   Checkpoint.kept = new Map();

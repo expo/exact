@@ -163,8 +163,11 @@ pub(crate) fn page_at(
 /// ([`activate_js`]): an `eager` page's after its first paint, once the
 /// document is parsed; an `idle` page's when the browser is idle after
 /// `load`; an `interaction` page's at the first press or edit, or at once
-/// where the device keeps a secret (LLP 1048.003 D5); and every page's at a
-/// press that comes first.
+/// where the device keeps a secret (LLP 1048.003 D5); every page's at a
+/// press that comes first; and, in a development build, whose head says it
+/// admits agent mode (`<meta name="exact-agent">`, LLP 1069.007 D2), every
+/// page's once the document is parsed where the query asks for agent mode
+/// (`agent` alone or `agent=1`).
 pub fn capture_js() -> &'static str {
     concat!(
         include_str!("../../web/scheme.js"),

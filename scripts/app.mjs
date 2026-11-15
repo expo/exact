@@ -1112,7 +1112,7 @@ function completeBuild(app, platform, target, graph, messages, roots, env, prepa
     const entries=platform==='ios'&&(app.manifest.widgets?.length||app.manifest.live_activities?.length); if(entries)add(resolve(packageRoot,'widget'),true); if(entries||env.EXACT_WIDGET_GALLERY==='1')add(resolve(packageRoot,'Sources/ExactSnapshot'),true);
   }
   if(platform==='web') {
-    for(const path of [...Object.values(webHostFiles('base','rust','gpu',...(gpuModules(app.manifest).length?['gpuModules']:[]))).filter(path => !path.startsWith('target/web-host/')),...hostModuleSources(ROOT),'host/web-js/glue.mjs','scripts/app.mjs','scripts/rust.mjs',...SHELL_SOURCES,'host/web/build.mjs','package.json','bun.lock']) add(resolve(ROOT,path));
+    for(const path of [...Object.values(webHostFiles('base','rust','gpu',...(gpuModules(app.manifest).length?['gpuModules']:[]))).filter(path => !path.startsWith('target/web-host/')),...hostModuleSources(ROOT),'host/web-js/glue.mjs','host/web-js/agent-gate.mjs','scripts/app.mjs','scripts/rust.mjs',...SHELL_SOURCES,'host/web/build.mjs','package.json','bun.lock']) add(resolve(ROOT,path));
     if (existsSync(resolve(app.dir, 'app.ts'))) {
       // The TS producer is a build dependency, outside the runtime Cargo graph.
       // Its canonical API declaration still determines the accepted app module.
