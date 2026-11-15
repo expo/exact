@@ -300,6 +300,56 @@ mod tests {
         }
     }
 
+    /// A snapshot's file lives as long as its archive, so a killed process
+    /// leaves it; the next process to use an archive removes what the dead
+    /// left and nothing of the living.
+    #[test]
+    fn the_next_process_removes_a_dead_process_snapshot_files() {
+        const CHILD: &str = "EXACT_METAL_SWEEP_TEST";
+        if std::env::var_os(CHILD).is_some() {
+            let Some(gpu) = crate::fixture::device_or(crate::fixture::device(), false) else {
+                return;
+            };
+            let root = std::env::temp_dir().join("exact-metal");
+            let left = |name: &str| {
+                let directory = root.join(name);
+                std::fs::create_dir_all(&directory).unwrap();
+                std::fs::write(directory.join("0.metallib"), b"left").unwrap();
+                (
+                    std::fs::File::create(directory.join("lock")).unwrap(),
+                    directory,
+                )
+            };
+            let (_, dead) = left("dead");
+            let (lock, living) = left("living");
+            lock.try_lock().unwrap();
+            let archive = install(&gpu.device, None).unwrap();
+            pipelines(&gpu, false);
+            assert!(archive.data().is_some());
+            assert!(!dead.exists());
+            assert!(living.join("0.metallib").exists());
+            return;
+        }
+        if crate::fixture::device_or(crate::fixture::device(), false).is_none() {
+            return;
+        }
+        let directory = super::super::tests::directory();
+        let result = command(
+            "pipeline_cache::metal::tests::the_next_process_removes_a_dead_process_snapshot_files",
+            &directory,
+        )
+        .env(CHILD, "1")
+        .env("TMPDIR", &*directory)
+        .output()
+        .unwrap();
+        assert!(
+            result.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+
     /// Metal writes an archive that gained nothing by copying the file of its
     /// last write that had additions; a snapshot must not depend on a file an
     /// earlier snapshot removed.
