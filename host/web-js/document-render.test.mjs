@@ -523,12 +523,12 @@ component Crawled
   view
     column
       if top(nav).name == "art"
-        head title="Pikachu & co" description="An electric \\"mouse\\"" image="/art/25.png" canonical="/pokemon/25" robots="noindex"
+        head title="Pikachu & \\"co\\"" description="An electric \\"mouse\\"\\u{D}" image="/art/25.png" canonical="/pokemon/25" robots="noindex"
       if top(nav).name == "cafe"
         head canonical="/café" robots="max-image-preview:none"
       text "page"
 `;
-  const crawled = page => [...page.matchAll(/<meta (?:name|property)="(?:viewport|description|robots|og:[a-z_]+|twitter:[a-z]+)" content="[^"]*">|<link rel="canonical"[^>]*>/g)].map(m => m[0]);
+  const crawled = page => [...page.matchAll(/<title>[^<]*<\/title>|<meta (?:name|property)="(?:viewport|description|robots|og:[a-z_]+|twitter:[a-z]+)" content="[^"]*">|<link rel="canonical"[^>]*>/g)].map(m => m[0]);
   const heads = {}, files = {};
   for (const renderer of ['rust', 'js']) await renderedPages(source, (_, html, dist) => {
     heads[renderer] = ['', 'art', 'café'].map(path => crawled(html(path)));
@@ -537,13 +537,13 @@ component Crawled
     {}, { name: 'Caltrain', app: { id: 'test.heads', name: 'Caltrain', origin: 'https://caltrain.exact.invalid' } }, renderer);
   expect(heads.js).toEqual(heads.rust);
   expect(heads.js[1]).toEqual([
-    '<meta name="viewport" content="width=device-width, initial-scale=1">',
-    '<meta name="description" content="An electric &quot;mouse&quot;">', '<meta name="robots" content="noindex">',
+    '<title>Pikachu &amp; "co"</title>', '<meta name="viewport" content="width=device-width, initial-scale=1">',
+    '<meta name="description" content="An electric &quot;mouse&quot;&#13;">', '<meta name="robots" content="noindex">',
     '<link rel="canonical" href="https://caltrain.exact.invalid/pokemon/25">', '<meta property="og:type" content="website">',
-    '<meta property="og:site_name" content="Caltrain">', '<meta property="og:title" content="Pikachu &amp; co">',
-    '<meta property="og:description" content="An electric &quot;mouse&quot;">', '<meta property="og:url" content="https://caltrain.exact.invalid/pokemon/25">',
+    '<meta property="og:site_name" content="Caltrain">', '<meta property="og:title" content="Pikachu &amp; &quot;co&quot;">',
+    '<meta property="og:description" content="An electric &quot;mouse&quot;&#13;">', '<meta property="og:url" content="https://caltrain.exact.invalid/pokemon/25">',
     '<meta property="og:image" content="https://caltrain.exact.invalid/art/25.png">', '<meta name="twitter:card" content="summary_large_image">',
-    '<meta name="twitter:title" content="Pikachu &amp; co">', '<meta name="twitter:description" content="An electric &quot;mouse&quot;">',
+    '<meta name="twitter:title" content="Pikachu &amp; &quot;co&quot;">', '<meta name="twitter:description" content="An electric &quot;mouse&quot;&#13;">',
     '<meta name="twitter:image" content="https://caltrain.exact.invalid/art/25.png">',
   ]);
   expect(heads.js[0]).toContain('<meta property="og:url" content="https://caltrain.exact.invalid/">');
@@ -1196,6 +1196,7 @@ component Page
 
 // A route the stack covers holds no hero: at a nested route, the image preloaded is the shown page's, though the covered
 // home's list of lazy rows comes first in the document. An empty `crossorigin` is the anonymous mode, on the preload too.
+// Both renderers write an empty value bare: the `crossorigin`, a list row's wrapper, and a canvas's surface.
 test('both document renderers preload the shown route\'s first image, not a covered one\'s', async () => {
   for (const how of ['js', 'rust']) await renderedPages(`routes nav
   home "/" render=build
@@ -1213,12 +1214,18 @@ component Pages
               image \`https://example.com/\${id}.png\` width=96 alt=id
           if e.name == "detail"
             image "https://example.com/hero.png?a=1&b=2" width=200 alt="Hero" crossorigin=""
+            canvas height=10
+            list
+              text "Row"
+              dialog id="sheet"
+                text "Sheet"
 `, (_, html) => {
     const page = html('detail');
     expect([how, page.match(/<link rel="preload" as="image"[^>]*>/g)])
-      .toEqual([how, ['<link rel="preload" as="image" href="https://example.com/hero.png?a=1&amp;b=2" crossorigin="" fetchpriority="high">']]);
+      .toEqual([how, ['<link rel="preload" as="image" href="https://example.com/hero.png?a=1&amp;b=2" crossorigin fetchpriority="high">']]);
     const [link, img] = heroRequests(page);
-    expect([how, link]).toEqual([how, img]);
+    expect([how, link, page.includes('=""'), ...[' data-exact-list-item ', ' data-exact-list-item="layer" ', '<canvas data-surface ']
+      .map(bytes => page.includes(bytes))]).toEqual([how, img, false, true, true, true]);
     expect([how, html('').match(/<link rel="preload" as="image"[^>]*>/g)]).toEqual([how, null]);
   }, {}, {}, how);
 }, 180000);
@@ -1299,8 +1306,8 @@ export const answer: Answer = async (_source, [name]): Promise<Result<'note'>> =
 // LLP 1069.005 D2: a draw of randomness is the device's, so a page whose render drew, by `crypto`, by making a key or by
 // a randomized signature, is its reader's alone, kept and shared by no one, even on a `render=cached` route. A deterministic
 // signature, an empty fill or a call the platform refuses draws nothing. A request that says `no-store`, in any case,
-// leaves nothing kept.
-test('serve keeps and shares no page whose render drew randomness', async () => {
+// leaves nothing kept. A page whose render failed (a NUL, which HTML cannot carry) is the render host's error page.
+test('serve keeps and shares no page whose render drew randomness or failed', async () => {
   await renderedPages(`shape Note
   text: string
 
@@ -1310,6 +1317,7 @@ routes nav
   keyed "/keyed" render=cached
   signed "/signed" render=cached
   pure "/pure" render=cached
+  broken "/broken" render=cached
 
 component App
   resource note = note(top(nav).name) as shape Note
@@ -1329,11 +1337,15 @@ component App
       ['/', 2, ['public, max-age=0, s-maxage=60']], ['/drawn', 2, ['no-store']], ['/keyed', 2, ['no-store']],
       ['/signed', 2, ['no-store']], ['/pure', 1, ['public, max-age=0, s-maxage=60']],
     ]);
+    const broken = await page('/broken', () => undefined);
+    expect([broken.status, broken.headers['cache-control'], String(broken.body)])
+      .toEqual([500, 'no-store', "<!doctype html>\n<title>Unavailable</title>\n<p>This page couldn't be rendered.</p>\n"]);
   }, { 'app.ts': `import type { Answer, Result } from './app.contract.d.ts';
 export const appId = 'test.heads';
 export const grants = '';
 export const answer: Answer = async (_source, [name]): Promise<Result<'note'>> => {
   const ecdsa = { name: 'ECDSA', namedCurve: 'P-256' };
+  if (name === 'broken') return { text: 'a\\0b' };
   if (name === 'drawn') crypto.getRandomValues(new Uint8Array(1));
   if (name === 'keyed') await crypto.subtle.generateKey(ecdsa, false, ['sign']);
   // A key from a fixed seed, so that only the signature draws: ML-DSA's is hedged, randomized by default (FIPS 204)

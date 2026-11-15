@@ -70,6 +70,14 @@ test('the render DOM marks its hero first among its attributes and preloads it b
   expect(inline.heroPreload()).toBe('<link rel="preload" as="image" href="https://example.com/unset.png" fetchpriority="high">');
 });
 
+test('the render DOM refuses a NUL in text or an attribute', () => {
+  for (const write of [el => { el.textContent = 'a\0b'; }, el => el.setAttribute('title', 'a\0b')]) {
+    const doc = createDocument(), el = doc.createElement('p');
+    write(el); doc.getElementById('exact-root').append(el);
+    expect(() => doc.rootHTML()).toThrow('a NUL character, which the HTML parser does not keep');
+  }
+});
+
 test('the render DOM selects options by their value or label', () => {
   const doc = createDocument(), select = doc.createElement('select');
   const a = doc.createElement('option'), b = doc.createElement('option'), explicit = doc.createElement('option');

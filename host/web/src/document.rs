@@ -980,19 +980,15 @@ impl<S: Source> Walk<'_, '_, S> {
             return Ok(());
         }
         if tag == "canvas" {
-            if self.style.is_some() {
-                self.open(
-                    id,
-                    "canvas",
-                    &[
-                        ("data-surface".into(), Some(String::new())),
-                        ("style".into(), Some(SURFACE_STYLE.into())),
-                    ],
-                )?;
-                self.out.push_str("</canvas>");
-            } else {
-                self.out.push_str(SURFACE);
-            }
+            self.open(
+                id,
+                "canvas",
+                &[
+                    ("data-surface".into(), None),
+                    ("style".into(), Some(SURFACE_STYLE.into())),
+                ],
+            )?;
+            self.out.push_str("</canvas>");
         }
         if let (Some(json), true) = (&markup, children.is_empty()) {
             // `renderMarkup`; a node's children replace its pieces.
@@ -1034,14 +1030,14 @@ impl<S: Source> Walk<'_, '_, S> {
                         // Top layers do not count as modal-card body rows (navigation.js).
                         let layer = tag_of(&c, self.buttons > 0) == "dialog"
                             || c.props.str(PropId::Popover).is_some();
-                        (role, if layer { "layer" } else { "" })
+                        (role, if layer { "=\"layer\"" } else { "" })
                     })
             } else {
                 None
             };
             if let Some((role, marker)) = item {
                 self.out.push_str(&format!(
-                    "<div role=\"{role}\" data-exact-list-item=\"{marker}\" style=\"display:contents\">"
+                    "<div role=\"{role}\" data-exact-list-item{marker} style=\"display:contents\">"
                 ));
             }
             let handled = self.handlers.get(&child).is_some_and(|k| !k.is_empty());
@@ -1110,16 +1106,12 @@ impl<S: Source> Walk<'_, '_, S> {
                     _ => {}
                 }
             }
-            self.out.push(' ');
-            self.out.push_str(name);
-            if let Some(value) = value {
-                self.out.push_str("=\"");
-                escape(&mut self.out, value, true).map_err(|reason| DocumentError {
+            attribute(&mut self.out, name, value.as_deref().unwrap_or_default()).map_err(
+                |reason| DocumentError {
                     view: id,
                     reason: format!("attribute `{name}`: {reason}"),
-                })?;
-                self.out.push('"');
-            }
+                },
+            )?;
         }
         self.out.push('>');
         Ok(())
@@ -1247,9 +1239,7 @@ impl<S: Source> Walk<'_, '_, S> {
     }
 }
 
-/// The surface element `glue.js` puts first in a canvas's `div`.
-const SURFACE: &str = "<canvas data-surface=\"\" style=\"position:absolute;inset:0;width:100%;height:100%;display:block;z-index:-1\"></canvas>";
-/// [`SURFACE`]'s style.
+/// The style of the surface element `glue.js` puts first in a canvas's `div`.
 const SURFACE_STYLE: &str =
     "position:absolute;inset:0;width:100%;height:100%;display:block;z-index:-1";
 
@@ -1276,6 +1266,21 @@ fn option_label(src: &impl Source, id: ViewId) -> String {
     exact_kernel::control::option_label(&text)
 }
 
+/// Append ` name`, or ` name="value"` escaped. An empty value is written
+/// bare: the HTML parser reads `name` as `name=""`, and the JS render's DOM
+/// (`dom.js` `attr`), which keeps no difference between a boolean attribute
+/// and an empty one, writes it so.
+fn attribute(out: &mut String, name: &str, value: &str) -> Result<(), &'static str> {
+    out.push(' ');
+    out.push_str(name);
+    if !value.is_empty() {
+        out.push_str("=\"");
+        escape(out, value, true)?;
+        out.push('"');
+    }
+    Ok(())
+}
+
 /// Append `text` escaped for HTML text (`attribute` false) or a
 /// double-quoted attribute value. A carriage return is a reference (the
 /// parser folds a literal one into a newline); a NUL has no spelling the
@@ -1291,7 +1296,7 @@ fn escape(out: &mut String, text: &str, attribute: bool) -> Result<(), &'static 
             b'>' => "&gt;",
             b'"' if attribute => "&quot;",
             b'\r' => "&#13;",
-            0 => return Err("a NUL character, which the HTML parser drops"),
+            0 => return Err("a NUL character, which the HTML parser does not keep"),
             _ => continue,
         };
         out.push_str(&text[run..at]);

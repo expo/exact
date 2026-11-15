@@ -5,8 +5,15 @@
 // boolean attributes). Region anchors (comments) are not written: adoption
 // inserts its own.
 const VOID = new Set(['img', 'input', 'br', 'hr', 'meta', 'link', 'source', 'area', 'col', 'embed', 'wbr']);
-// An attribute value's `<` and `>` are references too, as HTML's serializer and document.rs `escape` write them.
-const esc = (s, attr) => String(s).replace(attr ? /[&"<>\r]/g : /[&<>\r]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\r': '&#13;' })[c]);
+// Text, or a quoted attribute value, as document.rs `escape` writes it: an attribute value's `<` and `>` are references
+// too, as in HTML's serializer. A NUL has no spelling the parser keeps, so a render with one is refused.
+export const esc = (s, quoted) => String(s).replace(quoted ? /[&"<>\r\0]/g : /[&<>\r\0]/g, c => {
+  if (c === '\0') throw new Error('a NUL character, which the HTML parser does not keep');
+  return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\r': '&#13;' }[c];
+});
+// An attribute as document.rs `attribute` writes it: nothing for `null`, and an empty value bare (the parser reads `name`
+// as `name=""`).
+const attr = (name, value) => (value === null ? '' : value === '' ? ` ${name}` : ` ${name}="${esc(value, true)}"`);
 
 let Trees = 0;
 class Node {
@@ -146,8 +153,8 @@ class Element extends Node {
     if (this.localName === 'template') return '';
     let out = `<${this.localName}`;
     const style = this.style.cssText;
-    for (const [k, v] of this.attrs) out += v === '' ? ` ${k}` : ` ${k}="${esc(v, true)}"`;
-    if (style) out += ` style="${esc(style, true)}"`;
+    for (const [k, v] of this.attrs) out += attr(k, v);
+    if (style) out += attr('style', style);
     out += '>';
     if (VOID.has(this.localName)) return out;
     return out + this.childNodes.map(c => c.html(font)).join('') + `</${this.localName}>`;
@@ -222,9 +229,8 @@ export function createDocument(shell = '') {
       const hero = heroIn(root);
       if (!hero) return '';
       hero.attrs = new Map([['fetchpriority', HERO_PRIORITY], ...hero.attrs]);
-      const crossorigin = hero.getAttribute('crossorigin');
-      return `<link rel="preload" as="image" href="${esc(hero.getAttribute('src'), true)}"`
-        + `${crossorigin === null ? '' : ` crossorigin="${esc(crossorigin, true)}"`} fetchpriority="${HERO_PRIORITY}">`;
+      return `<link rel="preload" as="image"${attr('href', hero.getAttribute('src'))}${attr('crossorigin', hero.getAttribute('crossorigin'))}`
+        + ` fetchpriority="${HERO_PRIORITY}">`;
     },
   });
   return doc;

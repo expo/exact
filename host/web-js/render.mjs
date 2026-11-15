@@ -14,7 +14,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'no
 import { resolve, dirname } from 'node:path';
 import vm from 'node:vm';
 import { brotliCompressSync, createBrotliCompress, constants } from 'node:zlib';
-import { createDocument } from './dom.js';
+import { createDocument, esc } from './dom.js';
 import { cachingFetch, directives, FRESH } from './http-cache.mjs';
 import { canonical } from './route-pattern.js';
 import { select, tokens } from './page-style.mjs';
@@ -93,7 +93,8 @@ const builtMarkdown = (shell, seen) => {
   const at = seen.indexOf(MARKDOWN);
   return at < 0 ? '[]' : shell.slice(at + MARKDOWN.length, shell.indexOf('</script>', at + MARKDOWN.length));
 };
-const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+// A page whose render failed, as the render host writes it (host/render/src/serve.rs).
+const UNAVAILABLE = "<title>Unavailable</title>\n<p>This page couldn't be rendered.</p>\n";
 const unesc = s => s.replace(/&(amp|lt|gt|quot);/g, (_, e) => ({ amp: '&', lt: '<', gt: '>', quot: '"' })[e]);
 
 /** `url` if it navigates (document_url.rs `navigable`), made absolute against the manifest's origin (page.rs `absolute`). */
@@ -169,11 +170,11 @@ export function renderer(dist, { closed = false, read = path => readFileSync(res
   const name = unesc(/<title>([^<]*)<\/title>/.exec(shell)?.[1] ?? '');
   // The head's fields a crawler reads after the title and viewport, as page.rs `page_head` writes them.
   const crawled = (out, location) => {
-    const meta = (key, n, v) => `<meta ${key}="${n}" content="${esc(v)}">`, title = out.title ?? name;
+    const meta = (key, n, v) => `<meta ${key}="${n}" content="${esc(v, true)}">`, title = out.title ?? name;
     const canonical = out.canonical ? crawlable(out.canonical, out.origin) : null, image = out.image ? crawlable(out.image, out.origin) : null;
     const url = canonical ?? (out.origin ? crawlable(location, out.origin) : null);
     return (out.description ? meta('name', 'description', out.description) : '') + (out.robots ? meta('name', 'robots', out.robots) : '')
-      + (canonical ? `<link rel="canonical" href="${esc(canonical)}">` : '')
+      + (canonical ? `<link rel="canonical" href="${esc(canonical, true)}">` : '')
       + meta('property', 'og:type', 'website') + meta('property', 'og:site_name', name) + meta('property', 'og:title', title)
       + (out.description ? meta('property', 'og:description', out.description) : '') + (url ? meta('property', 'og:url', url) : '')
       + (image ? meta('property', 'og:image', image) : '')
@@ -191,11 +192,11 @@ export function renderer(dist, { closed = false, read = path => readFileSync(res
   const root = ROOT?.index ?? -1, rootAttrs = ROOT?.[1] ?? '';
   // The build's preloads are before its sheet; after it, `host.web.head`'s entries are the app's, left as written.
   const sheetAt = seen.indexOf('<style>', stop), early = sheetAt < 0 || sheetAt > root ? root : sheetAt;
-  const viewportMeta = esc(/<meta name="viewport" content="([^"]*)"/.exec(shell)?.[1] ?? 'width=device-width, initial-scale=1');
+  const viewportMeta = esc(/<meta name="viewport" content="([^"]*)"/.exec(shell)?.[1] ?? 'width=device-width, initial-scale=1', true);
   // A page's `lang` and `dir` are the strings table the render resolved (LLP 1060 D4: `__start`'s `language`); with no
   // table, the shell's `lang`, which the build wrote from the manifest's (LLP 1115.000 D4.6), and `ltr` (page.rs `lang_attr`).
   const shellLang = /<html[^>]* lang="([^"]*)"/.exec(shell)?.[1] || 'en-US';
-  const htmlTag = language => language ? `<html lang="${esc(language[0])}" dir="${language[1]}">` : `<html lang="${shellLang}" dir="ltr">`;
+  const htmlTag = language => language ? `<html lang="${esc(language[0], true)}" dir="${language[1]}">` : `<html lang="${shellLang}" dir="ltr">`;
   // A fixed `userInterfaceStyle` (the shell's `<meta name="color-scheme">`, look.mjs) is the system scheme a page renders in.
   const fixedScheme = /<meta name="color-scheme" content="(light|dark)">/.exec(seen)?.[1];
   // The shell's sheet as rules, when the build analyzed it: a page then carries only those its document can match, after
@@ -320,19 +321,21 @@ export function renderer(dist, { closed = false, read = path => readFileSync(res
     Object.assign(made.ctx, { innerWidth: viewport.width, innerHeight: viewport.height });
     made.prefers.clear();
     for (const [on, query] of [[fixedScheme ? fixedScheme === 'dark' : viewport.dark, '(prefers-color-scheme:dark)'], [viewport.reducedMotion, '(prefers-reduced-motion:reduce)'], [viewport.reducedTransparency, '(prefers-reduced-transparency:reduce)']]) if (on) made.prefers.add(query);
-    let info;
-    try { info = await ctx.__start(); } catch (error) { made.dispose(); throw error; }
     // The capture script imports the entry by the policy; an interaction
     // page drops the head's modulepreloads, and an undeclared one adds them
     // after its head once its render chose `eager` (page.rs `head_js`).
-    const head = headOf(info.activate !== 'interaction' && info.activate !== 'inferred', info.language);
+    let info, head;
+    try {
+      info = await ctx.__start();
+      head = headOf(info.activate !== 'interaction' && info.activate !== 'inferred', info.language);
+    } catch (error) { made.dispose(); throw error; }
     return { ...info, location, head, dispose: made.dispose, async finish(deadline = DEADLINE) {
       try {
         const out = await ctx.__render(deadline, info.canSetStatus !== false);
         out.failed = [...(out.failed ?? []), ...made.errors];
         const activate = info.activate === 'inferred' ? infer(out) : info.activate;
         const late = info.activate === 'inferred' && activate !== 'interaction' ? preloads : '';
-        const wake = activate === 'interaction' && out.wake.length ? ` data-wake="${esc(JSON.stringify(out.wake))}"` : '';
+        const wake = activate === 'interaction' && out.wake.length ? ` data-wake="${esc(JSON.stringify(out.wake), true)}"` : '';
         const fields = `<title>${esc(out.title ?? name)}</title><meta name="viewport" content="${viewportMeta}">${crawled(out, url.pathname + url.search)}`;
         const revalidate = info.activate !== 'never' && (out.outstanding || out.continuing);
         const checkpoint = `{"location":${JSON.stringify(url.pathname + url.search)},"time":${JSON.stringify(out.time)},"logic":null,"answers":${out.answers},"pending":${JSON.stringify(out.pending)}${out.open.length ? `,"open":${JSON.stringify(out.open)}` : ''}${out.readers.length ? `,"readers":${JSON.stringify(out.readers)}` : ''}${revalidate ? ',"revalidate":true' : ''}}`;
@@ -349,7 +352,7 @@ export function renderer(dist, { closed = false, read = path => readFileSync(res
         const whole = late ? headOf(true, info.language) : head;
         // The canvas a bound root background gave the html element (canvas.rs).
         const canvas = ctx.document.documentElement.style.getPropertyValue('--exact-root-background');
-        const htmlAttrs = (out.scrollDocument ? 'data-scrolldocument ' : '') + (canvas ? `style="--exact-root-background:${esc(canvas)}" ` : '');
+        const htmlAttrs = (out.scrollDocument ? 'data-scrolldocument ' : '') + (canvas ? `style="--exact-root-background:${esc(canvas, true)}" ` : '');
         const markedHead = htmlAttrs ? whole.replace('<html ', `<html ${htmlAttrs}`) : whole;
         const mark = [out.scrollDocument && 'document.documentElement.setAttribute("data-scrolldocument","")',
           canvas && `document.documentElement.style.setProperty("--exact-root-background",${JSON.stringify(canvas).replace(/</g, '\\u003c')})`].filter(Boolean).join(';');
@@ -459,7 +462,7 @@ export function pageServer(dist, render = renderer(dist), log = console.log) {
         const put = text => new Promise(ok => { if (!z) { out.enqueue(new TextEncoder().encode(text)); ok(); } else { z.write(text); z.flush(constants.BROTLI_OPERATION_FLUSH, ok); } });
         await put(begun.head);
         const page = await begun.finish().catch(e => ({ error: e }));
-        await put(page.error ? "<title>Unavailable</title>\n<p>This page couldn't be rendered.</p>\n" : page.rest);
+        await put(page.error ? UNAVAILABLE : page.rest);
         if (z) await new Promise(ok => { z.on('end', ok); z.end(); });
         try { out.close(); } catch {}
         if (page.error) log(`render ${location} 500 ${page.error.message}`); else keep({ ...page, flushed: true });
@@ -468,7 +471,11 @@ export function pageServer(dist, render = renderer(dist), log = console.log) {
       if (br) headers['content-encoding'] = 'br';
       return { status: 200, headers, body };
     }
-    const page = await begun.finish();
+    const page = await begun.finish().catch(error => ({ error }));
+    if (page.error) {
+      log(`render ${location} 500 ${page.error.message}`);
+      return send(header, `<!doctype html>\n${UNAVAILABLE}`, 500, 'no-store');
+    }
     keep(page);
     return send(header, page.html, page.status, shared(page) && page.status === 200 ? 'public, max-age=0, s-maxage=60' : 'no-store');
   };

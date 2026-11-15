@@ -1,7 +1,7 @@
 //! The routes, document scroller and hero known before any opening tag streams.
 
 use super::{
-    bars::bar_header, escape, props_of, tag_of, NodeFacts, PropId, Route, SortedMap, SortedSet,
+    attribute, bars::bar_header, props_of, tag_of, NodeFacts, PropId, Route, SortedMap, SortedSet,
     Source, ViewId,
 };
 use exact_plan::EventKind;
@@ -29,13 +29,10 @@ impl HeroImage {
     /// fetches the image twice. `None` for a value with a NUL character,
     /// which the walk refuses too.
     pub fn preload(&self) -> Option<String> {
-        let mut link = String::from("<link rel=\"preload\" as=\"image\" href=\"");
-        escape(&mut link, &self.src, true).ok()?;
-        link.push('"');
+        let mut link = String::from("<link rel=\"preload\" as=\"image\"");
+        attribute(&mut link, "href", &self.src).ok()?;
         if let Some(crossorigin) = &self.crossorigin {
-            link.push_str(" crossorigin=\"");
-            escape(&mut link, crossorigin, true).ok()?;
-            link.push('"');
+            attribute(&mut link, "crossorigin", crossorigin).ok()?;
         }
         link.push_str(Self::PRIORITY);
         link.push('>');
