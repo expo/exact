@@ -8,6 +8,7 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { webCompiler } from './module.mjs';
 import { suiteBrowser } from '../../scripts/agent-launch.mjs';
+import { builtFile } from './content-names.mjs';
 
 const root = resolve(import.meta.dir, '../..');
 // The parser's validation refusal, the driver's fault table, a fetch option's refusal, the asset path's pattern and
@@ -39,7 +40,7 @@ export const answer: Answer = ${usesFetch ? `async () => {
     const build = (out, args) => {
       const result = spawnSync(process.execPath, ['host/web-js/build.mjs', 'empty-admission', '--out', out, '--render', usesFetch ? 'js' : 'none', ...args], { cwd: root, env: { ...process.env, EXACT_APP_DIR: dir }, encoding: 'utf8' });
       expect(result.status, result.stdout + result.stderr).toBe(0);
-      return { admission: readFileSync(resolve(out, '.gen/grant-admission.js'), 'utf8'), entry: readFileSync(resolve(out, 'app.js'), 'utf8'), module: () => import(pathToFileURL(resolve(out, '.gen/grant-admission.js')).href) };
+      return { admission: readFileSync(resolve(out, '.gen/grant-admission.js'), 'utf8'), entry: readFileSync(resolve(out, builtFile(out, 'app.js')), 'utf8'), module: () => import(pathToFileURL(resolve(out, '.gen/grant-admission.js')).href) };
     };
     app('');
     const production = build(resolve(dir, 'production'), ['--production']), development = build(resolve(dir, 'development'), []);
@@ -137,7 +138,7 @@ export const answer = async (name: string, args: unknown[], store: unknown, stor
     const build = (out, args) => {
       const result = spawnSync(process.execPath, ['host/web-js/build.mjs', 'storage-refused', '--out', out, '--render', 'none', ...args], { cwd: root, env: { ...process.env, EXACT_APP_DIR: dir }, encoding: 'utf8' });
       expect(result.status, result.stdout + result.stderr).toBe(0);
-      return readFileSync(resolve(out, 'app.js'), 'utf8');
+      return readFileSync(resolve(out, builtFile(out, 'app.js')), 'utf8');
     };
     // `net.fetch` is no storage grant.
     app('net.fetch https://api.example');
@@ -187,7 +188,7 @@ test('a production page whose plan asks no Rust source links neither the module 
     const out = resolve(dir, 'production');
     const result = spawnSync(process.execPath, ['host/web-js/build.mjs', 'hello', '--out', out, '--render', 'none', '--production'], { cwd: root, encoding: 'utf8' });
     expect(result.status, result.stdout + result.stderr).toBe(0);
-    const entry = readFileSync(resolve(out, 'app.js'), 'utf8');
+    const entry = readFileSync(resolve(out, builtFile(out, 'app.js')), 'utf8');
     expect(readFileSync(resolve(out, '.gen/grant-admission.js'), 'utf8').startsWith('// Generated: the grant admission of a page that admits nothing')).toBe(true);
     expect(entry).not.toContain(PARSER);
     expect(entry).not.toContain('rust-data');

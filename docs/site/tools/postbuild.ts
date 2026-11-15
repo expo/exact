@@ -20,8 +20,13 @@ writeFileSync(join(DIST, 'routes.json'), `${JSON.stringify(table, null, 2)}\n`);
 for (const h of hidden) {
   rmSync(join(DIST, h.path.slice(1)), { recursive: true, force: true });
   rmSync(join(DIST, 'assets/markdown', `${h.route}.md`), { force: true });
-  for (const chunk of readdirSync(DIST).filter(f => new RegExp(`^${h.route}-[\\w-]{8}\\.js$`).test(f))) rmSync(join(DIST, chunk));
+  for (const chunk of readdirSync(DIST).filter(f => new RegExp(`^${h.route}-[\\w-]{8}\\.js$`).test(f))) {
+    rmSync(join(DIST, chunk));
+    // Its row in the table of files named by content goes too (LLP 1153.004).
+    delete table.files?.[chunk];
+  }
 }
+writeFileSync(join(DIST, 'routes.json'), `${JSON.stringify(table, null, 2)}\n`);
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const withSlash = (p: string) => (p === '/' ? p : `${p}/`);

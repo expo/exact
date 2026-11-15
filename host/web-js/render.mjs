@@ -75,15 +75,15 @@ const blanked = (html) => {
   }
   return out + html.slice(kept);
 };
-/** The shell's root, found in `seen` (`blanked`), and its entry: the first module script after the root, `./app.js`'s
- * or the one an `--inline` shell holds the bundle in, where a page puts its checkpoint and its capture script loads
- * `./app.js` (page.rs `js_entry`); `entry` is -1 where there is none. The root carries what the build wrote on it:
- * `data-audio-session` (LLP 1096 D7). */
+/** The shell's root, found in `seen` (`blanked`), and its entry after it, which the build marks: `data-entry` with the
+ * entry's `src`, or, in an `--inline` shell, which holds the bundle, naming it. A page puts its checkpoint there, and the
+ * checkpoint names the entry's URL, `entryURL`, for its capture script to load (page.rs `js_entry`, LLP 1153.004 D4);
+ * `entry` is -1 where there is none. The root carries what the build wrote on it: `data-audio-session` (LLP 1096 D7). */
 export function shellPlaces(seen) {
   const ROOT = /<div id="exact-root"( data-audio-session="[a-z-]+")?><\/div>/.exec(seen);
-  const ENTRY = ROOT && /<script type="module"(?: src="\.\/app\.js")?>\s*<\/script>/.exec(seen.slice(ROOT.index + ROOT[0].length));
+  const ENTRY = ROOT && /<script type="module" data-entry(?: src)?="([^"]*)">\s*<\/script>/.exec(seen.slice(ROOT.index + ROOT[0].length));
   const entry = ENTRY ? ROOT.index + ROOT[0].length + ENTRY.index : -1;
-  return { ROOT, entry, entryEnd: ENTRY ? entry + ENTRY[0].length : -1 };
+  return { ROOT, entry, entryEnd: ENTRY ? entry + ENTRY[0].length : -1, entryURL: ENTRY?.[1] ?? null };
 }
 /** Where the build puts the Markdown it compiled: before the shell's entry, whatever a head entry's text spells. */
 export const markdownAt = (shell) => shellPlaces(blanked(shell)).entry;
@@ -187,7 +187,7 @@ export function renderer(dist, { closed = false, read = path => readFileSync(res
   // checkpoint.
   // The root carries what the build wrote on it: `data-audio-session` (LLP 1096 D7). The root, the entry and the
   // sheet are found in `seen`, outside every script element.
-  const seen = blanked(shell), { ROOT, entry, entryEnd } = shellPlaces(seen);
+  const seen = blanked(shell), { ROOT, entry, entryEnd, entryURL } = shellPlaces(seen);
   const title = shell.indexOf('<title>'), stop = shell.indexOf('>\n', shell.indexOf('<meta name="viewport"', title)) + 2;
   const root = ROOT?.index ?? -1, rootAttrs = ROOT?.[1] ?? '';
   // The build's preloads are before its sheet; after it, `host.web.head`'s entries are the app's, left as written.
@@ -346,7 +346,7 @@ export function renderer(dist, { closed = false, read = path => readFileSync(res
         const deferred = activate === 'interaction' && (info.policy === 'request' || info.policy === 'cached') && checkpoint.length > 1024;
         const src = deferred ? ` data-src="/.exact/checkpoint/${deferAnswers(checkpoint)}.json"` : '';
         const body = late => `${fields}\n${late}${style}${out.hero}<div id="exact-root"${rootAttrs}>${out.root}</div>${shell.slice(root + ROOT[0].length, entry)}`
-          + `<script type="application/vnd.exact.checkpoint" data-digest="${digest}" data-activate="${activate}"${wake}${src}>${deferred ? '' : checkpoint.replace(/</g, '\\u003c')}</script>${shell.slice(entryEnd)}`;
+          + `<script type="application/vnd.exact.checkpoint" data-digest="${digest}" data-activate="${activate}" data-entry="${entryURL}"${wake}${src}>${deferred ? '' : checkpoint.replace(/</g, '\\u003c')}</script>${shell.slice(entryEnd)}`;
         // A complete page marks html and names the preloads in its head; a streamed head has gone already, so the rest
         // marks it before the body and names them after the head's fields, as page.rs does.
         const whole = late ? headOf(true, info.language) : head;

@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 import { brotliCompressSync, constants } from 'node:zlib';
 import { suiteBrowser } from '../../scripts/agent-launch.mjs';
 import { webCompiler } from './module.mjs';
+import { builtFile } from './content-names.mjs';
 
 test('a production hello page ships no input chunk and still mounts', async () => {
   if (webCompiler().cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
@@ -46,7 +47,7 @@ test('the production starter stays within its 45 KiB budget and its header butto
     run(['scripts/exact.mjs', 'new', app, '--bundle-id', 'com.example.starter']);
     run(['host/web/build.mjs', 'starter-web'], { EXACT_APP_DIR: app, EXACT_WEB_DIST: dev });
     run(['host/web-js/build.mjs', 'starter', '--plan', resolve(dev, 'app.plan'), '--out', dist, '--production'], { EXACT_APP_DIR: app });
-    const entry = readFileSync(resolve(dist, 'app.js'));
+    const entry = readFileSync(resolve(dist, builtFile(dist, 'app.js')));
     const bytes = brotliCompressSync(entry, { params: {
       [constants.BROTLI_PARAM_QUALITY]: 11, [constants.BROTLI_PARAM_SIZE_HINT]: entry.length,
     } }).length;

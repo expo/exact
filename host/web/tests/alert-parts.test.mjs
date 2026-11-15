@@ -330,7 +330,7 @@ async function renderedAhead({ head = '', tail = '', files, slow = {} }, drive) 
     return new Response(`<!doctype html><html><head><style>${sheet}</style>${head}</head><body><div id="exact-root">
       <button id="ask" commandfor="failed" command="show-modal">Ask</button>
       <dialog id="failed" role="alertdialog" aria-label="Couldn’t Save">${message(text('failed-message', long), 'Couldn’t Save')}${actions(button('failed-ok', 'OK'))}</dialog>
-      </div><script type="application/vnd.exact.checkpoint" data-activate="interaction">{}</script>${tail}</body></html>`, { headers: { 'content-type': 'text/html; charset=utf-8' } });
+      </div><script type="application/vnd.exact.checkpoint" data-activate="interaction" data-entry="./app.js">{}</script>${tail}</body></html>`, { headers: { 'content-type': 'text/html; charset=utf-8' } });
   } });
   const playwright = await import('playwright-core');
   try {

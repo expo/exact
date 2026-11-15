@@ -99,7 +99,7 @@ const EDITS_APPS = /\/dev-scheduler\.test\.mjs$/;
 export function glueWorkers(cores = availableParallelism(), load = loadavg()[0]) {
   return Math.max(1, Math.floor((cores - load) / 2));
 }
-// `bundle-size` reads RealWorld's production app.js (`EXACT_REALWORLD_JS`), which no step prepares before the glue.
+// `bundle-size` reads RealWorld's production entry (`EXACT_REALWORLD_DIST`), which no step prepares before the glue.
 const LEFT_OUT = /^host\/web-js\/bundle-size\.test\.mjs$/;
 /** The glue step's files: every test file of the web hosts, of the modules and of `scripts/`, so a new one runs without
  * being named, less `LEFT_OUT`'s. */
@@ -157,7 +157,7 @@ export function extraChecks(hits, glue, repo) {
   const realworld = resolve(STATE_DIR, 'fixtures/realworld-production');
   if (fixture) out.push(['bundle-fixture', 'bun', ['host/web-js/build.mjs', 'realworld', '--production', '--out', realworld]]);
   for (const cmd of commands(bun)) out.push(['other-glue', 'env', ['EXACT_REQUIRED=1',
-    ...(fixture ? [`EXACT_REALWORLD_JS=${resolve(realworld, 'app.js')}`] : []), ...cmd]]);
+    ...(fixture ? [`EXACT_REALWORLD_DIST=${realworld}`] : []), ...cmd]]);
   for (const hit of hits) {
     const s = hit.suite;
     if (s.kind !== 'app' && !(s.kind === 'xctest' && s.host === 'macos')) continue;

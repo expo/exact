@@ -236,8 +236,9 @@ if (host === 'deploy') {
         }
         check(src?.includes('/.exact/root/web/releases/'), `the published deck loaded from its immutable release: ${src}`);
       }
-      // The program is the JS target's `app.js` when it takes the app, else `app.wasm` (LLP 1071 §7, delivery).
-      check(requests.some((p) => /^\/\.exact\/root\/web\/releases\/[0-9a-f]{64}\/app\.(?:js|wasm)$/.test(p))
+      // The program is the JS target's entry (`app-<hash>.js`, LLP 1153.004) when it takes the app, else `app.wasm`
+      // (LLP 1071 §7, delivery).
+      check(requests.some((p) => /^\/\.exact\/root\/web\/releases\/[0-9a-f]{64}\/app(?:-[\w-]{8}\.js|\.wasm)$/.test(p))
         && !requests.some((p) => /^\/(assets|deck|shaders)\//.test(p)), `the browser used immutable local resources: ${requests.join(', ')}`);
       const lines = browser.carrier.hostLines;
       check(!lines.some((line) => /exception:|console.error: exact:/.test(line)), `published browser diagnostics: ${lines.join(' | ')}`);

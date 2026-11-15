@@ -182,8 +182,9 @@ across deploys, outside the replaced dist. It retains the newest four builds of
 `app.wasm`: an open page's `?v=` URL gets its exact build, or 404 once it expires.
 Malformed or repeated versions get 400. A browser holding a retained build can
 download another as a delta (LLP 1047.000 §9): after a one-line app change, 9.5 KB
-instead of 238.6. Versioned builds and stage files whose names match their content
-are cached as immutable; other files revalidate.
+instead of 238.6. Versioned builds, stage files whose names match their content,
+and the files a JavaScript build names by content (`routes.json` `files`, LLP
+1153.004) are cached as immutable; other files revalidate.
 
 ## Inspect and format Contract
 

@@ -375,7 +375,7 @@ mod tests {
 <link rel="modulepreload" href="./app.js">
 <style>p{margin:0}</style>
 <div id="exact-root"></div>
-<script type="module" src="./app.js"></script>
+<script type="module" data-entry src="./app.js"></script>
 "#;
     const SOURCE: &str = r#"
 routes nav

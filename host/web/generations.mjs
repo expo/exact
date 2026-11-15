@@ -273,5 +273,5 @@ export async function servedFile(dist, pathname, accept = '', { base = '/', pinn
   }
   if (!found) return { status: 404 };
   const body = found.route.endsWith('.html') && found.id ? withGenerationBase(found.body, found.id, base) : found.body;
-  return { status: found.status ?? 200, route: found.route, body, id: found.id, render: found.render, location };
+  return { status: found.status ?? 200, route: found.route, body, id: found.id, render: found.render, location, immutable: found.immutable };
 }

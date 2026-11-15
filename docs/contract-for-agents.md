@@ -724,7 +724,7 @@ representation. These calculations use the reader's list and call budgets;
 a trap belongs to the reader. They are not cached. A root derive evaluates
 once per settlement, so put a calculation there when its result should be
 shared across readers. Action-body reads, action calls and `fn` calls still
-expand in place. The web build reports `app.js` bytes and each component's
+expand in place. The web build reports its entry's bytes and each component's
 own plan instructions and compiled instance count. Shared bodies count per
 use; a `for` is one compiled instance regardless of its runtime item count.
 

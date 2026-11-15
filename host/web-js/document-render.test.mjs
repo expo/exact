@@ -5,6 +5,7 @@ import { webCompiler } from './module.mjs';
 import { open } from '../../scripts/agent.mjs';
 import { appDigest, suiteBrowser } from '../../scripts/agent-launch.mjs';
 import { renderedPages, warmRustRenderer } from './rendered-pages.mjs';
+import { builtFile } from './content-names.mjs';
 
 beforeAll(warmRustRenderer, 1_800_000);
 
@@ -326,7 +327,7 @@ test('the render context reports UTC independently of the machine zone', async (
   const dir = mkdtempSync(resolve(import.meta.dir, '../../target/place-render-test-'));
   try {
     mkdirSync(resolve(dir, '.gen'));
-    writeFileSync(resolve(dir, 'shell.html'), '<html><head><title>Place</title><meta name="viewport" content="width=device-width">\n</head><body><div id="exact-root"></div><script type="module" src="./app.js"></script></body></html>');
+    writeFileSync(resolve(dir, 'shell.html'), '<html><head><title>Place</title><meta name="viewport" content="width=device-width">\n</head><body><div id="exact-root"></div><script type="module" data-entry src="./app.js"></script></body></html>');
     const entry = resolve(dir, 'probe.js');
     writeFileSync(entry, `import { placeReporter } from ${JSON.stringify(resolve(import.meta.dir, '../web/navigation/environment.js'))};
 globalThis.__start = () => ({ activate: 'eager' });
@@ -861,7 +862,7 @@ test('both document renderers preload the runtime at low priority, and the shell
     await renderedPages('routes nav\n  home "/" render=build activate=idle\n\ncomponent Page\n  view\n    text "Home"\n', (_, html, dist) => {
       const preloads = page => page.match(/<link rel="modulepreload"[^>]*>/g);
       const shell = preloads(readFileSync(resolve(dist, 'shell.html'), 'utf8'));
-      expect(shell).toContain('<link rel="modulepreload" href="./app.js">');
+      expect(shell).toContain(`<link rel="modulepreload" href="./${builtFile(dist, 'app.js')}">`);
       expect(shell.every(link => !link.includes('fetchpriority'))).toBe(true);
       expect([how, preloads(html(''))]).toEqual([how, shell.map(link => link.replace('>', ' fetchpriority="low">'))]);
     }, {}, {}, how);
@@ -1114,7 +1115,7 @@ component Page
           option "A" value="a"
           option "B" value="b"
 `, async (_, html, dist) => {
-    const page = html(''), full = readFileSync(resolve(dist, 'style.css'), 'utf8');
+    const page = html(''), sheet = builtFile(dist, 'style.css'), full = readFileSync(resolve(dist, sheet), 'utf8');
     const own = /<style data-exact-page>([\s\S]*?)<\/style>/.exec(page)?.[1];
     expect([how, own?.length < full.length / 2, page.match(/<style[ >]/g)?.length, own?.includes('select:not([multiple])')]).toEqual([how, true, 1, false]);
     const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: req => {
@@ -1127,8 +1128,8 @@ component Page
       await tab.goto(server.url.href);
       await tab.click('[data-testid="show"]');
       await tab.waitForSelector('[data-testid="pick"]');
-      expect([how, await tab.evaluate(() => [!!document.querySelector('style[data-exact-page]'), !!document.querySelector('link[rel=stylesheet][href="./style.css"]'),
-        getComputedStyle(document.querySelector('[data-testid="pick"]')).appearance])]).toEqual([how, [false, true, 'none']]);
+      expect([how, await tab.evaluate(sheet => [!!document.querySelector('style[data-exact-page]'), !!document.querySelector(`link[rel=stylesheet][href="./${sheet}"]`),
+        getComputedStyle(document.querySelector('[data-testid="pick"]')).appearance], sheet)]).toEqual([how, [false, true, 'none']]);
     } finally { await browser.close(); server.stop(true); }
   }, {}, {}, how);
 }, 240000);

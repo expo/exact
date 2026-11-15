@@ -5,6 +5,7 @@ import { webCompiler } from './module.mjs';
 import { hostFixtureFile, glueCase, glueNode, glueDeclarations } from '../web/tests/glue-fixture.mjs';
 import { test, expect } from 'bun:test';
 import { suiteBrowser } from '../../scripts/agent-launch.mjs';
+import { builtFile } from './content-names.mjs';
 
 test('relaunch reloads the browser document and keeps committed storage', async () => {
   const server = Bun.serve({ port: 0, fetch(request) {
@@ -363,7 +364,7 @@ component App
       key = 'exact.state.#scheme';
     }
     let loaded = false;
-    await page.route(wasm ? '**/app.wasm*' : '**/app.js', async () => { loaded = true; });
+    await page.route(wasm ? '**/app.wasm*' : `**/${builtFile(dist, 'app.js')}`, async () => { loaded = true; });
     if (wasm) {
       await page.route('**/*glue.js', async () => {});
       await page.route('**/navigation.js', route => route.fulfill({ status: 200, body: '' }));

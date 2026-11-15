@@ -12,6 +12,7 @@ import { admittingGrant, admitsNetwork, coversPath, createGrantSet, grantError, 
 import { createRequestExecutor, createSecretFacade, fetchWith, redirectOf } from '../web-js/admission.js';
 import { cdpBrowser, chromium } from '../../scripts/agent-launch.mjs';
 import { need } from '../../scripts/coverage.mjs';
+import { builtFile } from '../web-js/content-names.mjs';
 const { unavailable } = chromium(), chromeTest = need('chrome', unavailable);
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -523,9 +524,11 @@ test('a clean JS dist imports every lazy storage and document entry with its com
     expect(built.status, built.stderr || built.stdout).toBe(0);
     globalThis.exact ??= {};
     for (const name of ['grant-admission.js', 'storage-fs.js', 'storage-sqlite.js', 'storage-request.js', 'picker-glue.js', 'documents-glue.js']) {
-      await import(`${pathToFileURL(resolve(dist, name)).href}?built=${Date.now()}-${name}`);
+      await import(`${pathToFileURL(resolve(dist, builtFile(dist, name))).href}?built=${Date.now()}-${name}`);
     }
     for (const name of ['storage-worker.js', 'sqlite3.mjs', 'sqlite3.wasm']) expect(existsSync(resolve(dist, name)), name).toBe(true);
+    // The copied storage-request.js imports the documents glue, so in this build the glue keeps its name (LLP 1153.004).
+    expect([builtFile(dist, 'storage-request.js') === 'storage-request.js', builtFile(dist, 'documents-glue.js')]).toEqual([false, 'documents-glue.js']);
   } finally { rmSync(dist, { recursive: true, force: true }); }
 }, 60_000);
 

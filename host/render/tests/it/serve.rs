@@ -139,6 +139,8 @@ pub(super) fn dist(name: &str) -> super::Dist {
     std::fs::write(dir.join("module-binary.js"), "binary").unwrap();
     std::fs::write(dir.join("module-prelude.js"), "prelude").unwrap();
     std::fs::write(dir.join("app.js"), "module").unwrap();
+    let table = r#"{"routes":[],"files":{"large.wasm":"large.wasm"}}"#; // LLP 1153.004
+    std::fs::write(dir.join("routes.json"), table).unwrap();
     std::fs::write(
         dir.join("big.js"),
         "export const words = ['the same words, again'];\n".repeat(200),
@@ -1084,6 +1086,7 @@ fn large_static_files_stream_with_lengths_validators_and_head() {
             "public, max-age=31536000, immutable",
         ),
         ("/stages/large.0000000000000000.wasm".into(), "no-cache"),
+        ("/large.wasm".into(), "public, max-age=31536000, immutable"),
     ] {
         let (status, headers, body) = fetch_bytes(addr, &format!("HEAD {url} HTTP/1.1\r\n\r\n"));
         assert_eq!((status, body.len()), (200, 0));
@@ -1102,7 +1105,7 @@ fn large_static_files_stream_with_lengths_validators_and_head() {
 }
 
 /// The JavaScript runtime's shell, as host/web-js/build.mjs writes it.
-pub(super) const JS_SHELL: &str = "<!doctype html>\n<html lang=\"en\">\n<meta charset=\"utf-8\">\n<base href=\"/\">\n<title>Blog</title>\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<link rel=\"modulepreload\" href=\"./app.js\">\n<style>p{margin:0}</style>\n<div id=\"exact-root\"></div>\n<script type=\"module\" src=\"./app.js\"></script>\n";
+pub(super) const JS_SHELL: &str = "<!doctype html>\n<html lang=\"en\">\n<meta charset=\"utf-8\">\n<base href=\"/\">\n<title>Blog</title>\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<link rel=\"modulepreload\" href=\"./app.js\">\n<style>p{margin:0}</style>\n<div id=\"exact-root\"></div>\n<script type=\"module\" data-entry src=\"./app.js\"></script>\n";
 
 /// A chunked body, its chunks joined.
 #[test]

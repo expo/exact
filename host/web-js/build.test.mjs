@@ -7,6 +7,7 @@ import { brotliDecompressSync } from 'node:zlib';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { buildModule, moduleGrants, undeclaredRustData, webCompiler } from './module.mjs';
+import { builtFile } from './content-names.mjs';
 import { rustDataOf } from '../../scripts/app-shells.mjs';
 import { spawnOwned } from '../../scripts/test-children.mjs';
 import { open } from '../../scripts/agent.mjs';
@@ -44,7 +45,7 @@ test('a media-only page applies its audio policy while activation waits and pres
     await p.goto(server.url.href);
     await p.locator('audio').click();
     expect(await p.evaluate(() => ({ type: navigator.audioSession.type, ready: !!globalThis.exact?.ready, contexts }))).toEqual({ type: 'ambient', ready: false, contexts: 0 });
-    expect(scripts).toEqual(['/audio-session.js']);
+    expect(scripts).toEqual([`/${builtFile(dist, 'audio-session.js')}`]);
     await p.goto(new URL('shell.html', server.url).href);
     await p.waitForFunction(() => globalThis.exact?.ready);
     const agent = readdirSync(dist).find(name => /^agent-.*\.js$/.test(name));
@@ -84,7 +85,7 @@ test.each([[false, false], [true, false], [true, true]])('a list first opened of
       ...(production ? ['--production'] : [])], { cwd: root, env: { ...process.env, EXACT_APP_DIR: dir }, encoding: 'utf8' });
     expect(built.status, built.stdout + built.stderr).toBe(0);
     expect(built.stdout).toMatch(/own plan code by component \(shared bodies counted per use\)[\s\S]*OfflineList: \d+ B \(1 instance\)/);
-    expect(built.stdout).toContain(`${dist}: app.js ${statSync(resolve(dist, 'app.js')).size} B, built`);
+    expect(built.stdout).toContain(`${dist}: ${builtFile(dist, 'app.js')} ${statSync(resolve(dist, builtFile(dist, 'app.js'))).size} B, built`);
     const collection = readdirSync(dist).find(name => /^collection-glue-.*\.js$/.test(name));
     expect(collection).toBeDefined();
     // A probe in the deferred chunk distinguishes preparation from evaluation.
@@ -387,7 +388,7 @@ test('web validation drops unused package exports before refusing their environm
     writeFileSync(resolve(dir, 'app.ts'), base + "export const answer = () => 'ready';\nexport { debug } from 'debug-helper';\n");
     const built = build();
     expect(built.status, built.stdout + built.stderr).toBe(0);
-    expect(readFileSync(resolve(out, 'app.js'), 'utf8')).not.toContain('import.meta.env');
+    expect(readFileSync(resolve(out, builtFile(out, 'app.js')), 'utf8')).not.toContain('import.meta.env');
     for (const source of [
       base + 'export const answer = () => debug();\n',
       base.replace('() => false', '() => !!debug()') + "export const answer = () => 'ready';\n",
@@ -567,7 +568,7 @@ component App
         expect(production.agentSeed(origin + '/?agent&seed=7')).toBeNull();
       }
       const shipped = readdirSync(release, { recursive: true }).filter(name => /\.m?js$/.test(name));
-      expect(shipped).toContain('picker-glue.js');
+      expect(shipped).toContain(builtFile(release, 'picker-glue.js'));
       expect(shipped).toContain('storage-environment.js');
       expect(shipped).toContain('.gen/navigation.js');
       for (const name of shipped) {
@@ -723,7 +724,7 @@ test('web-build --out writes a site that serve.mjs serves by the hosting rule, r
     expect(built.stdout).toContain('/item/:id: render=client, the default, so the browser draws the page only once app.js and its data have loaded; a page every reader sees alike arrives whole sooner as render=request');
     expect(built.stdout).toContain('/live: render=request, so serve renders its page for each request; a static host serves its shell');
     expect(built.stdout).toContain('/feed: render=cached, so serve renders its page and keeps it 60 s; a static host serves its shell');
-    expect(built.stdout.trimEnd().split('\n').slice(-3).join('\n')).toMatch(/dist: the site, for any static host\. bun host\/web\/serve\.mjs .*dist serves it[^]*shell\.html with status 200; else 404\.html with status 404\.\n {2}A host with a single fallback page serves shell\.html/);
+    expect(built.stdout.trimEnd().split('\n').slice(-4).join('\n')).toMatch(/dist: the site, for any static host\. bun host\/web\/serve\.mjs .*dist serves it[^]*shell\.html with status 200; else 404\.html with status 404\.\n {2}A host with a single fallback page serves shell\.html[^]*\n {2}routes\.json `files` names the files named by their content: a host may cache them for good/);
     expect(JSON.parse(readFileSync(resolve(out, 'routes.json'), 'utf8')).routes).toEqual([
       { name: 'home', pattern: '/', render: 'build', notfound: false },
       { name: 'item', pattern: '/item/:id', render: 'client', notfound: false },
@@ -774,13 +775,13 @@ test('web-build --out writes a site that serve.mjs serves by the hosting rule, r
     // A page sent before the build is replaced still loads its build's files: the build replaced is kept beside the
     // output by its generation (`dist.gen`), as target/web-dist's is.
     const generation = async () => /<base href="\/\.exact\/gen\/([0-9a-f]{32})\/">/.exec(await (await fetch(url('/'), { headers: html })).text())?.[1];
-    const before = await generation(), script = readFileSync(resolve(out, 'app.js'));
+    const before = await generation(), entry = builtFile(out, 'app.js'), script = readFileSync(resolve(out, entry));
     writeFileSync(resolve(app, 'app.contract'), source.replace('text note.text\n', 'text note.text\n      text "Changed."\n'));
     const rebuilt = build();
     expect(rebuilt.status, rebuilt.stdout + rebuilt.stderr).toBe(0);
-    const after = await generation(), kept = await fetch(url(`/.exact/gen/${before}/app.js`));
+    const after = await generation(), kept = await fetch(url(`/.exact/gen/${before}/${entry}`));
     expect([before === after, kept.status, Buffer.from(await kept.arrayBuffer()).equals(script)]).toEqual([false, 200, true]);
-    expect(readFileSync(resolve(out, 'app.js')).equals(script)).toBe(false);
+    expect(builtFile(out, 'app.js')).not.toBe(entry);
     expect(readdirSync(app).filter((name) => name.startsWith('dist')).sort()).toEqual(['dist', 'dist.gen', 'dist.lock']);
     // As `serve` serves it: each route's page rendered with its data, the live one per request, the cached one once.
     serve = await serving(root, out);
@@ -807,10 +808,12 @@ test('web-build --out writes a site that serve.mjs serves by the hosting rule, r
     const docAsked = await fetch(`http://127.0.0.1:${serve.port}/doc/7`, { headers: { accept: 'text/markdown, text/html;q=0.9' } });
     const docBody = await docAsked.text();
     expect([docAsked.status, docBody.includes('>/doc/7<'), docBody.includes('>/doc/7.md<')]).toEqual([200, true, false]);
-    const file = await raw('/app.js');
+    // A file the build named by its content is kept for good; one with a fixed name is asked about again (LLP 1153.004).
+    const file = await raw(`/${builtFile(out, 'app.js')}`), fixed = await raw('/app.plan');
     const hosted = await serving(root, out, { fromEnv: true });
     try { expect((await hosted.get('/live')).body).toContain('The note, rendered.'); } finally { await hosted.stop(); }
-    expect([file.headers['cache-control'], /^"[\w-]+"$/.test(file.headers.etag ?? '')]).toEqual(['no-cache', true]);
+    expect([file.headers['cache-control'], /^"[\w-]+"$/.test(file.headers.etag ?? ''), fixed.headers['cache-control']])
+      .toEqual(['public, max-age=31536000, immutable', true, 'no-cache']);
     expect(await get('/item/7')).toMatchObject({ status: 200, body: expect.not.stringContaining('The note, rendered.') });
     expect((await get('/no/such/route')).status).toBe(404);
     // A bad percent escape is no file, and a link in the build to a file outside it is not served (render.mjs
@@ -827,7 +830,7 @@ test('web-build --out writes a site that serve.mjs serves by the hosting rule, r
       .toEqual([[200, true], [200, true], [404, false], [404, false]]);
     // A rendered page is its build's, as a document from a file is: its base names its generation, whose runtime its
     // reader loads from there, even once another build replaces it.
-    const rendered = await get('/live'), id = generationIn(rendered.body), runtime = readFileSync(resolve(out, 'app.js'));
+    const rendered = await get('/live'), id = generationIn(rendered.body), loaded = builtFile(out, 'app.js'), runtime = readFileSync(resolve(out, loaded));
     expect(id).toBe(after);
     // Asked for under its generation (as a page's own navigation asks), the same page is rendered, not the notfound route.
     const under = await fetch(`http://127.0.0.1:${serve.port}/.exact/gen/${id}/live`, { headers: html });
@@ -835,7 +838,7 @@ test('web-build --out writes a site that serve.mjs serves by the hosting rule, r
     writeFileSync(resolve(app, 'app.contract'), source.replace('text note.text\n', 'text note.text\n      text "Changed again."\n'));
     const again = build();
     expect(again.status, again.stdout + again.stderr).toBe(0);
-    const next = await get('/live'), old = await fetch(`http://127.0.0.1:${serve.port}/.exact/gen/${id}/app.js`);
+    const next = await get('/live'), old = await fetch(`http://127.0.0.1:${serve.port}/.exact/gen/${id}/${loaded}`);
     expect([generationIn(next.body) === id, next.body.includes('Changed again.'), old.status, Buffer.from(await old.arrayBuffer()).equals(runtime)]).toEqual([false, true, 200, true]);
     // A source changed since the build: serve builds the site again before it answers a navigation, and answers a
     // build that fails with its output (LLP 1153.001 D3). A source is one however deep in the app it is.
@@ -975,11 +978,12 @@ test('a page built from an --inline shell is composed in the shell\'s own root a
     const built = spawnSync(process.execPath, ['host/web-js/build.mjs', app, '--out', out, '--inline'], { cwd: root, env: { ...process.env, EXACT_APP_DIR: app }, encoding: 'utf8' });
     expect(built.status, built.stdout + built.stderr).toBe(0);
     const shell = readFileSync(resolve(out, 'shell.html'), 'utf8'), page = readFileSync(resolve(out, 'index.html'), 'utf8');
-    expect(shell.includes('<script type="module">') && shell.indexOf('<script type="module">') > shell.lastIndexOf(entry)).toBe(true);
+    const inline = `<script type="module" data-entry="./${builtFile(out, 'app.js')}">`;
+    expect(shell.includes(inline) && shell.indexOf(inline) > shell.lastIndexOf(entry)).toBe(true);
     // The head entry once and before the document; the document in the root; the checkpoint in the entry's place,
-    // which the capture script loads `./app.js` for, so the bundle is not in the page, once or twice.
+    // which names the entry the capture script loads, so the bundle is not in the page, once or twice.
     const document = page.indexOf('The note, rendered.'), checkpoint = page.indexOf('<script type="application/vnd.exact.checkpoint"');
-    expect([page.split(entry).length - 1, page.indexOf(entry) < document, document < checkpoint, page.includes('<script type="module">'),
+    expect([page.split(entry).length - 1, page.indexOf(entry) < document, document < checkpoint, page.includes(inline),
       page.split('<script type="application/vnd.exact.checkpoint"').length - 1]).toEqual([1, true, true, false, 1]);
     expect(page.slice(0, document).lastIndexOf('<div id="exact-root">')).toBeGreaterThan(page.indexOf(entry) + entry.length - 1);
   } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -1009,7 +1013,7 @@ test('an app whose name or head entry spells a script tag renders its pages in t
 // nor inside a head script's text that spells one (render.mjs `markdownAt`).
 test("compiled Markdown goes before the shell's own entry, whatever the head's scripts are or spell", async () => {
   const { markdownAt } = await import('./render.mjs');
-  const entry = '<script type="module" src="./app.js"></script>', inline = '<script type="module">const a = "<script type=\\"module\\">";</script>';
+  const entry = '<script type="module" data-entry src="./app.js"></script>', inline = '<script type="module" data-entry="./app.js">const a = "<script type=\\"module\\">";</script>';
   const head = '<script type="module" src="https://cdn.example/x.js"></script>\n<script>const s = \'<script type="module" src="./app.js">\';</script>\n';
   for (const tail of [entry, inline]) {
     const shell = `<!doctype html>\n<html lang="en">\n<title>T</title>\n<meta name="viewport" content="x">\n<style>p{}</style>\n${head}<div id="exact-root"></div>\n${tail}\n`;

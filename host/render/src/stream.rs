@@ -35,10 +35,19 @@ use crate::encode::Accepts;
 use std::io::Write;
 use std::net::TcpStream;
 
-/// The entry's `modulepreload`s in `shell`, as absolute paths: the shell's
-/// `<base href="/">` resolves `./app.js` to `/app.js`, where a `Link`
-/// header would resolve it against the request's path.
+/// The entry's `modulepreload`s in `shell`, resolved against its `<base
+/// href>` as the page's own preloads are (`/` from the build, a release's
+/// path from deploy), where a `Link` header would resolve them against the
+/// request's path (LLP 1153.004 D5).
 pub(crate) fn preload_paths(shell: &str) -> Vec<String> {
+    let base = shell
+        .find("<base href=\"")
+        .and_then(|at| {
+            let href = &shell[at + "<base href=\"".len()..];
+            href.find('"').map(|end| &href[..end])
+        })
+        .filter(|base| base.ends_with('/'))
+        .unwrap_or("/");
     let mut found = Vec::new();
     let mut rest = shell;
     while let Some(at) = rest.find("<link rel=\"modulepreload\" href=\"") {
@@ -47,7 +56,7 @@ pub(crate) fn preload_paths(shell: &str) -> Vec<String> {
         let href = &rest[..end];
         if let Some(path) = href.strip_prefix("./") {
             if !path.contains(['<', '>', ',', ';', '\r', '\n', ' ']) {
-                found.push(format!("/{path}"));
+                found.push(format!("{base}{path}"));
             }
         }
         rest = &rest[end..];
@@ -214,4 +223,28 @@ pub(crate) fn idle(
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::preload_paths;
+
+    /// A hint names the URL the page's own preload does: resolved against the
+    /// shell's base, the build's `/` or a release's path that deploy writes
+    /// (LLP 1153.004 D5).
+    #[test]
+    fn a_hint_names_the_url_of_the_pages_preload() {
+        for (base, url) in [
+            ("/", "/app-Ab12Cd34.js"),
+            (
+                "/.exact/root/web/releases/ab/",
+                "/.exact/root/web/releases/ab/app-Ab12Cd34.js",
+            ),
+        ] {
+            let shell = format!(
+                "<base href=\"{base}\">\n<link rel=\"modulepreload\" href=\"./app-Ab12Cd34.js\">\n"
+            );
+            assert_eq!(preload_paths(&shell), [url]);
+        }
+    }
 }

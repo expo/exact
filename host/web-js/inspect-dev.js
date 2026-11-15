@@ -535,8 +535,8 @@ const ended = new Set();
 let lastRevision = 0, epoch = 0, holdStream = null;
 const end = (revision, of) => { if (of !== epoch) return; ended.add(revision); if (ended.size > 64) ended.delete(ended.values().next().value); };
 const canonical = (v) => JSON.stringify(v ?? [], (_, x) => (x && typeof x === "object" && !Array.isArray(x) ? Object.fromEntries(Object.entries(x).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) : x));
-// The runtime the app runs (this module is served at /__dev/inspect.js): the one beside its app.js.
-const runtime = () => new URL("rt.js", document.querySelector('script[type="module"][src$="app.js"]')?.src ?? document.baseURI).href;
+// The runtime the app runs (this module is served at /__dev/inspect.js): the one beside its entry, at the document's base.
+const runtime = () => new URL("rt.js", document.baseURI).href;
 function hold(m) {
   // (A lower revision is a new server's: the revisions ended before are forgotten.)
   // (A new stream, which may be a new server's, likewise.)

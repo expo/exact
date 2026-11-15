@@ -2,8 +2,9 @@
 import { posix } from 'node:path';
 import { webRequestURL } from './origin.mjs';
 
-// Exact's own files at the site's root: the JS target's entry, the wasm target's glue, its document glue, its
-// navigation module, audio session entry and wasm. An entry may neither load nor preload one again.
+// Exact's own files at the site's root by their fixed names: the wasm target's TypeScript module, glue, document glue,
+// navigation module, audio session entry and wasm. An entry may neither load nor preload one again. (The JS target
+// names its entry and audio session entry by their content, LLP 1153.004.)
 const OWN_FILES = new Set(['app.js', 'glue.js', 'document-glue.js', 'navigation.js', 'audio-session.js', 'app.wasm']);
 // Whether a URL names one: resolved as the browser resolves it against the shells' `<base href="/">` at the app's
 // origin (`app.origin`, else a stand-in no other URL names), so a relative URL, a protocol-relative one and one that
@@ -101,8 +102,8 @@ export function webHead(manifest) {
 }
 
 /** After the root, before the runtime: a classic script also precedes a capture script's deferred import. */
-export function webAudioSession(manifest) {
-  return manifest.audio_session ? '<script src="./audio-session.js"></script>\n' : '';
+export function webAudioSession(manifest, name = 'audio-session.js') {
+  return manifest.audio_session ? `<script src="./${name}"></script>\n` : '';
 }
 
 // A directive's name and value, as CSP3 §2.3 writes them: a name of letters, digits and `-` (lower case here, so a

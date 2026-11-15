@@ -26,6 +26,7 @@ import { slashRelative, within } from '../../scripts/paths.mjs';
 import { INSTALL_FILES, INSTALL_PUBLIC, INSTALL_ROOT, installRoute, installNetworkPage } from '../../scripts/install-page.mjs';
 import { COMPRESSIBLE, acceptedEncodings, bodyDigest, compressionCache, matchesETag } from './compression.mjs';
 import { foreignBeside, generationPath, keepGeneration, reapGenerations, servedFile } from './generations.mjs';
+import { builtFile } from '../web-js/content-names.mjs';
 
 const PUBLIC_FILES = new Set([
   ...INSTALL_PUBLIC,
@@ -656,16 +657,23 @@ function* servedRouteTable(dist) {
       bytes = yield {op: 'get', root: resolve(dist), path: 'routes.json'};
       if (routeFileIdentity(dist, ['routes.json']) !== identity) continue;
     } catch { continue; }
-    let routes = [];
+    let routes = [], kept = new Set();
     try {
       const table = bytes === null ? null : JSON.parse(Buffer.from(bytes, 'base64').toString('utf8'));
       if (Array.isArray(table?.routes) && table.routes.every((r) => typeof r?.pattern === 'string')) routes = table.routes.map((r) => ({pattern: r.pattern, notfound: r.notfound === true, render: r.render}));
+      kept = new Set(Object.values(table?.files ?? {}).filter((name) => typeof name === 'string').map((name) => `/${name}`));
     } catch { /* not a route table */ }
     if (servedRoutePlans.size >= 32) servedRoutePlans.delete(servedRoutePlans.keys().next().value);
-    servedRoutePlans.set(key, {identity, plan: routes});
+    servedRoutePlans.set(key, {identity, plan: routes, kept});
     return routes;
   }
   return null;
+}
+/** The routes of the files the build at `dist` names by content (`routes.json` `files`, LLP 1153.004 D6), read with its
+ * route table: a client may keep them for good. */
+function* servedContentRoutes(dist) {
+  yield* servedRouteTable(dist);
+  return servedRoutePlans.get(`routes:${resolve(dist)}`)?.kept ?? new Set();
 }
 // Check the build, plan and published head before reading. A producer may
 // rewrite a local plan without replacing its build directory.
@@ -703,7 +711,7 @@ export async function builtAppMatches(dist, app) {
     const js = marker.target === 'js';
     const files = js ? buildFileCards(root) : await publicFileCards(root);
     const names = new Set(files.map((file) => file.name));
-    if ((js ? JS_BUILD_FILES : REQUIRED_BUILD_FILES).some((name) => !names.has(name))) return false;
+    if ((js ? [...JS_BUILD_FILES, builtFile(root, 'app.js')] : REQUIRED_BUILD_FILES).some((name) => !names.has(name))) return false;
     if (!Array.isArray(marker.files) || marker.files.length !== files.length
       || files.some((file, i) => marker.files[i]?.name !== file.name
         || marker.files[i]?.sha256 !== file.sha256 || marker.files[i]?.bytes !== file.bytes
@@ -726,11 +734,11 @@ export async function builtAppMatches(dist, app) {
 }
 
 // A JS-target build (LLP 1071, `host/web-js/build.mjs`) is whatever its
-// bundler wrote — the entry, content-named chunks, pages at their locations —
-// so the local tools list and serve it as a tree: every regular file whose
-// path has no dot component, never through a symlink. Its completion marker
-// (`host/web/build.mjs`) says `target: 'js'`.
-const JS_BUILD_FILES = ['app.js', 'app.plan', 'index.html'];
+// bundler wrote — the entry and chunks, named by content (`routes.json`),
+// pages at their locations — so the local tools list and serve it as a tree:
+// every regular file whose path has no dot component, never through a
+// symlink. Its completion marker (`host/web/build.mjs`) says `target: 'js'`.
+const JS_BUILD_FILES = ['routes.json', 'app.plan', 'index.html'];
 export function listBuildFiles(dist) {
   const root = realpathSync(dist), out = [];
   const walk = (sub) => {
@@ -798,6 +806,7 @@ export function hostingNotes(dist, serve = 'bun exact.mjs serve') {
     `${shown}: the site, for any static host. ${serve} ${shown} serves it by the rule a host applies:`,
     `  a file at the path; else, for a browser's navigation to a path a route in routes.json matches, shell.html with status 200; else ${missing}.`,
     '  A host with a single fallback page serves shell.html for every page it lacks; the client then draws the notfound route.',
+    '  routes.json `files` names the files named by their content: a host may cache them for good (Cache-Control: public, max-age=31536000, immutable), and keeps those of earlier builds for pages still open (LLP 1153.004).',
   ];
 }
 
@@ -886,7 +895,11 @@ function* treeFile(dist, pathname, accept, miss) {
       if (!built) index = file(decoded);
     }
     const exact = /%2f/i.test(pathname) ? null : file(path);
-    if (exact) return exact;
+    if (exact) {
+      const kept = yield* servedContentRoutes(root);
+      if (!stillBuild(dist, was)) continue;
+      return kept.has(exact.route) ? { ...exact, immutable: true } : exact;
+    }
     // Only a navigation gets the shell; a dotted last segment is a page only when it is no file's extension or a
     // route matches it (`appDocumentPath`).
     if (navigation) {
@@ -993,7 +1006,7 @@ export async function serveBuildTree(dist, req, res, { pinned = null, pages = nu
     encoding = ['br', 'gzip'].find(name => accepted.has(name) && compression.get(digest, name)) ?? null;
     void compression.warm(digest, body);
   }
-  const headers = { 'content-type': type, 'cache-control': 'no-cache', etag: `"${digest}${encoding ? `-${encoding}` : ''}"`,
+  const headers = { 'content-type': type, 'cache-control': r.immutable ? 'public, max-age=31536000, immutable' : 'no-cache', etag: `"${digest}${encoding ? `-${encoding}` : ''}"`,
     ...(COMPRESSIBLE.has(type) || negotiated ? { vary: [negotiated && 'Accept', COMPRESSIBLE.has(type) && 'Accept-Encoding'].filter(Boolean).join(', ') } : {}), ...(encoding ? { 'content-encoding': encoding } : {}) };
   if (matchesETag(req.headers['if-none-match'], headers.etag)) {
     const { 'content-type': _, 'content-encoding': __, ...validators } = headers;

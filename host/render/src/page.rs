@@ -157,9 +157,6 @@ pub(crate) fn page_at(
     Ok(html)
 }
 
-/// The JavaScript runtime's entry in its shell (`host/web-js/build.mjs`).
-const JS_ENTRY: &str = "<script type=\"module\" src=\"./app.js\"></script>";
-
 /// The JavaScript runtime's capture script (LLP 1048.001 D5, as
 /// `capture()`): presses and edits before activation, replayed after
 /// adoption. It also starts the runtime, by the page's policy
@@ -297,26 +294,30 @@ pub(crate) fn is_js(shell: &str) -> bool {
 }
 
 /// The JavaScript runtime's entry after the shell's root, outside script
-/// text ([`blanked`]): [`JS_ENTRY`], or the `<script type="module">` an
-/// `--inline` shell holds the bundle in (`host/web-js/build.mjs`). A page
-/// puts its checkpoint in that place, and its capture script loads
-/// `./app.js`.
-fn js_entry(shell: &str) -> Option<std::ops::Range<usize>> {
-    const INLINE: &str = "<script type=\"module\">";
+/// text ([`blanked`]), as the build marks it: `<script type="module"
+/// data-entry src="…"></script>`, or `<script type="module" data-entry="…">`
+/// in an `--inline` shell, which holds the bundle. Returns the entry's
+/// range, where a page puts its checkpoint, and its URL's range: the
+/// checkpoint names that URL for the capture script to load (LLP 1153.004
+/// D4).
+fn js_entry(shell: &str) -> Option<(std::ops::Range<usize>, std::ops::Range<usize>)> {
+    const OPEN: &str = "<script type=\"module\" data-entry";
     let (_, root_end) = shell_root(shell)?;
     let seen = &blanked(shell)[root_end..];
-    let (at, len) = match seen.find(JS_ENTRY) {
-        Some(at) => (at, JS_ENTRY.len()),
-        None => {
-            let at = seen.find(INLINE)?;
-            let text = seen[at + INLINE.len()..].find("</script>")?;
-            if !seen[at + INLINE.len()..][..text].trim().is_empty() {
-                return None;
-            }
-            (at, INLINE.len() + text + "</script>".len())
-        }
-    };
-    Some(root_end + at..root_end + at + len)
+    let at = seen.find(OPEN)?;
+    let rest = &seen[at + OPEN.len()..];
+    let value = rest
+        .strip_prefix(" src=\"")
+        .or_else(|| rest.strip_prefix("=\""))?;
+    let url = value.find('"')?;
+    let text = value[url..].strip_prefix("\">")?;
+    let close = text.find("</script>")?;
+    if !text[..close].trim().is_empty() {
+        return None;
+    }
+    let url_at = root_end + at + OPEN.len() + (rest.len() - value.len());
+    let end = url_at + url + "\">".len() + close + "</script>".len();
+    Some((root_end + at..end, url_at..url_at + url))
 }
 
 /// The shell's places, in its order: `<html…>`, `<title>` through the
@@ -329,6 +330,7 @@ struct Places {
     root_open: usize,
     root_end: usize,
     entry: std::ops::Range<usize>,
+    entry_url: std::ops::Range<usize>,
 }
 
 fn places(shell: &str) -> Result<Places, String> {
@@ -343,7 +345,7 @@ fn places(shell: &str) -> Result<Places, String> {
     let stop = shell[meta..].find(">\n").ok_or_else(|| lacks("viewport"))? + meta + 2;
     let (root, root_end) =
         shell_root(shell).ok_or_else(|| lacks("<div id=\"exact-root\"></div>"))?;
-    let entry = js_entry(shell).ok_or_else(|| lacks(JS_ENTRY))?;
+    let (entry, entry_url) = js_entry(shell).ok_or_else(|| lacks("<script type=\"module\">"))?;
     if !(end <= title && stop <= root.start && root_end <= entry.start) {
         return Err("the JavaScript shell's places are out of order".into());
     }
@@ -354,6 +356,7 @@ fn places(shell: &str) -> Result<Places, String> {
         root_open: root.end,
         root_end,
         entry,
+        entry_url,
     })
 }
 
@@ -639,9 +642,10 @@ pub(crate) fn body_close_js(
     let _ = std::fmt::Write::write_fmt(
         &mut out,
         format_args!(
-            "<script type=\"application/vnd.exact.checkpoint\" data-digest=\"{}\" data-activate=\"{}\"{}{src}>{}</script>",
+            "<script type=\"application/vnd.exact.checkpoint\" data-digest=\"{}\" data-activate=\"{}\" data-entry=\"{}\"{}{src}>{}</script>",
             digest,
             activate_js(activate),
+            &shell[at.entry_url.clone()],
             wake,
             checkpoint
         ),
@@ -1120,7 +1124,7 @@ mod tests {
     /// scroller: the rest marks `<html>` with the one script the CSP admits.
     #[test]
     fn a_streamed_page_marks_its_scroller_after_the_head() {
-        let shell = "<!doctype html>\n<html lang=\"en\">\n<meta charset=\"utf-8\">\n<base href=\"/\">\n<title>Blog</title>\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<link rel=\"modulepreload\" href=\"./app.js\">\n<style>p{margin:0}</style>\n<div id=\"exact-root\"></div>\n<script type=\"module\" src=\"./app.js\"></script>\n";
+        let shell = "<!doctype html>\n<html lang=\"en\">\n<meta charset=\"utf-8\">\n<base href=\"/\">\n<title>Blog</title>\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<link rel=\"modulepreload\" href=\"./app.js\">\n<style>p{margin:0}</style>\n<div id=\"exact-root\"></div>\n<script type=\"module\" data-entry src=\"./app.js\"></script>\n";
         let mut rendered = Rendered {
             document: exact_web::document::Document {
                 lang: "en".into(),
@@ -1168,7 +1172,7 @@ mod tests {
             "<script async src=\"https://a.example/t.js\"></script>\n<script>x('<style>p{}</style>')</script>\n",
             "<script>const r = '<div id=\"exact-root\"></div>', p = `<link rel=\"modulepreload\" href=\"./x.js\">\n`;</script>\n",
         );
-        let shell = format!("<!doctype html>\n<html lang=\"en\">\n<meta charset=\"utf-8\">\n<base href=\"/\">\n<title>Blog</title>\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<link rel=\"modulepreload\" href=\"./app.js\">\n<style>p{{margin:0}}</style>\n{entries}<div id=\"exact-root\"></div>\n<script type=\"module\" src=\"./app.js\"></script>\n");
+        let shell = format!("<!doctype html>\n<html lang=\"en\">\n<meta charset=\"utf-8\">\n<base href=\"/\">\n<title>Blog</title>\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<link rel=\"modulepreload\" href=\"./app.js\">\n<style>p{{margin:0}}</style>\n{entries}<div id=\"exact-root\"></div>\n<script type=\"module\" data-entry src=\"./app.js\"></script>\n");
         for rules in [None, Some("[]")] {
             let js = Js::of(&shell).unwrap();
             let js = match rules {
@@ -1192,8 +1196,8 @@ mod tests {
     fn the_shells_places_are_outside_its_scripts() {
         let head = "<script>const r = '<div id=\"exact-root\"></div>';</script>\n";
         let after = "<script>const a = '<div id=\"exact-root\"';</script>\n";
-        let external = "<script type=\"module\" src=\"./app.js\"></script>\n";
-        let inline = "<script type=\"module\">const b = '<div id=\"exact-root\"></div>', c = '<div id=\"exact-root\"';</script>\n";
+        let external = "<script type=\"module\" data-entry src=\"./app.js\"></script>\n";
+        let inline = "<script type=\"module\" data-entry=\"./app.js\">const b = '<div id=\"exact-root\"></div>', c = '<div id=\"exact-root\"';</script>\n";
         for (head, after, entry) in [
             (head, "", external),
             ("", after, external),
@@ -1234,9 +1238,10 @@ mod tests {
             for script in [head, after].into_iter().filter(|s| !s.is_empty()) {
                 assert_eq!(page.matches(script).count(), 1, "{page}");
             }
-            // The entry's place holds the checkpoint; the capture script
-            // loads `./app.js`.
+            // The entry's place holds the checkpoint, which names the entry
+            // for the capture script to load.
             assert!(!page.contains(entry), "{page}");
+            assert!(page.contains(" data-entry=\"./app.js\""), "{page}");
             let root = page
                 .find("<div id=\"exact-root\"><p>PAGE</p></div>")
                 .expect(&page);
@@ -1254,7 +1259,7 @@ mod tests {
     #[test]
     fn a_script_tag_in_a_title_sheet_comment_or_attribute_is_not_one() {
         for title in ["Learn <script> tags", "Learn &lt;script> tags"] {
-            let shell = format!("<!doctype html>\n<html lang=\"en\">\n<meta charset=\"utf-8\">\n<base href=\"/\">\n<title>{title}</title>\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<!-- <script> -->\n<link rel=\"modulepreload\" href=\"./app.js\">\n<style>p::after{{content:\"<script>\"}}</style>\n<meta name=\"x\" content=\"<script>\" data-y='<script>'>\n<div id=\"exact-root\"></div>\n<script type=\"module\" src=\"./app.js\"></script>\n");
+            let shell = format!("<!doctype html>\n<html lang=\"en\">\n<meta charset=\"utf-8\">\n<base href=\"/\">\n<title>{title}</title>\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<!-- <script> -->\n<link rel=\"modulepreload\" href=\"./app.js\">\n<style>p::after{{content:\"<script>\"}}</style>\n<meta name=\"x\" content=\"<script>\" data-y='<script>'>\n<div id=\"exact-root\"></div>\n<script type=\"module\" data-entry src=\"./app.js\"></script>\n");
             assert!(is_js(&shell), "{shell}");
             let js = Js::of(&shell).unwrap();
             assert_eq!(
@@ -1263,7 +1268,7 @@ mod tests {
             );
             assert_eq!(
                 &shell[js.at.entry.clone()],
-                "<script type=\"module\" src=\"./app.js\"></script>"
+                "<script type=\"module\" data-entry src=\"./app.js\"></script>"
             );
             assert_eq!(preloads(&shell, &js.at).len(), 1, "{shell}");
         }
@@ -1274,7 +1279,7 @@ mod tests {
     /// name a language (`lang` empty); a resolved table's language still wins.
     #[test]
     fn a_rendered_page_keeps_the_shells_lang_when_the_plan_names_none() {
-        let shell = "<!doctype html>\n<html lang=\"pt-BR\">\n<meta charset=\"utf-8\">\n<base href=\"/\">\n<title>Olá</title>\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<style></style>\n<div id=\"exact-root\"></div>\n<script type=\"module\" src=\"./app.js\"></script>\n";
+        let shell = "<!doctype html>\n<html lang=\"pt-BR\">\n<meta charset=\"utf-8\">\n<base href=\"/\">\n<title>Olá</title>\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<style></style>\n<div id=\"exact-root\"></div>\n<script type=\"module\" data-entry src=\"./app.js\"></script>\n";
         let js = Js::of(shell).unwrap();
         let head = head_js(shell, &js, "", "ltr", true, false);
         assert!(head.contains("<html lang=\"pt-BR\" dir=\"ltr\">"), "{head}");

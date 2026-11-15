@@ -107,6 +107,7 @@ export { op } from './forma-op.mjs';
 import { allows, needs, pairing, PAIR_TTL_MS, parseDuration, refusal } from './forma-pairing.mjs';
 import { opsRefusal, overOps } from './forma-ops-limit.mjs';
 import { earlyAnswer, probeTool, protocolError, readBody, parseRequest as parse, tooDeep, upstream, viaDoor, waitForAnswer } from './forma-request.mjs'; import { cursorOf, eventsQuery, LONG_POLL_PRESENT_MS } from './forma-events-get.mjs'; import { REAL, TIMING } from './forma-timing.mjs';
+import { builtFile } from '../host/web-js/content-names.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 // The server's own line limit, less room for the id this adds and an import's `recognised` digests (64, stage 10b).
@@ -1384,7 +1385,7 @@ export async function toolCommand(argv) {
     const served = async path => { try { return Buffer.from(await (await fetch(`${url}${path}`, { redirect: 'error', signal: AbortSignal.timeout(5000) })).arrayBuffer()); } catch { return Buffer.alloc(0); } };
     const page = Buffer.from(toolPage(readFileSync(resolve(TOOL_DIST, 'index.html')), generationOf(TOOL_DIST)));
     const matches = async (path, bytes) => (await served(path)).equals(bytes);
-    if (!(await matches('', page)) || !(await matches('app.js', readFileSync(resolve(TOOL_DIST, 'app.js')))) || !(await matches('app.plan', readFileSync(resolve(TOOL_DIST, 'app.plan'))))) { console.error(`forma tool: the design server at ${TOOL_ORIGIN} serves another build of the design tool (another checkout's?); stop it first`); return 1; }
+    if (!(await matches('', page)) || !(await matches(builtFile(TOOL_DIST, 'app.js'), readFileSync(resolve(TOOL_DIST, builtFile(TOOL_DIST, 'app.js'))))) || !(await matches('app.plan', readFileSync(resolve(TOOL_DIST, 'app.plan'))))) { console.error(`forma tool: the design server at ${TOOL_ORIGIN} serves another build of the design tool (another checkout's?); stop it first`); return 1; }
     console.log(`${url}\n  (the design tool, on the design server already running for ${dir})`);
     open();
     return 0;

@@ -581,7 +581,7 @@ fn a_javascript_page_preloads_its_runtime_and_runs_it_after_first_paint(mut r: R
     // @ref LLP 1071 D6
     r.activate = exact_plan::ActivatePolicy::Inferred;
     // The shell as host/web-js/build.mjs writes it.
-    let shell = "<!doctype html>\n<html lang=\"en\">\n<meta charset=\"utf-8\">\n<base href=\"/\">\n<title>Blog</title>\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<link rel=\"modulepreload\" href=\"./app.js\">\n<link rel=\"modulepreload\" href=\"./shared-1.js\">\n<style>p{margin:0}</style>\n<div id=\"exact-root\"></div>\n<script type=\"module\" src=\"./app.js\"></script>\n";
+    let shell = "<!doctype html>\n<html lang=\"en\">\n<meta charset=\"utf-8\">\n<base href=\"/\">\n<title>Blog</title>\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<link rel=\"modulepreload\" href=\"./app.js\">\n<link rel=\"modulepreload\" href=\"./shared-1.js\">\n<style>p{margin:0}</style>\n<div id=\"exact-root\"></div>\n<script type=\"module\" data-entry src=\"./app.js\"></script>\n";
     let html = exact_render::page(shell, &r).unwrap();
     // Undeclared is eager: the runtime downloads from the head, before the
     // stylesheet and the document, while the page streams, at low priority:
@@ -609,7 +609,7 @@ fn a_javascript_page_preloads_its_runtime_and_runs_it_after_first_paint(mut r: R
     let root = strip_view_ids(&r.document.root);
     assert!(r.document.root.contains(" data-view=\""));
     assert!(html.ends_with(&format!(
-        "<div id=\"exact-root\">{root}</div>\n<script type=\"application/vnd.exact.checkpoint\" data-digest=\"{}\" data-activate=\"eager\">{}</script>\n",
+        "<div id=\"exact-root\">{root}</div>\n<script type=\"application/vnd.exact.checkpoint\" data-digest=\"{}\" data-activate=\"eager\" data-entry=\"./app.js\">{}</script>\n",
         r.digest, r.checkpoint
     )), "{html}");
     // The head goes first, as a server flushes it before the render: the
@@ -653,7 +653,7 @@ fn a_javascript_page_preloads_its_runtime_and_runs_it_after_first_paint(mut r: R
         assert!(tag.contains(" data-view"), "{tag}");
     }
     for part in [
-        "import(\"./app.js\")",
+        "import(c().dataset.entry)",
         "observe({type:\"paint\",buffered:!0})",
         "DOMContentLoaded",
         "requestIdleCallback",
@@ -670,7 +670,11 @@ fn a_javascript_page_preloads_its_runtime_and_runs_it_after_first_paint(mut r: R
     r.activate = exact_plan::ActivatePolicy::Interaction;
     let html = exact_render::page(shell, &r).unwrap();
     assert!(html.contains("data-activate=\"interaction\""));
-    assert!(!html.replace(capture, "").contains(".js"), "{html}");
+    // The checkpoint names the entry, which nothing fetches yet.
+    let fetched = html
+        .replace(capture, "")
+        .replace(" data-entry=\"./app.js\"", "");
+    assert!(!fetched.contains(".js"), "{html}");
     audio_policy_precedes_runtime(shell, &r);
     // A shell that declares the plan's fonts (their faces with
     // `font-display`, their preloads early in the head) keeps its own: the
@@ -901,7 +905,7 @@ fn rendered_document_sets_html_language_and_direction() {
     // rule (LLP 1048.003 D4), on either runtime's shell; a JavaScript page
     // sent whole needs no script for it.
     rendered.document.scroll_document = true;
-    let js = "<!doctype html>\n<html lang=\"en\">\n<meta charset=\"utf-8\">\n<base href=\"/\">\n<title>Blog</title>\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<link rel=\"modulepreload\" href=\"./app.js\">\n<style>p{margin:0}</style>\n<div id=\"exact-root\"></div>\n<script type=\"module\" src=\"./app.js\"></script>\n";
+    let js = "<!doctype html>\n<html lang=\"en\">\n<meta charset=\"utf-8\">\n<base href=\"/\">\n<title>Blog</title>\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<link rel=\"modulepreload\" href=\"./app.js\">\n<style>p{margin:0}</style>\n<div id=\"exact-root\"></div>\n<script type=\"module\" data-entry src=\"./app.js\"></script>\n";
     for shell in [shell.as_str(), js] {
         let html = exact_render::page(shell, &rendered).unwrap();
         assert!(

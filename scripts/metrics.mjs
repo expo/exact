@@ -51,6 +51,7 @@ import { chromium, quitBrowser } from './agent-launch.mjs';
 import { childFailure as failure, failureSummary } from './agent-build.mjs';
 import { fileURLToPath } from 'node:url';
 import { gateMetric } from './gate.mjs';
+import { builtFile } from '../host/web-js/content-names.mjs';
 
 const t0 = Date.now();
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -127,11 +128,12 @@ const jsTargetBytes = (name, target) => {
   const dist = resolve(ROOT, 'target/metrics-bytes', `${name}-js`), shipped = `${dist}-production`;
   const env = { ...process.env, EXACT_APP_DIR: target.dir, EXACT_WEB_DIST: dist };
   const b = spawnSync(process.execPath, [resolve(ROOT, 'host/web/build.mjs'), target.crate('web')], { cwd: ROOT, env, stdio: ['ignore', 'ignore', 'pipe'], encoding: 'utf8' });
-  if (b.status !== 0 || !existsSync(resolve(dist, 'app.js'))) return { js: { failed: b.status !== 0 ? failure(b) : 'no app.js: not a JS target build' } };
-  const measured = { js_dev: sizesOf(resolve(dist, 'app.js')) };
+  if (b.status !== 0 || !existsSync(resolve(dist, builtFile(dist, 'app.js')))) return { js: { failed: b.status !== 0 ? failure(b) : 'no app.js: not a JS target build' } };
+  const measured = { js_dev: sizesOf(resolve(dist, builtFile(dist, 'app.js'))) };
   const p = spawnSync(process.execPath, [resolve(ROOT, 'host/web-js/build.mjs'), name, '--plan', resolve(dist, 'app.plan'), '--out', shipped, '--production'], { cwd: ROOT, env, stdio: ['ignore', 'ignore', 'pipe'], encoding: 'utf8' });
-  if (p.status !== 0 || !existsSync(resolve(shipped, 'app.js'))) return { ...measured, js: { failed: p.status !== 0 ? failure(p) : 'no production app.js' } };
-  measured.js = sizesOf(resolve(shipped, 'app.js'));
+  const entry = resolve(shipped, builtFile(shipped, 'app.js'));
+  if (p.status !== 0 || !existsSync(entry)) return { ...measured, js: { failed: p.status !== 0 ? failure(p) : 'no production app.js' } };
+  measured.js = sizesOf(entry);
   measured.module_brotli = JSON.parse(readFileSync(resolve(shipped, '.gen/module-bytes.json'), 'utf8'));
   // The entry prepares every emitted chunk even when an interaction-activated document omits its head's preloads.
   const preloads = Object.keys(measured.module_brotli);
@@ -429,7 +431,7 @@ await step('wasm', async () => {
   if (out.web_target === 'js') {
     out.web_artifacts = buildFileCards(dist);
     out.web_artifact_id = sha256(JSON.stringify(out.web_artifacts));
-    const js = readFileSync(resolve(dist, 'app.js'));
+    const js = readFileSync(resolve(dist, builtFile(dist, 'app.js')));
     out.js_bytes = js.length;
     out.js_gzip_bytes = gzipSync(js, { level: 9 }).length;
     return;

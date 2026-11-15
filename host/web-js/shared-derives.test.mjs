@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { suiteBrowser } from '../../scripts/agent-launch.mjs';
+import { builtFile } from './content-names.mjs';
 
 const root = resolve(import.meta.dir, '../..');
 const target = resolve(root, 'target');
@@ -126,7 +127,7 @@ test('the form keeps its encoded plan and bundled JS margins and follows real ed
     const dir = mkdtempSync(resolve(target, 'derive-form-bundle-'));
     try {
       command(process.execPath, ['host/web-js/build.mjs', 'hello', '--contract', source, '--out', dir, '--render', 'none']);
-      sizes.push([readFileSync(resolve(dir, 'app.plan')).length, readFileSync(resolve(dir, 'app.js')).length]);
+      sizes.push([readFileSync(resolve(dir, 'app.plan')).length, readFileSync(resolve(dir, builtFile(dir, 'app.js'))).length]);
     } finally { rmSync(dir, { recursive: true, force: true }); }
     const seen = [];
     await pageFor(readFileSync(source, 'utf8'), async page => {

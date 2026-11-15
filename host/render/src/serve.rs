@@ -124,6 +124,9 @@ struct Shared {
     generations: Option<crate::generations::Generations>,
     /// The entry's `modulepreload`s, for a 103 ([`crate::stream::hint`]).
     hints: Vec<String>,
+    /// The paths of the build's files named by their content (LLP 1153.004
+    /// D6), which a client keeps for good.
+    content: std::collections::HashSet<String>,
     /// The shell is the JavaScript runtime's.
     js: bool,
     /// Its places, read once, and its early head ([`page::head_js`]) with the
@@ -227,6 +230,10 @@ impl Server {
                 [true, false].map(|preload| page::head_js(&shell, &at, &lang, dir, preload, false));
             Some((at, heads))
         });
+        let content = crate::files::content_files(&serve.dist)
+            .into_values()
+            .map(|to| format!("/{to}"))
+            .collect();
         Ok(Server {
             listener,
             stop: Arc::new(AtomicBool::new(false)),
@@ -244,6 +251,7 @@ impl Server {
                 variants,
                 generations,
                 hints,
+                content,
                 js,
                 early,
             },

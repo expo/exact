@@ -47,7 +47,7 @@ try {
         await bundle.close();
       }
       const css = readFileSync(resolve(dir, 'app.css'), 'utf8');
-      const shell = `<!doctype html><html><head><title>Paint</title><meta name="viewport" content="width=device-width">\n<style>${css}</style></head><body><div id="exact-root"></div><script type="module" src="./app.js"></script></body></html>`;
+      const shell = `<!doctype html><html><head><title>Paint</title><meta name="viewport" content="width=device-width">\n<style>${css}</style></head><body><div id="exact-root"></div><script type="module" data-entry src="./app.js"></script></body></html>`;
       writeFileSync(resolve(dir, 'shell.html'), shell);
       const rendered = (await renderer(dir)('/')).html;
       const rust = readFileSync(resolve(dir, 'rust.html'), 'utf8');
