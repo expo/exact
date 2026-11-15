@@ -110,9 +110,15 @@ impl Before {
         {
             live.push(path.clone());
         }
+        let tag = tag_of(&node, false);
+        // A popover or dialog is closed until a script opens it, and the
+        // browser does not show a closed one.
         let covered = covered
             || self.routes.get(&id).is_some_and(|r| r.inert)
-            || node.props.bool(PropId::Inert) == Some(true);
+            || node.props.bool(PropId::Inert) == Some(true)
+            || node.style.display == exact_kernel::Display::None
+            || node.props.get(PropId::Popover).is_some()
+            || tag == "dialog";
         // Unlike `inert`, CSS `visibility` is inherited, and a descendant may
         // set it back to `visible`.
         if node.style.mask.has(exact_kernel::StyleId::Visibility) {
@@ -121,11 +127,15 @@ impl Before {
         if !covered
             && visibility == exact_kernel::Visibility::Visible
             && !self.hero_seen
-            && tag_of(&node, false) == "img"
+            && tag == "img"
         {
+            // A symbol is an icon, no hero, though one drawn from its file has
+            // that file for its source.
             let props = props_of(&node);
             if let Some(source) = props.get("src").filter(|source| {
-                !source.is_empty() && !source.starts_with("data:") && !source.starts_with("symbol:")
+                !source.is_empty()
+                    && !source.starts_with("data:")
+                    && !props.contains_key("data-symbol-source")
             }) {
                 // A first image in a repeated row is lazy; no later image replaces it.
                 self.hero_seen = true;

@@ -1118,7 +1118,8 @@ const heroRequests = page => {
 // LLP 1048.007 D5: an image a `for` repeats loads as its row comes into view, as a platform list's cells load theirs.
 // The page's own first shown image with a source, likely its largest paint, is preloaded ahead of the document at high
 // priority: an image with no source makes no request and a hidden one is not shown, so neither is the hero. An image in
-// a hidden column that sets its own `visibility` back to `visible` is shown.
+// a hidden column that sets its own `visibility` back to `visible` is shown. A symbol is an icon, no hero, and one drawn
+// from its file, here a bound source, is written with the file.
 test('both document renderers lazy-load the images a for repeats, and preload the first shown image with a source', async () => {
   for (const how of ['js', 'rust']) await renderedPages(`routes nav
   home "/" render=build
@@ -1126,10 +1127,21 @@ test('both document renderers lazy-load the images a for repeats, and preload th
 component Page
   state ids: string[] = ["a", "b"]
   state avatar: string = ""
+  state brand: string = "symbol:icon||0 0 24 24||brand.svg"
+  state hide: string = "none"
   view
     main
       for e in stack(nav) key=e.id
         for page in [e] key=page.id
+          image brand alt="Brand"
+          column display="none"
+            image "https://example.com/undisplayed.png" alt="Undisplayed"
+          column display=hide
+            image "https://example.com/hidden-by-state.png" alt="Hidden by state"
+          column popover="auto" id="menu"
+            image "https://example.com/menu.png" alt="Menu"
+          dialog id="modal"
+            image "https://example.com/modal.png" alt="Modal"
           image avatar alt="Avatar"
           column visibility="hidden"
             image "https://example.com/hidden.png" alt="Hidden"
@@ -1141,7 +1153,8 @@ component Page
     // A page's own image, though a stack's `for` and a page-keying `for [e]` hold it, is no row.
     const page = html('');
     expect([how, page.match(/<img [^>]*>/g)?.map(img => [/loading="([^"]*)"/.exec(img)?.[1] ?? null, img.includes('fetchpriority="high"')])])
-      .toEqual([how, [[null, false], [null, false], [null, true], ['lazy', false], ['lazy', false]]]);
+      .toEqual([how, [...Array(7).fill([null, false]), [null, true], ['lazy', false], ['lazy', false]]]);
+    expect([how, /<img [^>]*alt="Brand"[^>]*>/.exec(page)?.[0].includes(' src="assets/brand.svg"')]).toEqual([how, true]);
     const preload = page.indexOf('<link rel="preload" as="image" href="https://example.com/hero.png" fetchpriority="high">');
     expect([how, preload > 0 && preload < page.indexOf('<div id="exact-root"')]).toEqual([how, true]);
     const [link, img] = heroRequests(page);

@@ -51,19 +51,22 @@ test('the render DOM marks its hero first among its attributes and preloads it b
   hidden.append(unseen, hero); root.append(hidden);
   expect(doc.heroPreload()).toBe('<link rel="preload" as="image" href="https://example.com/hero.png?a=1&amp;b=2" crossorigin="anonymous" fetchpriority="high">');
   expect(doc.rootHTML()).toContain('<img fetchpriority="high" alt="Hero" class="c2" crossorigin="anonymous" src="https://example.com/hero.png?a=1&amp;b=2">');
-  // Inline, `collapse` hides an image; `inert` hides even an image set `visible`; an inline `unset` (a bound blank) wins
-  // over a hidden class and takes the parent's visibility, here the root's, and `inherit` takes a hidden parent's.
-  const inline = createDocument('<style>.c1{visibility:hidden}</style>'), make = (src, style, attrs = {}) => {
+  // Inline, `collapse` hides an image; `inert` and `display: none` hide even an image set `visible`; `inherit` takes a
+  // hidden parent's visibility; an inline `display` wins over a class's `none`, and an inline `unset` (a bound blank)
+  // over a hidden class, taking the parent's visibility.
+  const inline = createDocument('<style>.c1{visibility:hidden}.c2{display:none}</style>'), make = (src, style, attrs = {}) => {
     const img = inline.createElement('img');
     for (const [name, value] of Object.entries({ src, ...attrs })) img.setAttribute(name, value);
     img.style.setProperty('visibility', style);
     return img;
   };
-  const inert = inline.createElement('div'), shut = inline.createElement('div');
+  const [inert, gone, shut, shown] = [1, 2, 3, 4].map(() => inline.createElement('div'));
   inert.setAttribute('inert', ''); inert.append(make('https://example.com/inert.png', 'visible'));
+  gone.style.setProperty('display', 'none'); gone.append(make('https://example.com/gone.png', 'visible'));
   shut.setAttribute('class', 'c1'); shut.append(make('https://example.com/inherit.png', 'inherit'));
-  inline.getElementById('exact-root').append(make('https://example.com/collapsed.png', 'collapse'), inert, shut,
-    make('https://example.com/unset.png', 'unset', { class: 'c1' }));
+  shown.setAttribute('class', 'c2'); shown.style.setProperty('display', 'flex');
+  shown.append(make('https://example.com/unset.png', 'unset', { class: 'c1' }));
+  inline.getElementById('exact-root').append(make('https://example.com/collapsed.png', 'collapse'), inert, gone, shut, shown);
   expect(inline.heroPreload()).toBe('<link rel="preload" as="image" href="https://example.com/unset.png" fetchpriority="high">');
 });
 

@@ -124,6 +124,8 @@ class Element extends Node {
   // Read only (symbols.js `tinted`): the class attribute's names.
   get classList() { const names = (this.getAttribute('class') ?? '').split(/\s+/).filter(Boolean); return Object.assign(names, { contains: c => names.includes(c) }); }
   set href(v) { this.setAttribute('href', v); }
+  // Reflected as a browser reflects it, so an icon symbols.js draws from its file is written with the file (element.rs).
+  set src(v) { this.setAttribute('src', v); }
   // Reflected as a browser reflects it, so a link renderMarkup sends out of the app is written with it.
   get target() { return this.getAttribute('target') ?? ''; }
   set target(v) { this.setAttribute('target', v); }
@@ -163,36 +165,38 @@ const fontPx = (value, inherited) => {
 
 // The hero `<img>`'s priority, which its preload carries too (document_before.rs `HeroImage::PRIORITY`).
 const HERO_PRIORITY = 'high';
+// The `visibility` values an element can set; any other (`unset`, `inherit`) takes its parent's.
+const VISIBILITIES = new Set(['visible', 'hidden', 'collapse']);
 
 /** A document for one render: `#exact-root` in a body, a head for metas. */
 export function createDocument(shell = '') {
-  // The shell's classes that set a font size, and those that set a visibility (a static style is a class: emit.rs).
-  const fonts = new Map(), visibilities = new Map();
+  // The shell's classes that set a font size, `display: none`, and a visibility (a static style is a class: emit.rs).
+  const fonts = new Map(), displays = new Map(), visibilities = new Map();
   for (const rule of shell.matchAll(/\.([\w-]+)\{([^}]+)\}/g)) {
     const size = /(?:^|;)font-size:([^;]+)(?:;|$)/.exec(rule[2]);
     if (size) fonts.set(rule[1], size[1]);
+    if (/(?:^|;)display:none(?:;|$)/.test(rule[2])) displays.set(rule[1], 'none');
     const visibility = /(?:^|;)visibility:(visible|hidden|collapse)(?:;|$)/.exec(rule[2]);
     if (visibility) visibilities.set(rule[1], visibility[1]);
   }
-  // The visibility `el` sets, '' when it takes its parent's. An inline value wins over its class's, and `unset` or
-  // `inherit` (a bound blank writes `unset`: tree.js) takes the parent's, as the kernel clears the row for them.
-  const ownVisibility = el => {
-    const inline = el.style.getPropertyValue('visibility');
-    if (inline) return /^(?:visible|hidden|collapse)$/.test(inline) ? inline : '';
-    const names = visibilities.size ? el.getAttribute('class') : null;
-    return names === null ? '' : names.split(/\s+/).map(name => visibilities.get(name)).findLast(Boolean) ?? '';
-  };
+  // `el`'s own value for `property`: its inline value, else its class's in `byClass` (a rendered element's one class
+  // is its static style's: tree.js).
+  const own = (el, property, byClass) => el.style.getPropertyValue(property) || byClass.get(el.getAttribute('class')) || '';
   /** The page's hero in `el`'s subtree: its first shown image with a source, as document_before.rs `Before::scan` finds
    * it. `null` when that image is lazy, which a row's is (LLP 1048.007 D5): the page opens with a list and has no
-   * hero; `undefined` when the subtree has no such image. A head (`template`) and a covered subtree (a route the stack
-   * covers is `inert`) hold none. `inherited` is the parent's `visibility`, which CSS inherits; a descendant may set it
-   * back to `visible`. A symbol written as a placeholder (`html`) is no hero. */
+   * hero; `undefined` when the subtree has no such image. A head (`template`), a popover or dialog (closed until a
+   * script opens it), a covered subtree (a route the stack covers is `inert`) and one with `display: none` hold none.
+   * `inherited` is the parent's `visibility`, which CSS inherits: a descendant may set it back to `visible`, and
+   * `unset` or `inherit` (a bound blank writes `unset`: tree.js) takes the parent's, as the kernel clears the row for
+   * them. A symbol (`data-symbol-source`) is an icon, no hero. */
   const heroIn = (el, inherited = 'visible') => {
-    if (el.localName === 'template' || el.hasAttribute('inert')) return undefined;
-    const visibility = ownVisibility(el) || inherited;
+    if (el.localName === 'template' || el.localName === 'dialog' || el.hasAttribute('popover') || el.hasAttribute('inert')
+      || own(el, 'display', displays) === 'none') return undefined;
+    const declared = own(el, 'visibility', visibilities);
+    const visibility = VISIBILITIES.has(declared) ? declared : inherited;
     if (el.localName === 'img') {
-      const src = el.getAttribute('src') ?? '', placeholder = el.hasAttribute('data-symbol-source') && !el.hasAttribute('data-symbol-file');
-      if (visibility !== 'visible' || !src || src.startsWith('data:') || src.startsWith('symbol:') || placeholder) return undefined;
+      const src = el.getAttribute('src') ?? '';
+      if (visibility !== 'visible' || !src || src.startsWith('data:') || el.hasAttribute('data-symbol-source')) return undefined;
       return el.getAttribute('loading') === 'lazy' ? null : el;
     }
     for (const child of el.childNodes) if (child.nodeType === 1) { const hero = heroIn(child, visibility); if (hero !== undefined) return hero; }
