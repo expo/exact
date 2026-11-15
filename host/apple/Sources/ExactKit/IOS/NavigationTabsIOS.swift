@@ -218,6 +218,60 @@ extension NavigationHost {
         presenter.session?.log("hatch: the app's \(type(of: owned)) holds the tabs; the content moved after the first frame")
     }
 
+    /// An intent of a tab container the app owns (`ExactTabContents.back`,
+    /// `open`, `select`; LLP 1075.003 §3.6): 0 its Back, the platform's Back
+    /// of the stack in front as the agent's `back` takes it (`agentBack`);
+    /// 1 open `text` as a URL that arrived from the system
+    /// (`ExactSession.openURL`); 2 press the authored tab whose index is
+    /// `text`, as the bar's item presses it.
+    /// Queued on the hatch act queue, it runs on a later turn and only in the
+    /// term of the container that sent it. False when it cannot be queued:
+    /// Exact's own container, text that is no URL, a full queue.
+    func tabIntent(_ kind: UInt32, _ text: String) -> Bool {
+        guard tabController == nil, tabOwner != nil else { return false }
+        let term = tabOwnerTerm
+        switch kind {
+        case 0:
+            return presenter.elements.later("tabs", "back()") { [weak self] in
+                guard let self, inTerm(term) else { return }
+                if inTransition || presenter.modals.inTransition { return backRefused("a transition is running") }
+                switch agentBack() {
+                case nil: backRefused("nothing is beneath the top of the stack in front")
+                case ""?: break
+                case let refusal?: backRefused(refusal)
+                }
+            }
+        case 1:
+            guard !text.isEmpty, let url = URL(string: text) else { return false }
+            return presenter.elements.later("tabs", "open(\(text))", bytes: text.utf8.count) { [weak self] in
+                guard let self, inTerm(term), let session = presenter.session else { return }
+                if !session.openURL(url) { session.log("hatch tabs: open(\(text)) refused: the session did not take it") }
+            }
+        case 2:
+            guard let index = Int(text) else { return false }
+            return presenter.elements.later("tabs", "select(\(index))") { [weak self] in
+                guard let self, inTerm(term) else { return }
+                guard let tab = authoredTab(index), tab.handlers.contains("press"), !tab.disabled else {
+                    presenter.session?.log("hatch tabs: select(\(index)) refused: the tab is gone, disabled or has no press")
+                    return
+                }
+                presenter.press(tab.id)
+            }
+        default:
+            return false
+        }
+    }
+
+    private func backRefused(_ why: String) { presenter.session?.log("hatch tabs: back() refused: \(why)") }
+
+    /// Whether the container that sent an intent in `term` still holds the
+    /// tabs: a later container, or the same one adopted again, did not send it.
+    private func inTerm(_ term: Int) -> Bool {
+        if tabOwnerTerm == term { return true }
+        presenter.session?.log("hatch tabs: an intent refused: the container that sent it retired")
+        return false
+    }
+
     private func hideTabBar(_ container: UITabBarController) {
         if #available(iOS 18.0, tvOS 18.0, *) { container.setTabBarHidden(true, animated: false) } else { container.tabBar.isHidden = true }
         (container as? TabController)?.syncBarAccessibility()

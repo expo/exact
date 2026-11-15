@@ -326,7 +326,12 @@ final class ElementHatches {
     /// when refused.
     @discardableResult
     func later(_ id: UInt32, _ name: String, bytes: Int = 0, _ work: @escaping () -> Void) -> Bool {
-        let what = presenter.views[id]?.props["hatch"].map { "element \($0) #\(id)" } ?? "node #\(id)"
+        later(presenter.views[id]?.props["hatch"].map { "element \($0) #\(id)" } ?? "node #\(id)", name, bytes: bytes, work)
+    }
+
+    /// The same, for an act the journal names by `what` rather than by a node.
+    @discardableResult
+    func later(_ what: String, _ name: String, bytes: Int = 0, _ work: @escaping () -> Void) -> Bool {
         guard queue.count < Self.maxQueued, queuedBytes + bytes <= Self.maxBytes else {
             refused += 1
             presenter.session?.log("hatch \(what): \(name) refused: the act queue is full")

@@ -8,7 +8,7 @@ import { evictArms, probeDigest } from './arms.mjs';
 
 /** The module side's fixed Swift, in `root`: the table, its view entries, the hatch bindings, extensions and service query,
  * and ExactCore's walk to an app file through no link, which an extension's `file` takes too. */
-export const moduleSeam = (resolve, root) => ['ExactNativeModule.swift', 'ExactNativeViews.swift', 'ExactForma.swift', 'ExactExtensions.swift', 'ExactServices.swift', 'ExactPackageLibrary.swift']
+export const moduleSeam = (resolve, root) => ['ExactNativeModule.swift', 'ExactNativeViews.swift', 'ExactNativeTabs.swift', 'ExactForma.swift', 'ExactExtensions.swift', 'ExactServices.swift', 'ExactPackageLibrary.swift']
   .map(f => resolve(root, 'host/apple/modules', f)).concat(resolve(root, 'host/apple/Sources/ExactCore/AppFileWalk.swift'));
 
 /** Wrapped module libraries find their dependencies in sibling frameworks, including when dlopened by a host with no run path. */

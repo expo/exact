@@ -62,7 +62,10 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     }
     /// What holds the tabs: Exact's tab controller, or a container the app's
     /// `tabContainer` hatch returned (LLP 1075.003 §3.6).
-    var tabOwner: UIViewController?
+    var tabOwner: UIViewController? { didSet { tabOwnerTerm &+= 1 } }
+    /// Advances whenever `tabOwner` is set, so a container's term ends when
+    /// it leaves the tabs, even if the same container takes them again.
+    private(set) var tabOwnerTerm = 0
     var tabsHatched = false, tabContainerAsked = false, routerTab = -1
     /// The router's tab's root route when a tap reselects it at that root,
     /// kept from `shouldSelect` to `didSelect` to scroll it to its top.
