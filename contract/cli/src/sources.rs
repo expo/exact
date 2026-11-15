@@ -62,6 +62,8 @@ pub(crate) struct Sources {
     /// Each `var()` whose fallback the loader dropped (LLP 1153 D6): one
     /// warning says them.
     pub(crate) var_fallbacks: Vec<(Span, String)>,
+    /// Each `var()` of a runtime custom property nothing declares (LLP 1123 D5).
+    pub(crate) var_undeclared: Vec<(Span, contract_lower::var_tokens::Undeclared)>,
 }
 
 /// One name a `use` brought: where it is written, and the declaration it
@@ -275,11 +277,14 @@ impl Loader<'_> {
             &params,
             &identities,
         );
-        self.vars = Some(contract_lower::var_tokens::Tokens::of(
-            design.as_ref().map(|d| d.text.as_str()),
-            &package_designs,
-            self.units.first().and_then(|u| u.file.theme.as_ref()),
-        ));
+        self.vars = Some(
+            contract_lower::var_tokens::Tokens::of(
+                design.as_ref().map(|d| d.text.as_str()),
+                &package_designs,
+                self.units.first().and_then(|u| u.file.theme.as_ref()),
+            )
+            .with_runtime(self.units.iter().map(|u| &u.file)),
+        );
         let library = library::read(&self.sources, self.app_root);
         match self.scope() {
             Ok((mut file, scopes)) => {
@@ -681,6 +686,7 @@ impl<'a> Loader<'a> {
                 consulted: Vec::new(),
                 motion: Vec::new(),
                 var_fallbacks: Vec::new(),
+                var_undeclared: Vec::new(),
             },
             active: vec![root_key.to_path_buf()],
             units: Vec::new(),
@@ -875,6 +881,7 @@ impl Loader<'_> {
         let refused = found.refused.into_iter();
         (self.refused.errors).extend(refused.map(|e| sources.resolve(e.into())));
         self.sources.var_fallbacks.extend(found.fallbacks);
+        self.sources.var_undeclared.extend(found.undeclared);
     }
 
     /// Give every declaration its program-unique name (D4), rewrite each

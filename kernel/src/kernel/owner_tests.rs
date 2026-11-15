@@ -5,7 +5,7 @@ use crate::id::Offer;
 use crate::wire::Op;
 use crate::{HostCover, NodeType, StyleId, StyleValue};
 
-fn style(id: ViewId, rows: &[(StyleId, &str)]) -> Op {
+pub(super) fn style(id: ViewId, rows: &[(StyleId, &str)]) -> Op {
     let mut patch = StyleProps::default();
     for (row, value) in rows {
         let value = match value.parse::<f64>() {
@@ -20,7 +20,7 @@ fn style(id: ViewId, rows: &[(StyleId, &str)]) -> Op {
     }
 }
 
-fn create(ids: impl IntoIterator<Item = ViewId>) -> Vec<Op> {
+pub(super) fn create(ids: impl IntoIterator<Item = ViewId>) -> Vec<Op> {
     (ids.into_iter())
         .map(|id| Op::CreateView {
             id,
@@ -29,7 +29,7 @@ fn create(ids: impl IntoIterator<Item = ViewId>) -> Vec<Op> {
         .collect()
 }
 
-fn children(id: ViewId, children: &[ViewId]) -> Op {
+pub(super) fn children(id: ViewId, children: &[ViewId]) -> Op {
     Op::SetChildren {
         id,
         children: children.to_vec(),
@@ -217,12 +217,16 @@ fn the_term_parses_writes_back_and_crosses_the_wire() {
         "var(--exact-safe-area-inset-top, 4px)",
         "var(--exact-accent)",
         "var(--exact-safe-area-inset-middle)",
-        "calc(var(--Exact-safe-area-inset-top) + 1px)",
     ] {
         let mut props = StyleProps::default();
         let text = StyleValue::Text(refused.into());
         assert!(props.set_dynamic(TOP, &text).is_err(), "{refused}");
     }
+    // Custom property names are case-sensitive: this is an author's, which a
+    // node may declare (LLP 1123 D5)
+    let mut props = StyleProps::default();
+    let text = StyleValue::Text("calc(var(--Exact-safe-area-inset-top) + 1px)".into());
+    assert!(props.set_dynamic(TOP, &text).is_ok());
 }
 
 #[test]

@@ -1,5 +1,7 @@
 //! Element lowering keeps its large per-tag temporaries off the recursive view path.
 
+#[path = "custom_props.rs"]
+mod custom_props;
 use super::*;
 
 pub(super) struct ElementStep<'n> {
@@ -598,7 +600,13 @@ impl Lowerer<'_> {
         }
         let flex = tags::flex_container(tag, expanded);
         self.element_children = !children.is_empty();
+        let (custom, refused_custom) = custom_props::merged(expanded, scope, &self.types.shapes);
+        self.errors.extend(refused_custom);
         for (index, a) in expanded.iter().enumerate() {
+            // Its custom properties are bound as one row, after the others
+            if exact_kernel::style::safe_area_properties::is_author_name(&a.name) {
+                continue;
+            }
             if let Some(e) = flex.and_then(|f| tags::multicol_on_flex(f, a).err()) {
                 self.errors.push(e);
                 continue;
@@ -716,6 +724,26 @@ impl Lowerer<'_> {
                     false => origin,
                 };
                 origins.resize(bindings.len(), origin);
+            }
+        }
+        if let Some(a) = &custom {
+            let control = contract_syntax::payload_control(tag, attrs);
+            let font = &font;
+            if let Err(e) = self.attr(
+                tag,
+                control,
+                a,
+                scope,
+                locals,
+                &mut bindings,
+                &mut handlers,
+                &mut surface,
+                font,
+            ) {
+                self.errors.push(native::name_the_fix(n, e));
+            }
+            if let Some(origins) = &mut origins {
+                origins.resize(bindings.len(), Origin::Own(None));
             }
         }
         // @ref LLP 1116.006 D2 — no box where no split shows it (the web shell shows it).

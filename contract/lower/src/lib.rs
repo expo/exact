@@ -172,8 +172,7 @@ pub use theme::retained::{
     before_view, first_refusal, offer_design_scan, retention_only, take_design_scan,
     with_design_scan, DesignScan,
 };
-pub use theme::rows;
-pub use theme::{retention, synthetic_candidates};
+pub use theme::{retention, rows, synthetic_candidates};
 pub use warnings::{warnings, MAX_WARNINGS};
 
 use contract_analyze::Analysis;
@@ -1317,6 +1316,7 @@ impl<'a> Lowerer<'a> {
                 }
             }
             tags::AttrTarget::Styles(rows) => {
+                let a = &*values::fallback_tokens(a, rows)?;
                 if rows == [StyleId::FontFamily] {
                     if self.family_token(a, scope, locals, bindings)? {
                         return Ok(());

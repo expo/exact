@@ -9,9 +9,10 @@
 //! @ref LLP 1001 §2
 
 mod parse;
-mod simplify;
+pub(crate) mod simplify;
 mod substitute;
 mod text;
+pub(crate) use text::ident;
 mod wire;
 
 pub use parse::nonnegative_row;
@@ -96,23 +97,24 @@ impl EnvTerm {
     }
 }
 
+/// `var(--name)` of an author's custom property (LLP 1123 D5), read in a
+/// length: the property's value where the reading node has one, else the
+/// fallback; with neither, the length is invalid at computed-value time.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Var {
+    /// The property's name, with its leading `--`.
+    pub name: Arc<str>,
+    /// What stands in where the property has no value.
+    pub fallback: Option<Box<Node>>,
+}
+
 /// `node` with every local inset (`EnvTerm::Local`) replaced by its points
-/// under `env`.
-fn localize(node: &Node, env: &Env) -> Node {
-    let all = |c: &[Node]| c.iter().map(|n| localize(n, env)).collect();
-    match node {
-        Node::Env(EnvTerm::Local(edge)) => Node::Value(f64::from(env.local_inset(*edge)), Unit::Px),
-        Node::Value(..) | Node::Env(..) => node.clone(),
-        Node::Sum(c) => Node::Sum(all(c)),
-        Node::Product(c) => Node::Product(all(c)),
-        Node::Min(c) => Node::Min(all(c)),
-        Node::Max(c) => Node::Max(all(c)),
-        Node::Negate(c) => Node::Negate(Box::new(localize(c, env))),
-        Node::Invert(c) => Node::Invert(Box::new(localize(c, env))),
-        Node::Clamp(c) => Node::Clamp(Box::new(
-            c.each_ref().map(|n| n.as_ref().map(|n| localize(n, env))),
-        )),
-    }
+/// under `env`, and every custom property by its value there (LLP 1123 D5);
+/// `None` where a property has neither a value nor a fallback.
+fn localize(node: &Node, env: &Env) -> Option<Node> {
+    substitute(node, &|edge| env.local_inset(edge), &mut |name| {
+        env.property(name).cloned()
+    })
 }
 
 /// A calculation tree as §10.10 builds one and §10.10.1 leaves it: numeric
@@ -126,6 +128,8 @@ pub enum Node {
     /// `env()` without a fallback: a substitution of a length, which a tree
     /// may hold as a leaf (one with a fallback is held as text, [`Entry`]).
     Env(EnvTerm),
+    /// `var()` of an author's custom property, resolved per node.
+    Var(Var),
     /// Its children added.
     Sum(Vec<Node>),
     /// Its children multiplied.
@@ -149,6 +153,7 @@ impl PartialEq for Node {
         match (self, other) {
             (Value(a, u), Value(b, v)) => a.to_bits() == b.to_bits() && u == v,
             (Env(a), Env(b)) => a == b,
+            (Var(a), Var(b)) => a == b,
             (Sum(a), Sum(b)) | (Product(a), Product(b)) | (Min(a), Min(b)) | (Max(a), Max(b)) => {
                 a == b
             }
@@ -164,6 +169,10 @@ impl Node {
     fn children(&self) -> impl Iterator<Item = &Node> {
         let (nodes, optional): (&[Node], &[Option<Node>]) = match self {
             Node::Value(..) | Node::Env(..) => (&[], &[]),
+            Node::Var(v) => (
+                v.fallback.as_deref().map_or(&[][..], std::slice::from_ref),
+                &[],
+            ),
             Node::Sum(c) | Node::Product(c) | Node::Min(c) | Node::Max(c) => (c, &[]),
             Node::Negate(c) | Node::Invert(c) => (std::slice::from_ref(c), &[]),
             Node::Clamp(c) => (&[], c.as_slice()),
@@ -172,8 +181,18 @@ impl Node {
     }
 
     /// Whether a node anywhere in it satisfies `f`.
-    fn any(&self, f: &dyn Fn(&Node) -> bool) -> bool {
+    pub(crate) fn any(&self, f: &dyn Fn(&Node) -> bool) -> bool {
         f(self) || self.children().any(|c| c.any(f))
+    }
+
+    /// Each custom property it reads, fallbacks included.
+    pub(crate) fn names(&self, out: &mut Vec<Arc<str>>) {
+        if let Node::Var(v) = self {
+            if !out.contains(&v.name) {
+                out.push(v.name.clone());
+            }
+        }
+        self.children().for_each(|c| c.names(out));
     }
 
     /// The value under `env`, a percentage of `basis`, in IEEE-754 `f64`
@@ -188,6 +207,10 @@ impl Node {
                 Unit::Rem => f64::from(env.root_font_size) * v,
             },
             Node::Env(term) => term.value(env)?,
+            Node::Var(v) => match env.property(&v.name) {
+                Some(value) => value.value(env, basis)?,
+                None => v.fallback.as_ref()?.value(env, basis)?,
+            },
             Node::Sum(c) => {
                 let mut total = 0.0;
                 for n in c {
@@ -311,6 +334,143 @@ pub(crate) fn lone_env(term: EnvTerm) -> Dimension {
     dimension(Node::Env(term))
 }
 
+/// The tree a length is (LLP 1123 D5): a compact form's, or a
+/// calculation's own; `None` for `auto`, a size keyword or a text a row
+/// substitutes.
+pub(crate) fn tree_of(d: &Dimension) -> Option<Node> {
+    let plus = |term: EnvTerm, x: f32| match x {
+        0.0 => Node::Env(term),
+        _ => Node::Sum(vec![Node::Env(term), Node::Value(f64::from(x), Unit::Px)]),
+    };
+    Some(match d {
+        // A size keyword is no length a tree holds
+        Dimension::Auto | Dimension::Keyword(_) => return None,
+        Dimension::Points(v) => Node::Value(f64::from(*v), Unit::Px),
+        Dimension::Percent(p) => Node::Value(f64::from(*p), Unit::Percent),
+        Dimension::Calc(p, x) => Node::Sum(vec![
+            Node::Value(f64::from(*p), Unit::Percent),
+            Node::Value(f64::from(*x), Unit::Px),
+        ]),
+        Dimension::Env(edge, x) => plus(EnvTerm::Inset(*edge), *x),
+        Dimension::Region(region, edge, x) => plus(EnvTerm::Region(*region, *edge), *x),
+        Dimension::Segment(var, a, b, x) => plus(EnvTerm::Segment(*var, *a, *b), *x),
+        Dimension::Viewport(unit, n) => Node::Value(f64::from(*n), Unit::Viewport(*unit)),
+        Dimension::Compare(c) => return c.tree(|t| t.clone()),
+    })
+}
+
+/// Whether `node` reads an environment value `env` leaves undefined, which
+/// makes what holds it invalid at computed-value time (CSS Environment
+/// Variables 1 §3); a custom property is read as its value, else its
+/// fallback (CSS Variables 1 §3).
+pub(crate) fn undefined_in(node: &Node, env: &Env) -> bool {
+    match node {
+        // A local inset is always defined, and only a node's environment has it
+        Node::Env(EnvTerm::Local(_)) => false,
+        Node::Env(term) => term.value(env).is_none(),
+        Node::Var(v) => match (env.property(&v.name), &v.fallback) {
+            (Some(value), _) => undefined_in(value, env),
+            (None, Some(fallback)) => undefined_in(fallback, env),
+            (None, None) => true,
+        },
+        n => n.children().any(|c| undefined_in(c, env)),
+    }
+}
+
+/// Whether `node` is small enough to hold once its custom properties are
+/// substituted: CSS Variables 1 §3.3 has a long expansion invalid, and the
+/// bound is the one every consumer of a tree holds an author's to (CSS
+/// Values 4 §10.8's values and levels, which the wire and the Apple host
+/// check).
+pub(crate) fn within_expansion(node: &Node) -> bool {
+    wire::within_author_limits(node)
+}
+
+/// A length's CSS: a lone value as itself, any other tree as a math
+/// function, a text as written.
+pub(crate) fn length_css(d: &Dimension, out: &mut String) {
+    let tree = match d {
+        Dimension::Compare(c) => match c.tree(|t| text::length(t, out)) {
+            Some(()) => return,
+            None => return c.css(out),
+        },
+        d => tree_of(d),
+    };
+    match tree {
+        Some(t) => text::length(&t, out),
+        None => out.push_str("auto"),
+    }
+}
+
+/// `node` with each local inset as `local` gives it and each custom
+/// property as `property` resolves it (LLP 1123 D5); `None` where a
+/// property has neither a value nor a fallback.
+pub(crate) fn substitute(
+    node: &Node,
+    local: &dyn Fn(Edge) -> f32,
+    property: &mut dyn FnMut(&Arc<str>) -> Option<Node>,
+) -> Option<Node> {
+    let all = |c: &[Node], property: &mut dyn FnMut(&Arc<str>) -> Option<Node>| {
+        c.iter()
+            .map(|n| substitute(n, local, property))
+            .collect::<Option<Vec<_>>>()
+    };
+    Some(match node {
+        Node::Env(EnvTerm::Local(edge)) => Node::Value(f64::from(local(*edge)), Unit::Px),
+        Node::Var(v) => match property(&v.name) {
+            Some(value) => value,
+            None => substitute(v.fallback.as_ref()?, local, property)?,
+        },
+        Node::Value(..) | Node::Env(..) => node.clone(),
+        Node::Sum(c) => Node::Sum(all(c, property)?),
+        Node::Product(c) => Node::Product(all(c, property)?),
+        Node::Min(c) => Node::Min(all(c, property)?),
+        Node::Max(c) => Node::Max(all(c, property)?),
+        Node::Negate(c) => Node::Negate(Box::new(substitute(c, local, property)?)),
+        Node::Invert(c) => Node::Invert(Box::new(substitute(c, local, property)?)),
+        Node::Clamp(c) => {
+            let [lo, v, hi] = c.as_ref();
+            // `none` stays `none`; an argument that substitutes to nothing is invalid
+            let mut one = |n: &Option<Node>| match n {
+                Some(n) => substitute(n, local, property).map(Some),
+                None => Some(None),
+            };
+            Node::Clamp(Box::new([one(lo)?, one(v)?, one(hi)?]))
+        }
+    })
+}
+
+/// Each author's custom property a text's `var()`s name, fallbacks
+/// included, by CSS's tokens: a function's name in any case, a property's
+/// as written.
+fn text_properties(text: &str, out: &mut Vec<Arc<str>>) {
+    use cssparser::{Parser, ParserInput, Token};
+    fn walk(p: &mut Parser<'_, '_>, out: &mut Vec<Arc<str>>) {
+        while let Ok(token) = p.next() {
+            let var = matches!(token, Token::Function(name) if name.eq_ignore_ascii_case("var"));
+            if !matches!(token, Token::Function(_) | Token::ParenthesisBlock) {
+                continue;
+            }
+            let _ = p.parse_nested_block(|p| {
+                if var {
+                    if let Ok(Token::Ident(name)) = p.next() {
+                        let name: &str = name;
+                        if crate::style::safe_area_properties::is_author_name(name)
+                            && !out.iter().any(|n| &**n == name)
+                        {
+                            out.push(name.into());
+                        }
+                    }
+                }
+                walk(p, out);
+                Ok::<_, cssparser::ParseError<'_, ()>>(())
+            });
+        }
+    }
+    let mut input = ParserInput::new(text);
+    walk(&mut Parser::new(&mut input), out);
+}
+
 /// A calculation a row holds: a handle to its interned entry.
 #[derive(Clone)]
 pub struct Comparison(Arc<Value<Arc<[u8]>, Entry>>);
@@ -402,6 +562,11 @@ impl Comparison {
         }
     }
 
+    /// Whether it is held as a tree, not as a text a row substitutes.
+    pub(crate) fn is_tree(&self) -> bool {
+        self.tree(|_| ()).is_some()
+    }
+
     /// `f` of the tree, or `None` for a text, without copying either.
     fn tree<T>(&self, f: impl FnOnce(&Node) -> T) -> Option<T> {
         self.with(|e| match e {
@@ -447,13 +612,7 @@ impl Comparison {
     /// whichever argument it is in, or a text substituted is no value of its
     /// row (CSS Environment Variables 1 §3).
     pub(crate) fn undefined(&self, env: &Env) -> bool {
-        // A local inset is always defined, and only a node's environment has it
-        let undefined = |n: &Node| match n {
-            Node::Env(EnvTerm::Local(_)) => false,
-            Node::Env(term) => term.value(env).is_none(),
-            _ => false,
-        };
-        self.tree(|t| t.any(&undefined)).unwrap_or_else(|| {
+        self.tree(|t| undefined_in(t, env)).unwrap_or_else(|| {
             self.substituted(env)
                 .is_none_or(|d| d.undefined_segment(env))
         })
@@ -512,6 +671,30 @@ impl Comparison {
         })
     }
 
+    /// Whether it reads an author's custom property (LLP 1123 D5), which
+    /// resolves per node: in a tree, at a leaf; a text whose `env()` has a
+    /// fallback, wherever it names one.
+    pub(crate) fn reads_custom(&self) -> bool {
+        match &self.0.value {
+            Entry::Tree(t) => t.any(&|n| matches!(n, Node::Var(_))),
+            Entry::Text { text, .. } => {
+                let mut names = Vec::new();
+                text_properties(text, &mut names);
+                !names.is_empty()
+            }
+        }
+    }
+
+    /// The custom properties it reads, each name with its `--`, fallbacks
+    /// included (LLP 1123 D5): a tree's at its leaves, a text's wherever a
+    /// `var()` of an author's name stands in it.
+    pub(crate) fn properties(&self, out: &mut Vec<Arc<str>>) {
+        match &self.0.value {
+            Entry::Tree(t) => t.names(out),
+            Entry::Text { text, .. } => text_properties(text, out),
+        }
+    }
+
     /// Whether it reads the local inset at `edge`.
     pub(crate) fn reads_local_edge(&self, edge: Edge) -> bool {
         self.with(|e| match e {
@@ -522,14 +705,19 @@ impl Comparison {
         })
     }
 
-    /// The tree with its local insets as `env` has them, in points, as the
-    /// dimension that holds it; `None` when it reads none. A tree handed to
-    /// layout, where only the window's environment is known, is localized
-    /// first (LLP 1123 D5).
+    /// The tree with its local insets and custom properties as `env` has
+    /// them, as the dimension that holds it, `Auto` (the row's initial
+    /// value) where a property is invalid; `None` when it reads neither. A
+    /// tree handed to layout, where only the window's environment is known,
+    /// is localized first (LLP 1123 D5).
     pub(crate) fn localized(&self, env: &Env) -> Option<Dimension> {
         self.tree(|t| {
-            t.any(&|n| matches!(n, Node::Env(EnvTerm::Local(_))))
-                .then(|| dimension(simplify::simplify(localize(t, env))))
+            t.any(&|n| matches!(n, Node::Env(EnvTerm::Local(_)) | Node::Var(_)))
+                .then(|| {
+                    let t = localize(t, env).map(simplify::simplify);
+                    t.filter(within_expansion)
+                        .map_or(Dimension::Auto, dimension)
+                })
         })
         .flatten()
     }

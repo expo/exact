@@ -161,6 +161,8 @@ pub(crate) fn style_json_rows(
         out.push_str("\":");
         let wrote = match style.get(id) {
             RowValue::ShapeOutside(_) => false, // LLP 1043.000 M3
+            // The kernel's own (LLP 1123 D5): the lengths that read them are sent resolved
+            RowValue::SafeAreaProperties(_) => false,
             // Layout only (LLP 1053 G1): the kernel sizes the box.
             RowValue::AspectRatio(_) => false,
             RowValue::PositionTryFallbacks(v) => {

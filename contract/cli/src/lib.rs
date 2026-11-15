@@ -296,13 +296,19 @@ pub(crate) fn params(file: &mut contract_syntax::File) -> Result<(), CompileErro
 /// writes them for a file, from the one design a text has, its inline
 /// `theme`: the first row refused, or the warning for a fallback dropped.
 fn vars(file: &mut contract_syntax::File) -> Result<Vec<CompileError>, CompileError> {
-    let tokens = contract_lower::var_tokens::Tokens::of(None, &[], file.theme.as_ref());
+    let tokens = contract_lower::var_tokens::Tokens::of(None, &[], file.theme.as_ref())
+        .with_runtime([&*file]);
     let found = contract_lower::var_tokens::rewrite(file, &tokens);
     if let Some(e) = found.refused.into_iter().next() {
         return Err(e.into());
     }
-    let warning = contract_lower::var_tokens::fallback_warning(&found.fallbacks);
-    Ok(warning.map(CompileError::warning).into_iter().collect())
+    let fallback = contract_lower::var_tokens::fallback_warning(&found.fallbacks);
+    let undeclared = contract_lower::var_tokens::undeclared_warning(&found.undeclared);
+    Ok(fallback
+        .into_iter()
+        .chain(undeclared)
+        .map(CompileError::warning)
+        .collect())
 }
 /// Compile one source text to a validated plan. A text has no path, so a
 /// `use … from "./file.contract"` in it cannot be resolved: compile a file
@@ -964,6 +970,8 @@ fn compile_loaded(
         own.extend(shortcut_warnings(&file, &app_root));
         let fallbacks = contract_lower::var_tokens::fallback_warning(&sources.var_fallbacks);
         own.extend(fallbacks.map(CompileError::warning));
+        let undeclared = contract_lower::var_tokens::undeclared_warning(&sources.var_undeclared);
+        own.extend(undeclared.map(CompileError::warning));
     }
     let compiled = compile_file_warned(
         &file,

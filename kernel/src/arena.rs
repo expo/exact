@@ -16,6 +16,7 @@ pub(crate) mod button;
 pub(crate) mod control_text;
 pub(crate) mod defaults;
 mod inline_image;
+mod styles;
 pub mod text_style;
 
 use taffy::NodeId;
@@ -64,6 +65,8 @@ pub struct NodeArena {
     // @ref LLP 1043.000 §3 D4 — no per-node vector or allocation.
     pub(crate) flow: IdMap<u32, crate::flow::FlowState>,
     pub(crate) exclusion_slots: SlotSet,
+    /// The slots that declare custom properties (LLP 1123 D5).
+    pub(crate) declaring_slots: SlotSet,
     /// @ref LLP 1093 D7 — multi-column containers and their last cuts.
     pub(crate) frag: crate::fragment::FragState,
     /// Relative rows and the slots whose inputs changed (LLP 1069.000 D3).
@@ -184,6 +187,7 @@ impl Clone for NodeArena {
             frames: self.frames.clone(),
             flow: self.flow.clone(),
             exclusion_slots: self.exclusion_slots.clone(),
+            declaring_slots: self.declaring_slots.clone(),
             frag: self.frag.clone(),
             relative: self.relative.clone(),
             symbols_owed: self.symbols_owed.clone(),
@@ -276,6 +280,7 @@ impl NodeArena {
         self.fit_scales.clear();
         self.flow.clear();
         self.exclusion_slots.clear();
+        self.declaring_slots.clear();
         self.frag = Default::default();
         self.relative = Default::default();
         self.symbols_owed.clear();
@@ -926,6 +931,7 @@ impl NodeArena {
         self.field_content.remove(&slot);
         self.mark_reports.remove(&slot);
         self.exclusion_slots.remove(slot);
+        self.declaring_slots.remove(slot);
         self.frag.forget(slot);
         self.relative.forget(slot);
         self.symbols_owed.remove(slot);
@@ -1036,50 +1042,6 @@ impl NodeArena {
         } else {
             self.exclusion_slots.remove(slot);
         }
-    }
-
-    /// A test's write in place, copied first when shared. Production writes
-    /// go through [`set_style`](Self::set_style), which keeps an unset row
-    /// at its initial value, as sharing assumes.
-    #[cfg(test)]
-    pub(crate) fn style_mut(&mut self, slot: u32) -> &mut StyleProps {
-        Rc::make_mut(&mut self.styles[slot as usize])
-    }
-
-    /// Replace the slot's style, sharing an equal one's allocation.
-    pub(crate) fn set_style(&mut self, slot: u32, style: StyleProps) {
-        let style = self.shared.intern(style);
-        self.set_shared_style(slot, style);
-    }
-
-    /// Patch a slot without copying a style another node already holds.
-    pub(crate) fn patch_style(&mut self, slot: u32, patch: &StyleProps) {
-        let style = self.shared.patch(&self.styles[slot as usize], patch);
-        self.set_shared_style(slot, style);
-    }
-
-    /// Clear rows without copying a style another node already holds.
-    pub(crate) fn clear_style(&mut self, slot: u32, mask: crate::StyleMask, written: bool) {
-        let style = self
-            .shared
-            .clear(&self.styles[slot as usize], mask, written);
-        self.set_shared_style(slot, style);
-    }
-
-    fn set_shared_style(&mut self, slot: u32, style: Rc<StyleProps>) {
-        self.relative.update(slot, !style.relative.is_empty());
-        if crate::fragment::is_multicol(&style) {
-            self.frag.containers.insert(slot);
-        } else {
-            self.frag.containers.remove(slot);
-        }
-        self.styles[slot as usize] = style;
-        self.refresh_sticky(slot);
-    }
-
-    /// Distinct styles the arena holds for its nodes, beyond the initial one.
-    pub fn shared_style_count(&self) -> usize {
-        self.shared.len()
     }
 
     /// Set a prop; the previous value.

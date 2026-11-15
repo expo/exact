@@ -23,11 +23,15 @@
 use super::Kernel;
 use crate::arena::NodeArena;
 use crate::error::{KernelError, LayoutError};
-use crate::generated::{StyleId, StyleProps};
-use crate::id::{NodeFlags, ViewId};
+use crate::generated::{StyleId, StyleMask, StyleProps};
+use crate::id::ViewId;
 use crate::layout::LayoutMirror;
+use crate::style::calc::{self, simplify, Node};
+use crate::style::safe_area_properties::{Resolved, SafeAreaProperties};
 use crate::style::{Dimension, Edge, Env, RowValue};
 use std::borrow::Cow;
+use std::collections::BTreeMap;
+use std::sync::Arc;
 
 /// The rows an author overrides the four insets with, top right bottom left.
 pub(crate) const OVERRIDES: [StyleId; 4] = [
@@ -37,30 +41,388 @@ pub(crate) const OVERRIDES: [StyleId; 4] = [
     StyleId::LocalInsetLeft,
 ];
 
-/// Whether a style holds a length that reads a local inset, its own
-/// overrides aside (they read their parent's, [`local_at`]).
-pub(crate) fn reads_local(style: &StyleProps) -> bool {
-    style.mask.iter().any(|id| {
-        !OVERRIDES.contains(&id)
-            && matches!(style.get(id), RowValue::Dimension(Dimension::Compare(c)) if c.reads_local())
-    })
+/// Whether a style's lengths read what only the node's own environment
+/// has: a local inset or an author's custom property (LLP 1123 D5, D9).
+pub(crate) fn reads_node(style: &StyleProps) -> bool {
+    !node_rows(style).is_empty()
+}
+
+/// The rows of `style` whose lengths read a local inset, its own overrides
+/// aside (they read their parent's, [`local_at`]), or an author's custom
+/// property.
+fn node_rows(style: &StyleProps) -> StyleMask {
+    rows_where(style, |c| c.reads_local() || c.reads_custom())
+}
+
+/// Whether a style holds a length that reads an author's custom property.
+pub(crate) fn reads_properties(style: &StyleProps) -> bool {
+    !rows_where(style, calc::Comparison::reads_custom).is_empty()
+}
+
+fn rows_where(style: &StyleProps, reads: impl Fn(&calc::Comparison) -> bool) -> StyleMask {
+    let mut rows = StyleMask::EMPTY;
+    for id in style.mask.iter().filter(|id| !OVERRIDES.contains(id)) {
+        if matches!(style.get(id), RowValue::Dimension(Dimension::Compare(c)) if reads(&c)) {
+            rows.set(id);
+        }
+    }
+    rows
+}
+
+/// Whether an input of `slot`'s lengths moved with a local inset: one reads
+/// it, or a custom property they read reaches one.
+fn reads_insets(arena: &NodeArena, slot: u32, style: &StyleProps) -> bool {
+    !rows_where(style, calc::Comparison::reads_local).is_empty()
+        || reads_properties(style) && properties_read_local(arena, slot, style)
+}
+
+/// Derive `slot`'s lengths again after their local insets or custom
+/// properties changed, through what a change of the rows that read them
+/// does (`txn::style_changed`): a paragraph is measured again where one is
+/// a text row, an inline image's or an inline edge, whatever the value. An
+/// engine style that comes out the same lays the box out no more
+/// (`TaffyMirror::write_style`); `dirty` lays it out regardless, as an inset
+/// change does.
+pub(crate) fn rederive(
+    arena: &mut NodeArena,
+    layout: &mut dyn LayoutMirror,
+    slot: u32,
+    dirty: bool,
+    receipt: &mut crate::CommitReceipt,
+) {
+    let rows = node_rows(&arena.effective_style(slot));
+    crate::txn::style_changed(arena, layout, slot, rows, receipt);
+    if let Some(node) = arena.taffy(slot).filter(|_| dirty) {
+        layout.mark_dirty(node);
+    }
+}
+
+/// `slot`'s custom properties changed from `old` (LLP 1123 D5): each reader
+/// of a name whose value changed is derived again, in `slot`'s subtree,
+/// below the nodes that declare that name again, and through the
+/// declarations that read it.
+pub(crate) fn declarations_changed(
+    arena: &mut NodeArena,
+    layout: &mut dyn LayoutMirror,
+    slot: u32,
+    old: &SafeAreaProperties,
+    touched: &mut Vec<crate::id::NodeKey>,
+    receipt: &mut crate::CommitReceipt,
+) {
+    let new = own_declarations(arena, slot);
+    let mut changed: Vec<Arc<str>> = Vec::new();
+    for (name, _) in old.iter().chain(new.iter()) {
+        if old.get(name) != new.get(name) && !changed.iter().any(|n| &**n == name) {
+            changed.push(name.into());
+        }
+    }
+    let mut stack = vec![(slot, reaching(&new, &changed, true))];
+    while let Some((s, names)) = stack.pop() {
+        if names.is_empty() {
+            continue;
+        }
+        let style = arena.effective_style(s);
+        if reads_properties(&style) && read_names(&style).iter().any(|n| names.contains(n)) {
+            drop(style);
+            rederive(arena, layout, s, false, receipt);
+            touched.push(arena.key(s));
+        }
+        for &c in arena.children(s) {
+            stack.push((c, reaching(&own_declarations(arena, c), &names, false)));
+        }
+    }
+}
+
+/// The names whose values change at a node that declares `own`, when those
+/// in `above` changed: the changed ones it does not declare again, and each
+/// it declares that reads a changed one. `at_root`: `own` is what changed,
+/// so `above` names its own too.
+fn reaching(own: &SafeAreaProperties, above: &[Arc<str>], at_root: bool) -> Vec<Arc<str>> {
+    let mut out: Vec<Arc<str>> = match at_root {
+        true => above.to_vec(),
+        false => above
+            .iter()
+            .filter(|n| own.get(n).is_none())
+            .cloned()
+            .collect(),
+    };
+    // What each declaration reads, collected once
+    let reads: Vec<(&str, Vec<Arc<str>>)> = own
+        .iter()
+        .map(|(name, value)| {
+            let mut names = Vec::new();
+            if let Some(t) = calc::tree_of(value) {
+                t.names(&mut names);
+            }
+            (name, names)
+        })
+        .collect();
+    loop {
+        let mut added = false;
+        for (name, names) in &reads {
+            if out.iter().any(|n| &**n == *name) {
+                continue;
+            }
+            // A name it declares is its own; any other, its parent's
+            let moved = names.iter().any(|m| match own.get(m) {
+                Some(_) => out.contains(m),
+                None => above.contains(m),
+            });
+            if moved {
+                out.push((*name).into());
+                added = true;
+            }
+        }
+        if !added {
+            return out;
+        }
+    }
+}
+
+/// `slot`'s custom properties before a change of `changed`, where it
+/// changes them.
+pub(crate) fn declared_before(
+    arena: &NodeArena,
+    slot: u32,
+    changed: StyleMask,
+) -> Option<SafeAreaProperties> {
+    changed
+        .has(StyleId::SafeAreaProperties)
+        .then(|| own_declarations(arena, slot))
+}
+
+/// The custom properties `slot` declares itself.
+pub(crate) fn own_declarations(arena: &NodeArena, slot: u32) -> SafeAreaProperties {
+    let style = arena.style(slot);
+    match style.get(StyleId::SafeAreaProperties) {
+        RowValue::SafeAreaProperties(own) if style.mask.has(StyleId::SafeAreaProperties) => {
+            own.clone()
+        }
+        _ => SafeAreaProperties::default(),
+    }
 }
 
 /// The environment `slot`'s lengths, `style`, resolve against: the
 /// arena's, unless they read a local inset ([`env_at`]).
 pub(crate) fn env_for<'a>(arena: &'a NodeArena, slot: u32, style: &StyleProps) -> Cow<'a, Env> {
-    match reads_local(style) {
+    match reads_node(style) {
         true => env_at(arena, slot),
         false => Cow::Borrowed(arena.env()),
     }
 }
 
 /// The environment `slot`'s lengths resolve against: the arena's, with the
-/// local insets `slot` inherits ([`local_at`]).
+/// local insets `slot` inherits ([`local_at`]) and the custom properties its
+/// lengths read ([`properties_at`]).
 pub(crate) fn env_at(arena: &NodeArena, slot: u32) -> Cow<'_, Env> {
     let mut env = arena.env().clone();
     env.local = Some(local_at(arena, slot));
+    env.properties = Some(properties_at(arena, slot, &arena.effective_style(slot)));
     Cow::Owned(env)
+}
+
+/// The values of the custom properties `style`'s lengths read at `slot`
+/// (LLP 1123 D5), each resolved where it is declared.
+pub(crate) fn properties_at(arena: &NodeArena, slot: u32, style: &StyleProps) -> Resolved {
+    let names = read_names(style);
+    if names.is_empty() {
+        return Resolved::default();
+    }
+    // Every declaration first, so a walk past the bound invalidates every
+    // value, whatever order the rows read them in
+    let mut resolver = Resolver::new(arena);
+    let keys: Vec<_> = names.iter().map(|n| resolver.reach(slot, n)).collect();
+    if resolver.exhausted {
+        return Resolved::default();
+    }
+    let values = names
+        .into_iter()
+        .zip(keys)
+        .filter_map(|(name, key)| Some((name, resolver.value(&key?)?)))
+        .collect();
+    Resolved(values)
+}
+
+/// Whether a custom property `style`'s lengths read at `slot` reaches a
+/// local inset, through any declaration it depends on.
+pub(crate) fn properties_read_local(arena: &NodeArena, slot: u32, style: &StyleProps) -> bool {
+    let mut resolver = Resolver::new(arena);
+    for name in read_names(style) {
+        resolver.reach(slot, &name);
+    }
+    let local = |n: &Node| matches!(n, Node::Env(calc::EnvTerm::Local(_)));
+    resolver.exhausted
+        || resolver
+            .found
+            .values()
+            .any(|d| d.tree.as_ref().is_some_and(|t| t.any(&local)))
+}
+
+/// The custom properties `style`'s lengths read, fallbacks included.
+fn read_names(style: &StyleProps) -> Vec<Arc<str>> {
+    let mut names = Vec::new();
+    for id in style.mask.iter() {
+        if let RowValue::Dimension(Dimension::Compare(c)) = style.get(id) {
+            c.properties(&mut names);
+        }
+    }
+    names
+}
+
+/// The most declarations one node's lengths reach: past it every value is
+/// invalid, as CSS Variables 1 §3.3 has an over-long expansion.
+const MAX_DECLARATIONS: usize = 1024;
+
+/// A declaration: the node that declares a name, and the name.
+type Key = (u32, Arc<str>);
+
+/// Resolves custom properties where they are declared (CSS Variables 1
+/// §2.3). It first finds every declaration a reader depends on, fallbacks
+/// included, and the cycles among them (§2.3, by Tarjan's algorithm), whose
+/// every member is invalid; then it substitutes the rest, each `var()` in a
+/// declaration reading the declaring node's own values and a capture its
+/// local inset.
+struct Resolver<'a> {
+    arena: &'a NodeArena,
+    found: BTreeMap<Key, Declared>,
+    /// Tarjan's stack of declarations whose component is open.
+    stack: Vec<Key>,
+    /// Whether the walk passed [`MAX_DECLARATIONS`].
+    exhausted: bool,
+}
+
+struct Declared {
+    /// Its value's tree; `None` where it holds none.
+    tree: Option<Node>,
+    /// Tarjan's visit index and low link.
+    index: usize,
+    low: usize,
+    open: bool,
+    cyclic: bool,
+    /// Its substituted value, once known; `Some(None)` where it is invalid.
+    value: Option<Option<Node>>,
+}
+
+impl<'a> Resolver<'a> {
+    fn new(arena: &'a NodeArena) -> Self {
+        Resolver {
+            arena,
+            found: BTreeMap::new(),
+            stack: Vec::new(),
+            exhausted: false,
+        }
+    }
+
+    /// `name`'s declaration as `from` has it, the nearest at or above it,
+    /// visited with all it depends on; `None` where nothing declares it.
+    fn reach(&mut self, from: u32, name: &Arc<str>) -> Option<Key> {
+        let (slot, declared) = self.declaring(from, name)?;
+        let key = (slot, name.clone());
+        if !self.found.contains_key(&key) {
+            self.visit(key.clone(), &declared);
+        }
+        Some(key)
+    }
+
+    fn declaring(&self, from: u32, name: &str) -> Option<(u32, Dimension)> {
+        let mut at = Some(from);
+        while let Some(slot) = at {
+            if let RowValue::SafeAreaProperties(own) =
+                self.arena.style(slot).get(StyleId::SafeAreaProperties)
+            {
+                if let Some(d) = own.get(name) {
+                    return Some((slot, d.clone()));
+                }
+            }
+            at = self.arena.parent(slot);
+        }
+        None
+    }
+
+    fn visit(&mut self, key: Key, declared: &Dimension) {
+        let index = self.found.len();
+        if index >= MAX_DECLARATIONS {
+            self.exhausted = true;
+        }
+        let tree = calc::tree_of(declared);
+        let mut names = Vec::new();
+        if let Some(t) = &tree {
+            t.names(&mut names);
+        }
+        self.found.insert(
+            key.clone(),
+            Declared {
+                tree,
+                index,
+                low: index,
+                open: true,
+                cyclic: false,
+                value: None,
+            },
+        );
+        self.stack.push(key.clone());
+        let mut low = index;
+        let mut looped = false;
+        for name in names {
+            if self.exhausted {
+                break;
+            }
+            let Some((slot, d)) = self.declaring(key.0, &name) else {
+                continue;
+            };
+            let dep = (slot, name);
+            looped |= dep == key;
+            match self.found.get(&dep) {
+                None => {
+                    self.visit(dep.clone(), &d);
+                    low = low.min(self.found[&dep].low);
+                }
+                Some(seen) if seen.open => low = low.min(seen.index),
+                Some(_) => {}
+            }
+        }
+        self.found.get_mut(&key).expect("visited").low = low;
+        if low == index {
+            let at = self
+                .stack
+                .iter()
+                .rposition(|k| *k == key)
+                .expect("on the stack");
+            let component = self.stack.split_off(at);
+            let cyclic = component.len() > 1 || looped;
+            for k in component {
+                let d = self.found.get_mut(&k).expect("visited");
+                d.open = false;
+                d.cyclic = cyclic;
+            }
+        }
+    }
+
+    /// A visited declaration's value, substituted where it is declared;
+    /// `None` where it is invalid: in a cycle, reading an undefined
+    /// environment value, or too long.
+    fn value(&mut self, key: &Key) -> Option<Node> {
+        if self.exhausted {
+            return None;
+        }
+        let d = self.found.get(key)?;
+        if let Some(value) = &d.value {
+            return value.clone();
+        }
+        let tree = d.tree.clone().filter(|_| !d.cyclic);
+        let local = local_at(self.arena, key.0);
+        let value = tree
+            .and_then(|tree| {
+                calc::substitute(&tree, &|edge| local[edge as usize], &mut |name| {
+                    let dep = self.reach(key.0, name)?;
+                    self.value(&dep)
+                })
+            })
+            .map(simplify::simplify)
+            .filter(|v| !calc::undefined_in(v, self.arena.env()) && calc::within_expansion(v));
+        self.found.get_mut(key).expect("visited").value = Some(value.clone());
+        value
+    }
 }
 
 impl NodeArena {
@@ -145,6 +507,8 @@ fn resolve(
             }
             let mut env = env.clone();
             env.local = Some(local);
+            // An override reads no custom property, so a `var()` of one takes its fallback
+            env.properties = Some(Resolved::default());
             d.at_basis(&env, 0.0)
         }
         _ => base[i],
@@ -154,23 +518,24 @@ fn resolve(
 }
 
 /// A box moved to another parent, created ones included, may be in another
-/// owner now: what in its subtree reads a local inset is derived again.
-/// Whether anything was.
+/// owner, and below other declarations, now: what in its subtree reads a
+/// local inset or a custom property is derived again. Whether anything was.
 pub(crate) fn moved(arena: &mut NodeArena, layout: &mut dyn LayoutMirror, slot: u32) -> bool {
-    if !arena.blocks.has_locals() {
+    let locals = arena.blocks.has_locals();
+    if !locals && arena.declaring_slots.is_empty() {
         return false;
     }
+    let mut receipt = crate::CommitReceipt::default();
     let mut any = false;
     for s in arena.subtree(slot) {
-        if !reads_local(&arena.effective_style(s)) {
-            continue;
+        let style = arena.effective_style(s);
+        let reads = reads_properties(&style)
+            || locals && !rows_where(&style, calc::Comparison::reads_local).is_empty();
+        drop(style);
+        if reads {
+            rederive(arena, layout, s, false, &mut receipt);
+            any = true;
         }
-        if let Some(node) = arena.taffy(s) {
-            layout.restyle(arena, s, node);
-            layout.mark_dirty(node);
-        }
-        arena.flags_mut(s).insert(NodeFlags::STYLE_DIRTY);
-        any = true;
     }
     any
 }
@@ -202,9 +567,8 @@ impl Kernel {
             return Ok(false);
         }
         self.arena.blocks.set_local(slot, insets);
-        let readers: Vec<u32> = (self.arena.iter_live())
-            .filter(|&s| s == slot || self.arena.is_ancestor(slot, s))
-            .filter(|&s| reads_local(&self.arena.effective_style(s)))
+        let readers: Vec<u32> = (self.arena.subtree(slot).into_iter())
+            .filter(|&s| reads_insets(&self.arena, s, &self.arena.effective_style(s)))
             .collect();
         self.restyle_readers(&readers);
         Ok(!readers.is_empty())
@@ -241,6 +605,7 @@ impl Kernel {
             // A node gone (a leaving view's last style) reads the root's
             None => Env {
                 local: Some(Edge::ALL.map(|e| self.arena.env().root_inset(e))),
+                properties: Some(Default::default()),
                 ..self.env()
             },
         }
@@ -253,13 +618,11 @@ impl Kernel {
         if let Some(r) = &mut self.region {
             r.invalidate();
         }
+        let mut unmirrored = crate::layout::Unmirrored;
+        let layout = self.layout.as_deref_mut().unwrap_or(&mut unmirrored);
+        let mut receipt = crate::CommitReceipt::default();
         for &slot in readers {
-            if let (Some(node), Some(layout)) = (self.arena.taffy(slot), self.layout.as_deref_mut())
-            {
-                layout.restyle(&self.arena, slot, node);
-                layout.mark_dirty(node);
-            }
-            self.arena.flags_mut(slot).insert(NodeFlags::STYLE_DIRTY);
+            rederive(&mut self.arena, layout, slot, true, &mut receipt);
         }
         // A replayed row checks its styles, not what they now resolve to
         if let Some(tree) = self.layout.as_deref_mut().and_then(|l| l.tree()) {
@@ -271,3 +634,7 @@ impl Kernel {
 #[cfg(test)]
 #[path = "owner_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "property_tests.rs"]
+mod property_tests;

@@ -53,6 +53,7 @@ mod paint;
 mod paragraph_stamp;
 mod presence;
 mod presented_height;
+mod property_cost;
 mod reader;
 mod regions;
 mod rem;

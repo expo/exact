@@ -8,7 +8,7 @@ use super::{pick, Node, Unit};
 
 /// The tree `root` simplified, every NaN the one NaN: CSS writes a NaN as
 /// `NaN`, whatever its sign or payload (§10.13), so the tree holds no other.
-pub(super) fn simplify(root: Node) -> Node {
+pub(crate) fn simplify(root: Node) -> Node {
     canonical(fold(root))
 }
 
@@ -17,6 +17,10 @@ fn canonical(n: Node) -> Node {
     match n {
         Node::Value(v, unit) if v.is_nan() => Node::Value(f64::NAN, unit),
         Node::Value(..) | Node::Env(..) => n,
+        Node::Var(v) => Node::Var(super::Var {
+            fallback: v.fallback.map(|f| Box::new(canonical(*f))),
+            ..v
+        }),
         Node::Sum(c) => Node::Sum(all(c)),
         Node::Product(c) => Node::Product(all(c)),
         Node::Min(c) => Node::Min(all(c)),
@@ -30,6 +34,10 @@ fn canonical(n: Node) -> Node {
 fn fold(root: Node) -> Node {
     match root {
         Node::Value(..) | Node::Env(..) => root,
+        Node::Var(v) => Node::Var(super::Var {
+            fallback: v.fallback.map(|f| Box::new(fold(*f))),
+            ..v
+        }),
         Node::Min(c) => min_max(c.into_iter().map(fold).collect(), false),
         Node::Max(c) => min_max(c.into_iter().map(fold).collect(), true),
         Node::Clamp(c) => clamp(c.map(|a| a.map(fold))),

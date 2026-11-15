@@ -632,6 +632,46 @@ fn a_layout_region_is_the_browsers_safe_area() {
     }
 }
 
+/// A node's custom properties (LLP 1123 D5) are the browser's own: each
+/// declaration's length, and a length reads one through `var()`, which the
+/// browser substitutes.
+#[test]
+fn custom_properties_reach_the_browser_as_declarations() {
+    use exact_kernel::{StyleId, StyleValue};
+    let mut style = StyleProps::default();
+    let declared = "--gap: 8px; --pad: calc(var(--gap) * 2)";
+    style
+        .set_dynamic(
+            StyleId::SafeAreaProperties,
+            &StyleValue::Text(declared.into()),
+        )
+        .unwrap();
+    style
+        .set_dynamic(
+            StyleId::PaddingLeft,
+            &StyleValue::Text("var(--pad, 4px)".into()),
+        )
+        .unwrap();
+    // A fallback stands alone where the row's value does, so a sum keeps its `calc()`
+    style
+        .set_dynamic(
+            StyleId::MarginTop,
+            &StyleValue::Text("var(--missing, calc(10% + 2px))".into()),
+        )
+        .unwrap();
+    let (out, _) = crate::css::css_text(&style, &[]);
+    assert!(
+        out.contains("--gap:8px;--pad:calc(2 * var(--gap));"),
+        "{out}"
+    );
+    assert!(out.contains("padding-left:var(--pad, 4px)"), "{out}");
+    // As host/web/tests/local-insets.test.mjs has the browser read it
+    assert!(
+        out.contains("margin-top:var(--missing, calc(10% + 2px))"),
+        "{out}"
+    );
+}
+
 /// A content owner's local inset (LLP 1123 D9) reaches the browser as the
 /// registered custom property it reads, alone or in a calculation.
 #[test]

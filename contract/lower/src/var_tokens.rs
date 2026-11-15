@@ -1,30 +1,36 @@
-//! @ref LLP 1153 D6 — `var(--name)` in a style row is the design's token
-//! `name`. Each one is written as the name before anything reads the row
-//! (scoping, the types, the design's retention): by the loader for a file,
-//! and by `contract::compile` for a source text. So it lowers exactly as the
-//! name does: folded, or on the web the token's `var(--x-name)` where it
-//! varies. A browser substitutes `var()` when it computes a value; a token is
-//! the build's, which every host draws, so a reference resolves only to a
-//! token the app declares.
+//! @ref LLP 1153 D6, LLP 1123 D5 — `var(--name)` in a style row names, in
+//! this order:
 //!
-//! - A name the design declares is the token. A fallback is never used, and
-//!   the app is warned once (`forma-var-fallback`).
-//! - Any other `var()` in a style row is refused, fallback or not, so a typo
-//!   never ships the fallback (`forma-unknown-token`, naming the design's
-//!   tokens of the kinds the row takes). The refused row is dropped, so the
-//!   passes after the loader say nothing more of it.
-//! - The host's own custom properties, the safe area where a box is
-//!   (`var(--exact-safe-area-inset-top)`, LLP 1123 D9), are no token: they
-//!   are left for the kernel, which reads them.
-//! - A component's argument, a `fn`'s result and a `derive`'s value that is
-//!   one `var()` naming a token is that token, as a row reads it once the
-//!   component is expanded or the call made. Any other argument is
-//!   left as written, since it may be text; where it reaches a style row, a
-//!   `var()` in it naming no token is refused there ([`carried`]).
+//! - The host's own custom property (`var(--exact-safe-area-inset-top)`,
+//!   LLP 1123 D9), which is left for the kernel.
+//! - The design's token `name`, written as the name before anything reads
+//!   the row (scoping, the types, the design's retention): by the loader for
+//!   a file, and by `contract::compile` for a source text. It lowers exactly
+//!   as the name does: folded, or on the web the token's `var(--x-name)`
+//!   where it varies. A fallback is never used, and the app is warned once
+//!   (`forma-var-fallback`).
+//! - In a length row or a declaration, a runtime custom property some node
+//!   of the app declares (`--gap="8px"`), which the kernel reads at run
+//!   time, its fallback a value checked as the row's own; any other row
+//!   refuses one. A name nothing declares, which can only take its fallback,
+//!   is warned with one (`lower-var-undeclared`), as CSS admits it.
+//! - Nothing else: the call is refused, so a typo never ships its fallback
+//!   (`forma-unknown-token`, naming the design's tokens of the kinds the row
+//!   takes). A name with a `.`, which no node can declare, is a token's. The
+//!   refused row is dropped, so the passes after the loader say nothing more
+//!   of it.
+//!
+//! A component's argument, a `fn`'s result and a `derive`'s value that is
+//! one `var()` naming a token is that token, as a row reads it once the
+//! component is expanded or the call made. Any other argument is left as
+//! written, since it may be text; where it reaches a style row, a `var()` in
+//! it naming no token is refused there ([`carried`]).
 
 use crate::{tags, LowerError};
 use contract_syntax::{Attr, DesignSource, Expr, File, Node, Span, TemplatePart, ThemeDecl};
 use exact_forma as forma;
+use exact_kernel::style::safe_area_properties::is_author_name;
+use exact_kernel::StyleId;
 
 /// The tokens an app declares, as a `var()` may name them.
 #[derive(Debug, Clone, Default)]
@@ -38,6 +44,9 @@ pub struct Tokens {
     /// design is read, so its `var()`s are written as names and refused no
     /// further.
     parsed: bool,
+    /// The runtime custom properties the app's nodes declare (LLP 1123 D5),
+    /// each name after its `--`.
+    runtime: std::collections::BTreeSet<String>,
 }
 
 impl Tokens {
@@ -61,6 +70,7 @@ impl Tokens {
                 names: Vec::new(),
                 designed,
                 parsed,
+                runtime: Default::default(),
             };
         };
         let names: Vec<String> = merged.tokens.iter().map(|t| t.name.value.clone()).collect();
@@ -80,16 +90,42 @@ impl Tokens {
             names,
             designed,
             parsed,
+            runtime: Default::default(),
         }
+    }
+
+    /// These tokens with the runtime custom properties `files` declare.
+    pub fn with_runtime<'a>(mut self, files: impl IntoIterator<Item = &'a File>) -> Tokens {
+        for file in files {
+            self.runtime.extend(declared_properties(file));
+        }
+        self
     }
 
     fn declares(&self, name: &str) -> bool {
         !self.parsed || self.names.iter().any(|(n, _)| n == name)
     }
+
+    /// The one token or declared property `name` most plausibly misspells.
+    fn near(&self, name: &str) -> Option<String> {
+        let tokens = self.names.iter().map(|(n, _)| n.as_str());
+        contract_syntax::suggestion(name, tokens.chain(self.runtime.iter().map(String::as_str)))
+            .map(str::to_string)
+    }
 }
 
-/// What [`rewrite`] reports: the rows it refused, and the fallbacks it
-/// dropped.
+/// A `var()` of a name no token or node declares (LLP 1123 D5): the call as
+/// written, and the one declared name it most plausibly misspells.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Undeclared {
+    /// The call as written.
+    pub call: String,
+    /// The token or declared property it most plausibly misspells.
+    pub near: Option<String>,
+}
+
+/// What [`rewrite`] reports: the rows it refused, the fallbacks it
+/// dropped, and the `var()`s of names nothing declares.
 #[derive(Debug, Default)]
 pub struct Rewritten {
     /// Each style row refused, and dropped from the file.
@@ -97,11 +133,75 @@ pub struct Rewritten {
     /// Each `var()` whose fallback was dropped: where, and the call as
     /// written.
     pub fallbacks: Vec<(Span, String)>,
+    /// Each `var()` with a fallback of a name no token or node declares,
+    /// and where.
+    pub undeclared: Vec<(Span, Undeclared)>,
+}
+
+/// The runtime custom properties `file`'s nodes and styles declare (LLP
+/// 1123 D5), each name after its `--`.
+pub fn declared_properties(file: &File) -> std::collections::BTreeSet<String> {
+    // Every call here names no other compiler function (`from_iter`, not `new`): the walk
+    // census (`contract-checking`) matches calls by name and counts a walk that could recurse
+    let mut out = std::collections::BTreeSet::from_iter([]);
+    for s in &file.styles {
+        author_names(&s.attrs, &mut out);
+    }
+    for c in &file.components {
+        view_names(&c.view, &mut out);
+    }
+    if let Some(c) = &file.members {
+        view_names(&c.view, &mut out);
+    }
+    out
+}
+
+/// Each custom property `view`'s elements declare, after its `--`, added to
+/// `out`.
+fn view_names(tree_nodes: &[Node], declared_names: &mut std::collections::BTreeSet<String>) {
+    for n in Node::walk(tree_nodes) {
+        if let Node::Element {
+            attrs: own_attrs, ..
+        } = n
+        {
+            author_names(own_attrs, declared_names);
+        }
+    }
+}
+
+/// Each custom property `list` declares, after its `--`, added to `out`.
+fn author_names(list: &[Attr], out: &mut std::collections::BTreeSet<String>) {
+    for a in list {
+        if is_author_name(&a.name) {
+            out.insert(a.name[2..].to_owned());
+        }
+    }
+}
+
+/// The one warning for every `var()` of a name nothing declares, at the
+/// first (LLP 1123 D5).
+pub fn undeclared_warning(found: &[(Span, Undeclared)]) -> Option<LowerError> {
+    let (span, Undeclared { call, near }) = found.first()?;
+    let name = call_name(call);
+    let near = near
+        .as_ref()
+        .map(|n| format!("; did you mean `--{n}`?"))
+        .unwrap_or_default();
+    let others = match found.len() - 1 {
+        0 => String::new(),
+        _ => "; other `var()`s in this app name undeclared properties likewise".into(),
+    };
+    Some(LowerError {
+        id: "lower-var-undeclared",
+        message: format!("`{call}`: no node of this app declares `--{name}` and no token of the design is named so, so the fallback always stands in; declare it (`--{name}=\"…\"`) or write the fallback itself{near}{others}"),
+        span: *span,
+    })
 }
 
 /// Write each `var()` of `file`'s style rows that names a token as its
-/// name, refuse and drop each row with another, and write a component
-/// argument that is one such `var()` as the name.
+/// name, leave each that a length or a declaration reads at run time, refuse
+/// and drop each row with another, and write a component argument that is
+/// one such `var()` as the name (the module's order).
 pub fn rewrite(file: &mut File, tokens: &Tokens) -> Rewritten {
     let mut out = Rewritten::default();
     for s in file
@@ -133,8 +233,14 @@ pub fn rewrite(file: &mut File, tokens: &Tokens) -> Rewritten {
 }
 
 /// An app's design as [`Tokens::of`] reads it: `app.forma`'s text, its
-/// packages' designs and an inline `theme`.
-type Noted = (Option<String>, Vec<DesignSource>, Option<ThemeDecl>);
+/// packages' designs and an inline `theme`; and the runtime custom
+/// properties its nodes declare.
+type Noted = (
+    Option<String>,
+    Vec<DesignSource>,
+    Option<ThemeDecl>,
+    std::collections::BTreeSet<String>,
+);
 
 thread_local! {
     /// The design a `var()` may name while the app's styles are lowered,
@@ -145,15 +251,20 @@ thread_local! {
 /// Note `file`'s design for the rows [`carried`] checks, as lowering starts.
 pub(crate) fn note(file: &File) {
     let design = file.design.as_ref().map(|d| d.text.clone());
-    let noted = (design, file.package_designs.clone(), file.theme.clone());
+    let noted = (
+        design,
+        file.package_designs.clone(),
+        file.theme.clone(),
+        declared_properties(file),
+    );
     DESIGN.with(|d| *d.borrow_mut() = Some(noted));
 }
 
 /// A style row's `var()` that reached it through a component's argument,
 /// which the loader writes only when the argument is one `var()` naming a
-/// token: one naming no token is refused as the loader refuses it in a row,
-/// naming the tokens the row takes. A `var()` among other words of an
-/// argument, naming a token, is left for the row's own check.
+/// token: one the row cannot read is refused as the loader refuses it in a
+/// row. A `var()` among other words of an argument, naming a token, is left
+/// for the row's own check.
 pub(crate) fn carried(a: &Attr) -> Result<(), LowerError> {
     fn mentions(e: &Expr) -> bool {
         let named = |s: &str| {
@@ -177,15 +288,16 @@ pub(crate) fn carried(a: &Attr) -> Result<(), LowerError> {
     if !tags::style(&a.name) || !mentions(&a.value) {
         return Ok(());
     }
-    let Some((design, packages, theme)) = DESIGN.with(|d| d.borrow().clone()) else {
+    let Some((design, packages, theme, runtime)) = DESIGN.with(|d| d.borrow().clone()) else {
         return Ok(());
     };
-    let tokens = Tokens::of(design.as_deref(), &packages, theme.as_ref());
+    let mut tokens = Tokens::of(design.as_deref(), &packages, theme.as_ref());
+    tokens.runtime = runtime;
     let (mut out, mut refused) = (Rewritten::default(), None);
     value(
         &mut a.value.clone(),
         &tokens,
-        Mode::Row,
+        row_mode(a),
         &mut out,
         &mut refused,
     );
@@ -243,14 +355,21 @@ fn nodes(list: &mut [Node], tokens: &Tokens, out: &mut Rewritten) {
 }
 
 /// A list's style rows rewritten; one with a `var()` no token answers is
-/// refused and dropped.
+/// refused and dropped, as is a custom property named as a token is.
 fn rows(list: &mut Vec<Attr>, tokens: &Tokens, out: &mut Rewritten) {
     list.retain_mut(|a| {
         if !tags::style(&a.name) {
             return true;
         }
+        let name = a.name.strip_prefix("--").unwrap_or_default();
+        if tokens.parsed && tokens.names.iter().any(|(n, _)| n == name) {
+            let why = Why::Token(name.to_string());
+            out.refused.push(refusal(a, why, "", a.span, tokens));
+            return false;
+        }
         let mut refused = None;
-        value(&mut a.value, tokens, Mode::Row, out, &mut refused);
+        let mode = row_mode(a);
+        value(&mut a.value, tokens, mode, out, &mut refused);
         match refused {
             None => true,
             Some((why, literal, span)) => {
@@ -263,8 +382,13 @@ fn rows(list: &mut Vec<Attr>, tokens: &Tokens, out: &mut Rewritten) {
 
 #[derive(Clone, Copy, PartialEq)]
 enum Mode {
-    /// A style row's value: every `var()` written or refused.
-    Row,
+    /// A style row's value: every `var()` written or refused; whether the
+    /// row reads a runtime custom property ([`runtime_row`]).
+    Row(bool),
+    /// A custom property's declaration: a row that reads runtime properties,
+    /// whose token calls stay as written for lowering to write each
+    /// token's value ([`crate::values::call_tokens`]).
+    Declaration,
     /// A component's argument: a literal that is one `var()` naming a
     /// token, written; the rest left.
     Whole,
@@ -279,6 +403,40 @@ enum Why {
     Unnamed,
     /// Its name is computed (a template's hole).
     Computed,
+    /// It names a runtime custom property in a row that reads none.
+    Runtime(String),
+    /// A node declares a custom property a token of the design is named.
+    Token(String),
+    /// A token of another kind than a length stands where a custom property
+    /// holds one.
+    NotLength(String),
+}
+
+/// Whether `a`'s rows read a runtime custom property: lengths, which the
+/// kernel substitutes per node, and declarations (LLP 1123 D5).
+fn runtime_row(a: &Attr) -> bool {
+    use exact_kernel::StyleCodec;
+    let rows = tags::rows(a);
+    !rows.is_empty()
+        && !rows.iter().any(|r| local_inset(*r))
+        && rows.iter().all(|r| {
+            matches!(
+                r.codec(),
+                StyleCodec::Dimension | StyleCodec::SafeAreaProperties
+            )
+        })
+}
+
+/// Whether `row` overrides a content owner's local inset, which the kernel
+/// resolves before any custom property, so it reads none.
+fn local_inset(row: StyleId) -> bool {
+    matches!(
+        row,
+        StyleId::LocalInsetTop
+            | StyleId::LocalInsetRight
+            | StyleId::LocalInsetBottom
+            | StyleId::LocalInsetLeft
+    )
 }
 
 /// The first refusal in a value: why, the literal's text, where.
@@ -297,29 +455,49 @@ fn value(e: &mut Expr, tokens: &Tokens, mode: Mode, out: &mut Rewritten, refused
             if mode == Mode::Whole && whole_var(s).is_none() {
                 return;
             }
-            match text(s, tokens, false, &mut None) {
-                Ok(Some((next, fallbacks))) => {
+            match text(
+                s,
+                tokens,
+                false,
+                &mut None,
+                runtime(mode),
+                mode == Mode::Declaration,
+            ) {
+                Ok(Some((next, fallbacks, undeclared))) => {
                     out.fallbacks
                         .extend(fallbacks.into_iter().map(|f| (*span, f)));
+                    out.undeclared
+                        .extend(undeclared.into_iter().map(|f| (*span, f)));
                     *s = next;
                 }
                 Ok(None) => {}
-                Err(why) if mode == Mode::Row && refused.is_none() => {
+                Err(why)
+                    if matches!(mode, Mode::Row(_) | Mode::Declaration) && refused.is_none() =>
+                {
                     *refused = Some((why, s.clone(), *span));
                 }
                 Err(_) => {}
             }
         }
-        Expr::Template(parts, span) if mode == Mode::Row => {
+        Expr::Template(parts, span) if matches!(mode, Mode::Row(_) | Mode::Declaration) => {
             let mut quote = None;
             let n = parts.len();
             for i in 0..n {
                 let hole = i + 1 < n && matches!(parts[i + 1], TemplatePart::Expr(_));
                 match &mut parts[i] {
-                    TemplatePart::Text(s) => match text(s, tokens, hole, &mut quote) {
-                        Ok(Some((next, fallbacks))) => {
+                    TemplatePart::Text(s) => match text(
+                        s,
+                        tokens,
+                        hole,
+                        &mut quote,
+                        runtime(mode),
+                        mode == Mode::Declaration,
+                    ) {
+                        Ok(Some((next, fallbacks, undeclared))) => {
                             out.fallbacks
                                 .extend(fallbacks.into_iter().map(|f| (*span, f)));
+                            out.undeclared
+                                .extend(undeclared.into_iter().map(|f| (*span, f)));
                             *s = next;
                         }
                         Ok(None) => {}
@@ -424,31 +602,54 @@ pub fn whole_var(text: &str) -> Option<(String, bool)> {
 /// A `var(` in a literal's text.
 #[derive(Debug, PartialEq)]
 enum Found {
-    /// A whole call: its bytes, its name and its fallback as written.
+    /// A whole call: its bytes, its name and its fallback's bytes.
     Call {
         at: std::ops::Range<usize>,
         name: String,
-        fallback: Option<String>,
+        fallback: Option<std::ops::Range<usize>>,
     },
     /// One with no name, or whose name a template's hole computes.
     Bad(Why),
 }
 
-/// `text` with each `var()` naming a token written as the name, and each
-/// call whose fallback it dropped; `None` when it has no `var()`. `hole`:
-/// a template's hole follows the text. `quote`: the quote a template's
-/// earlier text left open, and this text leaves open.
+/// Whether a value in `mode` may read a runtime custom property.
+fn runtime(mode: Mode) -> bool {
+    matches!(mode, Mode::Row(true) | Mode::Declaration)
+}
+
+/// How a style row's value is rewritten: a declaration's apart from any
+/// other row's.
+fn row_mode(a: &Attr) -> Mode {
+    match tags::rows(a).as_slice() {
+        [StyleId::SafeAreaProperties] => Mode::Declaration,
+        _ => Mode::Row(runtime_row(a)),
+    }
+}
+
+/// A text's `var()`s rewritten: the text, each call whose fallback was
+/// dropped, and each call of a name nothing declares.
+type Written = (String, Vec<String>, Vec<Undeclared>);
+
+/// `text` with each `var()` naming a token written as the name, each call
+/// whose fallback it dropped, and each of a name nothing declares, which
+/// its fallback answers (`runtime`: the row reads runtime custom
+/// properties); `None` when it has no `var()`. `hole`: a template's hole
+/// follows the text. `quote`: the quote a template's earlier text left
+/// open, and this text leaves open.
 fn text(
     text: &str,
     tokens: &Tokens,
     hole: bool,
     quote: &mut Option<char>,
-) -> Result<Option<(String, Vec<String>)>, Why> {
+    runtime: bool,
+    keep: bool,
+) -> Result<Option<Written>, Why> {
     let found = calls(text, hole, quote);
     if found.is_empty() {
         return Ok(None);
     }
-    let (mut out, mut fallbacks, mut at) = (String::new(), Vec::new(), 0);
+    let (mut out, mut fallbacks, mut undeclared, mut at) =
+        (String::new(), Vec::new(), Vec::new(), 0);
     for f in found {
         match f {
             Found::Call {
@@ -460,12 +661,55 @@ fn text(
                     continue;
                 }
                 if !tokens.declares(&name) {
-                    return Err(Why::Unknown(name, fallback.is_some()));
+                    // Exact reserves dotted names for design tokens, so no node declares one
+                    let property = !name.contains('.');
+                    match tokens.runtime.contains(&name) {
+                        true if runtime => {}
+                        true => return Err(Why::Runtime(name)),
+                        false if runtime && property && fallback.is_some() => {
+                            let near = tokens.near(&name);
+                            let call = text[range].to_string();
+                            undeclared.push(Undeclared { call, near });
+                        }
+                        false => return Err(Why::Unknown(name, fallback.is_some())),
+                    }
+                    // The call stays for the kernel, its fallback a value of its own
+                    if let Some(f) = fallback {
+                        let inner = (self::text)(
+                            &text[f.clone()],
+                            tokens,
+                            false,
+                            &mut None,
+                            runtime,
+                            true,
+                        )?;
+                        if let Some((inner, mut dropped, mut unknown)) = inner {
+                            out.push_str(&text[at..f.start]);
+                            out.push_str(&inner);
+                            at = f.end;
+                            fallbacks.append(&mut dropped);
+                            undeclared.append(&mut unknown);
+                        }
+                    }
+                    continue;
                 }
                 // A design that does not parse names no token: its refusal
                 // fails the build, and no fallback is said to be unused.
                 if fallback.is_some() && tokens.parsed {
                     fallbacks.push(text[range.clone()].to_string());
+                }
+                // A declaration's or a runtime fallback's token call stays for
+                // lowering to write as its value
+                if keep {
+                    let kind = tokens
+                        .names
+                        .iter()
+                        .find(|(n, _)| *n == name)
+                        .and_then(|(_, k)| *k);
+                    if kind.is_some_and(|k| k != forma::Kind::Length) {
+                        return Err(Why::NotLength(name));
+                    }
+                    continue;
                 }
                 out.push_str(&text[at..range.start]);
                 out.push_str(&name);
@@ -475,7 +719,7 @@ fn text(
         }
     }
     out.push_str(&text[at..]);
-    Ok(Some((out, fallbacks)))
+    Ok(Some((out, fallbacks, undeclared)))
 }
 
 /// Whether `name` (after its `--`) is a custom property the host sets.
@@ -503,6 +747,13 @@ fn calls(text: &str, hole: bool, quote: &mut Option<char>) -> Vec<Found> {
         if c == '"' || c == '\'' {
             *quote = Some(c);
             i += 1;
+            continue;
+        }
+        // A comment holds no call
+        if text[i..].starts_with("/*") {
+            i = text[i + 2..]
+                .find("*/")
+                .map_or(text.len(), |e| i + 2 + e + 2);
             continue;
         }
         let opens = text
@@ -547,7 +798,7 @@ fn calls(text: &str, hole: bool, quote: &mut Option<char>) -> Vec<Found> {
                     found.push(Found::Call {
                         at: i..end + 1,
                         name: name.to_string(),
-                        fallback: Some(text[after + 1..end].trim().to_string()),
+                        fallback: Some(after + 1..end),
                     });
                     i = end + 1;
                 }
@@ -599,6 +850,22 @@ fn refusal(a: &Attr, why: Why, literal: &str, span: Span, tokens: &Tokens) -> Lo
             "lower-attr-value",
             format!("{written}: a `var()` names its token whole; a token's name from data is the value itself (`{}=name`), which the runtime reads against the design", a.name),
         ),
+        Why::NotLength(name) => (
+            "lower-attr-value",
+            format!("{written}: `--{name}` is a design token of another kind than a length, and a custom property's value, or a fallback a length reads at run time, is a length"),
+        ),
+        Why::Token(name) => (
+            "lower-attr-value",
+            format!("`{}`: `{name}` is a token of this app's design, and `var(--{name})` reads the token, so no node declares a custom property of that name; name the property otherwise", a.name),
+        ),
+        Why::Runtime(name) if tags::rows(a).into_iter().any(local_inset) => (
+            "lower-attr-value",
+            format!("{written}: `{}` sets the content owner's inset, which the kernel resolves before any custom property, so it reads none; write the length `--{name}` holds", a.name),
+        ),
+        Why::Runtime(name) => (
+            "lower-attr-value",
+            format!("{written}: `--{name}` is a custom property a node declares, which a length (`padding`, `width`, …) or another declaration reads; `{}` names a token of the design (`var(--name)` of a token, or a role)", a.name),
+        ),
         Why::Unknown(name, fallback) => {
             let kinds = kinds(a);
             let said = kinds
@@ -635,9 +902,19 @@ fn refusal(a: &Attr, why: Why, literal: &str, span: Span, tokens: &Tokens) -> Lo
             } else {
                 ""
             };
+            // A length reads a custom property a node declares too (LLP 1123 D5)
+            let (nodes, near) = match runtime_row(a) {
+                true => (
+                    " and no node of the app declares it",
+                    (tokens.near(&name).filter(|_| dotted.is_empty()))
+                        .map(|n| format!("; did you mean `--{n}`?"))
+                        .unwrap_or_default(),
+                ),
+                false => ("", String::new()),
+            };
             (
                 "forma-unknown-token",
-                format!("{written}: `--{name}` is no token of this app's design; {listed}{dotted}{role}{fallback}"),
+                format!("{written}: `--{name}` is no token of this app's design{nodes}; {listed}{dotted}{role}{near}{fallback}"),
             )
         }
     };
@@ -693,11 +970,20 @@ mod tests {
             names: names.iter().map(|n| (n.to_string(), None)).collect(),
             designed: true,
             parsed: true,
+            runtime: Default::default(),
         }
     }
 
     fn written(s: &str) -> Result<Option<String>, Why> {
-        text(s, &tokens(&["ink", "space.row"]), false, &mut None).map(|o| o.map(|(s, _)| s))
+        text(
+            s,
+            &tokens(&["ink", "space.row"]),
+            false,
+            &mut None,
+            false,
+            false,
+        )
+        .map(|o| o.map(|(s, ..)| s))
     }
 
     #[test]
@@ -737,7 +1023,10 @@ mod tests {
         assert_eq!(written("var(--ink"), Err(Why::Unnamed));
         // A name a template's hole completes.
         let t = tokens(&["ink"]);
-        assert_eq!(text("var(--", &t, true, &mut None), Err(Why::Computed));
+        assert_eq!(
+            text("var(--", &t, true, &mut None, false, false),
+            Err(Why::Computed)
+        );
     }
 
     #[test]
@@ -756,7 +1045,7 @@ mod tests {
     #[test]
     fn a_fallback_is_kept_for_the_warning() {
         let t = tokens(&["ink"]);
-        let (_, fallbacks) = text("var(--ink, #111)", &t, false, &mut None)
+        let (_, fallbacks, _) = text("var(--ink, #111)", &t, false, &mut None, false, false)
             .unwrap()
             .unwrap();
         assert_eq!(fallbacks, ["var(--ink, #111)"]);

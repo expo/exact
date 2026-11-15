@@ -25,7 +25,8 @@ pub(super) const MAX_LEVELS: usize = 2 * super::MAX_DEPTH + 2;
 /// (0–3 an inset's edge, 8–13 a segment's variable, then its two indices,
 /// 16–35 a layout region's inset, 36–39 a title-bar area variable);
 /// a list's `u8` count; clamp's three presence bytes, each before its
-/// argument.
+/// argument; 10 an author's custom property (LLP 1123 D5), its name as the
+/// codec's string, then its fallback's presence byte and the fallback.
 pub(super) fn encode(entry: &Entry, w: &mut Writer) {
     match entry {
         Entry::Tree(n) => node_out(n, w),
@@ -87,6 +88,11 @@ fn node_out(n: &Node, w: &mut Writer) {
             w.u8(8);
             c.iter().for_each(|a| optional(a.as_ref(), w));
         }
+        Node::Var(v) => {
+            w.u8(10);
+            w.string(&v.name);
+            optional(v.fallback.as_deref(), w);
+        }
     }
 }
 
@@ -143,7 +149,7 @@ pub(super) fn within_author_limits(tree: &Node) -> bool {
 fn authored(n: &Node, opened: bool) -> (usize, usize) {
     let function = matches!(n, Node::Min(_) | Node::Max(_) | Node::Clamp(_));
     let product = matches!(n, Node::Product(_));
-    let mut values = usize::from(matches!(n, Node::Value(..) | Node::Env(..)));
+    let mut values = usize::from(matches!(n, Node::Value(..) | Node::Env(..) | Node::Var(..)));
     let mut deepest = 0;
     for c in n.children() {
         let (v, l) = authored(c, product && matches!(c, Node::Sum(_)));
@@ -209,6 +215,13 @@ fn node(r: &mut Reader<'_>, level: usize, nodes: &mut usize) -> Option<Node> {
             optional(r, nodes)?,
             optional(r, nodes)?,
         ])),
+        10 => {
+            let name = r.string().ok()?;
+            Node::Var(super::Var {
+                name: name.into(),
+                fallback: optional(r, nodes)?.map(Box::new),
+            })
+        }
         _ => return None,
     })
 }

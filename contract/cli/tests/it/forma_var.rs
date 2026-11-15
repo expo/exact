@@ -264,6 +264,9 @@ fn a_length_token_in_grid_tracks_is_its_value() {
             "{tracks}"
         );
     }
+    // A comment separates a number from the token after it, as white space does
+    let plan = grid("0/**/var(--card.min)").unwrap_or_else(|e| panic!("{e}"));
+    assert!(plan.windows(b"9.5rem".len()).any(|w| w == b"9.5rem"));
     let varies = grid("repeat(2, var(--space.row))").unwrap_err();
     assert!(
         varies.contains("with one value in every app mode"),

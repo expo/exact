@@ -1131,6 +1131,9 @@ pub fn style_writes(id: u16, timeline: bool, written: bool) -> Result<Vec<Write>
             with("timeline-scope", NONE),
             with("--exact-timeline-scope", NONE),
         ],
+        // @ref LLP 1123 D5 — a node's custom properties, which tree.js `css`
+        // writes one declaration at a time
+        StyleId::SafeAreaProperties => vec![with("--", "v=>v")],
         StyleId::GridTemplateColumns | StyleId::GridTemplateRows => vec![with(
             &css_property(row),
             "v=>gridValue(\"tracks\",v)",

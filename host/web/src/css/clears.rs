@@ -7,12 +7,11 @@ pub(super) fn push(out: &mut String, id: StyleId, press: bool) -> bool {
     use StyleId::*;
     match id {
         TintColor | ExitAnimation | DragTimeline | AnimationTimeline | AnimationRange
-        | TimelineScope | LayoutTransition | PressScale | PressHaptic | ControlSize
-        | ControlCornerStyle | Fit | LineClamp | RotateAxis | TranslateZ | TranslatePercent
-        | SymbolRendering | TintAdjustment | SymbolPalette | SymbolValue | SymbolEffect
-        | ContentTransition | ScrollEdgeEffect | HoverEffect | SmartInvert | AnimationTrigger => {
-            return false
-        }
+        | TimelineScope | SafeAreaProperties | LayoutTransition | PressScale | PressHaptic
+        | ControlSize | ControlCornerStyle | Fit | LineClamp | RotateAxis | TranslateZ
+        | TranslatePercent | SymbolRendering | TintAdjustment | SymbolPalette | SymbolValue
+        | SymbolEffect | ContentTransition | ScrollEdgeEffect | HoverEffect | SmartInvert
+        | AnimationTrigger => return false,
         // The name and the drag code's copy of it (css.rs).
         ScrollTimelineName => {
             out.push_str("scroll-timeline-name:unset;--exact-scroll-timeline:unset;")

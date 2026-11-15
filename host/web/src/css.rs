@@ -13,6 +13,7 @@ pub mod text_style;
 pub use decorations::{atom_faces, decoration_styles};
 pub use fonts::{font_alias, font_family_names, runtime_font_family};
 
+use exact_kernel::style::safe_area_properties::SafeAreaProperties;
 use exact_kernel::style::ColorValue;
 use exact_kernel::{Color, Dimension, Display, Overflow, RowValue, StyleId, StyleProps};
 use exact_motion::{Easing, Property, TimingFunction, Transition, TransitionProperty, Transitions};
@@ -302,6 +303,15 @@ fn css_text_in(
                         s,
                         s
                     );
+                }
+            }
+            // @ref LLP 1123 D5 — runtime custom properties are the browser's own
+            (StyleId::SafeAreaProperties, RowValue::SafeAreaProperties(c)) => {
+                for (name, value) in c.iter() {
+                    SafeAreaProperties::write_name(name, &mut out);
+                    out.push(':');
+                    dimension(&mut out, value.clone());
+                    out.push(';');
                 }
             }
             (StyleId::LayoutTransition, RowValue::Transitions(t)) => {
@@ -802,6 +812,7 @@ fn lowered(id: StyleId, value: &RowValue<'_>) -> bool {
         | RowValue::AnimationTimeline(_)
         | RowValue::AnimationRange(_)
         | RowValue::TimelineScope(_)
+        | RowValue::SafeAreaProperties(_)
         | RowValue::TimelineName(_) => false,
         _ => true,
     }
@@ -990,6 +1001,7 @@ fn declared(out: &mut String, id: StyleId, value: &RowValue<'_>) {
         RowValue::AnimationTimeline(t) => out.push_str(&t.css()),
         RowValue::AnimationRange(r) => out.push_str(&r.css()),
         RowValue::TimelineScope(s) => out.push_str(&s.css()),
+        RowValue::SafeAreaProperties(c) => out.push_str(&c.css()),
         RowValue::TimelineName(n) => out.push_str(&n.css()),
         RowValue::ViewTimelineInset(i) => out.push_str(&i.css()),
         RowValue::Paint(p) => out.push_str(&p.css()),

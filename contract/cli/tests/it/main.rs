@@ -53,6 +53,7 @@ mod control_roles;
 mod controls;
 mod corpus;
 mod current;
+mod custom_properties;
 mod dataset;
 mod declared_source;
 mod delete_rows;

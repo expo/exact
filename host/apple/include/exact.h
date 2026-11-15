@@ -256,7 +256,7 @@ size_t exact_corner_outline(const float *shape, float x, float y, float width, f
 /* A style owns this environment snapshot until destroy. Values: top, right, bottom, left,
  * viewport width/height (the window's when a sheet is open), segment cols/rows, the layout
  * regions' count (0 or 20) and the regions (LLP 1123 D10), the title-bar area's count (0 or 4)
- * and its x,y,w,h, then x,y,w,h per segment. create copies them and parses the UTF-8
+ * and its x,y,w,h, x,y,w,h per segment, then the root font size. create copies them and parses the UTF-8
  * expression; NULL for malformed input.
  * resolve borrows a live context; destroy consumes it exactly once (NULL is allowed). */
 void *exact_calc_create(const uint8_t *text, size_t len, const double *values, size_t count);

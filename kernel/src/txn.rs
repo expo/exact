@@ -842,6 +842,7 @@ pub(crate) fn continue_document(
                     if changed.is_empty() {
                         continue;
                     }
+                    let declared = crate::kernel::owner::declared_before(arena, slot, changed);
                     let excluded = crate::flow::is_exclusion(arena, slot);
                     let named = arena.named_text_style(slot).is_some();
                     arena.patch_style(slot, patch);
@@ -859,6 +860,11 @@ pub(crate) fn continue_document(
                     }
                     touched.push(arena.key(slot));
                     propagate_inherited(arena, layout, slot, changed, touched, receipt);
+                    if let Some(old) = declared {
+                        crate::kernel::owner::declarations_changed(
+                            arena, layout, slot, &old, touched, receipt,
+                        );
+                    }
                 }
                 Op::ClearStyle { id, mask, written } => {
                     let slot = live_slot(arena, op_index, *id)?;
@@ -866,6 +872,7 @@ pub(crate) fn continue_document(
                     if changed.is_empty() {
                         continue;
                     }
+                    let declared = crate::kernel::owner::declared_before(arena, slot, changed);
                     let excluded = crate::flow::is_exclusion(arena, slot);
                     let named = arena.named_text_style(slot).is_some();
                     arena.clear_style(slot, *mask, *written);
@@ -879,6 +886,11 @@ pub(crate) fn continue_document(
                         segmented::style_changed(arena, layout, slot, changed, touched);
                     touched.push(arena.key(slot));
                     propagate_inherited(arena, layout, slot, changed, touched, receipt);
+                    if let Some(old) = declared {
+                        crate::kernel::owner::declarations_changed(
+                            arena, layout, slot, &old, touched, receipt,
+                        );
+                    }
                 }
                 Op::SetChildren { id, children } => {
                     let slot = live_slot(arena, op_index, *id)?;
@@ -1399,7 +1411,7 @@ fn view_box_changed(
     receipt.layout_invalidated = true;
 }
 
-fn style_changed(
+pub(crate) fn style_changed(
     arena: &mut NodeArena,
     layout: &mut dyn LayoutMirror,
     slot: u32,

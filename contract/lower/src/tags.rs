@@ -421,6 +421,10 @@ pub fn attr(name: &str) -> Option<AttrTarget> {
     if let Some(target) = crate::style_names::lookup(name) {
         return Some(target);
     }
+    // @ref LLP 1123 D5 — a runtime custom property; a node's are one row
+    if exact_kernel::style::safe_area_properties::is_author_name(name) {
+        return Some(AttrTarget::Styles(&[StyleId::SafeAreaProperties]));
+    }
     Some(match name {
         "datetime" => AttrTarget::Prop(PropId::Datetime),
         "format" => AttrTarget::Prop(PropId::TimeFormat),

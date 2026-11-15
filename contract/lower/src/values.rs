@@ -1,12 +1,16 @@
 //! Attribute values checked against what they set, at compile time: a
 //! literal style value by the kernel's own row parser, a computed one and a
 //! prop by type (LLP 1017 P1a).
+// @ref LLP 1123 D5 — length tokens written as their values where nothing binds one
+#[path = "length_tokens.rs"]
+mod length_tokens;
 use crate::style_names::press_refusal;
 use crate::{edits, err, media, symbols, tags, vocab, FontUse, LowerError};
 use contract_syntax::{Attr, Expr, Span, TemplatePart, UnOp};
 use contract_types::{Ref, Scope, Shapes, Ty};
 use exact_kernel::style::sides as box_sides;
 use exact_kernel::{PropId, StyleId, StyleProps, StyleValue, StyleValueError};
+pub(crate) use length_tokens::{call_tokens, fallback_tokens, grid_tokens};
 use std::{cell::Cell, rc::Rc};
 /// A literal, as an author wrote it, for a message.
 fn literal_text(e: &Expr) -> String {
@@ -32,64 +36,6 @@ fn constant_text(e: &Expr) -> Option<String> {
         _ => None,
     }
 }
-/// A grid track list with each length token it names written as the token's
-/// value (`minmax(card-min-width, 1fr)`, the loader having written
-/// `var(--card-min-width)` as the name), as a browser substitutes `var()` before
-/// it parses the tracks (CSS Variables 1 §3). Only a token with one value in
-/// every app mode is written in; the kernel's track parser refuses any other.
-pub(crate) fn grid_tokens(a: &Attr, rows: &[StyleId]) -> Option<Attr> {
-    if !rows
-        .iter()
-        .any(|r| matches!(r, StyleId::GridTemplateColumns | StyleId::GridTemplateRows))
-    {
-        return None;
-    }
-    fn write(e: &mut Expr, changed: &mut bool) {
-        match e {
-            Expr::Str(text, _) => {
-                let mut out = String::with_capacity(text.len());
-                let mut rest = text.as_str();
-                while let Some(start) = rest.find(|c: char| c.is_ascii_alphabetic()) {
-                    let (before, word) = rest.split_at(start);
-                    let end = word
-                        .find(|c: char| {
-                            !(c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
-                        })
-                        .unwrap_or(word.len());
-                    // A word that follows a digit is the number's unit (`1fr`, `9.5rem`).
-                    let unit = before.ends_with(|c: char| c.is_ascii_digit() || c == '.');
-                    out.push_str(before);
-                    match crate::theme::measure_written(&word[..end]).filter(|_| !unit) {
-                        Some((exact_forma::Kind::Length, values)) if values.len() == 1 => {
-                            out.push_str(&values[0]);
-                            *changed = true;
-                        }
-                        _ => out.push_str(&word[..end]),
-                    }
-                    rest = &word[end..];
-                }
-                out.push_str(rest);
-                *text = out;
-            }
-            Expr::Ternary(_, yes, no, _)
-            | Expr::Match {
-                some: yes,
-                none: no,
-                ..
-            } => {
-                write(yes, changed);
-                write(no, changed);
-            }
-            Expr::Let { body, .. } => write(body, changed),
-            _ => {}
-        }
-    }
-    let mut out = a.clone();
-    let mut changed = false;
-    write(&mut out.value, &mut changed);
-    changed.then_some(out)
-}
-
 /// `navigationSplit`'s column width written as a number: its text, as the
 /// prop carries it (LLP 1116.004 D1.2).
 pub(crate) fn split_width(prop: PropId, e: &Expr) -> Option<Expr> {
@@ -233,6 +179,7 @@ pub(crate) fn describe(e: &StyleValueError) -> String {
         StyleValueError::BadAnimationRange { .. } => "expected normal, or one or two distinct ends, each normal, a length or percentage, or a range name (cover, contain, entry, exit, entry-crossing, exit-crossing) with an optional length or percentage (`0px 300px`, `entry 20% cover 50%`)".into(),
         StyleValueError::BadPositionTryFallbacks { .. } => "expected none, or comma-separated attempts, each one to three of flip-block, flip-inline and flip-start, applied in order; flip-x, flip-y and named rules are not implemented".into(),
         StyleValueError::BadTimelineScope { .. } => "expected none, all, or `--name`s separated by commas".into(),
+        StyleValueError::BadSafeAreaProperties { .. } => "expected `--name: <length>` declarations: a length in px, rem, a percentage, a viewport unit, env(), var(), or calc(), min(), max() or clamp() of these; a name is `--` and an identifier that does not start `--exact-`".into(),
         StyleValueError::BadTimelineName { .. } => "expected none or one `--name`".into(),
         StyleValueError::BadViewTimelineInset { .. } => "expected one or two of auto and a length or percentage, the start then the end".into(),
         StyleValueError::BadTransition { .. } => "unsupported transition property or invalid timing components; exact2 supports transform components, opacity, paint and SVG properties, and admitted numeric height transitions; general layout interpolation is not implemented".into(),

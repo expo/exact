@@ -81,6 +81,8 @@ pub enum DecodeError {
     BadAnimationRange,
     /// Invalid `timeline-scope` (LLP 1057.003 D4).
     BadTimelineScope,
+    /// Invalid runtime custom properties (LLP 1123 D5).
+    BadSafeAreaProperties,
     /// Invalid `scroll-timeline-name` or `view-timeline-name` (LLP 1057.003 D5).
     BadTimelineName,
     /// Invalid `view-timeline-inset` (LLP 1057.003 D5).
@@ -592,6 +594,10 @@ pub enum StyleValueError {
     },
     /// Not `none`, `all` or a list of `<dashed-ident>`s.
     BadTimelineScope {
+        style: StyleId,
+    },
+    /// Not `--name: <length>` declarations of authors' names.
+    BadSafeAreaProperties {
         style: StyleId,
     },
     /// Not `none` or one `<dashed-ident>`.

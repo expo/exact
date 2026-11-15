@@ -5,6 +5,7 @@ import { listRow, listOwner, renderMarkup } from './navigation.js';
 import { Docs } from './document.js';
 import { Refusal } from './shape.js';
 import { regions } from './regions.js';
+import { declare } from './declarations.js';
 import { backdropValue as backdropCss } from './backdrop.js';
 import { onEnd, effect, say, inflight, After, Paint, Probes, Media, Links, Scrolls, Selects } from './rt.js';
 import { Adopt, adopting } from './mount.js';
@@ -319,6 +320,7 @@ export function css(e, prop, unit, v, rendered) {
     t = cssText(prop, unit, v);
   if (last[prop] === t) return;
   last[prop] = t;
+  if (prop === '--') return declare(e, t);
   if (prop === '--exact-animation-trigger') {
     if (v === 'none') e.setAttribute('data-exact-animation-trigger', 'none');
     else e.removeAttribute('data-exact-animation-trigger');

@@ -36,6 +36,7 @@ mod keyword;
 pub use keyword::SizeKeyword;
 mod handles;
 mod intern;
+pub mod safe_area_properties;
 pub use calc::Comparison;
 use handles::calc_handle;
 pub(crate) use handles::{calc_handle_in, resolve_calc, tree_handle, LayoutEnv};
@@ -900,6 +901,8 @@ pub enum RowValue<'a> {
     AnimationRange(&'a crate::timeline::AnimationRange),
     /// CSS `timeline-scope` (LLP 1057.003 D4).
     TimelineScope(&'a crate::timeline::TimelineScope),
+    /// A node's runtime custom properties (LLP 1123 D5).
+    SafeAreaProperties(&'a crate::style::safe_area_properties::SafeAreaProperties),
     /// CSS `scroll-timeline-name` or `view-timeline-name` (LLP 1057.003 D5).
     TimelineName(&'a crate::timeline::TimelineName),
     /// CSS `view-timeline-inset` (LLP 1057.003 D5).

@@ -5,6 +5,21 @@
 
 use super::{EnvTerm, Node, Unit};
 
+/// `name` as a CSS identifier, escaped where it must be.
+pub(crate) fn ident(name: &str, out: &mut String) {
+    // Writing to a String cannot fail
+    let _ = cssparser::serialize_identifier(name, out);
+}
+
+/// A length's tree as CSS: a lone value as itself, anything else as a
+/// math function.
+pub(crate) fn length(root: &Node, out: &mut String) {
+    match root {
+        Node::Value(v, unit) => value(*v, *unit, out),
+        _ => math_function(root, out),
+    }
+}
+
 /// "Serialize a math function" whose tree is `root`.
 pub(super) fn math_function(root: &Node, out: &mut String) {
     match root {
@@ -23,7 +38,7 @@ pub(super) fn math_function(root: &Node, out: &mut String) {
             out.push(')');
         }
         // A non-math function as normal
-        Node::Env(..) => tree(root, out),
+        Node::Env(..) | Node::Var(..) => tree(root, out),
         _ => {
             out.push_str("calc(");
             out.push_str(stripped(&serialized(root)));
@@ -64,6 +79,16 @@ fn tree(n: &Node, out: &mut String) {
     match n {
         Node::Value(v, unit) => value(*v, *unit, out),
         Node::Env(term) => env(*term, out),
+        Node::Var(v) => {
+            out.push_str("var(");
+            ident(&v.name, out);
+            // A fallback is written as a length, which stands alone where a row's value does
+            if let Some(fallback) = &v.fallback {
+                out.push_str(", ");
+                length(fallback, out);
+            }
+            out.push(')');
+        }
         Node::Min(_) | Node::Max(_) | Node::Clamp(_) => math_function(n, out),
         Node::Negate(c) => {
             out.push_str("(-1 * ");
