@@ -88,9 +88,6 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     }
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        // Stand in for the transition's end on a stack whose delegate the app replaced, which sends Exact no call of
-        // its own: UIKit shows this route as a pop or push ends (`NavigationHost.routeAppeared`)
-        host?.routeAppeared()
         appeared?()
     }
     required init?(coder: NSCoder) { nil }

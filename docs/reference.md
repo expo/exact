@@ -4352,6 +4352,18 @@ below any later popover, without exposing the page or a lower modal.
 | The app: its facts, by the web's names, and the root node's `data-*` words as `data` (each in `app.json` `data`, which `hatch --app` adds; Swift reads `data-booted` as `app.data[.booted]`) | `app(_:)`, `appEnded(_:)` | `app(a)`, `appEnded(a)` |
 | The window the session presents into | `window(_:)`, `windowEnded(_:)` | `window(w)`, `windowEnded(w)` |
 
+A navigation controller (`navigation`) and Exact's tab container (`tabs`) are
+UIKit's, and their `delegate` slot is Exact's, as More's is (LLP 1075.003
+§3.5). Give a delegate to `navigation.delegate` or `tabs.delegate`: Exact
+passes each call on to it after its own handling (a tab's `shouldSelect` and a
+transition's animator ask it first), and sends it straight the calls Exact does
+not implement, such as an interaction controller or the supported orientations.
+Exact keeps it until another or nil is given, or the container goes. A
+`controller.delegate` written directly takes the slot from Exact, which then
+hears none of the container's calls, and a development build journals it. An
+app that needs the tab container's slot itself owns the container
+(`tabContainer`).
+
 An `iframe` marked `hatch="word"` hands `element.platform` its `WKWebView` on
 macOS and iOS, or the `PDFView` of a local PDF it shows, after the arm set its
 data store, preferences, delegates and content worlds; `changed` hands the new

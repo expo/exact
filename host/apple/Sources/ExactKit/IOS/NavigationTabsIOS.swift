@@ -25,7 +25,10 @@ import UIKit
 /// straight to the app's delegate.
 final class TabDelegateProxy: NSObject, UITabBarControllerDelegate {
     weak var host: NavigationHost?
-    weak var app: UITabBarControllerDelegate?
+    /// The app's delegate, held strongly until the app gives another or nil,
+    /// or the container leaves Exact (`NavigationHost.tabController`), as
+    /// `NavigationDelegateProxy.app` is.
+    var app: UITabBarControllerDelegate?
 
     func tabBarController(_ tabs: UITabBarController, shouldSelect controller: UIViewController) -> Bool {
         if app?.tabBarController?(tabs, shouldSelect: controller) == false { return false }
@@ -52,9 +55,8 @@ final class TabDelegateProxy: NSObject, UITabBarControllerDelegate {
         super.responds(to: selector) || (app?.responds(to: selector) ?? false)
     }
 
-    override func forwardingTarget(for selector: Selector!) -> Any? {
-        app?.responds(to: selector) == true ? app : nil
-    }
+    // Send the app's delegate each call Exact does not implement, as `NavigationDelegateProxy` does
+    override func forwardingTarget(for selector: Selector!) -> Any? { app }
 }
 
 extension NavigationHost {
@@ -761,8 +763,9 @@ extension NavigationHost {
         releaseMore()
         if tabsHatched, tabController != nil { presenter.session?.natives.tabsHatch(tabController, event: 1) }
         if tabController == nil, tabOwner != nil { presenter.session?.natives.tabsHatch(nil, event: 3) }
+        // Leave the slot of a container the app owns as it is; Exact's own container's is emptied as
+        // `tabController` changes
         if let holder = tabOwner {
-            (holder as? UITabBarController)?.delegate = nil
             holder.willMove(toParent: nil)
             holder.view.removeFromSuperview()
             holder.removeFromParent()

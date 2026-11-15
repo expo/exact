@@ -908,9 +908,9 @@ final class NavigationMoreIOSTests: XCTestCase {
         XCTAssertEqual(routeKeys(five), [], "Five's own controller holds none of its routes")
     }
 
-    /// An app that sets More's delegate itself takes More's calls from Exact:
-    /// a pop of More reaches the router in the turn after the next sync, and
-    /// holds no sync after that.
+    /// An app that sets More's delegate itself takes More's calls from Exact,
+    /// which the development check journals: a pop of More reaches the router
+    /// in the turn after the next sync, and holds no sync after that.
     func testAnAppsOwnDelegateOnMoreHoldsNoSync() throws {
         let (session, _, more, _, back) = try deeperUnderMore("more-app-delegate")
         let navigation = session.presenter.navigation
@@ -921,6 +921,179 @@ final class NavigationMoreIOSTests: XCTestCase {
         navigation.sync(Batch(ops: [], timers: false, motion: false, clock: nil, error: nil))
         waitFor("no sync waits for a call Exact cannot hear", facts: { "changing \(navigation.changing)" }) { !navigation.changing }
         XCTAssertEqual(journal(session, "press view \(back) (back)"), 1, "the pop reached the router")
+        XCTAssertEqual(journal(session, "navigation More: delegate changed outside Exact"), 1, "and the slot is named once")
+    }
+
+    /// The app's forwarded navigation delegate is kept until the app gives
+    /// another or nil: UIKit, which reads a delegate's answers once (LLP
+    /// 1075.003 §9.16), asks the proxy for its methods while the proxy is the
+    /// stack's delegate, and the app need not hold the delegate for the proxy
+    /// to answer.
+    func testAForwardedDelegateIsKeptUntilTheAppClearsIt() throws {
+        let session = try fixture("stack-delegate-kept")
+        let navigation = session.presenter.navigation
+        let home = try XCTUnwrap(navigation.tabController?.tabControllers?[0] as? UINavigationController)
+        let own = home.supportedInterfaceOrientations
+        weak var given: NavigationOrienting?
+        autoreleasepool {
+            let app = NavigationOrienting()
+            given = app
+            navigation.setAppDelegate(home, app)
+        }
+        // Drain what UIKit's calls and the assertions autorelease before asking whether the delegate is gone
+        autoreleasepool {
+            XCTAssertNotNil(given, "kept, though the app holds it no longer")
+            XCTAssertEqual(home.supportedInterfaceOrientations, .portrait, "the app's answer, forwarded")
+            navigation.setAppDelegate(home, nil)
+            XCTAssertEqual(home.supportedInterfaceOrientations, own, "UIKit's own answer once the app clears it")
+        }
+        XCTAssertNil(given, "released once the app clears it")
+    }
+
+    /// UIKit calls a method the app's forwarded delegate answered when it was
+    /// given, though the delegate no longer answers it, as it calls its own
+    /// delegate's (LLP 1075.003 §9.16): the proxy sends the call on.
+    func testAForwardedDelegateIsCalledForWhatItAnsweredWhenGiven() throws {
+        let session = try fixture("tabs-delegate-answers")
+        let navigation = session.presenter.navigation
+        let tabs = try XCTUnwrap(navigation.tabController)
+        let app = TabAnswering()
+        navigation.setAppDelegate(tabs, app)
+        app.answers = false
+        XCTAssertEqual(tabs.supportedInterfaceOrientations, .portrait, "the delegate's answer")
+        XCTAssertEqual(app.calls, 1, "UIKit asked the delegate")
+    }
+
+    /// The app's forwarded tab delegate is kept until the app gives another
+    /// or nil, or the container goes: UIKit, which reads a delegate's answers
+    /// once (LLP 1075.003 §9.16), asks the proxy for its methods while the
+    /// proxy is the container's delegate, and the app need not hold the
+    /// delegate for the proxy to answer. The container's slot is emptied as
+    /// it goes, so UIKit asks the proxy nothing more.
+    func testAForwardedTabDelegateIsKeptWhileItsContainerIs() throws {
+        let session = try fixture("tabs-delegate-kept")
+        let navigation = session.presenter.navigation
+        let tabs = try XCTUnwrap(navigation.tabController)
+        let own = tabs.supportedInterfaceOrientations
+        weak var given: TabAnswering?
+        autoreleasepool {
+            let app = TabAnswering()
+            given = app
+            navigation.setAppDelegate(tabs, app)
+        }
+        // Drain what UIKit's calls and the assertions autorelease before asking whether the delegate is gone
+        autoreleasepool {
+            XCTAssertNotNil(given, "kept, though the app holds it no longer")
+            XCTAssertEqual(tabs.supportedInterfaceOrientations, .portrait, "the app's answer, forwarded")
+            navigation.retireTabs()
+            XCTAssertEqual(tabs.supportedInterfaceOrientations, own, "UIKit's own answer once the container is retired")
+        }
+        XCTAssertNil(given, "released with its container")
+    }
+
+    /// The app's tab delegate goes only once UIKit no longer asks the proxy
+    /// for its methods: one that asks the container its orientations as it
+    /// goes gets UIKit's own answer, as from a container it was never given
+    /// to.
+    func testAForwardedTabDelegateIsAskedNothingAsItGoes() throws {
+        let session = try fixture("tabs-delegate-cleared")
+        let navigation = session.presenter.navigation
+        let tabs = try XCTUnwrap(navigation.tabController)
+        let own = tabs.supportedInterfaceOrientations
+        var asked: UIInterfaceOrientationMask?
+        autoreleasepool {
+            let app = TabDelegateGoing()
+            app.goes = { [weak tabs] in asked = tabs?.supportedInterfaceOrientations }
+            navigation.setAppDelegate(tabs, app)
+            XCTAssertEqual(tabs.supportedInterfaceOrientations, .portrait, "the app's answer, forwarded")
+        }
+        autoreleasepool { navigation.setAppDelegate(tabs, nil) }
+        XCTAssertEqual(asked, own, "UIKit's own answer as the delegate goes")
+    }
+
+    /// A tab delegate replaced by another goes after the swap: one that
+    /// clears the app's delegate as it goes, as a delegate keeping its
+    /// handle may, clears the new one, the slot is still Exact's, and the
+    /// journal has the swap before the clear.
+    func testAForwardedTabDelegateThatClearsAsItGoesClearsItsSuccessor() throws {
+        let session = try fixture("tabs-delegate-reentry")
+        let navigation = session.presenter.navigation
+        let tabs = try XCTUnwrap(navigation.tabController)
+        autoreleasepool {
+            let app = TabDelegateGoing()
+            app.goes = { [weak navigation, weak tabs] in
+                if let navigation, let tabs { navigation.setAppDelegate(tabs, nil) }
+            }
+            navigation.setAppDelegate(tabs, app)
+        }
+        autoreleasepool { navigation.setAppDelegate(tabs, TabAnswering()) }
+        XCTAssertNil(navigation.tabProxy.app, "the successor, cleared")
+        XCTAssertTrue(tabs.delegate === navigation.tabProxy, "the slot is Exact's")
+        let logs = session.agent(#"{"op":"logs","since":0}"#)
+        let given = try XCTUnwrap(logs.range(of: "hatch tabs: delegate TabAnswering"))
+        let cleared = try XCTUnwrap(logs.range(of: "hatch tabs: delegate cleared"))
+        XCTAssertLessThan(given.lowerBound, cleared.lowerBound, "the journal has the swap before the clear the old delegate made as it went")
+    }
+
+    /// A delegate the app writes into a stack's own slot takes the stack's
+    /// calls from Exact, which the development check journals at the next
+    /// batch, also after a pop Exact did not hear: once while the slot stays
+    /// outside Exact, though what it holds goes, and once more each time it
+    /// leaves Exact again. A delegate given through `setAppDelegate`, as the
+    /// handle gives it, is forwarded, and journals nothing.
+    func testADelegateWrittenIntoAStacksSlotIsJournaledOnce() throws {
+        let session = try fixture("stack-delegate-written")
+        let tabs = try XCTUnwrap(session.presenter.navigation.tabController)
+        let navigation = session.presenter.navigation
+        let home = try XCTUnwrap(tabs.tabControllers?[0] as? UINavigationController)
+        let written = "delegate changed outside Exact"
+        func batch() throws { session.presenter.press(try node(session, "redirect").id) }
+        let app = BarWatcher()
+        navigation.setAppDelegate(home, app)
+        try tapNode(session, "open-detail")
+        waitFor("Detail is pushed") { home.viewControllers.count == 2 && home.transitionCoordinator == nil && !navigation.inTransition }
+        XCTAssertEqual(journal(session, written), 0, "a delegate given through setAppDelegate is forwarded")
+        var held: BarWatcher? = BarWatcher()
+        home.delegate = held
+        home.popViewController(animated: false)
+        try batch()
+        waitFor("journaled at the next batch") { journal(session, written) == 1 }
+        autoreleasepool { held = nil }
+        XCTAssertNil(home.delegate, "what the slot held is gone")
+        try batch()
+        waitForMainQueue()
+        XCTAssertEqual(journal(session, written), 1, "once while the slot stays outside Exact")
+        navigation.setAppDelegate(home, app)
+        try batch()
+        waitForMainQueue()
+        home.delegate = app
+        try batch()
+        waitFor("journaled again as the slot leaves Exact again") { journal(session, written) == 2 }
+    }
+
+    /// A delegate the app writes into Exact's tab container's own slot takes
+    /// the container's calls from Exact, which the development check
+    /// journals at the next batch: once while the slot stays outside Exact,
+    /// and once more each time it leaves Exact again.
+    func testADelegateWrittenIntoTheTabContainersSlotIsJournaledOnce() throws {
+        let session = try fixture("tabs-delegate-written")
+        let tabs = try XCTUnwrap(session.presenter.navigation.tabController)
+        let navigation = session.presenter.navigation
+        let written = "tabs: delegate changed outside Exact"
+        func batch() throws { session.presenter.press(try node(session, "redirect").id) }
+        let app = TabAnswering()
+        tabs.delegate = app
+        try batch()
+        waitFor("journaled at the next batch") { journal(session, written) == 1 }
+        try batch()
+        waitForMainQueue()
+        XCTAssertEqual(journal(session, written), 1, "once while the slot stays outside Exact")
+        navigation.setAppDelegate(tabs, nil)
+        try batch()
+        waitForMainQueue()
+        tabs.delegate = app
+        try batch()
+        waitFor("journaled again as the slot leaves Exact again") { journal(session, written) == 2 }
     }
 
     /// An interactive pop toward More's list, cancelled while a sync waits
@@ -1194,5 +1367,18 @@ private final class BarWatcher: NSObject, UINavigationControllerDelegate {
     func navigationController(_ nav: UINavigationController, willShow controller: UIViewController, animated: Bool) {
         if controller is RouteController { hiddenAtWillShow.append(nav.isNavigationBarHidden) }
     }
+}
+
+/// A navigation delegate that limits its controller to portrait.
+private final class NavigationOrienting: NSObject, UINavigationControllerDelegate {
+    func navigationControllerSupportedInterfaceOrientations(_ navigationController: UINavigationController) -> UIInterfaceOrientationMask { .portrait }
+}
+
+/// A tab delegate that limits its container to portrait and runs `goes` as
+/// it goes.
+private final class TabDelegateGoing: NSObject, UITabBarControllerDelegate {
+    var goes: (() -> Void)?
+    func tabBarControllerSupportedInterfaceOrientations(_ tabBarController: UITabBarController) -> UIInterfaceOrientationMask { .portrait }
+    deinit { goes?() }
 }
 #endif

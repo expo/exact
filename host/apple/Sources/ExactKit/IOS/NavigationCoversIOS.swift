@@ -376,26 +376,54 @@ extension NavigationHost {
     /// production bake.
     static let checksOwnership = !ExactEnv.productionBake
 
+    /// The delegate slots Exact keeps (LLP 1075.003 §3.5): every stack's,
+    /// hooked or not, More's once adopted, and its own tab container's. A
+    /// slot written outside Exact takes its container's calls from Exact, so
+    /// the journal names it once each time it leaves Exact: what it holds,
+    /// what Exact no longer hears and what to set instead. Checked at each
+    /// batch, also while Exact is changing a stack: such a slot keeps Exact
+    /// from hearing a transition end.
+    func checkDelegates() {
+        func say(_ what: String, _ now: AnyObject?, _ effect: String) {
+            presenter.session?.log("\(what): delegate changed outside Exact, which owns it (now \(now.map { "\(type(of: $0))" } ?? "nil")); \(effect)")
+        }
+        // `stacks` holds a record for each slot Exact keeps: `registerStack` writes the slot, `retireStack` drops it
+        for stack in stacks.values.sorted(by: { $0.order < $1.order }) {
+            guard let nav = stack.controller else { continue }
+            let written = nav.delegate !== stack.proxy
+            if written, !stack.slotNamed {
+                if nav === adoptedMore {
+                    say("navigation More", nav.delegate, "Exact hears none of More's calls, and More has no forwarded delegate")
+                } else {
+                    say("navigation \(stack.label)", nav.delegate, "Exact hears none of this stack's calls: set ExactNavigation.delegate, which Exact forwards to")
+                }
+            }
+            stack.slotNamed = written
+        }
+        guard let tabs = tabController else { return }
+        if tabs.delegate === tabProxy {
+            tabSlotNamed = nil
+        } else if tabSlotNamed !== tabs {
+            tabSlotNamed = tabs
+            say("tabs", tabs.delegate, "Exact hears none of the tab container's calls: set ExactTabs.delegate, which Exact forwards to")
+        }
+    }
+
     /// Before each batch: compare what Exact owns on each hatched object with
     /// what Exact last wrote, and UIKit's stacks and selection at rest with
     /// the router's (`restDifference`), and journal a difference once, by
     /// name. It is detection, not enforcement; a change made and undone
     /// between two batches is not seen.
     func checkOwned() {
-        if NavigationHost.checksOwnership, let difference = restDifference {
-            let line = "navigation: at rest, \(difference)"
-            if ownedReported.insert(line).inserted { presenter.session?.log(line) }
-        }
-        guard NavigationHost.checksOwnership, !changing, !syncing, presenter.session?.natives.hatchesConnected == true else { return }
-        func say(_ what: String, _ property: String) {
-            let line = "\(what): \(property) changed outside Exact, which owns it"
-            if ownedReported.insert(line).inserted { presenter.session?.log(line) }
-        }
+        guard NavigationHost.checksOwnership else { return }
+        checkDelegates()
+        if let difference = restDifference { reportOnce("navigation: at rest, \(difference)") }
+        guard !changing, !syncing, presenter.session?.natives.hatchesConnected == true else { return }
+        func say(_ what: String, _ property: String) { reportOnce("\(what): \(property) changed outside Exact, which owns it") }
         // `allNavigations` leaves out a tab's own navigation controller while UIKit holds its routes in More; More has
         // no hatch, so the `hatched` guard skips it
         for nav in allNavigations {
             guard let stack = stacks[ObjectIdentifier(nav)], stack.hatched else { continue }
-            if nav.delegate !== stack.proxy { say("navigation \(stack.label)", "delegate") }
             if nav.transitionCoordinator == nil, !searching(nav.topViewController as? RouteController), nav.isNavigationBarHidden == topShowsBar(nav) { say("navigation \(stack.label)", "navigation bar visibility") }
             #if !os(tvOS)
             if let pop = nav.interactivePopGestureRecognizer, pop.delegate !== self { say("navigation \(stack.label)", "the pop gesture's delegate") }
@@ -409,6 +437,11 @@ extension NavigationHost {
             guard let node = c.ownedScroll, let scroll = node.scrollView else { continue }
             for property in NavigationHost.ownedChanges(scroll, of: node, insetByUIKit: insetByUIKit(node)) { say("route \(c.key)", property) }
         }
+    }
+
+    /// Journal `line` the first time the development check finds it.
+    private func reportOnce(_ line: String) {
+        if ownedReported.insert(line).inserted { presenter.session?.log(line) }
     }
 
     /// What Exact sets on a node's scroll view and nothing else may (LLP

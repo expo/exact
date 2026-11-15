@@ -49,7 +49,17 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     var logicalChildren: [UInt32: [UInt32]] = [:]
     /// Exact's tab container and its stacks by panel id; the tablist whose
     /// place its bar takes; the tab delegate Exact keeps and forwards.
-    var tabController: UITabBarController?
+    var tabController: UITabBarController? {
+        // Release the app's tab delegate with the container it was given for, once that container's slot is empty:
+        // UIKit keeps calling the methods the proxy answered while the proxy is in the slot
+        didSet {
+            guard tabController !== oldValue else { return }
+            withExtendedLifetime(tabProxy.app) {
+                if oldValue?.delegate === tabProxy { oldValue?.delegate = nil }
+                tabProxy.app = nil
+            }
+        }
+    }
     /// What holds the tabs: Exact's tab controller, or a container the app's
     /// `tabContainer` hatch returned (LLP 1075.003 §3.6).
     var tabOwner: UIViewController?
@@ -91,6 +101,9 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     /// where the bar takes an accent as its tint.
     var tabTint: [[Double]]?
     let tabProxy = TabDelegateProxy()
+    /// The tab container whose delegate slot the development check has named
+    /// as written outside Exact since the slot was last Exact's.
+    weak var tabSlotNamed: UITabBarController?
     /// Each tab's `UITab`, in tab order, when Exact's container is built
     /// from them (TabsIOS.swift); empty for one built from `viewControllers`.
     var builtTabs: [AnyObject] = []
@@ -430,7 +443,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         #endif
         followHeld()
         // Follow by the next turn a pop UIKit committed that no call has reported yet (its `willShow` is still to
-        // come, or an app's own delegate on the stack hears it); until then its tab is not written (`routesInFlight`)
+        // come); until then its tab is not written (`routesInFlight`)
         if !poppedByUIKit().isEmpty { followPopsNextTurn() }
         let root = p.root, wanted = p.chosen
         // A presentation whose route a logical ancestor's `display: none`

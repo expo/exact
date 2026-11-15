@@ -41,8 +41,10 @@
 // writes from app.json `data` (`route.data[.title]`).
 //
 //     #if os(iOS)
+//     let transitions = FadeTransitions()
 //     override func navigation(_ navigation: ExactNavigation) {
 //         navigation.controller.navigationBar.prefersLargeTitles = true
+//         navigation.delegate = transitions // forwarded: the controller's own slot is Exact's
 //     }
 //     override func route(_ route: ExactRoute) {
 //         route.controller.navigationItem.rightBarButtonItem = route.data[.trailing].map { id in
@@ -701,6 +703,8 @@ final class ExactHatches {
 #if os(iOS) || os(tvOS)
 /// A navigation controller Exact built (LLP 1075.003 §3.2, §3.7).
 public final class ExactNavigation {
+    /// The stack's controller. Its `delegate` is Exact's: give yours to
+    /// `delegate` here, which Exact forwards to (LLP 1075.003 §3.5).
     public let controller: UINavigationController
     /// Whether the stack's routes may show UIKit's bar. Exact's default is
     /// true, and each route then decides for itself (LLP 1115.000 D5.3: a
@@ -711,8 +715,11 @@ public final class ExactNavigation {
     public var showsBar: Bool
     /// The app's navigation delegate. Exact keeps the controller's own slot,
     /// where it reconciles pops, and forwards each call here after its own
-    /// handling; what Exact does not implement (a custom transition's
-    /// animator) comes straight here.
+    /// handling; it asks here first for a transition's animator, and what
+    /// Exact does not implement (an interaction controller) comes straight
+    /// here. Exact keeps it until you give another or nil, or the controller
+    /// goes. This property holds it weakly, as UIKit's does, so a delegate
+    /// that keeps this handle makes no cycle.
     public weak var delegate: UINavigationControllerDelegate? {
         didSet {
             guard let hatches else { return }
@@ -782,10 +789,15 @@ public final class ExactRoute {
 
 /// Exact's tab container (LLP 1075.003 §3.7).
 public final class ExactTabs {
+    /// The tab container. Its `delegate` is Exact's: give yours to `delegate`
+    /// here, which Exact forwards to (LLP 1075.003 §3.5).
     public let controller: UITabBarController
     /// The app's tab delegate. Exact keeps the controller's own slot: a tab
     /// the bar would select presses its authored tab, after asking this
-    /// delegate's `shouldSelect`; the rest is forwarded.
+    /// delegate's `shouldSelect`; the rest is forwarded. Exact keeps it until
+    /// you give another or nil, or the container goes. This property holds it
+    /// weakly, as UIKit's does, so a delegate that keeps this handle makes no
+    /// cycle.
     public weak var delegate: UITabBarControllerDelegate? {
         didSet {
             guard let hatches else { return }

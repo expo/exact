@@ -60,17 +60,16 @@ extension NavigationHost {
     /// each UIKit call Exact hears (a stack's `willShow` and `didShow`, a
     /// transition's end, the tab delegate's calls) before anything else the
     /// call does, so a Back made before a tap reaches the router before the
-    /// tap's press, and, on a stack whose delegate the app replaced, in the
-    /// turn after a route appears (`routeAppeared`). A departed header search
-    /// field finishes its edit first, while its handlers still exist (LLP
-    /// 1035.001 D2). A pop on the tab UIKit selects follows that selection
-    /// first (`followSelection`): a pop on a tab selected in code can reach
-    /// Exact before the tab's route appears. One route off the router's
-    /// selected route is the platform's Back, which presses the authored
-    /// control; more is a history jump. A pop that leaves the router's
-    /// selected route in place (under a route the app pushed meanwhile, or on
-    /// a tab the router has left and UIKit does not select) is not followed,
-    /// and the router's stack is written back.
+    /// tap's press. A departed header search field finishes its edit first,
+    /// while its handlers still exist (LLP 1035.001 D2). A pop on the tab
+    /// UIKit selects follows that selection first (`followSelection`): a pop
+    /// on a tab selected in code can reach Exact before the tab's route
+    /// appears. One route off the router's selected route is the platform's
+    /// Back, which presses the authored control; more is a history jump. A
+    /// pop that leaves the router's selected route in place (under a route
+    /// the app pushed meanwhile, or on a tab the router has left and UIKit
+    /// does not select) is not followed, and the router's stack is written
+    /// back.
     @discardableResult
     func followPops() -> Bool {
         guard !syncing else { return false }
@@ -140,28 +139,6 @@ extension NavigationHost {
                 replacement.lastStack = route.lastStack
             }
             route.held = false
-        }
-    }
-
-    /// A route UIKit shows has appeared, as a transition ended. On a stack
-    /// whose delegate the app replaced, Exact hears none of the stack's
-    /// calls, so this stands in for the transition's end there: in the next
-    /// turn, it follows the stack's pops and runs a sync the transition held.
-    /// A finished swipe's destination appears while the swipe's coordinator
-    /// is still there, its `initiallyInteractive` true (LLP 1075.003 §9.16),
-    /// and the pop counts as committed only once the coordinator is gone. On
-    /// a stack of Exact's, `willShow`, `didShow` or the transition's end has
-    /// done both already. On a stack whose delegate the app replaced, the
-    /// rest of a transition's end is not run (LLP 1075.003 §3.7): a swipe
-    /// whose source the app replaced while the finger was down is not
-    /// followed, and when the popped route's header search field finishes its
-    /// edit only after this next turn, the pop is followed then
-    /// (`followPops`), and a sync that following holds waits for a later
-    /// sync.
-    func routeAppeared() {
-        DispatchQueue.main.async { [weak self] in
-            self?.followPops()
-            self?.runHeldSync()
         }
     }
 

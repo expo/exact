@@ -24,14 +24,17 @@ struct HatchSource: Equatable {
 }
 
 /// The delegate Exact gives each navigation controller it builds: Exact's
-/// own handling first, then the app's delegate, which receives straight
-/// anything Exact does not implement — a custom transition's animator
-/// (LLP 1075.003 §3.5). A pop UIKit commits reaches the router at Exact's
-/// `willShow`, before the app's; a swipe, in its coordinator's completion,
-/// after both have heard `didShow` (LLP 1035.001 D1, D2).
+/// own handling first, then the app's delegate, which is asked first for a
+/// transition's animator and receives straight anything Exact does not
+/// implement (LLP 1075.003 §3.5). A pop UIKit commits reaches the router at
+/// Exact's `willShow`, before the app's; a swipe, in its coordinator's
+/// completion, after both have heard `didShow` (LLP 1035.001 D1, D2).
 final class NavigationDelegateProxy: NSObject, UINavigationControllerDelegate {
     weak var host: NavigationHost?
-    weak var app: UINavigationControllerDelegate?
+    /// The app's delegate, held strongly until the app gives another or nil,
+    /// or the stack's record goes: UIKit calls the methods the proxy answered
+    /// when it was set (LLP 1075.003 §9.16), and the proxy forwards them here.
+    var app: UINavigationControllerDelegate?
 
     func navigationController(_ nav: UINavigationController, willShow controller: UIViewController, animated: Bool) {
         // The bar as the route coming into view wants it, alongside UIKit's
@@ -77,9 +80,9 @@ final class NavigationDelegateProxy: NSObject, UINavigationControllerDelegate {
         super.responds(to: selector) || (app?.responds(to: selector) ?? false)
     }
 
-    override func forwardingTarget(for selector: Selector!) -> Any? {
-        app?.responds(to: selector) == true ? app : nil
-    }
+    // Send the app's delegate each call Exact does not implement, whatever the delegate answers now: UIKit calls the
+    // methods the proxy answered when it was set, as it calls its own delegate's (LLP 1075.003 §9.16)
+    override func forwardingTarget(for selector: Selector!) -> Any? { app }
 }
 
 /// A header's search field as UIKit's search controller (LLP 1075.003
@@ -342,17 +345,21 @@ final class BarPress: NSObject {
     }
 }
 
-/// One stack Exact built: its delegate, whether its routes may show the bar (they may unless the
+/// One stack Exact built: its controller, its delegate, whether its routes may show the bar (they may unless the
 /// app's `navigation` hatch says no; which of them shows it is each route's, LLP 1115.000 D5.3), the
 /// tint it last gave the bar, its top route's accent (nil: none), and whether a hatch tinted the bar,
 /// which Exact then leaves alone.
 final class NavigationStack {
+    weak var controller: UINavigationController?
     let proxy = NavigationDelegateProxy()
     let faceTint = BarFaceTintView()
     var showsBar: Bool
     let order: Int
     let label: String
     var hatched = false
+    /// Whether the development check has named the stack's delegate slot as
+    /// written outside Exact since the slot was last Exact's.
+    var slotNamed = false
     var barTint: UIColor?, hatchTintsBar = false
     init(showsBar: Bool, order: Int) { (self.showsBar, self.order, label) = (showsBar, order, "#\(order)") }
 }
@@ -515,6 +522,7 @@ extension NavigationHost {
     func registerStack(_ nav: UINavigationController) -> NavigationStack {
         stackCount += 1
         let stack = NavigationStack(showsBar: true, order: stackCount)
+        stack.controller = nav
         stack.proxy.host = self
         stacks[ObjectIdentifier(nav)] = stack
         nav.delegate = stack.proxy
@@ -1338,21 +1346,28 @@ extension NavigationHost {
     }
 
     /// The app's delegate for a controller whose own slot Exact keeps.
-    /// UIKit reads which methods a delegate answers when it is set, so the
-    /// proxy is set again.
+    /// UIKit reads which methods a delegate answers once, when it is set
+    /// (LLP 1075.003 §9.16), and the proxy answers for the app's delegate's
+    /// methods too, so the proxy is set again and UIKit reads its answers
+    /// anew. The old delegate goes only after that, so UIKit asks nothing of
+    /// it as it goes, and what its `deinit` does runs outside the swap.
     func setAppDelegate(_ controller: AnyObject, _ delegate: AnyObject?) {
         if let tabs = controller as? UITabBarController, tabs === tabController {
-            tabProxy.app = delegate as? UITabBarControllerDelegate
-            tabs.delegate = nil
-            tabs.delegate = tabProxy
-            presenter.session?.log("hatch tabs: delegate \(delegate.map { "\(type(of: $0))" } ?? "cleared")")
+            withExtendedLifetime(tabProxy.app) {
+                tabs.delegate = nil
+                tabProxy.app = delegate as? UITabBarControllerDelegate
+                tabs.delegate = tabProxy
+                presenter.session?.log("hatch tabs: delegate \(delegate.map { "\(type(of: $0))" } ?? "cleared")")
+            }
             return
         }
         guard let nav = controller as? UINavigationController, let stack = stacks[ObjectIdentifier(nav)] else { return }
-        stack.proxy.app = delegate as? UINavigationControllerDelegate
-        nav.delegate = nil
-        nav.delegate = stack.proxy
-        presenter.session?.log("hatch navigation \(stack.label): delegate \(delegate.map { "\(type(of: $0))" } ?? "cleared")")
+        withExtendedLifetime(stack.proxy.app) {
+            nav.delegate = nil
+            stack.proxy.app = delegate as? UINavigationControllerDelegate
+            nav.delegate = stack.proxy
+            presenter.session?.log("hatch navigation \(stack.label): delegate \(delegate.map { "\(type(of: $0))" } ?? "cleared")")
+        }
     }
 }
 #endif
