@@ -106,6 +106,7 @@ pub const RECIPES: &[(&str, &str)] = &[
 ];
 
 pub const PATTERNS: &[(&str, &str)] = &[
+    pattern!("chat"),
     pattern!("dashboard"),
     pattern!("list-detail"),
     pattern!("one-screen"),
