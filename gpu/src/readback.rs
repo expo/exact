@@ -176,6 +176,8 @@ impl Module {
             inst.performance.submitted(ms);
         }
         inst.surface.submitted();
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
+        self.pipeline_cache.save_metal();
         let result = target.read(gpu, &mut out[..len]);
         if presentation_space != ColorSpace::Srgb {
             inst.surface.color_space_granted(presentation_space);

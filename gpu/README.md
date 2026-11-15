@@ -263,7 +263,7 @@ it declared itself opaque. Return `true` when every pixel the surface writes
 has alpha one.
 
 **The pipeline cache.** `exact_gpu::PipelineCache::new(device)` gives a renderer
-the cache Exact installs for its module's device. Pass its `handle` as the
+the cache Exact installs for its module's device. On Vulkan, pass its `handle` as the
 `cache` of every render and compute pipeline descriptor, and after each submit
 call `save(work)` with the number of pipelines the renderer has created so far;
 a write happens on a worker thread only when that number has grown. On Android
@@ -278,8 +278,9 @@ below through the same `PipelineCache` owner. `game/render` is a whole user
 ### Metal pipeline archives
 
 Apple GPU modules keep a Metal binary archive in the app's cache directory,
-shared by its surfaces and written after submitted frames. The cache key includes
-the module name/version, app identity, GPU registry identity, OS build and archive
+shared by their surfaces and written by the module itself after each submitted
+frame when the archive has additions; a renderer does nothing for it. The cache key
+includes the module name/version, app identity, GPU registry identity, OS build and archive
 encoding version. Metal matches shader functions and complete pipeline descriptors;
 a shader or specialization change misses the archive and compiles normally.
 Invalid or incompatible data falls back to an empty archive. Writes use the same

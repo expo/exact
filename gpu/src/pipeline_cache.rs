@@ -29,6 +29,29 @@ struct Shared {
     metal: Option<Arc<wgpu::hal::metal::BinaryArchive>>,
     disk: Mutex<Persistence>,
 }
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
+impl Shared {
+    // Several renderers may save after one submit; only the module advances its frame.
+    fn save_metal(&self, advance_frame: bool) -> bool {
+        let Some(archive) = &self.metal else {
+            return false;
+        };
+        let mut persistence = self.disk.lock().unwrap();
+        let work = archive.counts().1;
+        // LLP 1172.018 E12: additions belong to the device, across all renderers.
+        let added = work.saturating_sub(persistence.metal_work.unwrap());
+        persistence.metal_work = Some(work);
+        for disk in &mut persistence.disks {
+            let device = self._device.clone();
+            let archive = archive.clone();
+            disk.save(added, advance_frame, move || {
+                let _device = device;
+                archive.data()
+            });
+        }
+        true
+    }
+}
 #[cfg(not(target_arch = "wasm32"))]
 impl Drop for Shared {
     fn drop(&mut self) {
@@ -47,6 +70,8 @@ static CACHES: Mutex<Vec<Weak<Shared>>> = Mutex::new(Vec::new());
 struct Persistence {
     disks: Vec<Disk>,
     invalidated: bool,
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
+    metal_work: Option<u64>,
 }
 #[cfg(not(target_arch = "wasm32"))]
 impl Persistence {
@@ -59,7 +84,10 @@ impl Persistence {
         {
             return;
         }
-        disk.work = self.disks.iter().map(|d| d.work).max().unwrap_or(1);
+        let work = self.disks.iter().map(|d| d.work).max().unwrap_or(1);
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
+        let work = self.metal_work.unwrap_or(work);
+        disk.work = work;
         self.disks.push(disk);
     }
 
@@ -115,7 +143,12 @@ impl Disk {
         }
     }
 
-    fn save(&mut self, added: u64, data: impl FnOnce() -> Option<Vec<u8>> + Send + 'static) {
+    fn save(
+        &mut self,
+        added: u64,
+        advance_frame: bool,
+        data: impl FnOnce() -> Option<Vec<u8>> + Send + 'static,
+    ) {
         self.reap(false);
         if added != 0 {
             self.work += added;
@@ -126,7 +159,9 @@ impl Disk {
             return;
         }
         if self.retry_frame != 0 {
-            self.retry_frame -= 1;
+            if advance_frame {
+                self.retry_frame -= 1;
+            }
             return;
         }
         let (path, key, work) = (self.path.clone(), self.key, self.work);
@@ -247,12 +282,14 @@ impl PipelineCache {
                     _device: device.clone(),
                     identity,
                     handle,
-                    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
-                    metal,
                     disk: Mutex::new(Persistence {
                         disks: disk.into_iter().collect(),
                         invalidated: false,
+                        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
+                        metal_work: metal.as_ref().map(|_| 0),
                     }),
+                    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
+                    metal,
                 });
                 caches.push(Arc::downgrade(&shared));
                 shared
@@ -282,25 +319,30 @@ impl PipelineCache {
     pub fn save(&mut self, work: u64) {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(shared) = &self.shared {
+            #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
+            if shared.save_metal(false) {
+                return;
+            }
             let added = work.saturating_sub(self.observed);
             self.observed = work;
             for disk in &mut shared.disk.lock().unwrap().disks {
                 let device = shared._device.clone();
                 let cache = self.handle.clone();
-                #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
-                let metal = shared.metal.clone();
-                disk.save(added, move || {
+                disk.save(added, true, move || {
                     let _device = device;
-                    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
-                    if let Some(metal) = metal {
-                        return metal.data();
-                    }
                     cache.and_then(|c| c.get_data())
                 });
             }
         }
         #[cfg(target_arch = "wasm32")]
         let _ = work;
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
+    pub(crate) fn save_metal(&self) {
+        if let Some(shared) = &self.shared {
+            shared.save_metal(true);
+        }
     }
 }
 
@@ -484,7 +526,7 @@ mod tests {
         let flag = done.clone();
         let (release, wait) = std::sync::mpsc::channel();
         let mut disk = Disk::new(path.clone(), 42);
-        disk.save(1, move || {
+        disk.save(1, true, move || {
             wait.recv().unwrap();
             flag.store(true, std::sync::atomic::Ordering::Release);
             Some(b"first".to_vec())
@@ -498,13 +540,13 @@ mod tests {
         );
 
         let mut disk = Disk::new(path, 42);
-        disk.save(1, || Some(b"second".to_vec()));
+        disk.save(1, true, || Some(b"second".to_vec()));
         let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while !disk.writer.as_ref().unwrap().is_finished() {
             assert!(std::time::Instant::now() < end);
             std::thread::yield_now();
         }
-        disk.save(0, || {
+        disk.save(0, true, || {
             panic!("a saved generation must not start another writer")
         });
         assert!(disk.writer.is_none());
@@ -593,20 +635,24 @@ mod tests {
         let dir = directory();
         let path = dir.join("cache");
         let mut disk = Disk::new(path.clone(), 42);
-        disk.save(1, || None);
+        disk.save(1, true, || None);
         disk.reap(true);
         assert_eq!(disk.saved, 0);
         assert_eq!(disk.attempts, 1);
+        for _ in 0..100 {
+            disk.save(0, false, || panic!("only submitted frames advance retries"));
+        }
+        assert_eq!(disk.retry_frame, 60);
         std::fs::create_dir(&path).unwrap(); // rename to an existing directory fails
         for _ in 0..61 {
-            disk.save(0, || Some(b"retry".to_vec()));
+            disk.save(0, true, || Some(b"retry".to_vec()));
         }
         disk.reap(true);
         assert_eq!(disk.saved, 0);
         assert_eq!(disk.attempts, 2);
         std::fs::remove_dir(&path).unwrap();
         for _ in 0..61 {
-            disk.save(0, || Some(b"retry".to_vec()));
+            disk.save(0, true, || Some(b"retry".to_vec()));
         }
         disk.reap(true);
         assert_eq!(disk.saved, 1);
@@ -615,21 +661,21 @@ mod tests {
             Some(&b"retry"[..])
         );
 
-        disk.save(1, || None);
+        disk.save(1, true, || None);
         disk.reap(true);
         for _ in 0..2 {
             for _ in 0..61 {
-                disk.save(0, || None);
+                disk.save(0, true, || None);
             }
             disk.reap(true);
         }
         for _ in 0..1000 {
-            disk.save(0, || panic!("retry budget exhausted"));
+            disk.save(0, true, || panic!("retry budget exhausted"));
         }
         assert_eq!(disk.attempts, 3);
         assert_eq!(disk.saved, 1);
         assert!(disk.writer.is_none());
-        disk.save(1, || Some(b"new work".to_vec()));
+        disk.save(1, true, || Some(b"new work".to_vec()));
         disk.reap(true);
         assert_eq!(disk.saved, 3);
         drop(disk);
@@ -658,7 +704,7 @@ mod tests {
         let mut persistence = shared.disk.lock().unwrap();
         assert_eq!(persistence.disks.len(), 2);
         for disk in &mut persistence.disks {
-            disk.save(0, || Some(b"shared driver data".to_vec()));
+            disk.save(1, true, || Some(b"shared driver data".to_vec()));
             disk.reap(true);
         }
         assert_eq!(
@@ -690,7 +736,7 @@ mod tests {
         let paths = [dir.join("first"), dir.join("second")];
         for path in &paths {
             let mut disk = Disk::new(path.clone(), 42);
-            disk.save(1, || Some(b"possibly bad data".to_vec()));
+            disk.save(1, true, || Some(b"possibly bad data".to_vec()));
             cache.disk.lock().unwrap().attach(disk);
         }
         module.lose_device();

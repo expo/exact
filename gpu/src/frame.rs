@@ -521,6 +521,8 @@ impl Module {
         if !first.is_empty() {
             shown(first);
         }
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
+        self.pipeline_cache.save_metal();
         ok
     }
 
