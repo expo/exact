@@ -285,7 +285,12 @@ Standard render and compute pipeline creation first tries the archive with
 A mutex excludes additions and snapshots from each other; every cache error leaves
 the ordinary compilation path available. `BinaryArchive::data` serializes through
 a private temporary directory because Metal accepts a file URL, not bytes.
+The file of the last snapshot is kept until an addition or the archive's end, and
+a snapshot of an archive that gained nothing since is read from it: Metal
+serializes such an archive by moving its last file, once, and fails after that.
 The caller owns the persistent envelope, identity and atomic file replacement.
+`BinaryArchive::counts` reports lookup hits and misses; `additions` counts only
+successful render and compute additions, so a failed addition cannot trigger a snapshot.
 Mesh pipelines keep their existing path. The metadata revision is 15.
 A simulator build (`target_abi = "sim"`) installs no archive: the simulator's
 Metal aborts the process serializing one (`MTLReportFailure` under

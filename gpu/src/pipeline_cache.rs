@@ -37,7 +37,7 @@ impl Shared {
             return false;
         };
         let mut persistence = self.disk.lock().unwrap();
-        let work = archive.counts().1;
+        let work = archive.additions();
         // LLP 1172.018 E12: additions belong to the device, across all renderers.
         let added = work.saturating_sub(persistence.metal_work.unwrap());
         persistence.metal_work = Some(work);
@@ -87,7 +87,7 @@ impl Persistence {
         let work = self.disks.iter().map(|d| d.work).max().unwrap_or(1);
         #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
         let work = self.metal_work.unwrap_or(work);
-        disk.work = work;
+        disk.work = work.max(disk.work);
         self.disks.push(disk);
     }
 
@@ -295,6 +295,18 @@ impl PipelineCache {
                 shared
             });
         if let Some(disk) = disk {
+            #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
+            let disk = {
+                let mut disk = disk;
+                if shared
+                    .metal
+                    .as_ref()
+                    .is_some_and(|archive| archive.restored() || archive.additions() != 0)
+                {
+                    disk.work = 1;
+                }
+                disk
+            };
             shared.disk.lock().unwrap().attach(disk);
         }
         Self {

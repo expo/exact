@@ -25,8 +25,10 @@ pub struct BinaryArchive {
     _device: Retained<ProtocolObject<dyn MTLDevice>>,
     restored: bool,
     _source: Option<Temporary>,
+    snapshot: Mutex<Option<(u64, Temporary)>>,
     hits: AtomicU64,
     misses: AtomicU64,
+    additions: AtomicU64,
 }
 // Metal archives have no thread affinity. The mutex serializes every operation,
 // including pipeline creation and serialization; the retained object never escapes.
@@ -89,8 +91,10 @@ impl Device {
                 _device: self.shared.device.clone(),
                 restored,
                 _source: source,
+                snapshot: Mutex::new(None),
                 hits: AtomicU64::new(0),
                 misses: AtomicU64::new(0),
+                additions: AtomicU64::new(0),
             }))
         })?;
         *installed = Some(Arc::clone(&archive));
@@ -120,16 +124,28 @@ impl BinaryArchive {
             self.misses.load(Ordering::Relaxed),
         )
     }
+    /// Successful additions, across render and compute pipelines.
+    pub fn additions(&self) -> u64 {
+        self.additions.load(Ordering::Relaxed)
+    }
     /// Snapshot bytes while excluding pipeline additions. Disk ownership and
     /// atomic replacement of the persistent envelope belong to the caller.
     pub fn data(&self) -> Option<Vec<u8>> {
         autoreleasepool(|_| {
-            let temporary = Temporary::new().ok()?;
-            self.raw
-                .lock()
-                .serializeToURL_error(&temporary.url())
-                .ok()?;
-            std::fs::read(&temporary.path).ok()
+            let raw = self.raw.lock();
+            // Counted under the archive's lock, held here.
+            let additions = self.additions.load(Ordering::Relaxed);
+            let mut snapshot = self.snapshot.lock();
+            // Metal serializes an archive that gained nothing since its last
+            // serialization by moving that file, and then fails every later
+            // attempt until an addition (macOS 27.2). An unchanged archive is
+            // read from the file kept here instead.
+            if snapshot.as_ref().is_none_or(|(at, _)| *at != additions) {
+                let temporary = Temporary::new().ok()?;
+                raw.serializeToURL_error(&temporary.url()).ok()?;
+                *snapshot = Some((additions, temporary));
+            }
+            std::fs::read(&snapshot.as_ref()?.1.path).ok()
         })
     }
     pub(super) fn render(
@@ -150,9 +166,14 @@ impl BinaryArchive {
             return cached;
         }
         self.misses.fetch_add(1, Ordering::Relaxed);
-        if let Err(error) = archive.addRenderPipelineFunctionsWithDescriptor_error(descriptor) {
-            log::warn!("Metal render archive addition failed: {error}");
-            descriptor.setBinaryArchives(None);
+        match archive.addRenderPipelineFunctionsWithDescriptor_error(descriptor) {
+            Ok(()) => {
+                self.additions.fetch_add(1, Ordering::Relaxed);
+            }
+            Err(error) => {
+                log::warn!("Metal render archive addition failed: {error}");
+                descriptor.setBinaryArchives(None);
+            }
         }
         device.newRenderPipelineStateWithDescriptor_error(descriptor)
     }
@@ -174,9 +195,14 @@ impl BinaryArchive {
             return cached;
         }
         self.misses.fetch_add(1, Ordering::Relaxed);
-        if let Err(error) = archive.addComputePipelineFunctionsWithDescriptor_error(descriptor) {
-            log::warn!("Metal compute archive addition failed: {error}");
-            descriptor.setBinaryArchives(None);
+        match archive.addComputePipelineFunctionsWithDescriptor_error(descriptor) {
+            Ok(()) => {
+                self.additions.fetch_add(1, Ordering::Relaxed);
+            }
+            Err(error) => {
+                log::warn!("Metal compute archive addition failed: {error}");
+                descriptor.setBinaryArchives(None);
+            }
         }
         device.newComputePipelineStateWithDescriptor_options_reflection_error(
             descriptor,
