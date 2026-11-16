@@ -43,7 +43,9 @@ public typealias ActivityReport = @convention(c) (UnsafeMutableRawPointer?, Unsa
     /// The registry and generation are embedded in the app bundle, so this
     /// stays correct across builds and does not make the app duplicate digests.
     private func loadPushToStartActivities() {
-        let generation = Bundle.main.object(forInfoDictionaryKey: "ExactWidgetGeneration") as? String ?? ""
+        let embedded = Bundle.main.object(forInfoDictionaryKey: "ExactWidgetGeneration") as? String ?? ""
+        let compatibility = Bundle.main.object(forInfoDictionaryKey: "ExactWidgetCompatibility") as? String ?? ""
+        let generation = embedded.isEmpty || compatibility.isEmpty ? "" : ExactActivityGeneration.embedded(compatibility: compatibility, generation: embedded)
         let path = Bundle.main.bundleURL.appendingPathComponent("plans/activities.json")
         guard let data = try? Data(contentsOf: path),
               let registry = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return }

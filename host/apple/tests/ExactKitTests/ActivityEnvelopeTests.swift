@@ -3,6 +3,14 @@ import ExactCore
 import ExactSnapshot
 
 final class ActivityEnvelopeTests: XCTestCase {
+    func testEmbeddedActivityGenerationMatchesWidgetContainer() {
+        let compatibility = "cohort-a"
+        let embedded = "e1"
+        XCTAssertEqual(
+            ExactActivityGeneration.embedded(compatibility: compatibility, generation: embedded),
+            WidgetContainer.generationDigest(compatibility: compatibility, publicationID: "embedded:" + embedded))
+    }
+
     func testUniversalEnvelopeRoundTripsAndCountsEscapedUTF8() throws {
         let digest = String(repeating: "a", count: 64)
         let attributes = ExactActivityAttributes(kind: "train", generation: digest, shape: digest)
