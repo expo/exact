@@ -111,7 +111,9 @@ test.each([[false, false], [true, false], [true, true]])('a list first opened of
       await page.getByTestId('boot').dispatchEvent('click');
       await page.waitForFunction(() => document.querySelector('[data-testid=boot]')?.textContent === 'Wake 1');
     }
-    await page.waitForFunction(() => [...document.querySelectorAll('link[rel=modulepreload]')].every(link => preparedModules.includes(link.href)));
+    // The entry prepares the list's controller as it starts: the head names only what runs then.
+    await page.waitForFunction(() => preparedModules.some(href => /\/collection-glue-/.test(href))
+      && [...document.querySelectorAll('link[rel=modulepreload]')].every(link => preparedModules.includes(link.href)));
     expect(await page.evaluate(() => globalThis.collectionEvaluated)).toBeUndefined();
     expect(await page.getByTestId('rows').count()).toBe(0);
     await page.context().setOffline(true);

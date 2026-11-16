@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { suiteBrowser } from '../../scripts/agent-launch.mjs';
+import { rootOf, tokens } from './page-style.mjs';
 
 const root = resolve(import.meta.dir, '../..');
 const target = resolve(process.env.CARGO_TARGET_DIR ?? resolve(root, 'target'));
@@ -61,10 +62,15 @@ component App
       ? [resolve(target, 'host-dev', process.platform === 'win32' ? 'caltrain-render.exe' : 'caltrain-render'), '--serve', dist, '--port', '0']
       : [process.execPath, resolve(root, 'host/web/serve.mjs'), dist, '--loopback', '--port', '0'];
     server = await start(command, root);
+    // A page made per request holds no element with a tag or an attribute the sheet was cut for (LLP 1047.003 D1).
+    const cut = new Set(JSON.parse(readFileSync(resolve(dist, '.gen/sheet-cut.json'), 'utf8')));
+    expect(cut.size).toBeGreaterThan(0);
     const get = async path => {
       const response = await fetch(new URL(path, server.url));
       expect(response.status).toBe(200);
-      return response.text();
+      const html = await response.text();
+      expect([path, [...tokens(rootOf(html))].filter(t => cut.has(t))]).toEqual([path, []]);
+      return html;
     };
     const checkpoint = html => /<script type="application\/vnd\.exact\.checkpoint"([^>]*)>([^<]*)<\/script>/.exec(html);
     const src = html => /data-src="([^"]+)"/.exec(checkpoint(html)[1])?.[1];

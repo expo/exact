@@ -17,9 +17,10 @@ import { installedFileDependencies } from '../../scripts/file-dependencies.mjs';
 //    module, everything needed to be interactive.
 // 3. `index.html` carries the web host's own base stylesheet (from
 //    `host/web/index.html`), the app's static classes, and the module, with a
-//    `modulepreload` in the head for every emitted chunk, so a served page
-//    (host/render/src/page.rs `page_js`) fetches its runtime while the document
-//    streams, including pieces it may first use offline.
+//    `modulepreload` in the head for it and its static imports, so a served
+//    page (host/render/src/page.rs `page_js`) fetches its runtime while the
+//    document streams. The entry prepares its other chunks as it starts,
+//    while online, so a piece first used offline is there.
 // A data module loaded after first pixel (`rust-data.js`) and the agent
 // adapter (`agent.js`, only under `?agent`) are separate files.
 import { spawn, spawnSync } from 'node:child_process';
@@ -30,7 +31,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { brotliCompressSync, constants } from 'node:zlib';
 import { transformSync, parseSync, Visitor } from 'rolldown/utils';
 import { copyGpuCache } from './gpu-cache.mjs';
-import { analyze } from './page-style.mjs';
+import { absent, analyze, planRules, rootOf, tokens as pageTokens, written } from './page-style.mjs';
+import { writers } from './writers.mjs';
 import { bundleHostModule, gateAgent, localImports, stageHostGlue } from './glue.mjs';
 import { contentName, contentNames } from './content-names.mjs';
 import { buildEditor, buildFlow, buildMarkdown, buildModule, buildMotion, moduleSourceDirs, undeclaredRustData, fresh, leafTaken, moduleGrants, webCompiler, inspectHooked, withInspectHooks, withoutDev, withRuntimeStamp } from './module.mjs';
@@ -310,7 +312,8 @@ const tsStage = resolve(realpathSync(gen), 'typescript'), pageAppTs = resolve(ts
 // before the app's, as the web host tells the wasm runner (navigation.js).
 // The whole map: its type strings hold braces, so a source sorted before it
 // (`advance`, a nested shape) once hid `exactTime` and its app could not boot.
-const sources = JSON.parse(readFileSync(resolve(gen, 'app.js'), 'utf8').match(/export const sources=(\{.*?\});export const wait=/)?.[1] ?? '{}');
+const plan = readFileSync(resolve(gen, 'app.js'), 'utf8');
+const sources = JSON.parse(plan.match(/export const sources=(\{.*?\});export const wait=/)?.[1] ?? '{}');
 const time = Object.hasOwn(sources, 'exactTime');
 // A native module's names and extensions (modules.js, LLP 1133.002 D13): each
 // extension's web implementation is a chunk of its own, `ext-<name>.js`, loaded
@@ -593,10 +596,11 @@ const shell = withInterfaceStyle(withLook(readFileSync(resolve(root, 'host/web/i
 const base = shell.match(/<style>([\s\S]*?)<\/style>/)[1]
   .replace(/\/\*[\s\S]*?\*\//g, '').replace(/\s*\n\s*/g, '').replace(/\s*([{};,>])\s*/g, '$1').replace(/:\s+/g, ':').replace(/;}/g, '}');
 const css = readFileSync(resolve(gen, 'app.css'), 'utf8');
-// The build's own files named by their content (LLP 1153.004, content-names.mjs). The stylesheet and the launch
-// services first: main.js, below, names them, and a copied file never does (checked where the copies are named).
-const contentFiles = {}, sheet = base + css, services = launchWeb.map(m => [`launch/${m.name}/service.js`, readFileSync(m.web)]);
-for (const [name, bytes] of [['style.css', sheet], ...services]) contentFiles[name] = contentName(name, bytes);
+// The build's own files named by their content (LLP 1153.004, content-names.mjs). The launch services first: main.js,
+// below, names them, and a copied file never does (checked where the copies are named). The sheet's name is known
+// only once `cutSheet`, below, has cut it as the entry renders; until then main.js names it `__EXACT_SHEET__`.
+const contentFiles = {}, services = launchWeb.map(m => [`launch/${m.name}/service.js`, readFileSync(m.web)]);
+for (const [name, bytes] of services) contentFiles[name] = contentName(name, bytes);
 writeFileSync(resolve(gen, 'main.js'), [
   ...(ts ? ["import './held-hooks.js';"] : []),
   "import app, { sources, wait } from './app.js';",
@@ -669,10 +673,11 @@ writeFileSync(resolve(gen, 'main.js'), [
   // never enters agent mode (LLP 1069.007 D2): its entry leaves `clock.agent` false here and below, and holds no early
   // animation.
   ...(production ? [] : ["if (fonts) clock.agent = agentMode();"]),
-  // A rendered page's sheet holds only what its document can match (LLP 1048.007 D4): the whole sheet comes first,
-  // then the page's goes, before the first render (one that fails to load leaves the page's, and the render goes on).
+  // A rendered page's sheet holds only what its document can match (LLP 1048.007 D4): the plan's sheet (style.css,
+  // below) comes first, then the page's goes, before the first render (one that fails to load leaves the page's, and
+  // the render goes on).
   "const page = typeof document === 'object' && document.querySelector('style[data-exact-page]');",
-  "const sheet = page && new Promise(r => { const l = Object.assign(document.createElement('link'), { rel: 'stylesheet', href: './" + contentFiles['style.css'] + "' }); l.onload = () => { page.remove(); r(); }; l.onerror = r; page.before(l); });",
+  "const sheet = page && new Promise(r => { const l = Object.assign(document.createElement('link'), { rel: 'stylesheet', href: './__EXACT_SHEET__' }); l.onload = () => { page.remove(); r(); }; l.onerror = r; page.before(l); });",
   // A waiting page's answers past 1 KB are named, not held (LLP 1048.007 D10): the capture script fetched them as it
   // imported this; the first render waits for them. Ones no longer kept are none, and the boot builds afresh.
   "const named = typeof document === 'object' && document.querySelector('script[type=\"application/vnd.exact.checkpoint\"][data-src]');",
@@ -706,15 +711,13 @@ writeFileSync(resolve(gen, 'main.js'), [
   ] : ['go(start);']),
   // After the first render, which a font wait may defer (`containers()` reads the runtime's `globalThis.exact`).
   ...(containerHatches ? ["go(() => requestAnimationFrame(() => requestAnimationFrame(() => import('./hatches.js').then(m => m.containers()))));"] : []),
-  // Interaction-activated documents omit the head's preloads. Starting their runtime prepares the same chunks without
-  // executing them. `prepareChunks`, below, writes their names here as Rolldown renders the entry.
-  "{",
-  "  const prepared = new Set([...document.querySelectorAll('link[rel=\"modulepreload\"]')].map(link => link.href));",
-  "  for (const name of __EXACT_DEFERRED_CHUNKS__) {",
-  `    const href = new URL(name, ${args.includes('--inline') ? 'document.baseURI' : 'import.meta.url'}).href;`,
-  "    if (!prepared.has(href)) document.head.append(Object.assign(document.createElement('link'), { rel: 'modulepreload', href }));",
-  "  }",
-  "}",
+  // The chunks no head preloads run when a piece is first used, which may be offline. The entry prepares them as it
+  // starts: a `modulepreload` each, not run, at low priority behind the sheet and the fonts its first render waits
+  // for (asked for above). So none competes with the entry for the link, and one the first render needs is already
+  // being fetched when it asks. A document that waited for the reader (no preload in its head) prepares them the same
+  // way.
+  // `prepareChunks`, below, writes their names here as Rolldown renders the entry.
+  `for (const name of __EXACT_DEFERRED_CHUNKS__) document.head.append(Object.assign(document.createElement('link'), { rel: 'modulepreload', fetchPriority: 'low', href: new URL(name, ${args.includes('--inline') ? 'document.baseURI' : 'import.meta.url'}).href }));`,
 ].join('\n'));
 for (const f of ['agent.js', 'check.js', 'perf.js', 'seam.js', 'rust-data.js', 'canvas-capture.js', 'list.js', 'list-text.js', 'facts.js', 'fetches.js', 'modules.js', 'permissions.js', 'sheets.js', 'samples.js', 'wakes.js', 'reach.js', 'devices.js', 'members.js', 'arrival.js', 'calls.js', 'update.js', 'spans.js', 'views.js', 'pictures.js', 'markdown.js', 'symbols.js', 'motion.js', 'drag-target.js', 'transform.js', 'svg-transform.js', 'dataset.js', 'format.js', 'format-locale.js', 'hatches.js', 'arrange.js', 'reorder.js', 'flow.js', 'native.js', 'shared.js', 'store-reader.js', 'iframes.js', 'list-items.js', 'button-fill.js']) cpSync(resolve(here, f), resolve(gen, f));
 writeFileSync(resolve(gen, 'modules.js'), localImports(readFileSync(resolve(here, 'modules.js'), 'utf8')));
@@ -742,7 +745,7 @@ writeFileSync(resolve(gen, 'grant-network.js'), await bundleHostModule(root, 'na
 // linked. A name admission exports that this table lacks fails the build, so a new check is answered here before a
 // page ships without it. Development pages keep the parser (LLP 1047 D7).
 // A source declared in Contract carries its origin as its grant (fetches.js, LLP 1162.001 D3).
-const declared = readFileSync(resolve(gen, 'app.js'), 'utf8').includes('from"./fetches.js"');
+const declared = plan.includes('from"./fetches.js"');
 const admitsNothing = production && !tsGrantSet.error && tsGrantSet.entries.length === 0 && !rustLinked && !Object.keys(moduleFlag.extensions).length && !pageModules && !declared;
 // Whether any source holds a network grant (the kinds grant-admission.js's `networkGrants`, `schemeGrants` and `localGrants` name).
 const netGranted = [tsGrantSet, rustGrantSet].some(set => (set.entries ?? []).some(([, , grant]) => /^(fetch|websocket)(-|$)/.test(grant?.[0] ?? '')));
@@ -1084,12 +1087,12 @@ for (const name of ['style.css', ...services.map(([name]) => name)]) {
   if (copiedNames.has(name)) throw new Error(`host/web-js/build.mjs: a copied file names ${name}, which main.js names by its content`);
 }
 const named = (name, bytes) => copiedNames.has(name) ? name : contentFiles[name] = contentName(name, bytes);
+const audioSession = manifest.audio_session ? [['audio-session.js', readFileSync(resolve(root, 'host/web/audio-session.js'))]] : [];
 for (const [name, bytes] of [
-  ['style.css', sheet],
   ...leafFiles,
   // The module binds with the plan's declarations, not the bake's answers.
   ...(rust ? [['app.bind.plan', readFileSync(resolve(gen, 'app.bind.plan'))]] : []),
-  ...(manifest.audio_session ? [['audio-session.js', readFileSync(resolve(root, 'host/web/audio-session.js'))]] : []),
+  ...audioSession,
   // Launch modules' web services, which marks.js imports after startup.
   ...services,
 ]) {
@@ -1102,11 +1105,35 @@ for (const [name, { bytes }] of storageLazy ?? []) if (bytes != null) named(name
 // Exact's own modules, where the bundles rewrite a quoted old name: not the app's TypeScript or the compiled contract,
 // whose strings are the author's.
 const exactModule = id => generatedRoots.some(root => inside(id, root) && id !== resolve(root, 'app.js')) && !inside(id, tsStage);
+// The sheet (LLP 1047.003 D1): the whole sheet's rules but those that need, inside `#exact-root`, a tag or an
+// attribute that neither the compiled plan nor Exact's code the page runs writes (page-style.mjs `absent`,
+// writers.mjs). That code is Exact's modules that Rolldown puts in either bundle, read as staged (the app's
+// TypeScript reaches no DOM: `scopedModule`), the files copied beside the page, and the development inspector the dev
+// loop serves beside it, read in every build. A page whose root other code writes (a page module, and the hatches
+// through it; a native module's view; a launch service) keeps every rule, and the build says so.
+const shipped = [];
+let rules = analyze(base + css), sheet = base + css, unused = new Set();
+const otherWriter = pageModules ? 'its page module (modules/web/index.js), which hatches go through,'
+  : launchWeb.length ? `its launch service ${launchWeb[0].name}`
+  : Object.keys(moduleFlag.extensions).length ? `its native module ${Object.keys(moduleFlag.extensions)[0]}'s view` : null;
+function cutSheet(chunks) {
+  if (otherWriter) console.log(`style.css keeps every rule (${(Buffer.byteLength(sheet) / 1024).toFixed(1)} KB): ${otherWriter} may write any element inside #exact-root (LLP 1047.003 D1)`);
+  else {
+    const modules = [...new Set([...shipped, ...chunks].flatMap(chunk => Object.keys(chunk.modules)))].filter(exactModule);
+    const copied = [...storageLazy ?? [], ...gpuLazy ?? []].map(([name, { bytes }]) => [name, bytes]).concat(leafFiles, audioSession)
+      .filter(([name, bytes]) => name.endsWith('.js') && bytes != null).map(([name, bytes]) => [name, String(bytes)]);
+    const inspector = ['inspect-dev.js', readFileSync(resolve(root, 'host/web-js/inspect-dev.js'), 'utf8')];
+    unused = absent(rules, writers(plan, [...modules.map(id => [relative(gen, id), readFileSync(id, 'utf8')]), ...copied, inspector]).writes);
+    rules = planRules(rules, unused);
+    sheet = written(rules);
+  }
+  return contentFiles['style.css'] = contentName('style.css', sheet);
+}
 if (how !== 'none' || markdownReaders) {
   const b = await rolldown({ input: resolve(gen, 'main-server.js'), ...(ts ? { tsconfig: resolve(tsStage, '__exact_tsconfig.json') } : {}),
     transform: { ...bundleOptions.transform, define: { ...bundleOptions.transform.define, ...versionDefines, 'globalThis.__exactRender': 'true', 'import.meta.url': JSON.stringify(pathToFileURL(resolve(out, 'app.js')).href) } },
     plugins: [...scopedPlugins(), contentNames(contentFiles, exactModule)], logLevel: 'warn', onLog });
-  try { await b.write({ file: resolve(gen, 'server.js'), format: 'iife', codeSplitting: false }); }
+  try { shipped.push(...(await b.write({ file: resolve(gen, 'server.js'), format: 'iife', codeSplitting: false })).output.filter(file => file.type === 'chunk')); }
   finally { await b.close(); }
 }
 // The page's module and its chunks: Rolldown, the repo's app bundler, whose
@@ -1114,13 +1141,28 @@ if (how !== 'none' || markdownReaders) {
 // 25.8 → 23.6 KB, the feed bench's 30.9 → 27.9, the grid's 19.3 → 18.1),
 // bytes a page downloads before its runtime is up.
 const preloadModules = [];
-// The chunks the entry prepares as it starts (main.js): every chunk but the entry. Their names are written into the
-// entry as Rolldown renders it, before it names the entry, so that the entry's name covers them.
+// What a page preloads from its head: the entry and the chunks it imports statically, which run as it starts.
+const eagerChunks = (entry, imports) => {
+  const eager = [];
+  for (const queue = [entry]; queue.length;) {
+    const name = queue.pop();
+    if (eager.includes(name) || !imports(name)) continue;
+    eager.push(name);
+    queue.push(...imports(name));
+  }
+  return eager;
+};
+// The chunks the entry prepares as it starts (main.js, above): every chunk its head does not preload. Their names, and
+// the sheet's, are written into the entry as Rolldown renders it, before it is minified and named, so the entry's
+// bytes, and any name made from them, cover them. Rolldown has rendered every chunk's modules by then.
 const prepareChunks = { name: 'exact-prepare-chunks', renderChunk(code, chunk, _options, meta) {
   if (!chunk.isEntry) return null;
-  const deferred = Object.keys(meta.chunks).filter(name => name !== chunk.fileName).sort();
-  if (code.split('__EXACT_DEFERRED_CHUNKS__').length !== 2) throw new Error('host/web-js/build.mjs: the entry has no one place for the names of the chunks it prepares');
-  return code.replace('__EXACT_DEFERRED_CHUNKS__', () => JSON.stringify(deferred));
+  const eager = eagerChunks(chunk.fileName, name => meta.chunks[name]?.imports);
+  const deferred = Object.keys(meta.chunks).filter(name => !eager.includes(name)).sort();
+  for (const place of ['__EXACT_DEFERRED_CHUNKS__', '__EXACT_SHEET__']) {
+    if (code.split(place).length !== 2) throw new Error(`host/web-js/build.mjs: the entry has no one place for ${place}`);
+  }
+  return code.replace('__EXACT_DEFERRED_CHUNKS__', () => JSON.stringify(deferred)).replace('__EXACT_SHEET__', () => cutSheet(Object.values(meta.chunks)));
 } };
 {
   const b = await rolldown({ input: resolve(gen, 'main.js'), ...(ts ? { tsconfig: resolve(tsStage, '__exact_tsconfig.json') } : {}), transform: { ...bundleOptions.transform, define: { ...bundleOptions.transform.define, ...versionDefines, 'globalThis.__exactRender': 'false' } },
@@ -1144,13 +1186,14 @@ const prepareChunks = { name: 'exact-prepare-chunks', renderChunk(code, chunk, _
   const built = await b.write({ dir: out, format: 'esm', minify: true, comments: false, entryFileNames: 'app-[hash].js', chunkFileNames: '[name]-[hash].js',
     postBanner: (chunk) => chunk.isEntry ? '//# allFunctionsCalledOnLoad' : undefined,
     ...(devReload && ts ? { manualChunks: (id, { getModuleInfo }) => fromData(id, getModuleInfo) ? 'dev-data' : undefined } : {}) });
-  preloadModules.push(...built.output.filter(file => file.type === 'chunk').map(file => file.fileName));
   if (devReload && ts) for (const chunk of built.output.filter(file => file.type === 'chunk' && Object.keys(file.modules).includes(pageAppTs))) {
     devLogic.push(['typescript', createHash('sha256').update(readFileSync(resolve(out, chunk.fileName))).digest('hex')]);
   }
+  const chunks = new Map(built.output.filter(file => file.type === 'chunk').map(file => [file.fileName, file]));
   const entry = built.output.find(file => file.type === 'chunk' && file.isEntry);
+  preloadModules.push(...eagerChunks(entry.fileName, name => chunks.get(name)?.imports));
   // The entry under the name it had, and each chunk, which had no other, under its own.
-  for (const name of preloadModules) contentFiles[name === entry.fileName ? 'app.js' : name] = name;
+  for (const name of chunks.keys()) contentFiles[name === entry.fileName ? 'app.js' : name] = name;
   // The entry's bytes by source module, as Rolldown rendered them before minification (shares, not a ledger), for
   // `scripts/metrics.mjs --web-bytes` (LLP 1047.002 D5): what of the runtime an app's plan reached.
   const moduleName = (id) => { const name = relative(gen, id); return name.startsWith('..') ? basename(id) : name; };
@@ -1185,8 +1228,11 @@ const fonts = existsSync(resolve(gen, 'preloads.html')) ? readFileSync(resolve(g
 const preloads = fonts + preloadModules.filter(f => !args.includes('--inline') || f !== contentFiles['app.js'])
   .map(f => `<link rel="modulepreload" href="./${f}">\n`).join('');
 // A rendered page carries only the rules its document can match (page-style.mjs, LLP 1048.007 D4); the runtime adds
-// the whole sheet before its first render (main.js), from the stylesheet written above.
-writeFileSync(resolve(gen, 'page-style.json'), JSON.stringify(analyze(base + css)));
+// the sheet before its first render (main.js). A renderer reads each rule's first three fields (page.rs); the cut's
+// tokens are for the checks that no element inside the root has one (conform.mjs, document-checkpoints.test.mjs).
+writeFileSync(resolve(out, contentFiles['style.css']), sheet);
+writeFileSync(resolve(gen, 'page-style.json'), JSON.stringify(rules.map(rule => rule.slice(0, 3))));
+writeFileSync(resolve(gen, 'sheet-cut.json'), JSON.stringify([...unused].sort()));
 // The app's part of the render server's CSP (LLP 1048.000 D11), which it reads at start.
 const cspFile = webCspFile(manifest);
 if (cspFile) writeFileSync(resolve(gen, 'csp.json'), cspFile);
@@ -1199,7 +1245,7 @@ writeFileSync(resolve(out, 'index.html'), `<!doctype html>
 ${schemeMeta}<title>${attr(manifest.name)}</title>
 <meta name="viewport" content="${viewport}">
 ${colorSchemeMeta(interfaceStyle(manifest))}${icon}
-${preloads}<style>${base}${css}${launchBackground(manifest)}</style>
+${preloads}<style>${sheet}${launchBackground(manifest)}</style>
 ${webHead(manifest)}<div id="exact-root"${manifest.audio_session ? ` data-audio-session="${manifest.audio_session}"` : ''}></div>
 ${webAudioSession(manifest, contentFiles['audio-session.js'])}${args.includes('--inline')
   // The entry, marked so a renderer finds it (page.rs `js_entry`); an inline one names the external one, which a rendered
@@ -1364,4 +1410,12 @@ if (pages.length && how === 'rust') {
 } else if (how !== 'none' && routes.length) {
   writeCrawlerFiles(out, [], null, routes, siteBase); // robots.txt alone: no page made at build to list
 }
+// A page made at build holds the plan's own elements, as a renderer wrote them. One with a tag or an attribute the
+// sheet was cut for means writers.mjs missed a writer, and the page would show that element unstyled. Only the root
+// is read: a head entry's script may spell any tag.
+const lost = !unused.size || how === 'none' ? [] : readdirSync(out, { recursive: true, withFileTypes: true }).filter(e => e.isFile() && e.name.endsWith('.html')).flatMap(entry => {
+  const path = resolve(entry.parentPath, entry.name), cut = [...pageTokens(rootOf(readFileSync(path, 'utf8')))].filter(t => unused.has(t));
+  return cut.length ? [`error: ${relative(out, path)} has ${cut.join(', ')}, which the sheet's rules were left out for (host/web-js/writers.mjs)`] : [];
+});
+if (lost.length) { for (const line of lost) console.error(line); process.exit(1); }
 console.log(`${out}: ${contentFiles['app.js']} ${statSync(resolve(out, contentFiles['app.js'])).size} B, built`);

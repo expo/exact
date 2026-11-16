@@ -17,6 +17,7 @@ mod symbol;
 use exact_kernel::svg::Paint;
 use exact_kernel::SortedMap;
 use exact_kernel::{Kernel, NodeFacts, NodeRef, NodeType, ObjectFit, PropId, PropValue, StyleId};
+pub use semantic::{attributes_by_data, tags_by_data};
 pub(super) use svg::svg_props;
 pub use svg::{attribute_rows, svg_props_of};
 

@@ -121,3 +121,53 @@ fn an_active_descendant_uses_the_live_hosts_attribute_static_and_bound() {
     );
     assert!(js.matches("\"aria-activedescendant\"").count() >= 2, "{js}");
 }
+
+/// LLP 1047.003 D1: where data sets a node's props or styles, the compiled
+/// module writes its tag and attributes from its literal rows (a sample's tag
+/// where a prop decides it) and the Rust renderer from the data's, so the
+/// module lists what data can give (`boundTokens`) and the build keeps their
+/// rules: a heading's tags for its bound level or role, an `a` or a `button`
+/// for a pressable's bound `href`, and the attributes `props_of` derives for
+/// the node's type (a switch's `data-exact-switch`). Literal rows decide at
+/// compile time, and the module lists nothing.
+#[test]
+fn a_module_lists_what_data_can_give_its_elements() {
+    exact_web::link(exact_web_capabilities::ALL);
+    let tokens = |node: &str| {
+        let plan = contract::compile(&format!(
+            "component App\n  state big = false\n  state url = \"/a\"\n  view\n    column\n      {node}\n"
+        ))
+        .unwrap();
+        let js = crate::emit::emit(&plan, false, false).unwrap().js;
+        let list = js
+            .split("export const boundTokens=")
+            .nth(1)
+            .map(|rest| &rest[..rest.find(';').unwrap()]);
+        list.map(|l| serde_json::from_str::<Vec<String>>(l).unwrap())
+            .unwrap_or_default()
+    };
+    let has = |node: &str, want: &[&str]| {
+        let got = tokens(node);
+        for token in want {
+            assert!(got.iter().any(|t| t == token), "{node}: {token} in {got:?}");
+        }
+        got
+    };
+    has(
+        "text role=\"heading\" aria-level=(big ? 1 : 5) \"T\"",
+        &["t:h1", "t:h5", "t:h6", "t:div"],
+    );
+    has("text role=(big ? \"heading\" : \"note\") \"T\"", &["t:h2"]);
+    let link = has("button \"Go\" href=url", &["t:a", "t:button"]);
+    assert!(!link.iter().any(|t| t == "a:data-exact-switch"), "{link:?}");
+    has(
+        "input type=\"checkbox\" role=(big ? \"switch\" : \"checkbox\")",
+        &["a:data-exact-switch", "a:switch"],
+    );
+    for literal in [
+        "text role=\"heading\" aria-level=1 \"T\"",
+        "button \"Go\" href=\"/a\"",
+    ] {
+        assert_eq!(tokens(literal), Vec::<String>::new(), "{literal}");
+    }
+}

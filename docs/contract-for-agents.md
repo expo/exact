@@ -4006,6 +4006,9 @@ JSON-LD. A page's own title and metas stay its `head` element's.
   stay and do not run again, so an analytics tag counts that change only if it watches the
   browser history. A page that loads no runtime (an `interaction` page with no handlers)
   follows a link as a new document, which runs them again.
+- A script does not write inside `#exact-root`: the runtime owns that tree, and the page's
+  sheet keeps the rules there only for what Exact writes (LLP 1047.003 D1). What a script
+  adds elsewhere, such as a banner on `body`, meets every rule of the sheet.
 - The dev loop and `serve` send them too, so a tag there reports local visits. `serve` and a
   static host send no Content-Security-Policy, so the scripts run as on any page. The Rust
   render server (`<app>-render --serve`) sends one. It admits each inline script here by its

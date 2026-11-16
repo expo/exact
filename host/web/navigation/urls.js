@@ -40,7 +40,7 @@ export const pageGivenFiles = (src, base = document.baseURI) => {
 export function refuseURL(el, name, value) {
   console.warn(`exact: refused ${name} ${JSON.stringify(String(value).slice(0, 80))}: only http, https, mailto and tel navigate${name === "src" ? ", and data: in a sandbox without allow-same-origin" : ""}`);
   if (name === "src") {
-    el.setAttribute(name, "about:blank");
+    el.setAttribute("src", "about:blank");
   } else {
     el.removeAttribute(name);
   }
