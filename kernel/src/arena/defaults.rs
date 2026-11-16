@@ -127,7 +127,13 @@ impl NodeArena {
         }
         // What moves a box in or out of sticky moves it out of or into the
         // top layer: its block follows at the next layout.
-        if crate::style::top_layer::lifted(self, slot) {
+        let lifted = crate::style::top_layer::lifted(self, slot);
+        // Measure every reader again when a box joins or leaves the top layer, which
+        // changes the band its readers observe
+        if lifted != self.top_layer_slots.contains(slot) {
+            self.observations.invalidate();
+        }
+        if lifted {
             self.top_layer_slots.insert(slot);
         } else {
             self.top_layer_slots.remove(slot);

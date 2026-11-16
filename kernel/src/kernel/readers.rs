@@ -36,6 +36,11 @@ pub(crate) struct Readers {
     pub(crate) local: SlotSet,
     /// Nodes with a length that reads an author's custom property.
     pub(crate) properties: SlotSet,
+    /// Nodes with a length that reads an observation of its safe area.
+    pub(crate) observers: SlotSet,
+    /// The edges each observer reads, as
+    /// [`calc::Comparison::observed_edges`] gives them.
+    pub(crate) observed_edges: crate::id::IdMap<u32, u8>,
     /// Nodes that declare a custom property.
     declaring: SlotSet,
     /// Nodes that declare one whose value reads a local inset: captures.
@@ -58,7 +63,7 @@ impl Readers {
         if differs(StyleId::SafeAreaProperties) || OVERRIDES.into_iter().any(differs) {
             self.invalidate();
         }
-        let (mut local, mut properties) = (false, false);
+        let (mut local, mut properties, mut observes) = (false, false, 0);
         for id in style.mask.iter() {
             // Skip the inset overrides: `local_at` resolves them for the subtree,
             // whose readers are indexed
@@ -68,12 +73,18 @@ impl Readers {
             if let RowValue::Dimension(Dimension::Compare(c)) = style.get(id) {
                 local |= c.reads_local();
                 properties |= c.reads_custom();
+                observes |= c.observed_edges();
             }
         }
         let own = owner::declarations(style);
         let captures = own.iter().any(|(_, value)| reads_local(value));
         put(&mut self.local, slot, local);
         put(&mut self.properties, slot, properties);
+        put(&mut self.observers, slot, observes != 0);
+        match observes {
+            0 => self.observed_edges.remove(&slot),
+            edges => self.observed_edges.insert(slot, edges),
+        };
         put(&mut self.declaring, slot, own.iter().next().is_some());
         put(&mut self.captures, slot, captures);
         let overrides = OVERRIDES.iter().any(|&id| style.mask.has(id));
@@ -84,12 +95,14 @@ impl Readers {
         for set in [
             &mut self.local,
             &mut self.properties,
+            &mut self.observers,
             &mut self.declaring,
             &mut self.captures,
             &mut self.overriding,
         ] {
             set.remove(slot);
         }
+        self.observed_edges.remove(&slot);
     }
 
     pub(crate) fn clear(&mut self) {

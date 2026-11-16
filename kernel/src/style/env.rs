@@ -353,6 +353,11 @@ pub struct Env {
     /// 1123 D5), set, as `local` is, only in an environment made for that
     /// node.
     pub properties: Option<crate::style::safe_area_properties::Resolved>,
+    /// What one node's observations of its safe area are, top right bottom
+    /// left, `None` where one is unavailable (LLP 1123 D9): the solve's
+    /// inputs, set, as `local` is, only in an environment made for that
+    /// node.
+    pub observed: Option<[Option<f32>; 4]>,
 }
 
 impl Default for Env {
@@ -386,6 +391,7 @@ impl Env {
             root_local: None,
             local: None,
             properties: None,
+            observed: None,
         }
     }
 
@@ -402,6 +408,13 @@ impl Env {
                 self.root_inset(edge)
             }
         }
+    }
+
+    /// The node's observation of its safe area on `edge` (LLP 1123 D9), as
+    /// the solve gives it; `None` where it is unavailable, or the
+    /// environment was made for no node.
+    pub fn observation(&self, edge: Edge) -> Option<f32> {
+        self.observed.and_then(|o| o[edge as usize])
     }
 
     /// An author's custom property's value at the node this environment was

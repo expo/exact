@@ -26,7 +26,10 @@ pub(super) const MAX_LEVELS: usize = 2 * super::MAX_DEPTH + 2;
 /// 16–35 a layout region's inset, 36–39 a title-bar area variable);
 /// a list's `u8` count; clamp's three presence bytes, each before its
 /// argument; 10 an author's custom property (LLP 1123 D5), its name as the
-/// codec's string, then its fallback's presence byte and the fallback.
+/// codec's string, then its fallback's presence byte and the fallback; 11
+/// an observation of the box's safe area (LLP 1123 D10's leaf), its edge,
+/// then its fallback's presence byte and the fallback, which the round trip
+/// through the text refuses until the parser reads the leaf.
 pub(super) fn encode(entry: &Entry, w: &mut Writer) {
     match entry {
         Entry::Tree(n) => node_out(n, w),
@@ -93,6 +96,11 @@ fn node_out(n: &Node, w: &mut Writer) {
             w.string(&v.name);
             optional(v.fallback.as_deref(), w);
         }
+        Node::Observe(o) => {
+            w.u8(11);
+            w.u8(o.edge as u8);
+            optional(o.fallback.as_deref(), w);
+        }
     }
 }
 
@@ -149,7 +157,11 @@ pub(super) fn within_author_limits(tree: &Node) -> bool {
 fn authored(n: &Node, opened: bool) -> (usize, usize) {
     let function = matches!(n, Node::Min(_) | Node::Max(_) | Node::Clamp(_));
     let product = matches!(n, Node::Product(_));
-    let mut values = usize::from(matches!(n, Node::Value(..) | Node::Env(..) | Node::Var(..)));
+    let leaf = matches!(
+        n,
+        Node::Value(..) | Node::Env(..) | Node::Var(..) | Node::Observe(..)
+    );
+    let mut values = usize::from(leaf);
     let mut deepest = 0;
     for c in n.children() {
         let (v, l) = authored(c, product && matches!(c, Node::Sum(_)));
@@ -222,6 +234,10 @@ fn node(r: &mut Reader<'_>, level: usize, nodes: &mut usize) -> Option<Node> {
                 fallback: optional(r, nodes)?.map(Box::new),
             })
         }
+        11 => Node::Observe(super::Observe {
+            edge: Edge::from_index(r.u8().ok()?)?,
+            fallback: optional(r, nodes)?.map(Box::new),
+        }),
         _ => return None,
     })
 }

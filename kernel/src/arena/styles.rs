@@ -38,9 +38,24 @@ impl NodeArena {
         } else {
             self.frag.containers.remove(slot);
         }
+        let read = self.readers.observed_edges.get(&slot).copied();
         self.readers
             .update(slot, &self.styles[slot as usize], &style);
+        // Measure a reader again when it reads a new edge, whose input may be stale
+        let reads = self.readers.observed_edges.get(&slot).copied();
+        if reads.unwrap_or(0) & !read.unwrap_or(0) != 0 {
+            self.observations.remeasure(slot);
+        }
+        if read.is_some() && reads.is_none() {
+            self.observations.stopped_reading(slot);
+        }
+        // Measure every reader again when a box starts or stops scrolling, which changes
+        // what its content observes
+        let scrolled = crate::kernel::observe::scroll_view(self, slot);
         self.styles[slot as usize] = style;
+        if scrolled != crate::kernel::observe::scroll_view(self, slot) {
+            self.observations.invalidate();
+        }
         self.refresh_sticky(slot);
     }
 
