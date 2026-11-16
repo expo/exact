@@ -170,6 +170,7 @@ pub(crate) fn resolve(
                     layout.mark_dirty(node);
                 }
                 touched.push(arena.key(slot));
+                crate::kernel::owner::resolved_again(arena, layout, slot, rows, touched, receipt);
             }
         }
     }
@@ -279,11 +280,13 @@ pub(crate) fn resolve(
             continue;
         }
         let excluded = crate::flow::is_exclusion(arena, slot);
+        let before = crate::kernel::owner::before_style(arena, slot, changed);
         arena.set_style(slot, next);
         arena.update_exclusion_count(slot, excluded);
         style_changed(arena, layout, slot, changed, receipt);
         touched.push(arena.key(slot));
         propagate_inherited(arena, layout, slot, changed, touched, receipt);
+        crate::kernel::owner::after_style(arena, layout, slot, before, touched, receipt);
         arena.relative.pending.remove(&slot);
     }
 }

@@ -31,6 +31,7 @@ mod history;
 use history::RetainedReceipt;
 mod intrinsic;
 pub(crate) mod owner;
+pub(crate) mod readers;
 pub(crate) use intrinsic::apply_projection;
 mod row_memo;
 mod sticky;

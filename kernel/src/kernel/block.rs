@@ -77,7 +77,12 @@ pub struct HostBlock {
 /// host may give a route with no block of its own: its local insets (LLP
 /// 1123 D2, D9; `owner.rs`).
 #[derive(Clone, Debug, Default)]
-pub(crate) struct Blocks(Vec<Held>, Vec<(u32, [f32; 4])>);
+pub(crate) struct Blocks(
+    Vec<Held>,
+    Vec<(u32, [f32; 4])>,
+    /// The owners in `.1`, for a lookup that finds no owner at once.
+    crate::sorted::SlotSet,
+);
 
 /// One node's block: the one in force, the host's or else the one the
 /// kernel implies (a top-layer box's, the viewport: HTML's top layer), its
@@ -148,22 +153,29 @@ impl Blocks {
     /// `slot` gone: neither block stands, nor its local insets.
     pub(crate) fn remove(&mut self, slot: u32) {
         self.0.retain(|b| b.slot != slot);
-        self.1.retain(|(s, _)| *s != slot);
+        self.set_local(slot, None);
     }
 
     /// The local insets a host gave the owner whose root is `slot`.
     pub(crate) fn local(&self, slot: u32) -> Option<[f32; 4]> {
+        if !self.2.contains(slot) {
+            return None;
+        }
         self.1.iter().find(|(s, _)| *s == slot).map(|(_, l)| *l)
     }
 
     pub(crate) fn set_local(&mut self, slot: u32, local: Option<[f32; 4]>) {
         self.1.retain(|(s, _)| *s != slot);
         self.1.extend(local.map(|l| (slot, l)));
+        match local {
+            Some(_) => self.2.insert(slot),
+            None => self.2.remove(slot),
+        };
     }
 
-    /// Whether any owner has local insets.
-    pub(crate) fn has_locals(&self) -> bool {
-        !self.1.is_empty()
+    /// The owners whose hosts set local insets.
+    pub(crate) fn local_slots(&self) -> &crate::sorted::SlotSet {
+        &self.2
     }
 
     fn held(&self, slot: u32) -> Option<&Held> {

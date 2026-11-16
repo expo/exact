@@ -38,12 +38,8 @@ impl NodeArena {
         } else {
             self.frag.containers.remove(slot);
         }
-        // With no declaration and no owner's local insets, a move changes no length
-        if style.mask.has(crate::StyleId::SafeAreaProperties) {
-            self.declaring_slots.insert(slot);
-        } else {
-            self.declaring_slots.remove(slot);
-        }
+        self.readers
+            .update(slot, &self.styles[slot as usize], &style);
         self.styles[slot as usize] = style;
         self.refresh_sticky(slot);
     }

@@ -166,7 +166,7 @@ impl PartialEq for Node {
 
 impl Node {
     /// The children a calculation reads, in order.
-    fn children(&self) -> impl Iterator<Item = &Node> {
+    pub(crate) fn children(&self) -> impl Iterator<Item = &Node> {
         let (nodes, optional): (&[Node], &[Option<Node>]) = match self {
             Node::Value(..) | Node::Env(..) => (&[], &[]),
             Node::Var(v) => (
@@ -568,7 +568,7 @@ impl Comparison {
     }
 
     /// `f` of the tree, or `None` for a text, without copying either.
-    fn tree<T>(&self, f: impl FnOnce(&Node) -> T) -> Option<T> {
+    pub(crate) fn tree<T>(&self, f: impl FnOnce(&Node) -> T) -> Option<T> {
         self.with(|e| match e {
             Entry::Tree(t) => Some(f(t)),
             Entry::Text { .. } => None,

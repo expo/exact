@@ -65,8 +65,8 @@ pub struct NodeArena {
     // @ref LLP 1043.000 §3 D4 — no per-node vector or allocation.
     pub(crate) flow: IdMap<u32, crate::flow::FlowState>,
     pub(crate) exclusion_slots: SlotSet,
-    /// The slots that declare custom properties (LLP 1123 D5).
-    pub(crate) declaring_slots: SlotSet,
+    /// What each node's lengths read of its own environment (LLP 1123 D9).
+    pub(crate) readers: crate::kernel::readers::Readers,
     /// @ref LLP 1093 D7 — multi-column containers and their last cuts.
     pub(crate) frag: crate::fragment::FragState,
     /// Relative rows and the slots whose inputs changed (LLP 1069.000 D3).
@@ -187,7 +187,7 @@ impl Clone for NodeArena {
             frames: self.frames.clone(),
             flow: self.flow.clone(),
             exclusion_slots: self.exclusion_slots.clone(),
-            declaring_slots: self.declaring_slots.clone(),
+            readers: self.readers.clone(),
             frag: self.frag.clone(),
             relative: self.relative.clone(),
             symbols_owed: self.symbols_owed.clone(),
@@ -264,6 +264,7 @@ impl NodeArena {
     /// kernel's to re-derive (`Kernel::set_env`).
     pub fn set_env(&mut self, env: Env) {
         self.env = env;
+        self.readers.invalidate();
         self.refresh_control_styles();
     }
     /// Forget every allocation while retaining each slot's generation.
@@ -280,7 +281,7 @@ impl NodeArena {
         self.fit_scales.clear();
         self.flow.clear();
         self.exclusion_slots.clear();
-        self.declaring_slots.clear();
+        self.readers.clear();
         self.frag = Default::default();
         self.relative = Default::default();
         self.symbols_owed.clear();
@@ -931,7 +932,7 @@ impl NodeArena {
         self.field_content.remove(&slot);
         self.mark_reports.remove(&slot);
         self.exclusion_slots.remove(slot);
-        self.declaring_slots.remove(slot);
+        self.readers.forget(slot);
         self.frag.forget(slot);
         self.relative.forget(slot);
         self.symbols_owed.remove(slot);
@@ -980,6 +981,7 @@ impl NodeArena {
         }
         if self.parents[slot as usize] != parent {
             self.relative.invalidate(slot);
+            self.readers.moved();
         }
         self.parents[slot as usize] = parent;
     }

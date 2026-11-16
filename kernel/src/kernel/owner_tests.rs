@@ -5,7 +5,7 @@ use crate::id::Offer;
 use crate::wire::Op;
 use crate::{HostCover, NodeType, StyleId, StyleValue};
 
-pub(super) fn style(id: ViewId, rows: &[(StyleId, &str)]) -> Op {
+pub(in crate::kernel) fn style(id: ViewId, rows: &[(StyleId, &str)]) -> Op {
     let mut patch = StyleProps::default();
     for (row, value) in rows {
         let value = match value.parse::<f64>() {
@@ -20,7 +20,7 @@ pub(super) fn style(id: ViewId, rows: &[(StyleId, &str)]) -> Op {
     }
 }
 
-pub(super) fn create(ids: impl IntoIterator<Item = ViewId>) -> Vec<Op> {
+pub(in crate::kernel) fn create(ids: impl IntoIterator<Item = ViewId>) -> Vec<Op> {
     (ids.into_iter())
         .map(|id| Op::CreateView {
             id,
@@ -29,7 +29,7 @@ pub(super) fn create(ids: impl IntoIterator<Item = ViewId>) -> Vec<Op> {
         .collect()
 }
 
-pub(super) fn children(id: ViewId, children: &[ViewId]) -> Op {
+pub(in crate::kernel) fn children(id: ViewId, children: &[ViewId]) -> Op {
     Op::SetChildren {
         id,
         children: children.to_vec(),
