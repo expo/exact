@@ -44,7 +44,9 @@ fn push_to_start_item_shape(plan: &Plan, id: TypesId) -> bool {
     ty.kind == TypeKind::Record
         && ty.fields.len == 3
         && ["kind", "generation", "shape"].iter().all(|name| {
-            ty.fields.iter().any(|id| plan.str(plan.field(id).name) == *name)
+            ty.fields
+                .iter()
+                .any(|id| plan.str(plan.field(id).name) == *name)
         })
         && ty.fields.iter().all(|id| {
             let field = plan.field(id);
