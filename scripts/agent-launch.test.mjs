@@ -149,7 +149,7 @@ test('--reader and --headless name the Android carrier as drive flags', () => {
 // `-fp-contract=off` is in `build.rustflags`). A run for another target, or for the host, is left alone.
 test('the Android build links its libraries with 16 KB pages, beside the flags Cargo would use', async () => {
   const { ANDROID_PAGE_SIZE: page, androidCargo } = await import('./cargo-check.mjs');
-  const config = ['--config', `build.rustflags=["${page}"]`];
+  const abi = '-Clink-arg=-lc++abi', config = ['--config', `build.rustflags=["${page}","${abi}"]`];
   const run = (env, args = ['build', '-p', 'app', '--target', 'aarch64-linux-android']) => {
     const [, argv, { env: out }] = androidCargo('cargo', args, { env });
     return { argv, flags: Object.fromEntries(['CARGO_ENCODED_RUSTFLAGS', 'RUSTFLAGS', 'CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS', 'CARGO_BUILD_RUSTFLAGS'].filter((k) => out[k] !== undefined).map((k) => [k, out[k]])) };
@@ -157,11 +157,11 @@ test('the Android build links its libraries with 16 KB pages, beside the flags C
   expect(run({})).toEqual({ argv: ['build', '-p', 'app', '--target', 'aarch64-linux-android', ...config], flags: {} });
   expect(run({}, ['rustc', '--target=aarch64-linux-android', '--', '-Cfoo']).argv).toEqual(['rustc', '--target=aarch64-linux-android', ...config, '--', '-Cfoo']);
   expect(run({ CARGO_BUILD_RUSTFLAGS: '--cfg b' }).flags).toEqual({ CARGO_BUILD_RUSTFLAGS: '--cfg b' });
-  expect(run({ RUSTFLAGS: '-Cdebuginfo=1' }).flags).toEqual({ RUSTFLAGS: `-Cdebuginfo=1 ${page}` });
-  expect(run({ RUSTFLAGS: '' }).flags).toEqual({ RUSTFLAGS: page });
-  expect(run({ RUSTFLAGS: '-Cdebuginfo=1', CARGO_ENCODED_RUSTFLAGS: '--cfg\x1fa b' }).flags).toEqual({ RUSTFLAGS: '-Cdebuginfo=1', CARGO_ENCODED_RUSTFLAGS: `--cfg\x1fa b\x1f${page}` });
-  expect(run({ CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS: '-llog' }).flags).toEqual({ CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS: `-llog ${page}` });
-  expect(run({ RUSTFLAGS: page, CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS: page }).flags).toEqual({ RUSTFLAGS: page, CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS: page });
+  expect(run({ RUSTFLAGS: '-Cdebuginfo=1' }).flags).toEqual({ RUSTFLAGS: `-Cdebuginfo=1 ${page} ${abi}` });
+  expect(run({ RUSTFLAGS: '' }).flags).toEqual({ RUSTFLAGS: `${page} ${abi}` });
+  expect(run({ RUSTFLAGS: '-Cdebuginfo=1', CARGO_ENCODED_RUSTFLAGS: '--cfg\x1fa b' }).flags).toEqual({ RUSTFLAGS: '-Cdebuginfo=1', CARGO_ENCODED_RUSTFLAGS: `--cfg\x1fa b\x1f${page}\x1f${abi}` });
+  expect(run({ CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS: '-llog' }).flags).toEqual({ CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS: `-llog ${page} ${abi}` });
+  expect(run({ RUSTFLAGS: page, CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS: `${page} ${abi}` }).flags).toEqual({ RUSTFLAGS: `${page} ${abi}`, CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS: `${page} ${abi}` });
   // The host's own runs (a game's lints) and other targets'.
   for (const args of [['clippy', '-p', 'game', '--lib'], ['build', '--target', 'aarch64-apple-ios']]) {
     const env = { RUSTFLAGS: '-Cdebuginfo=1' };
