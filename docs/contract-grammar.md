@@ -530,6 +530,9 @@ use the current value to start an activity while the app is not running. The
 registers for ordinary remote notifications only when it grants `device.push`.
 A push-to-start token is available only after the app has launched at least
 once and Live Activities permission has been granted.
+When a server starts an activity through that token, ActivityKit wakes the app
+briefly and the activity's per-instance update token appears in `activities`;
+the data module can upload that token before the app returns to suspension.
 
 ### MIDI: `exactMIDI`, `sendMIDI`, `midimessage`
 
