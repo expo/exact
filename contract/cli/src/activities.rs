@@ -14,6 +14,11 @@ pub(super) fn shape(plan: &Plan) -> Result<(), BakeError> {
             let ty = plan.type_(field.ty);
             let valid = if name == "activities" {
                 ty.kind == TypeKind::List && ty.elem.is_some_and(|item| item_shape(plan, item))
+            } else if name == "pushToStartToken" {
+                ty.kind == TypeKind::Option
+                    && ty
+                        .elem
+                        .is_some_and(|id| plan.type_(id).kind == TypeKind::String)
             } else {
                 ty.kind == TypeKind::Bool
             };
@@ -21,7 +26,7 @@ pub(super) fn shape(plan: &Plan) -> Result<(), BakeError> {
                 return Err(BakeError::Lint {
                     site: None,
                     id: "bake-activities-field",
-                    message: format!("`{}`: exactActivities.{name} needs activities: Activity[] or a bool fact; Activity fields are id, kind, state, activityState (string), token (option<string>)", plan.str(resource.name)),
+                    message: format!("`{}`: exactActivities.{name} needs activities: Activity[], pushToStartToken: option<string>, or a bool fact; Activity fields are id, kind, state, activityState (string), token (option<string>)", plan.str(resource.name)),
                 });
             }
         }

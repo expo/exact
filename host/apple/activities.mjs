@@ -27,13 +27,14 @@ export function packageActivityArm({ app, bundle, shared, triple, sdk, device, r
   wrapFramework(frameworks, 'libexact_activity.dylib', 'ExactActivity', app, device ? 'iPhoneOS' : 'iPhoneSimulator');
 }
 
-/** The activity update-token ruling admits no push-to-start, and no data-only push's background mode; an app
- * registers for remote notifications only when its grant ceiling has `device.push` (LLP 1133.004 §9 P8).
+/** ActivityKit push-to-start tokens are observed by the packaged arm. A data-only
+ * push's background mode remains refused; an app registers for remote notifications
+ * only when its grant ceiling has `device.push` (LLP 1133.004 §9 P8).
  * Run on archives and the async lane's built iOS app and extension. */
 export function assertActivityRefusals(bundle, runApple, app, ceiling = '') {
   if (!activityEntries(app).length) return 0;
   const pushes = String(ceiling).split('\n').some((line) => line.trim().split(/\s+/)[0] === 'device.push');
-  const forbidden = ['pushToStartTokenUpdates', ...(pushes ? [] : ['registerForRemoteNotifications'])];
+  const forbidden = [...(pushes ? [] : ['registerForRemoteNotifications'])];
   const executables = [];
   const visit = directory => {
     const plist = resolve(directory, 'Info.plist');

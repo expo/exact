@@ -511,8 +511,9 @@ new shape cannot update or end an older instance with incompatible state. A
 compatibility-changing binary update follows LLP 1126.001 §5 Q6’s device gate.
 
 `resource activities = exactActivities() as shape Activities` reads a record
-whose fields are `activities: Activity[]`, `frequentPushesEnabled: bool` and
-`linked: bool` (the host packaged its arm).
+whose fields are `activities: Activity[]`, `frequentPushesEnabled: bool`,
+`linked: bool` (the host packaged its arm), and
+`pushToStartToken: option<string>`.
 An activity has `id`, `kind`, `state` (a JSON string), `activityState`
 (`pending`, `active`, `stale`, `ended`, `dismissed`) and `token: option<string>`.
 Readers may name only the fields they need. Off iOS the list is empty and
@@ -520,9 +521,13 @@ frequent pushes are false. A first demand enumerates existing activities,
 including after a relaunch without a send; later token, state and content
 updates re-answer the source. A token is absent until ActivityKit supplies
 it, and exists only for an entry declaring `push: true`. The data module
-sends it to its own backend. Push-to-start and the `remote-notification`
-background mode stay refused; an app with activities registers for remote
-notifications only when it grants `device.push`.
+sends it to its own backend. On iOS 17.2 and later, `pushToStartToken` is
+continuously observed and changes when ActivityKit rotates it; a backend can
+use the current value to start an activity while the app is not running. The
+`remote-notification` background mode stays refused; an app with activities
+registers for ordinary remote notifications only when it grants `device.push`.
+A push-to-start token is available only after the app has launched at least
+once and Live Activities permission has been granted.
 
 ### MIDI: `exactMIDI`, `sendMIDI`, `midimessage`
 

@@ -16,7 +16,7 @@ pub(super) struct Activities {
 impl Default for Activities {
     fn default() -> Self {
         Self {
-            snapshot: json!({"activities":[],"frequentPushesEnabled":false,"linked":false}),
+            snapshot: json!({"activities":[],"frequentPushesEnabled":false,"linked":false,"pushToStartToken":null}),
             demanded: false,
             started: false,
             loading: false,
@@ -84,7 +84,7 @@ impl<D: DataSource> Runner<D> {
                 "exactActivities takes no arguments".into(),
             ));
         }
-        let value = decode(&self.plan, row.ty, &self.activities.snapshot).ok_or_else(|| DataError::BadArguments("exactActivities answers {linked: bool, activities: Activity[], frequentPushesEnabled: bool}; Activity has id, kind, state (JSON string), activityState, token (option<string>)".into()))?;
+        let value = decode(&self.plan, row.ty, &self.activities.snapshot).ok_or_else(|| DataError::BadArguments("exactActivities answers {linked: bool, activities: Activity[], frequentPushesEnabled: bool, pushToStartToken: option<string>}; Activity has id, kind, state (JSON string), activityState, token (option<string>)".into()))?;
         if self.activities.linked && !self.activities.started && !self.activities.loading {
             self.activities.demanded = true;
             self.activities.loading = true;
@@ -100,6 +100,9 @@ impl<D: DataSource> Runner<D> {
             error: DataError::BadArguments(e.to_string()),
         })?;
         snapshot["linked"] = Json::Bool(self.activities.linked);
+        if snapshot.get("pushToStartToken").is_none() {
+            snapshot["pushToStartToken"] = Json::Null;
+        }
         let mut next = self.activities.clone();
         next.snapshot = snapshot;
         next.started = true;
@@ -224,6 +227,7 @@ shape Activity
 shape Activities
   activities: Activity[]
   frequentPushesEnabled: bool
+  pushToStartToken: option<string>
 component App
   resource activities = exactActivities() as shape Activities
   mutation started as shape ID
@@ -256,7 +260,8 @@ component App
             r.resource("activities"),
             Some(&Value::record(vec![
                 Value::list(vec![]),
-                Value::Bool(false)
+                Value::Bool(false),
+                Value::Option(None)
             ]))
         );
         for action in ["start", "update", "end"] {
@@ -308,8 +313,12 @@ component App
                 .unwrap()
                 .is_some());
         }
-        for token in [Json::Null, json!("aabb"), json!("ccdd")] {
-            let snapshot = json!({"activities":[{"id":"a","kind":"train","state":"{\"count\":102}","activityState":"active","token":token}],"frequentPushesEnabled":true}).to_string();
+        for (token, start_token) in [
+            (Json::Null, Json::Null),
+            (json!("aabb"), json!("start-a")),
+            (json!("ccdd"), json!("start-b")),
+        ] {
+            let snapshot = json!({"activities":[{"id":"a","kind":"train","state":"{\"count\":102}","activityState":"active","token":token}],"frequentPushesEnabled":true,"pushToStartToken":start_token}).to_string();
             assert!(r.set_activities(&snapshot).unwrap().is_some());
             assert!(r.set_activities(&snapshot).unwrap().is_none());
             let mut state = String::new();
@@ -322,6 +331,10 @@ component App
             assert_eq!(
                 serde_json::from_str::<Json>(&state).unwrap()["activities"][0]["token"],
                 token
+            );
+            assert_eq!(
+                serde_json::from_str::<Json>(&state).unwrap()["pushToStartToken"],
+                start_token
             );
             assert!(!r.take_activities_demand());
         }
@@ -436,6 +449,10 @@ component App
             ("token: option<string>", "token: string"),
             ("activityState: string", "activityState: number"),
             ("activities: Activity[]", "activities: string[]"),
+            (
+                "pushToStartToken: option<string>",
+                "pushToStartToken: string",
+            ),
         ] {
             let error = contract::bake(contract::compile(&SOURCE.replace(from, to)).unwrap(), ())
                 .unwrap_err();

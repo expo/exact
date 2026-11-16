@@ -14,6 +14,7 @@ public typealias ActivityReport = @convention(c) (UnsafeMutableRawPointer?, Unsa
     private var tasks: [String: [Task<Void, Never>]] = [:]
     private var processTasks: [Task<Void, Never>] = []
     private var tokens: [String: String] = [:]
+    private var pushToStartToken: String?
 
     func join(_ context: UnsafeMutableRawPointer?, _ report: @escaping ActivityReport) -> UInt {
         next += 1
@@ -22,6 +23,15 @@ public typealias ActivityReport = @convention(c) (UnsafeMutableRawPointer?, Unsa
             // Subscribe before enumerating, so an activity arriving during recovery is seen.
             processTasks = [Task { for await activity in Live.activityUpdates { observe(activity); publish() } },
                             Task { for await _ in authorization.frequentPushEnablementUpdates { publish() } }]
+            if #available(iOS 17.2, *) {
+                if let token = Live.pushToStartToken { pushToStartToken = hex(token) }
+                processTasks.append(Task {
+                    for await token in Live.pushToStartTokenUpdates {
+                        pushToStartToken = hex(token)
+                        publish()
+                    }
+                })
+            }
             for activity in Live.activities { observe(activity) }
         }
         publish()
@@ -61,7 +71,10 @@ public typealias ActivityReport = @convention(c) (UnsafeMutableRawPointer?, Unsa
             return ["id": activity.id, "kind": activity.attributes.kind, "state": String(decoding: data, as: UTF8.self),
                     "activityState": state(activity), "token": tokens[activity.id].map { $0 as Any } ?? NSNull()]
         }
-        for listener in listeners.values { emit(["activities": entries, "frequentPushesEnabled": authorization.frequentPushesEnabled], to: listener) }
+        for listener in listeners.values {
+            emit(["activities": entries, "frequentPushesEnabled": authorization.frequentPushesEnabled,
+                  "pushToStartToken": pushToStartToken.map { $0 as Any } ?? NSNull()], to: listener)
+        }
         // The final report includes the terminal state. ActivityKit no longer enumerates dismissed instances.
         let dismissed = live.values.filter { $0.activityState == .dismissed }
         for activity in dismissed {
