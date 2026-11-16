@@ -19,6 +19,11 @@ pub(super) fn shape(plan: &Plan) -> Result<(), BakeError> {
                     && ty
                         .elem
                         .is_some_and(|id| plan.type_(id).kind == TypeKind::String)
+            } else if name == "pushToStartActivities" {
+                ty.kind == TypeKind::List
+                    && ty
+                        .elem
+                        .is_some_and(|item| push_to_start_item_shape(plan, item))
             } else {
                 ty.kind == TypeKind::Bool
             };
@@ -26,12 +31,26 @@ pub(super) fn shape(plan: &Plan) -> Result<(), BakeError> {
                 return Err(BakeError::Lint {
                     site: None,
                     id: "bake-activities-field",
-                    message: format!("`{}`: exactActivities.{name} needs activities: Activity[], pushToStartToken: option<string>, or a bool fact; Activity fields are id, kind, state, activityState (string), token (option<string>)", plan.str(resource.name)),
+                    message: format!("`{}`: exactActivities.{name} needs activities: Activity[], pushToStartToken: option<string>, pushToStartActivities: PushStartActivity[], or a bool fact; Activity fields are id, kind, state, activityState (string), token (option<string>)", plan.str(resource.name)),
                 });
             }
         }
     }
     Ok(())
+}
+
+fn push_to_start_item_shape(plan: &Plan, id: TypesId) -> bool {
+    let ty = plan.type_(id);
+    ty.kind == TypeKind::Record
+        && ty.fields.len == 3
+        && ["kind", "generation", "shape"].iter().all(|name| {
+            ty.fields.iter().any(|id| plan.str(plan.field(id).name) == *name)
+        })
+        && ty.fields.iter().all(|id| {
+            let field = plan.field(id);
+            plan.type_(field.ty).kind == TypeKind::String
+                && matches!(plan.str(field.name), "kind" | "generation" | "shape")
+        })
 }
 
 fn item_shape(plan: &Plan, id: TypesId) -> bool {

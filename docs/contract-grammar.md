@@ -513,7 +513,9 @@ compatibility-changing binary update follows LLP 1126.001 §5 Q6’s device gate
 `resource activities = exactActivities() as shape Activities` reads a record
 whose fields are `activities: Activity[]`, `frequentPushesEnabled: bool`,
 `linked: bool` (the host packaged its arm), and
-`pushToStartToken: option<string>`.
+`pushToStartToken: option<string>`, plus
+`pushToStartActivities: PushStartActivity[]` where each entry has `kind`,
+`generation` and `shape` string digests for a push-capable activity.
 An activity has `id`, `kind`, `state` (a JSON string), `activityState`
 (`pending`, `active`, `stale`, `ended`, `dismissed`) and `token: option<string>`.
 Readers may name only the fields they need. Off iOS the list is empty and

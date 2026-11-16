@@ -15,11 +15,13 @@ public typealias ActivityReport = @convention(c) (UnsafeMutableRawPointer?, Unsa
     private var processTasks: [Task<Void, Never>] = []
     private var tokens: [String: String] = [:]
     private var pushToStartToken: String?
+    private var pushToStartActivities: [[String: Any]] = []
 
     func join(_ context: UnsafeMutableRawPointer?, _ report: @escaping ActivityReport) -> UInt {
         next += 1
         listeners[next] = (context, report)
         if processTasks.isEmpty {
+            loadPushToStartActivities()
             // Subscribe before enumerating, so an activity arriving during recovery is seen.
             processTasks = [Task { for await activity in Live.activityUpdates { observe(activity); publish() } },
                             Task { for await _ in authorization.frequentPushEnablementUpdates { publish() } }]
@@ -36,6 +38,22 @@ public typealias ActivityReport = @convention(c) (UnsafeMutableRawPointer?, Unsa
         }
         publish()
         return next
+    }
+    /// The backend needs the exact attributes envelope for a push-to-start.
+    /// The registry and generation are embedded in the app bundle, so this
+    /// stays correct across builds and does not make the app duplicate digests.
+    private func loadPushToStartActivities() {
+        let generation = Bundle.main.object(forInfoDictionaryKey: "ExactWidgetGeneration") as? String ?? ""
+        let path = Bundle.main.bundleURL.appendingPathComponent("plans/activities.json")
+        guard let data = try? Data(contentsOf: path),
+              let registry = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return }
+        pushToStartActivities = registry.compactMap { entry in
+            guard entry["push"] as? Bool == true,
+                  let kind = entry["kind"] as? String,
+                  let shape = entry["shape"] as? String,
+                  !generation.isEmpty else { return nil }
+            return ["kind": kind, "generation": generation, "shape": shape]
+        }
     }
     func leave(_ id: UInt) { listeners.removeValue(forKey: id) }
     private func emit(_ value: [String: Any], to listener: (UnsafeMutableRawPointer?, ActivityReport)) {
@@ -73,7 +91,8 @@ public typealias ActivityReport = @convention(c) (UnsafeMutableRawPointer?, Unsa
         }
         for listener in listeners.values {
             emit(["activities": entries, "frequentPushesEnabled": authorization.frequentPushesEnabled,
-                  "pushToStartToken": pushToStartToken.map { $0 as Any } ?? NSNull()], to: listener)
+                  "pushToStartToken": pushToStartToken.map { $0 as Any } ?? NSNull(),
+                  "pushToStartActivities": pushToStartActivities], to: listener)
         }
         // The final report includes the terminal state. ActivityKit no longer enumerates dismissed instances.
         let dismissed = live.values.filter { $0.activityState == .dismissed }

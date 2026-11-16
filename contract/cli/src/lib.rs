@@ -1282,6 +1282,7 @@ fn first_frame<D: DataSource>(
             "frequentPushesEnabled",
             "linked",
             "pushToStartToken",
+            "pushToStartActivities",
         ],
         "bake-activities-field",
     )?;

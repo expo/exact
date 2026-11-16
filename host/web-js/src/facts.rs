@@ -26,6 +26,7 @@ pub fn reserved(plan: &Plan, body: &mut String) -> Result<String, String> {
                 "frequentPushesEnabled",
                 "linked",
                 "pushToStartToken",
+                "pushToStartActivities",
             ][..],
             "activities",
         ),
