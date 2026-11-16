@@ -812,7 +812,7 @@ export async function bringPlatform(dir, platform, { report = null, os = process
     if (platform === 'macos' && os !== 'darwin') return { refused: `${verb}: an Apple build needs a Mac with Xcode; nothing was written` };
     if (platform === 'windows' && os !== 'win32') return { refused: `${verb}: a Windows build needs Windows with the MSVC Rust target; nothing was written` };
     if (report?.error) return { refused: `${verb}: the setup report could not be read, so nothing was written: ${report.error}` };
-    const missing = (report ?? []).filter(row => !row.ok);
+    const missing = (report ?? []).filter(row => row.required && !row.ok);
     if (missing.length) return { refused: `${verb}: this machine lacks what a ${platform} build needs; nothing was written:\n${missing.map(row => `  ${row.name}: ${row.have} (SDK ${row.want})\n    ${row.fix}`).join('\n')}` };
     if (!manifest) {
       // An app without app.json had the defaults scripts/app.mjs `readManifest` supplies; naming a platform writes them.

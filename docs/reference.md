@@ -45,8 +45,11 @@ same set. On a CI worker, `bun <exact2>/scripts/exact.mjs setup --check
 --platform ios --device` checks the archive's prerequisites; `--platform
 android` checks the APK/AAB prerequisites, including JDK 17+ and the NDK's
 actual compiler paths. A scoped check fails when a prerequisite is missing
-and does not check unrelated web tools. Native `--platform` scopes are check-only;
-install commands are in the platform's CI recipe. `setup --platform web` installs
+and does not check unrelated web tools. Run from an app's directory, a check
+requires a Hermes bundle only when the app links Hermes, as that platform's build
+decides: iOS by `app.ts`, Android, macOS and Linux by the cargo graph of the app's
+crate. Elsewhere it reports the bundles as needed for TypeScript apps.
+Native `--platform` scopes are check-only; install commands are in the platform's CI recipe. `setup --platform web` installs
 [web prerequisites](#web-ci-preparation). The general check still reports
 optional tools separately (LLP 1086 D6).
 

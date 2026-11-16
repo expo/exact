@@ -320,6 +320,15 @@ test('a CI setup check names only the requested build toolchain and fails when i
   assert.doesNotMatch(result.stdout, /Chrome|web nightly|wasm-bindgen|Xcode/);
 });
 
+test('a setup check requires a Hermes bundle only of an app that links it', async () => {
+  const { platformReport } = await import('./exact.mjs');
+  const rows = [{ name: 'Hermes bundle (aarch64-linux-android)', ok: false, have: 'missing', fix: 'install it', need: 'Android TypeScript' }];
+  const hermesRow = async hermes => (await platformReport('android', rows, { hermes })).find(row => row.name === rows[0].name);
+  expect(await hermesRow(false)).toMatchObject({ ok: true, required: true, have: 'not linked by this app' });
+  expect(await hermesRow(null)).toMatchObject({ ok: false, required: false, need: 'TypeScript apps' });
+  expect(await hermesRow(true)).toMatchObject({ ok: false, required: true, fix: 'install it' });
+});
+
 test('web setup accepts an install scope and refuses native install scopes before provisioning', () => {
   for (const platform of ['web', 'ios', 'macos', 'android', 'linux', 'windows']) {
     const result = spawnSync(process.execPath, [resolve(import.meta.dir, 'exact.mjs'), 'setup', '--platform', platform], {
