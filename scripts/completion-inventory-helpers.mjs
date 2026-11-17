@@ -149,7 +149,7 @@ export function helperClassifications(group) {
     "The named public runner-crate source is the module lifecycle API or its value/admission helper. runner/src/runner/modules/bound.rs binds live module instances; runner/src/runner/kept.rs data_ready reconciles the current source/store before settlement.", [
     ["runner:runner/src/runner/retirement.rs", "ModuleIdentity::instance ModuleIdentity::retire ModuleInstance::failure"],
     ["runner:runner/src/runner/source.rs",
-      "Interrupt::new Native::handler Native::host Native::host_call Native::hosted Native::hosted_call Native::set Native::sync Native::synced PreloadWake::ask " +
+      "Interrupt::new Native::extension_handler Native::handler Native::host Native::host_call Native::hosted Native::hosted_call Native::set Native::sync Native::sync_form Native::synced PreloadWake::ask " +
       "PreloadWake::set Target::mutation Target::text"],
   ]),
   group("navigation", ["one-shot"], "current router, visit, tab or navigation operation", "UI-owned",
