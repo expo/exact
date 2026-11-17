@@ -33,6 +33,7 @@ import { transformSync, parseSync, Visitor } from 'rolldown/utils';
 import { copyGpuCache } from './gpu-cache.mjs';
 import { absent, analyze, planRules, rootOf, tokens as pageTokens, written } from './page-style.mjs';
 import { writers } from './writers.mjs';
+import { namesStream } from './stream-names.mjs';
 import { bundleHostModule, gateAgent, localImports, stageHostGlue } from './glue.mjs';
 import { contentName, contentNames } from './content-names.mjs';
 import { buildEditor, buildFlow, buildMarkdown, buildModule, buildMotion, moduleSourceDirs, undeclaredRustData, fresh, leafTaken, moduleGrants, webCompiler, inspectHooked, withInspectHooks, withoutDev, withRuntimeStamp } from './module.mjs';
@@ -482,12 +483,15 @@ async function typecheck(checking) {
   // Both run, and every diagnostic is reported, as the resident compiler joins them.
   const why = [];
   const { rolldown } = await import('rolldown');
+  // Whether a module can ask for a stream (LLP 1047.003 D5); the page's and the server's bundles load no other module.
+  let streams = false;
+  const streamNames = { name: 'stream-names', transform(code, id) { streams ||= namesStream(code, id); return null; } };
   const typed = checking ? check(real, resolve(libraries, 'tsc'), libraries).then(() => null, error => error) : Promise.resolve(null);
   let failed;
   rmSync(resolve(real, CODE_WARNINGS), { force: true });
   try {
     const bundle = await rolldown({ ...bundleOptions, cwd: real, input: resolve(real, '__exact_entry.ts'), tsconfig: resolve(real, '__exact_tsconfig.json'),
-      logLevel: 'silent', plugins: [capturedSources(real, why)] });
+      logLevel: 'silent', plugins: [capturedSources(real, why), streamNames] });
     try { await bundle.generate({ format: 'esm' }); } finally { await bundle.close(); }
   } catch (error) { failed = error; }
   // Each use of `Function` or `eval`, whose code from a string throws on every host (js/bake/src/__exact_portable.mjs):
@@ -510,7 +514,7 @@ async function typecheck(checking) {
     sources.shallow = [...(sources.shallow ?? []), ...packages.flatMap(([, , installed]) => installed.map(path => [dirname(path), basename(path)]))];
     writeFileSync(listed, JSON.stringify(sources));
   }
-  return { facts: { ...staticFacts(readFileSync(resolve(real, 'app.ts'), 'utf8'), parseSync), exported }, typed, warnings };
+  return { facts: { ...staticFacts(readFileSync(resolve(real, 'app.ts'), 'utf8'), parseSync), exported, streams }, typed, warnings };
 }
 const tsDraws = canvas2d && captured?.facts.exported.includes('draw');
 // A Rust module says whether it draws only when it loads (canvas2d.js says so then); with none, a surface no GPU module
@@ -749,7 +753,8 @@ const declared = plan.includes('from"./fetches.js"');
 const admitsNothing = production && !tsGrantSet.error && tsGrantSet.entries.length === 0 && !rustLinked && !Object.keys(moduleFlag.extensions).length && !pageModules && !declared;
 // Whether any source holds a network grant (the kinds grant-admission.js's `networkGrants`, `schemeGrants` and `localGrants` name).
 const netGranted = [tsGrantSet, rustGrantSet].some(set => (set.entries ?? []).some(([, , grant]) => /^(fetch|websocket)(-|$)/.test(grant?.[0] ?? '')));
-const fetchRefused = production && ts && !netGranted;
+const streams = !!captured?.facts.streams;
+const fetchRefused = production && ts && !netGranted && !streams;
 const emptyGrantAdmission = () => {
   const answers = {
     trimGrant: trimGrant.toString(), grantWords: grantWords.toString(),
@@ -779,8 +784,11 @@ writeFileSync(resolve(gen, 'agent.js'), localImports(readFileSync(resolve(gen, '
 // `@exact/sign-in` does for one granted `auth.apple` or `auth.google` (LLP 1133.014 D8).
 const auth = tsGrantSet.entries.some(([, source]) => ['auth.session', 'auth.apple', 'auth.google'].includes(grantWords(source)[0]));
 if (siteBase !== '/' && auth) throw new Error('host.web.base: auth callbacks currently require /; remove the base or use an app without auth.session, auth.apple or auth.google');
-// An upload is a granted fetch's stream (`exactUploadProgress`, LLP 1016.000 D10), so sources whose `fetch` is
-// ts-fetch-refused.js's never make one: rt.js keeps its empty ledger and uploads.js is not linked (LLP 1047.002 D3).
+// A page whose modules never spell `exactStream` is built without the stream reader (LLP 1047.003 D5): its fetch
+// refuses the option by name, and `opener` loads no chunk. An upload is a stream (`exactUploadProgress`, LLP 1016.000
+// D10), so neither makes one: rt.js keeps its empty ledger and uploads.js is not linked (LLP 1047.002 D3).
+const STREAM_REFUSAL = 'fetch() with exactStream: no module app.ts reaches spells exactStream, so this page was built without the stream reader; write exactStream by name where the options are made';
+const refusalLine = 'export const STREAM_REFUSAL = null;', streamImport = "import('./ts-stream.js')";
 const uploadsImport = "import { ledger, requestKey } from './uploads.js';";
 // A production page whose sources hold no storage grant (the kinds ts-data.js `storageOf` admits) keeps its refusals
 // alone: the adapters, the SQLite handles and the topics a write tells the app's other tabs are not linked (LLP
@@ -788,9 +796,10 @@ const uploadsImport = "import { ledger, requestKey } from './uploads.js';";
 const storageGrants = tsGrantSet.entries.some(([, , grant]) => ['fs-read', 'fs-write', 'sqlite-open'].includes(grant?.[0]));
 const storageFlag = 'const STORAGE_GRANTED = true;';
 const tsData = readFileSync(resolve(here, 'ts-data.js'), 'utf8');
-for (const line of [uploadsImport, storageFlag]) if (!tsData.includes(line)) throw new Error(`host/web-js/ts-data.js: build.mjs replaces a line it no longer has: ${line}`);
+for (const line of [uploadsImport, storageFlag, streamImport]) if (!tsData.includes(line)) throw new Error(`host/web-js/ts-data.js: build.mjs replaces a line it no longer has: ${line}`);
 if (ts) writeFileSync(resolve(gen, 'ts-data.js'), tsData.replace("'__APP_TS__'", JSON.stringify(pageAppTs))
-  .replace(uploadsImport, fetchRefused ? "import { data as runtime } from './rt.js'; const ledger = runtime.uploads, requestKey = () => undefined;" : uploadsImport)
+  .replace(uploadsImport, streams ? uploadsImport : "import { data as runtime } from './rt.js'; const ledger = runtime.uploads, requestKey = () => undefined;")
+  .replace(streamImport, streams ? streamImport : 'Promise.reject(new Error("this page was built without the stream reader"))')
   .replace(storageFlag, production && !storageGrants ? 'const STORAGE_GRANTED = false;' : storageFlag)
   .replace('const appId = source.appId;', `const appId = ${JSON.stringify((await import('../../scripts/app.mjs')).readManifest(appDir, app).app.id)};`)
   .replace('__AUTH_IMPORT__', auth ? "import { install as signIn } from './auth.js';" : '')
@@ -820,9 +829,11 @@ writeFileSync(resolve(gen, 'admission.js'), localImports(stubbed));
 // never linked. The realm it binds (the clock, the timers, the refused globals) stays with the module.
 if (fetchRefused) writeFileSync(resolve(gen, 'ts-fetch-refused.js'), [
   '// Generated: `fetch` for sources with no network grant (LLP 1047.002 D3): the app\'s own assets, else the refusal by name.',
-  "import { fetchWith } from './admission.js'; import { ordinary, responseFor } from './ts-fetch.js'; import { tsGrantSet } from './admission-data.js';",
-  'export const fetch = (input, init) => ordinary(() => fetchWith(tsGrantSet, input, init)).then(responseFor);', ''].join('\n'));
-cpSync(resolve(here, 'ts-fetch.js'), resolve(gen, 'ts-fetch.js'));
+  "import { fetchWith } from './admission.js'; import { ordinary, owned, responseFor, STREAM_REFUSAL } from './ts-fetch.js'; import { tsGrantSet } from './admission-data.js';",
+  'export const fetch = (input, init) => init?.exactStream !== undefined ? owned(Promise.reject(new TypeError(STREAM_REFUSAL))) : ordinary(() => fetchWith(tsGrantSet, input, init)).then(responseFor);', ''].join('\n'));
+const tsFetch = readFileSync(resolve(here, 'ts-fetch.js'), 'utf8');
+if (!tsFetch.includes(refusalLine)) throw new Error(`host/web-js/ts-fetch.js: build.mjs replaces a line it no longer has: ${refusalLine}`);
+writeFileSync(resolve(gen, 'ts-fetch.js'), streams ? tsFetch : tsFetch.replace(refusalLine, `export const STREAM_REFUSAL = ${JSON.stringify(STREAM_REFUSAL)};`));
 cpSync(resolve(here, 'ts-body-from.js'), resolve(gen, 'ts-body-from.js'));
 cpSync(resolve(here, 'ts-stream.js'), resolve(gen, 'ts-stream.js'));
 cpSync(resolve(here, 'ts-sqlite.js'), resolve(gen, 'ts-sqlite.js'));

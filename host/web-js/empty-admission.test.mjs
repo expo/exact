@@ -3,7 +3,7 @@
 // admission module exports, and a grant, a development build or a module brings the parser back.
 import { test, expect } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { webCompiler } from './module.mjs';
@@ -50,14 +50,14 @@ export const answer: Answer = ${usesFetch ? `async () => {
     // Its sources' `fetch` is the asset path and the refusal (ts-fetch-refused.js), so the request paths are not linked.
     expect(existsSync(resolve(dir, 'production/.gen/ts-fetch-refused.js'))).toBe(true);
     expect(production.entry).not.toContain(REQUESTS);
-    // Nor uploads: only a granted fetch's stream uploads.
+    // Nor uploads, which only a stream makes, in either mode (LLP 1047.003 D5).
     expect(production.entry).not.toContain(UPLOADS);
+    expect(development.entry).not.toContain(UPLOADS);
     expect(production.entry).toContain(ASSETS);
-    // Development links everything (LLP 1047 D7).
+    // Development links the parser and the request paths (LLP 1047 D7).
     expect(development.admission).toContain('function validateGrantSet');
     expect(development.entry).toContain(PARSER);
     expect(development.entry).toContain(REQUESTS);
-    expect(development.entry).toContain(UPLOADS);
     // Parity for the empty set: the stub and the parser answer the same calls the same way.
     const stub = await production.module(), parser = await development.module();
     expect(Object.keys(stub).sort()).toEqual(Object.keys(parser).sort());
@@ -77,7 +77,6 @@ export const answer: Answer = ${usesFetch ? `async () => {
     expect(granted.admission).toContain('function validateGrantSet');
     expect(granted.entry).toContain(PARSER);
     expect(granted.entry).toContain(REQUESTS);
-    expect(granted.entry).toContain(UPLOADS);
     expect(existsSync(resolve(dir, 'granted/.gen/ts-fetch-refused.js'))).toBe(false);
     if (!usesFetch) return;
     let ungranted = 0;
@@ -98,6 +97,69 @@ export const answer: Answer = ${usesFetch ? `async () => {
     rmSync(dir, { recursive: true, force: true });
   }
 }, 120000);
+
+// A page has the stream reader only where a module app.ts reaches spells `exactStream` (LLP 1047.003 D5), the same in
+// both modes. Without it, `fetch` refuses the option by name. With it, a page with no network grant links the whole
+// `fetch` in production too, so a stream is refused as development refuses it: its mapper sees the refusal.
+test('a page has the stream reader only where a module spells exactStream, and refuses a stream the same in both modes', async () => {
+  if (webCompiler().cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
+  mkdirSync(resolve(root, 'target'), { recursive: true });
+  const dir = mkdtempSync(resolve(root, 'target/web-js-stream-names-')), servers = [];
+  let browser;
+  try {
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Stream names', id: 'test.stream-names', app: { id: 'test.stream-names', name: 'Stream names' } }));
+    writeFileSync(resolve(dir, 'app.contract'), 'component App\n  resource said = said() as shape string\n  view\n    text said testId="said"\n');
+    const build = (out, args) => {
+      const result = spawnSync(process.execPath, ['host/web-js/build.mjs', 'stream-names', '--out', out, '--render', 'none', ...args], { cwd: root, env: { ...process.env, EXACT_APP_DIR: dir }, encoding: 'utf8' });
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      return { out, entry: readFileSync(resolve(out, builtFile(out, 'app.js')), 'utf8'), reader: readdirSync(out).some(f => f.startsWith('ts-stream-')) };
+    };
+    // What the page built in `out` says, at its own origin.
+    const said = async ({ out }) => {
+      const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(req) {
+        const path = new URL(req.url).pathname;
+        return new Response(Bun.file(resolve(out, path === '/' ? 'index.html' : path.slice(1))));
+      } });
+      servers.push(server);
+      const page = await (browser ??= await suiteBrowser()).newPage();
+      await page.goto(server.url.href);
+      await page.waitForFunction(() => document.querySelector('[data-testid=said]')?.textContent, null, { timeout: 30000 });
+      const text = await page.getByTestId('said').textContent();
+      await page.close();
+      return text;
+    };
+    // No grant admits the URL.
+    const url = JSON.stringify('http://127.0.0.1:1/events');
+    // A name made at run time.
+    writeFileSync(resolve(dir, 'app.ts'), `export const grants = '';
+export const answer = async () => {
+  try { await fetch(${url}, { ['exact' + 'Stream']: (e: any) => e.type } as RequestInit); return 'answered'; }
+  catch (error) { return String(error); }
+};
+`);
+    for (const args of [['--production'], []]) {
+      const unnamed = build(resolve(dir, `unnamed${args.length}`), args);
+      expect(unnamed.reader, args.join()).toBe(false);
+      expect(unnamed.entry).not.toContain('ts-stream');
+      expect(unnamed.entry).not.toContain(UPLOADS);
+      expect(await said(unnamed)).toStartWith('TypeError: fetch() with exactStream: no module app.ts reaches spells exactStream');
+    }
+    // The name spelled only in a module app.ts imports.
+    writeFileSync(resolve(dir, 'open.ts'), "export const open = (url: string) => fetch(url, { exactStream: (e: any) => [e.type, e.kind, e.message].join(' ') } as RequestInit);\n");
+    writeFileSync(resolve(dir, 'app.ts'), `import { open } from './open';\nexport const grants = '';\nexport const answer = (): any => open(${url});\n`);
+    for (const args of [['--production'], []]) {
+      const named = build(resolve(dir, `named${args.length}`), args);
+      expect(named.reader, args.join()).toBe(true);
+      expect(named.entry).toContain(UPLOADS);
+      expect(existsSync(resolve(named.out, '.gen/ts-fetch-refused.js'))).toBe(false);
+      expect(await said(named)).toBe("error Refused outside the app's grants (net.fetch)");
+    }
+  } finally {
+    await browser?.close();
+    for (const server of servers) server.stop(true);
+    rmSync(dir, { recursive: true, force: true });
+  }
+}, 180000);
 
 // A production page whose sources hold no `fs.read`, `fs.write` or `sqlite.open` grant keeps ts-data.js's storage
 // refusals and none of what a grant reaches: the adapters, the SQLite handles and the topics a write tells the app's
