@@ -692,12 +692,17 @@ final class FrameHealthMetricsTests: XCTestCase {
                 XCTAssertEqual(landed.y, target.y, accuracy: 0.001)
             }
         }
-        // Normal deceleration carries a release at 1,000 points a second 499 points
+        // A release at 1,000 points a second carries 250 points, and one at 2,000 carries 1,000
         let glide = Position(nearest: CGPoint(x: 20, y: 500), velocity: CGVector(dx: 0, dy: -1000), size: size, in: area)
-        XCTAssertEqual(glide.origin(of: size, in: area), CGPoint(x: 20, y: 8))
-        let side = Position(nearest: CGPoint(x: 20, y: 300), velocity: CGVector(dx: 1000, dy: 100), size: size, in: area)
+        XCTAssertEqual(glide.origin(of: size, in: area).x, 8)
+        XCTAssertEqual(glide.origin(of: size, in: area).y, 250, accuracy: 0.001)
+        let fling = Position(nearest: CGPoint(x: 20, y: 500), velocity: CGVector(dx: 0, dy: -2000), size: size, in: area)
+        XCTAssertEqual(fling.origin(of: size, in: area), CGPoint(x: 20, y: 8))
+        // Pushed away from its nearest edge, the card stays there unless flung
+        let gentle = Position(nearest: CGPoint(x: 20, y: 300), velocity: CGVector(dx: 500, dy: 50), size: size, in: area)
+        XCTAssertEqual(gentle.origin(of: size, in: area).x, 8)
+        let side = Position(nearest: CGPoint(x: 20, y: 300), velocity: CGVector(dx: 2000, dy: 200), size: size, in: area)
         XCTAssertEqual(side.origin(of: size, in: area).x, 488)
-        XCTAssertEqual(side.origin(of: size, in: area).y, 349.9, accuracy: 0.001)
         let middle = Position(nearest: CGPoint(x: 20, y: 300), velocity: .zero, size: size, in: area)
         let smaller = CGRect(x: 8, y: 8, width: 600, height: 708)
         XCTAssertEqual(middle.origin(of: size, in: smaller), CGPoint(x: 8, y: 154))
@@ -1222,14 +1227,52 @@ final class FrameHealthMetricsTests: XCTestCase {
     }
 
     func testTheHeaderButtonsFitApartAtTheMinimumWidth() {
-        let layout = FrameHealthCardFace.Layout(width: FrameHealthCardFace.minimumWidth)
-        let header = [layout.close, layout.title, layout.status, layout.details, layout.share]
-        for (left, right) in zip(header, header.dropFirst()) { XCTAssertLessThanOrEqual(left.maxX + 2, right.minX, "\(left) and \(right)") }
-        XCTAssertEqual(layout.share.maxX, layout.width - 6)
-        // Details and Share are 4 points apart, so their touch targets overlap; each takes its own half
-        XCTAssertEqual(layout.control(at: CGPoint(x: layout.details.maxX + 1, y: 22)), .details)
-        XCTAssertEqual(layout.control(at: CGPoint(x: layout.share.minX - 1, y: 22)), .share)
-        XCTAssertEqual(layout.control(at: CGPoint(x: layout.title.minX + 1, y: 22)), .title, "within the title, not Close's target")
+        for minimizable in [false, true] {
+            let layout = FrameHealthCardFace.Layout(width: FrameHealthCardFace.minimumWidth, minimizable: minimizable)
+            let header = (minimizable ? [layout.close, layout.minimize] : [layout.close]) + [layout.title, layout.status, layout.share]
+            for (left, right) in zip(header, header.dropFirst()) { XCTAssertLessThanOrEqual(left.maxX + 2, right.minX, "\(left) and \(right)") }
+            XCTAssertEqual(layout.share.maxX, layout.width - 6)
+            XCTAssertEqual(layout.control(at: CGPoint(x: layout.title.minX + 1, y: 22)), .title, "within the title, not a button's target")
+        }
+        // Details, and Done in its place, end under Share, 9 points below it, so their touch targets overlap; each takes its own part
+        for showsDetails in [false, true] {
+            let layout = FrameHealthCardFace.Layout(width: FrameHealthCardFace.minimumWidth, showsDetails: showsDetails)
+            XCTAssertEqual(layout.details.maxX, layout.share.maxX)
+            XCTAssertEqual(layout.control(at: CGPoint(x: layout.share.midX, y: layout.share.maxY + 4)), .share)
+            XCTAssertEqual(layout.control(at: CGPoint(x: layout.details.midX, y: layout.details.minY - 4)), .details)
+        }
+        #if os(iOS)
+        // Close and Minimize are 4 points apart likewise
+        let layout = FrameHealthCardFace.Layout(width: FrameHealthCardFace.minimumWidth, minimizable: true)
+        XCTAssertEqual(layout.control(at: CGPoint(x: layout.close.maxX + 1, y: 22)), .close)
+        XCTAssertEqual(layout.control(at: CGPoint(x: layout.minimize.minX - 1, y: 22)), .minimize)
+        #endif
+    }
+
+    func testAMinimizedCardKeepsClearOfTheScreensRoundedCorners() {
+        // An iPhone 18 Pro's window, whose corners round 62 points. The 192 by 44 point minimized card's corners, at most
+        // 22 points, cannot follow them, so in a bottom corner it moves along the bottom edge until its corner keeps 8 points
+        // inside the screen's
+        let bounds = CGRect(x: 0, y: 0, width: 402, height: 874), size = CGSize(width: 192, height: 44)
+        func clearing(_ x: CGFloat, _ y: CGFloat, horizontal: Bool = true) -> CGPoint {
+            FrameHealthCardFace.clearing(CGRect(origin: CGPoint(x: x, y: y), size: size), cornersOf: 62, in: bounds, horizontal: horizontal)
+        }
+        let left = clearing(8, 822)
+        XCTAssertEqual(left, CGPoint(x: 40, y: 822))
+        let corner = CGPoint(x: left.x + 22, y: left.y + 22), screen = CGPoint(x: 62, y: 874 - 62)
+        XCTAssertEqual(hypot(corner.x - screen.x, corner.y - screen.y) + 22, 62 - 8, accuracy: 0.001)
+        XCTAssertEqual(clearing(202, 822), CGPoint(x: 170, y: 822))
+        XCTAssertEqual(clearing(8, 822, horizontal: false), CGPoint(x: 8, y: 790), "on a side edge, it moves up")
+        XCTAssertEqual(clearing(100, 822), CGPoint(x: 100, y: 822), "clear of the corner, it stays")
+        XCTAssertEqual(clearing(8, 62), CGPoint(x: 8, y: 62), "below the status bar, it is past the corner's curve")
+        XCTAssertEqual(clearing(8, 874 - 44 - 20).x, 40 - (32 * 32 - 20 * 20 as CGFloat).squareRoot(), accuracy: 0.001,
+            "20 points up, it moves in less")
+        let full = CGRect(x: 8, y: 450, width: 320, height: 416)
+        XCTAssertEqual(FrameHealthCardFace.clearing(full, cornersOf: 62, in: bounds, horizontal: true), full.origin,
+            "the whole card's corners follow the screen's")
+        let wide = CGRect(x: 8, y: 822, width: 386, height: 44)
+        XCTAssertEqual(FrameHealthCardFace.clearing(wide, cornersOf: 62, in: bounds, horizontal: true), wide.origin,
+            "a card too wide to clear both corners stays")
     }
 
     func testTheTextAtTheBottomKeepsClearOfRounderBottomCorners() throws {
@@ -1294,33 +1337,6 @@ final class FrameHealthMetricsTests: XCTestCase {
         XCTAssertTrue(risen > 0 && card.contains(CGPoint(x: now.maxX, y: now.maxY - risen)), "\(risen)")
     }
 
-    #if os(iOS)
-    func testMinimizeKeepsWithinARounderBottomCorner() throws {
-        // Beside a compact card's pacing, Minimize sits in the bottom-right corner: in a 54-point corner it moves in
-        // as Share does from a rounder top-right one, and the pacing it sits beside gives way
-        let width = FrameHealthCardFace.width, height = FrameHealthCardFace.compactHeight
-        let corners: (CGFloat, CGFloat, CGFloat, CGFloat) = (12, 12, 54, 12)
-        let plain = FrameHealthCardFace.Layout(width: width, compact: true, minimizable: true)
-        let rounded = FrameHealthCardFace.Layout(width: width, compact: true, minimizable: true, corners: corners)
-        XCTAssertEqual(rounded.minimize.maxX, plain.minimize.maxX - 0.2915 * 42, accuracy: 0.01)
-        XCTAssertEqual(rounded.minimize.maxY, plain.minimize.maxY)
-        XCTAssertLessThanOrEqual(rounded.pacingArea.maxX + 8, rounded.minimize.minX)
-        XCTAssertEqual(FrameHealthCardFace.Layout(width: width, minimizable: true, corners: corners).minimize.maxX,
-            FrameHealthCardFace.Layout(width: width, minimizable: true).minimize.maxX, "in the toolbar's row it stays")
-        // Pressed, it inks nothing outside the card's edge
-        var state = FrameHealthCardFace.State()
-        state.pressed = .minimize
-        let edge = FrameHealthCardDrawing.continuous(CGRect(x: 1, y: 1, width: width - 2, height: height - 2),
-            radii: [corners.0, corners.1, corners.2, corners.3].map { $0 - 1 })
-        var p = Self.palette
-        p.iconPressed = CGColor(gray: 0, alpha: 1)
-        let ink = try Self.ink(outside: edge, size: CGSize(width: width, height: height)) {
-            FrameHealthCardFace.minimize($0, rounded, state: state, palette: p)
-        }
-        XCTAssertEqual(ink, 0)
-    }
-    #endif
-
     /// The pixels `draw` inks on a white card `size` points large, drawn at twice its scale, whose middles lie outside
     /// `outline`
     private static func ink(outside outline: CGPath, size: CGSize, _ draw: (CGContext) -> Void) throws -> Int {
@@ -1347,7 +1363,7 @@ final class FrameHealthMetricsTests: XCTestCase {
         // A 51-point corner, as the folded iPhone Duo's screen gives a card in its top-right corner
         let right = FrameHealthCardFace.Layout(width: width, corners: (12, 51, 12, 12))
         XCTAssertEqual(right.share.maxX, plain.share.maxX - 0.2915 * 39, accuracy: 0.01, "Share moves in")
-        XCTAssertEqual(right.share.minX - right.details.minX, plain.share.minX - plain.details.minX, accuracy: 0.001, "and Details with it")
+        XCTAssertEqual(right.details, plain.details, "Details, below the corner, stays")
         XCTAssertEqual(right.close, plain.close)
         // Close moves in as far as the 6 points the title leaves it, and the title keeps its place
         XCTAssertEqual(plain.title.minX - plain.close.maxX, 2 + 6, "the title stands 6 points beyond Close's 2")
@@ -1359,8 +1375,13 @@ final class FrameHealthMetricsTests: XCTestCase {
         XCTAssertEqual(left.share, plain.share)
         // The narrowest card, both corners rounded: the title's room and the moves shrink to keep the header apart
         let both = FrameHealthCardFace.Layout(width: FrameHealthCardFace.minimumWidth, corners: (51, 51, 12, 12))
-        let header = [both.close, both.title, both.status, both.details, both.share]
+        let header = [both.close, both.title, both.status, both.share]
         for (a, b) in zip(header, header.dropFirst()) { XCTAssertLessThanOrEqual(a.maxX + 2, b.minX + 0.001, "\(a) and \(b)") }
+        // Minimize moves in with Close, and the title, 2 points beyond Minimize, keeps its place
+        let minimizing = FrameHealthCardFace.Layout(width: width, minimizable: true, corners: (51, 12, 12, 12))
+        XCTAssertEqual(minimizing.minimize.minX - minimizing.close.minX, 36)
+        XCTAssertEqual(minimizing.title.minX - minimizing.minimize.maxX, 2, accuracy: 0.001)
+        XCTAssertEqual(minimizing.title, FrameHealthCardFace.Layout(width: width, minimizable: true).title)
 
         // Close pressed in the 51-point corner, drawn at 1x across the corner alone in colors far apart
         var p = Self.palette
@@ -1450,7 +1471,8 @@ final class FrameHealthMetricsTests: XCTestCase {
         let caption = "Last 5s. Exact does not observe presentation, compositor or GPU time, or input latency."
         let full = FrameHealthCardFace.Layout(width: FrameHealthCardFace.width, showsDetails: true)
         let height = FrameHealthCardFace.detailsHeight(width: full.width, rows: rows, caption: caption)
-        XCTAssertEqual(full.detailsArea.maxY, FrameHealthCardFace.height, "Details fills the card below the header")
+        XCTAssertEqual(full.detailsArea.minY, full.context.maxY, "Details fills the card below the line under the header")
+        XCTAssertEqual(full.detailsArea.maxY, FrameHealthCardFace.height)
         XCTAssertLessThanOrEqual(height, full.detailsArea.height, "today's rows fit the whole card")
         let compact = FrameHealthCardFace.Layout(width: FrameHealthCardFace.width, compact: true, showsDetails: true)
         XCTAssertGreaterThan(height, compact.detailsArea.height, "and scroll on a compact card, which stays its height")

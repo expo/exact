@@ -5295,15 +5295,15 @@ in the app's appearance; the Mac's Develop menu has the same item. Row and item 
 checked while the card shows, and follow it when it closes itself. The card starts hidden
 and takes the touches within its bounds: drag it from anywhere, even past the window's
 edges, and on release it springs to the point along the edges of an area 8 points inside
-the window, past the safe area and above any keyboard, that is nearest where its
-momentum would carry it; accessibility actions move it to an edge, keeping its position
+the window, past the safe area and above any keyboard, that is nearest where it would
+stop sliding at a constant 2,000 points/s²: a gentle release stays by the nearest edge,
+and a fling reaches another. Accessibility actions move it to an edge, keeping its position
 along the other axis. Close, at its top left, or the checked **Frame Health** dismisses
-it. On iOS, Minimize leaves a small status and frame rate at the same edge, below
-the status bar, while measurement continues; tap it to restore the card. Dragging and
-accessibility actions move either form, and rotation and keyboard changes keep it
-within the window.
-Minimize also stays available below Details and on the compact card. Touches outside
-the visible form reach the app. LLP 1079.000 §7.2 describes its rows: Live, Paused
+it. On iOS, Minimize, beside Close, leaves a small status and frame rate at the same edge,
+8 points below the status bar, while measurement continues; tap it to restore the card.
+In a screen corner, the small status moves along the edge until its corner keeps 8 points
+from the screen's. Dragging and accessibility actions move either form, and rotation and
+keyboard changes keep it within the window. Touches outside the visible form reach the app. LLP 1079.000 §7.2 describes its rows: Live, Paused
 or Idle; the requested rate and any system limit; frame rate
 and missed frames for the last 0.5 s and 5 s; pacing; and charts of frame rate and
 frame time, or a table of work time, late frames, maximum frame time and pacing
@@ -5311,9 +5311,9 @@ changes. A tap on a chart expands it; a tap on the title defines each figure; Sh
 at its top right, asks what to share, Agent Report, Summary or Image, and opens the
 system's share sheet with that one item; where the card measures the screen, it offers
 two agent reports, the screen's and Exact's frames'. The card states no pass or fail of its own;
-Details, beside Share, swaps the figures and charts for `perf frames health`'s
-three results over the last 5 s with their reasons and the counts behind them, in rows
-that scroll within the card. These are timing proxies; actual presentation and
+Details, at the end of the line under the header, swaps the figures and charts for
+`perf frames health`'s three results over the last 5 s with their reasons and the counts
+behind them, in rows that scroll within the card; Done in its place returns. These are timing proxies; actual presentation and
 native-only animation cadence are unmeasured. While the card is shown, bounded hitch
 capture also records matching asynchronous owner and apply timestamps. Idle time never
 becomes a frame time.
