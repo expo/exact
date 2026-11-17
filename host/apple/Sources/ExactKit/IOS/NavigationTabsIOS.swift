@@ -197,6 +197,7 @@ extension NavigationHost {
         if let more, primaryNavigation === more { primaryNavigation = tabStack(routerTab) as? UINavigationController }
         releaseMore()
         tablistRoot = nil
+        tablistOwed = nil
         tablistHidBar = false
         container.willMove(toParent: nil)
         container.view.removeFromSuperview()
@@ -346,6 +347,7 @@ extension NavigationHost {
             tablistAppearanceNone = authored
             presenter.session?.view?.setNeedsLayout()
             tablistRoot = nil
+            tablistOwed = nil
             tablistHidBar = false
             if let container = tabController, tabOwner === container, !ExactEnv.authoredChrome {
                 let hidden = authored || tabs.tablist.style["display"]?.string == "none"
@@ -370,7 +372,10 @@ extension NavigationHost {
         for index in navs.indices where index != p.at {
             let stack = routesStack(index) ?? navs[index]
             let routes = base(p.wanted[index])
-            if stack.stackRoutes.elementsEqual(routes, by: ===) || writable(stack, routes) { setRoutes(routes, in: stack) } else { tabsHeld = true }
+            if stack.stackRoutes.elementsEqual(routes, by: ===) || writable(stack, routes) { setRoutes(routes, in: stack) } else {
+                tabsHeld = true
+                if let transition = stack.transitionCoordinator { runHeld(after: transition) }
+            }
         }
         // Fill the router's tab's controller with its first routes, or project
         // its bar when the router's tab changes, before UIKit shows it, where
@@ -805,6 +810,7 @@ extension NavigationHost {
     func retireTabs() {
         // The tablist's hold on the bar goes with its container (§3.7).
         tablistRoot = nil
+        tablistOwed = nil
         tablistHidBar = false
         for stack in tabPanels.compactMap({ tabStacks[$0] }) {
             if let nav = stack as? UINavigationController { release(nav) } else { (stack as? PlainTab)?.show(nil) }

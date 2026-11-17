@@ -570,26 +570,42 @@ extension NavigationHost {
         else { return }
         let hidden = list.style["display"]?.string == "none"
         if let root = routes.first, root.key == key {
+            // A move owed to a pushed route is moot once the root is selected
+            tablistOwed = nil
             followTablistAtRoot(root, hidden: hidden, in: stack)
             return
         }
         guard let nav = stack as? UINavigationController, let at = routes.indices.dropFirst().first(where: { routes[$0].key == key }) else { return }
-        // A pushed route selected: the root, back on top later, arrives anew.
+        // A pushed route selected: the root, back on top later, arrives anew,
+        // and a move owed to another route is moot.
         if nav.tabBarController === tabController { tablistRoot = nil }
-        for (index, c) in routes.enumerated() where index > 0 && index <= at && (index == at || c.tablistHidden == nil) && c.tablistHidden != hidden {
-            c.tablistHidden = hidden
-            #if !os(tvOS)
-            c.hidesBottomBarWhenPushed = hidden
-            #endif
+        if tablistOwed !== routes[at] { tablistOwed = nil }
+        for (index, c) in routes.enumerated() where index > 0 && index <= at && (index == at || c.tablistHidden == nil)
+            && (c.tablistHidden != hidden || c === tablistOwed) {
+            // The flags on change only: a hatch's own, set since, stands
+            if c.tablistHidden != hidden {
+                c.tablistHidden = hidden
+                #if !os(tvOS)
+                c.hidesBottomBarWhenPushed = hidden
+                #endif
+            }
             // On top already, with no push to read it (a route revealed by a
             // pop with a guessed flag, or the tablist changing under it): the
-            // bar follows now (iOS 18).
-            guard c === nav.topViewController, nav.transitionCoordinator == nil, tabBarShows, let tabs = tabController, nav.tabBarController === tabs else { continue }
+            // bar follows now (iOS 18), or when a transition running over the
+            // stack ends.
+            guard c === nav.topViewController, tabBarShows, let tabs = tabController, nav.tabBarController === tabs else { continue }
+            guard #available(iOS 18.0, tvOS 18.0, *) else { continue }
+            if let transition = nav.transitionCoordinator {
+                tablistOwed = c
+                runHeld(after: transition)
+                continue
+            }
+            if tablistOwed === c { tablistOwed = nil }
             // (An iPad's floating bar: the whole stack's wish, as on a push. A
             // bar a route under this one hides, by UIKit's flag, is not shown.)
             let wish = floatingStackHides(nav) ?? hidden
             if !wish, Self.underHides(nav, c) { continue }
-            if #available(iOS 18.0, tvOS 18.0, *), tabs.isTabBarHidden != wish {
+            if tabs.isTabBarHidden != wish {
                 setTabBarHidden(wish, in: tabs, animated: nav.view.window != nil)
                 tablistHidBar = wish
             }
@@ -627,7 +643,7 @@ extension NavigationHost {
         guard root === stack.stackRoutes.last, tabBarShows, let tabs = tabController, stack.tabBarController === tabs else { return }
         guard #available(iOS 18.0, tvOS 18.0, *) else { return }
         if let transition = stack.transitionCoordinator {
-            if tablistRoot !== root { settleTablist(after: transition) }
+            if tablistRoot !== root { runHeld(after: transition) }
             return
         }
         // Arrived: the root on top at rest for the first time since another
@@ -727,36 +743,14 @@ extension NavigationHost {
         followFloatingBar(nav, for: nav.topViewController!, animated: false)
     }
 
-    /// A transition settled (`didShow`, or the end `followTablistAtRoot` waits
-    /// for): the root, if it is on top now, reconciles the bar with its tablist.
+    /// A push or pop of the stack settled (`completeTransition`): the root, if
+    /// it is on top now, reconciles the bar with its tablist.
     func settleTablist(_ stack: UIViewController) {
         guard !ExactEnv.authoredChrome, let key = selectedKey,
               let root = stack.stackRoutes.first as? RouteController, root.key == key, stack.stackRoutes.last === root,
               let list = adoptedTablist.flatMap({ presenter.views[$0] }) ?? container.flatMap({ NavigationTabs.of($0, presenter)?.tablist })
         else { return }
         followTablistAtRoot(root, hidden: list.style["display"]?.string == "none", in: stack)
-    }
-
-    /// Settles the root selected when `transition` ends, on the turn after
-    /// its completion. A call that finds the same transition while that
-    /// settle is pending asks nothing more and loses nothing: whichever root
-    /// asked, the one that settles is the root selected then, the only one the
-    /// bar follows.
-    private func settleTablist(after transition: UIViewControllerTransitionCoordinator) {
-        guard tablistTransition !== transition else { return }
-        tablistTransition = transition
-        let settle = { [weak self] in
-            guard let self, let stack = routesStack(routerTab) else { return }
-            settleTablist(stack)
-        }
-        let release = { [weak self, weak transition] in
-            if self?.tablistTransition === transition { self?.tablistTransition = nil }
-        }
-        let queued = transition.animate(alongsideTransition: nil) { _ in DispatchQueue.main.async { release(); settle() } }
-        // A coordinator that refuses the block, as one does once its completions have begun (`ModalController.viewDidAppear`
-        // meets one still installed): settle on the next turn, holding the slot through that settle so it does not ask again;
-        // a stack that still reports it then leaves the move to the root's next arrival, as before any completion
-        if !queued { DispatchQueue.main.async { settle(); release() } }
     }
 }
 #endif
