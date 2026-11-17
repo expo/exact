@@ -211,7 +211,8 @@ export function renderer(dist, { closed = false, read = path => readFileSync(res
   const rebase = head => generation ? withGenerationBase(head, generation, base) : head;
   // A rendered page paints without the runtime, which only adopts it, so its preloads are low priority (page.rs `push_low`).
   const headOf = (preload, language) => rebase(shell.slice(0, title).replace(/<html[^>]*>/, () => htmlTag(language)) + `<script>${capture}</script>\n`
-    + shell.slice(stop, early).replace(/(<link rel="modulepreload" href="[^"]*")>\n/g, preload ? '$1 fetchpriority="low">\n' : '')
+    // The TypeScript seam's line is the shell's alone: a page loads the seam at its first ask (LLP 1047.003 D6).
+    + shell.slice(stop, early).replace(/<link rel="modulepreload" href="[^"]*" data-exact-asks>\n/g, '').replace(/(<link rel="modulepreload" href="[^"]*")>\n/g, preload ? '$1 fetchpriority="low">\n' : '')
     + shell.slice(early, root).replace(sheet, ''));
   const preloads = (shell.slice(stop, early).match(/<link rel="modulepreload" href="[^"]*">\n/g) ?? []).map(l => l.replace('>', ' fetchpriority="low">')).join('');
   // A realm for one render: a document, a context with the server bundle run in it, and its location, which `begin`

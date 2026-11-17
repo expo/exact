@@ -161,6 +161,81 @@ export const answer = async () => {
   }
 }, 180000);
 
+// The TypeScript seam is a chunk loaded at the page's first ask (LLP 1047.003 D6) where only a resource asks: a page
+// made at build starts from its checkpoint and never runs it, a press that asks again loads it, the shell loads it
+// before its first render, and one that does not load is said once while the page keeps what it shows. A plan that
+// sends keeps it in the entry.
+test('a production page loads its TypeScript seam at its first ask, and a shell before its first render', async () => {
+  if (webCompiler().cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
+  mkdirSync(resolve(root, 'target'), { recursive: true });
+  const dir = mkdtempSync(resolve(root, 'target/web-js-seam-'));
+  const contract = sends => `routes nav
+  home "/" render=build activate=idle
+  notfound render=build activate=idle
+
+component App
+  state count = 0
+  resource said = greeting(count) as shape string
+${sends ? '  mutation saved as shape string\n' : ''}  action follow(url: string)
+    nav = go(nav, url)
+  action bump
+    count = count + 1
+${sends ? '  action save\n    send saved = keep()\n' : ''}  view
+    main navigationKey=\`\${top(nav).id}\` navigate=follow
+      for e in stack(nav) key=e.id
+        column navigationKey=\`\${e.id}\`
+          text said testId="said"
+          button "More" press=bump testId="bump"
+`;
+  let browser;
+  try {
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Seam', id: 'test.seam', app: { id: 'test.seam', name: 'Seam' } }));
+    writeFileSync(resolve(dir, 'app.ts'), "export const grants = '';\nexport const answer = (name: string, args: unknown[]): any => name === 'keep' ? 'kept' : 'said ' + String(args[0]);\n");
+    const build = (out, sends) => {
+      writeFileSync(resolve(dir, 'app.contract'), contract(sends));
+      const result = spawnSync(process.execPath, ['host/web-js/build.mjs', 'seam', '--out', out, '--production'], { cwd: root, env: { ...process.env, EXACT_APP_DIR: dir }, encoding: 'utf8' });
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      return { modules: Object.keys(JSON.parse(readFileSync(resolve(out, '.gen/modules.json'), 'utf8'))), chunk: readdirSync(out).find(name => /^ts-data-.*\.js$/.test(name)) };
+    };
+    const sending = build(resolve(dir, 'sends'), true);
+    expect(sending.modules).toContain('ts-data.js');
+    expect(sending.chunk).toBeUndefined();
+    const out = resolve(dir, 'asks'), { modules, chunk } = build(out, false);
+    expect(modules).not.toContain('ts-data.js');
+    expect(chunk).toBeDefined();
+    expect(readFileSync(resolve(out, 'shell.html'), 'utf8')).toContain(`<link rel="modulepreload" href="./${chunk}" data-exact-asks>`);
+    expect(readFileSync(resolve(out, 'index.html'), 'utf8')).not.toContain(chunk);
+    // `/` as built, or as the shell a host with one fallback page serves; `gone` drops the seam's chunk.
+    const serve = (shell, gone = false) => Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
+      const path = new URL(request.url).pathname;
+      if (gone && path === `/${chunk}`) return new Response('gone', { status: 404 });
+      return new Response(Bun.file(resolve(out, path === '/' ? (shell ? 'shell.html' : 'index.html') : path.slice(1))));
+    } });
+    browser = await suiteBrowser();
+    // The seam sets `exact.moduleReaders` as it loads (ts-data.js).
+    const visit = async (shell, gone, press) => {
+      const server = serve(shell, gone), page = await browser.newPage();
+      try {
+        await page.goto(server.url.href);
+        await page.waitForFunction(() => globalThis.exact?.ready && document.querySelector('[data-testid=said]')?.textContent);
+        const before = { said: await page.getByTestId('said').textContent(), loaded: await page.evaluate(() => typeof exact.moduleReaders === 'function') };
+        if (!press) return before;
+        await page.getByTestId('bump').click();
+        await page.waitForFunction(() => document.querySelector('[data-testid=said]').textContent !== 'said 0' || exact.journal.some(l => l.includes('did not load')));
+        const journal = await page.evaluate(() => exact.journal.filter(l => l.includes('did not load')).map(l => l.replace(/^t=[\d.]+ /, '').replace(/: Failed .*$/, '')));
+        return { before, after: { said: await page.getByTestId('said').textContent(), loaded: await page.evaluate(() => typeof exact.moduleReaders === 'function'), journal } };
+      } finally { await page.close(); server.stop(true); }
+    };
+    expect(await visit(false, false, true)).toEqual({ before: { said: 'said 0', loaded: false }, after: { said: 'said 1', loaded: true, journal: [] } });
+    expect(await visit(true, false, false)).toEqual({ said: 'said 0', loaded: true });
+    expect(await visit(false, true, true)).toEqual({ before: { said: 'said 0', loaded: false },
+      after: { said: 'said 0', loaded: false, journal: ['the TypeScript module did not load', 'resource said failed: the TypeScript module did not load'] } });
+  } finally {
+    await browser?.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+}, 120000);
+
 // A production page whose sources hold no `fs.read`, `fs.write` or `sqlite.open` grant keeps ts-data.js's storage
 // refusals and none of what a grant reaches: the adapters, the SQLite handles and the topics a write tells the app's
 // other tabs (build.mjs `storageGrants`). Each call refuses as a development page, which links everything, refuses it.

@@ -605,8 +605,19 @@ const css = readFileSync(resolve(gen, 'app.css'), 'utf8');
 // only once `cutSheet`, below, has cut it as the entry renders; until then main.js names it `__EXACT_SHEET__`.
 const contentFiles = {}, services = launchWeb.map(m => [`launch/${m.name}/service.js`, readFileSync(m.web)]);
 for (const [name, bytes] of services) contentFiles[name] = contentName(name, bytes);
+// A source granted `auth.session` signs in through the system browser (auth.js, LLP 1069.006), as
+// `@exact/sign-in` does for one granted `auth.apple` or `auth.google` (LLP 1133.014 D8).
+const auth = tsGrantSet.entries.some(([, source]) => ['auth.session', 'auth.apple', 'auth.google'].includes(grantWords(source)[0]));
+// The TypeScript seam (ts-data.js, ts-fetch.js, admission.js, app.ts and what they bring) is a chunk loaded at the
+// page's first ask (LLP 1047.003 D6), where the build proves only a resource's ask reaches it: a production page whose
+// plan sends nothing, whose app.ts exports no tools, overlay or draw, beside no Rust module, page module or sign-in,
+// and with pages made at build to start from. A page with no checkpoint (a shell) loads it before its first render.
+const exportedNames = captured?.facts.exported ?? [];
+const seamLazy = production && ts && !existsSync(resolve(gen, 'sends.flag')) && !rust && !pageModules && !auth
+  && !['tools', 'overlay', 'draw'].some(name => exportedNames.includes(name)) && !args.includes('--inline') && opt('--render') !== 'none'
+  && JSON.parse(readFileSync(resolve(gen, 'pages.json'), 'utf8')).length > 0;
 writeFileSync(resolve(gen, 'main.js'), [
-  ...(ts ? ["import './held-hooks.js';"] : []),
+  ...(ts && !seamLazy ? ["import './held-hooks.js';"] : []),
   "import app, { sources, wait } from './app.js';",
   ...(devReload ? ["import { prepareDev } from './checkpoint.js';", "const finishDev = prepareDev();"] : []),
   ...(files ? ["import './files.js';"] : []),
@@ -640,7 +651,10 @@ writeFileSync(resolve(gen, 'main.js'), [
     "let told = reportTime(clock.now)[1];",
     "Clocked.push(() => { const o = reportTime(clock.now)[1]; if (o === told) return; told = o; commit(() => { for (const r of Resources) if (r.source === 'exactTime') R(r); }, 'time'); });",
   ] : []),
-  ...(ts ? [`import { install as ts${production ? '' : ', watchState'} } from './ts-data.js';`, `ts(data, ${mixed}${pageModules ? ", () => import('./native.js')" : ''});`, "import { answering } from './ts-fetch.js';"] : []),
+  ...(ts ? ["import './ts-link.js';", ...(seamLazy ? [
+    "import { seam } from './ts-load.js';",
+    'const loadSeam = seam(data, inflight, journal, clock);',
+  ] : [`import { install as ts${production ? '' : ', watchState'} } from './ts-data.js';`, `ts(data, ${mixed}${pageModules ? ", () => import('./native.js')" : ''});`, "import { answering } from './ts-fetch.js';"])] : []),
   // File commands can run before the lazy Rust module has loaded.
   ...rustAdmissionImports, ...rustAdmission,
   ...(ts && !production ? ['globalThis.exact = Object.assign(globalThis.exact ?? {}, { watchState });'] : []),
@@ -712,7 +726,7 @@ writeFileSync(resolve(gen, 'main.js'), [
     "const fail = () => { if (!unloaded) return; const ts = data.ts; data.answer = ts ? (...a) => { try { return ts(...a); } catch (e) { throw also(e); } } : () => { throw new Error(unloaded); }; for (const f of data.q.splice(0)) f(); };",
     "inflight.n++;",
     `if (wait || ${mixed}) load().then(() => go(() => { start(); fail(); })); else go(() => { start(); requestAnimationFrame(() => setTimeout(() => load().then(fail))); });`,
-  ] : ['go(start);']),
+  ] : [seamLazy ? "if (typeof document === 'object' && !document.querySelector('script[type=\"application/vnd.exact.checkpoint\"]')) loadSeam().then(() => go(start)); else go(start);" : 'go(start);']),
   // After the first render, which a font wait may defer (`containers()` reads the runtime's `globalThis.exact`).
   ...(containerHatches ? ["go(() => requestAnimationFrame(() => requestAnimationFrame(() => import('./hatches.js').then(m => m.containers()))));"] : []),
   // The chunks no head preloads run when a piece is first used, which may be offline. The entry prepares them as it
@@ -788,9 +802,6 @@ const emptyGrantAdmission = () => {
 cpSync(resolve(root, 'host/web/frame-messages.js'), resolve(gen, 'frame-messages.js'));
 for (const f of ['navigation.js', 'names.js']) cpSync(resolve(gen, f), resolve(gen, 'agent-' + f));
 writeFileSync(resolve(gen, 'agent.js'), localImports(readFileSync(resolve(gen, 'agent.js'), 'utf8').replace("from './names.js'", "from './agent-names.js'").replace("from './navigation.js'", "from './agent-navigation.js'")));
-// A source granted `auth.session` signs in through the system browser (auth.js, LLP 1069.006), as
-// `@exact/sign-in` does for one granted `auth.apple` or `auth.google` (LLP 1133.014 D8).
-const auth = tsGrantSet.entries.some(([, source]) => ['auth.session', 'auth.apple', 'auth.google'].includes(grantWords(source)[0]));
 if (siteBase !== '/' && auth) throw new Error('host.web.base: auth callbacks currently require /; remove the base or use an app without auth.session, auth.apple or auth.google');
 // A page whose modules never spell `exactStream` is built without the stream reader (LLP 1047.003 D5): its fetch
 // refuses the option by name, and `opener` loads no chunk. An upload is a stream (`exactUploadProgress`, LLP 1016.000
@@ -805,7 +816,7 @@ const storageGrants = tsGrantSet.entries.some(([, , grant]) => ['fs-read', 'fs-w
 const storageFlag = 'const STORAGE_GRANTED = true;';
 const tsData = readFileSync(resolve(here, 'ts-data.js'), 'utf8');
 for (const line of [uploadsImport, storageFlag, streamImport]) if (!tsData.includes(line)) throw new Error(`host/web-js/ts-data.js: build.mjs replaces a line it no longer has: ${line}`);
-if (ts) writeFileSync(resolve(gen, 'ts-data.js'), tsData.replace("'__APP_TS__'", JSON.stringify(pageAppTs))
+if (ts) writeFileSync(resolve(gen, 'ts-data.js'), (seamLazy ? "import './held-hooks.js';\n" : '') + tsData.replace("'__APP_TS__'", JSON.stringify(pageAppTs))
   .replace(uploadsImport, streams ? uploadsImport : "import { data as runtime } from './rt.js'; const ledger = runtime.uploads, requestKey = () => undefined;")
   .replace(streamImport, streams ? streamImport : 'Promise.reject(new Error("this page was built without the stream reader"))')
   .replace(storageFlag, production && !storageGrants ? 'const STORAGE_GRANTED = false;' : storageFlag)
@@ -843,6 +854,7 @@ const tsFetch = readFileSync(resolve(here, 'ts-fetch.js'), 'utf8');
 if (!tsFetch.includes(refusalLine)) throw new Error(`host/web-js/ts-fetch.js: build.mjs replaces a line it no longer has: ${refusalLine}`);
 writeFileSync(resolve(gen, 'ts-fetch.js'), streams ? tsFetch : tsFetch.replace(refusalLine, `export const STREAM_REFUSAL = ${JSON.stringify(STREAM_REFUSAL)};`));
 cpSync(resolve(here, 'ts-body-from.js'), resolve(gen, 'ts-body-from.js'));
+for (const f of ['ts-link.js', 'ts-load.js']) cpSync(resolve(here, f), resolve(gen, f));
 cpSync(resolve(here, 'ts-stream.js'), resolve(gen, 'ts-stream.js'));
 cpSync(resolve(here, 'ts-sqlite.js'), resolve(gen, 'ts-sqlite.js'));
 cpSync(resolve(here, 'auth.js'), resolve(gen, 'auth.js'));
@@ -867,7 +879,7 @@ writeFileSync(resolve(gen, 'main-server.js'), [
   "import { answers } from './checkpoint.js';",
   "import { markBars, routeTitle } from './navigation.js';",
   "import { markRoutes, markDocument } from './document.js';",
-  ...(ts ? ["import { install as ts } from './ts-data.js';", "import { unfinishedIO } from './ts-fetch.js';"] : []),
+  ...(ts ? ["import './ts-link.js';", "import { install as ts } from './ts-data.js';", "import { unfinishedIO } from './ts-fetch.js';"] : []),
   ...(rustLinked ? ["import { install } from './rust-data.js';"] : []),
   ...rustAdmissionImports,
   // `exactTime` is a fact of the reader's device, which a render has not got: it answers as the runner does before a
@@ -1160,6 +1172,7 @@ if (how !== 'none' || markdownReaders) {
 // 25.8 → 23.6 KB, the feed bench's 30.9 → 27.9, the grid's 19.3 → 18.1),
 // bytes a page downloads before its runtime is up.
 const preloadModules = [];
+let seamChunk = null;
 // What a page preloads from its head: the entry and the chunks it imports statically, which run as it starts.
 const eagerChunks = (entry, imports) => {
   const eager = [];
@@ -1203,7 +1216,8 @@ const prepareChunks = { name: 'exact-prepare-chunks', renderChunk(code, chunk, _
   // clone's release page: runtime up at 1.7–1.9 s, 0.5 s with it; ~23 MB
   // more heap). Other browsers read a comment.
   const built = await b.write({ dir: out, format: 'esm', minify: true, comments: false, entryFileNames: 'app-[hash].js', chunkFileNames: '[name]-[hash].js',
-    postBanner: (chunk) => chunk.isEntry ? '//# allFunctionsCalledOnLoad' : undefined,
+    // The seam's chunk too (LLP 1047.003 D6): a page loads it to answer at once.
+    postBanner: (chunk) => chunk.isEntry || chunk.moduleIds.includes(resolve(gen, 'ts-data.js')) ? '//# allFunctionsCalledOnLoad' : undefined,
     ...(devReload && ts ? { manualChunks: (id, { getModuleInfo }) => fromData(id, getModuleInfo) ? 'dev-data' : undefined } : {}) });
   if (devReload && ts) for (const chunk of built.output.filter(file => file.type === 'chunk' && Object.keys(file.modules).includes(pageAppTs))) {
     devLogic.push(['typescript', createHash('sha256').update(readFileSync(resolve(out, chunk.fileName))).digest('hex')]);
@@ -1211,6 +1225,9 @@ const prepareChunks = { name: 'exact-prepare-chunks', renderChunk(code, chunk, _
   const chunks = new Map(built.output.filter(file => file.type === 'chunk').map(file => [file.fileName, file]));
   const entry = built.output.find(file => file.type === 'chunk' && file.isEntry);
   preloadModules.push(...eagerChunks(entry.fileName, name => chunks.get(name)?.imports));
+  // The shell, which cannot paint before the seam answers, preloads it too, marked so a page made from the shell does
+  // not (LLP 1047.003 D6, page.rs `ASKS`).
+  seamChunk = built.output.find(file => file.type === 'chunk' && !file.isEntry && file.moduleIds.includes(resolve(gen, 'ts-data.js')))?.fileName ?? null;
   // The entry under the name it had, and each chunk, which had no other, under its own.
   for (const name of chunks.keys()) contentFiles[name === entry.fileName ? 'app.js' : name] = name;
   // The entry's bytes by source module, as Rolldown rendered them before minification (shares, not a ledger), for
@@ -1245,7 +1262,7 @@ const fonts = existsSync(resolve(gen, 'preloads.html')) ? readFileSync(resolve(g
 // modulepreload fills the document's module map without evaluating the pieces
 // that import() activates later, even when HTTP caching is disabled.
 const preloads = fonts + preloadModules.filter(f => !args.includes('--inline') || f !== contentFiles['app.js'])
-  .map(f => `<link rel="modulepreload" href="./${f}">\n`).join('');
+  .map(f => `<link rel="modulepreload" href="./${f}">\n`).join('') + (seamChunk ? `<link rel="modulepreload" href="./${seamChunk}" data-exact-asks>\n` : '');
 // A rendered page carries only the rules its document can match (page-style.mjs, LLP 1048.007 D4); the runtime adds
 // the sheet before its first render (main.js). A renderer reads each rule's first three fields (page.rs); the cut's
 // tokens are for the checks that no element inside the root has one (conform.mjs, document-checkpoints.test.mjs).

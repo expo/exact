@@ -14,7 +14,9 @@ import * as source from '__APP_TS__';
 import { createSecretFacade, hasGrant, inOverlay, overlaying, setAppGrantSet } from './admission.js';
 import { tsGrantSet } from './admission-data.js';
 import { sourceTypes } from './names.js';
-import { canvasCommitted, checkpoint, clock, commit, drive, inflight, journal, Origin, painted, R, Resources, time } from './rt.js';
+// The runtime's objects, as a chunk loaded lazily takes them (rt-link.js): rt.js puts them there, and ts-link.js what
+// only this module reads (LLP 1047.003 D6).
+import { rt } from './rt-link.js';
 import { failureCode, failureReason, Shaped } from './shape.js';
 // What uploads a resource asks (uploads.js); with ts-fetch-refused.js no source can upload, and the build links none.
 import { ledger, requestKey } from './uploads.js';
@@ -23,9 +25,6 @@ useFetch(sourceFetch);
 const appId = source.appId;
 // Work an answer awaits that is no held fetch, counted on its answer (ts-fetch.js `answering.ordinary`, LLP 1016.000 D9).
 const ordinary = start => (answering.ordinary ?? (f => f()))(start);
-// What an answer's timers run on (ts-fetch.js `arm`). Set once the app's module has run: a draw from then on
-// outside an answer is refused as outside one, not as during initialization (ts-fetch.js `answerOnly`).
-answering.page = { clock, journal, drive, time };
 __AUTH_IMPORT__
 // Values cross by the plan's types (`named` into the module's objects,
 // `arrays` back into the runtime's arrays), with each type's converters made
@@ -228,11 +227,11 @@ let watching = null, page = null, load = null;
 // D4, the runner's `changed`).
 const changed = (r, topic) => {
   const t = r.ticket;
-  if (!t || t.stream || t.req?.stream) return R(r, true);
-  if (!t.again) journal.push(`t=${clock.now} changed ${topic}: ticket ${t.id} (${r.name}) lands first, then it is asked again`);
+  if (!t || t.stream || t.req?.stream) return rt.R(r, true);
+  if (!t.again) rt.journal.push(`t=${rt.clock.now} changed ${topic}: ticket ${t.id} (${r.name}) lands first, then it is asked again`);
   t.again = true;
 };
-const announce = (topic, why) => commit(() => { const m = moduleWatched.get(topic); for (const r of Resources) if (r.watches?.has(topic) || m?.has(r.source)) changed(r, topic); }, `${why} ${topic}`);
+const announce = (topic, why) => rt.commit(() => { const m = moduleWatched.get(topic); for (const r of rt.Resources) if (r.watches?.has(topic) || m?.has(r.source)) changed(r, topic); }, `${why} ${topic}`);
 const watch = topic => answering.call.watches.add(topic);
 // Another tab's durable write (LLP 1030.004 D2): its topics cross between the app's tabs on a channel of the app's,
 // after the write lands, and a tab never hears its own. An answer's read watches them, which opens the channel: in
@@ -280,15 +279,15 @@ globalThis.__exact_module = body => {
 };
 (globalThis.exact ??= {}).announceModule = topic => announce(topic, 'module');
 // The readers whose data code read module source `key`, of `among`: the release scan passes only the awake ones.
-globalThis.exact.moduleReaders = (key, among = Resources) => among.filter(r => moduleWatched.get(key)?.has(r.source)).map(r => r.name);
+globalThis.exact.moduleReaders = (key, among = rt.Resources) => among.filter(r => moduleWatched.get(key)?.has(r.source)).map(r => r.name);
 // The documents the answers watch, for the agent's `state.watches`, as the runner lists them: a development page
 // names it (build.mjs), since the agent drives only that, and a production page does not link it.
-export const watchState = () => [...new Set(Resources.flatMap(r => r.gone ? [] : [...r.watches ?? []]))].sort().flatMap(t => {
+export const watchState = () => [...new Set(rt.Resources.flatMap(r => r.gone ? [] : [...r.watches ?? []]))].sort().flatMap(t => {
   const m = /^doc-watch(-recursive)?:(.*)$/.exec(t);
   return m ? [{ path: m[2], recursive: !!m[1] }] : [];
 });
 const pageModule = () => page ??= load().then(m => m.pageModule({
-  agent: clock.agent, now: () => clock.now,
+  agent: rt.clock.agent, now: () => rt.clock.now,
   changed: topic => announce(topic, 'native'),
 }));
 const native = Object.freeze({
@@ -332,11 +331,11 @@ function landed(op, ok, value) {
   head = null;
   if (queue.length) issue(queue.shift());
   // What the settle waits for ends after the reactions it lands (hatches.js).
-  setTimeout(() => inflight.n--);
+  setTimeout(() => rt.inflight.n--);
   if (ok) { counts.done++; op.resolve(value); return; }
   const error = codedError(value), line = `storage failed: ${op.what}: ${error.code} ${error.message}`;
   counts.failed++; counts.last = line;
-  journal.push(`t=${clock.now} ${line}`);
+  rt.journal.push(`t=${rt.clock.now} ${line}`);
   op.reject(error);
 }
 // A stream's mapper has no storage in any turn of its call (LLP 1016.000 D7), refused in Hermes's words
@@ -344,7 +343,7 @@ function landed(op, ok, value) {
 function inMapper(method) {
   if (!answering.mapperCall) return null;
   const error = codedError(new Error(`storage.${method}() called in a stream's mapper: it was never run. Start storage inside an answer`));
-  journal.push(`t=${clock.now} storage refused: ${error.message}`);
+  rt.journal.push(`t=${rt.clock.now} storage refused: ${error.message}`);
   return Promise.reject(error);
 }
 function queued(what, run) {
@@ -352,10 +351,10 @@ function queued(what, run) {
   const mapper = inMapper(what.split(' ')[0]);
   if (mapper) return mapper;
   if (head && queue.length >= MAX_QUEUED) {
-    journal.push(`t=${clock.now} storage refused: full (${what})`);
+    rt.journal.push(`t=${rt.clock.now} storage refused: full (${what})`);
     return Promise.reject(Object.assign(new Error(`storage queue full: ${MAX_QUEUED} operations wait`), { kind: 'Unavailable', code: 'full' }));
   }
-  inflight.n++;
+  rt.inflight.n++;
   return new Promise((resolve, reject) => {
     const op = { what, run, resolve, reject };
     if (head) queue.push(op); else issue(op);
@@ -377,7 +376,7 @@ function leftOpen() {
     if (!h.call && pendingAnswers > 0) { owed = true; continue; } // checked again once none is pending
     if (h.call && !h.call.settled) continue;
     h.told = true;
-    journal.push(`t=${clock.now} storage: ${h.path} is still open after a failure in background work that opened it: if that work owns it, close it in a finally (finally { db.close() }), or the next open finds it locked (LLP 1097 D7)`);
+    rt.journal.push(`t=${rt.clock.now} storage: ${h.path} is still open after a failure in background work that opened it: if that work owns it, close it in a finally (finally { db.close() }), or the next open finds it locked (LLP 1097 D7)`);
   }
 }
 const FILE_METHODS = ['readFile', 'writeFile', 'atomicWriteFile', 'appendFile', 'readdir', 'mkdir', 'rm', 'stat', 'rename', 'copyFile', 'realpath'];
@@ -433,7 +432,7 @@ const expectRefusal = (m, args) => expecting(m, args) && !isDocument(args) ? new
 // a stream refused that file starts no request, so it no longer counts as in flight (held.js `counted`).
 const refusedInRender = new Set();
 function refuseInRender(api, owner) {
-  journal.push(`t=${clock.now} storage refused (render): ${owner?.name ?? owner?.streamName ?? 'background work'}: ${api}: a page rendered on the server has no storage; the reader's page asks again`);
+  rt.journal.push(`t=${rt.clock.now} storage refused (render): ${owner?.name ?? owner?.streamName ?? 'background work'}: ${api}: a page rendered on the server has no storage; the reader's page asks again`);
   if (owner) { owner.refused = api; owner.recount?.(); }
   const name = owner?.name ?? owner?.streamName;
   if (name) refusedInRender.add(name);
@@ -481,7 +480,7 @@ function storageOf(grants) {
   });
   // The first refused read or write is said once in the journal, as on every host (trivia F7).
   const tell = () => import('./storage-environment.js').then(env => {
-    if (!toldAgent) { toldAgent = true; journal.push(`t=${clock.now} storage refused (agent): ${env.agentStorageRefusal}`); }
+    if (!toldAgent) { toldAgent = true; rt.journal.push(`t=${rt.clock.now} storage refused (agent): ${env.agentStorageRefusal}`); }
     return env;
   });
   const refused = e => (e?.code === 'agent' ? tell() : Promise.resolve()).then(() => coded(e));
@@ -562,6 +561,9 @@ const opener = (stream, conv, name) => (deliver, controller) => {
     .catch(e => ({ error: String(e?.message ?? e), code: failureCode(e), reason: failureReason(e) }));
 };
 export function install(data, mixed = false, modules = null) {
+  // What an answer's timers run on (ts-fetch.js `arm`). Set once the app's module has run: a draw from then on
+  // outside an answer is refused as outside one, not as during initialization (ts-fetch.js `answerOnly`).
+  answering.page = { clock: rt.clock, journal: rt.journal, drive: rt.drive, time: rt.time };
   data.appId = appId;
   bodyFiles.appId = appId ?? null; // `exactBodyFrom`'s store (ts-fetch.js)
   data.grants = setAppGrantSet(tsGrantSet);
@@ -574,7 +576,7 @@ export function install(data, mixed = false, modules = null) {
     if (globalThis.__exactRender) return refuseInRender('captureCanvas()', call);
     if (!active()) return Promise.reject(new DOMException('captureCanvas() requires a live answer: call it directly or after await', 'InvalidStateError'));
     return ordinary(() => {
-      const ready = canvasCommitted(surface, active, { type, quality });
+      const ready = rt.canvasCommitted(surface, active, { type, quality });
       return Promise.all([ready, import('./canvas-capture.js')]).then(([, m]) =>
         m.captureCanvas(surface, path, (path, bytes) => m.writeCanvas(appId, tsGrantSet, path, bytes, active), ready, active));
     });
@@ -585,13 +587,13 @@ export function install(data, mixed = false, modules = null) {
   // the page's own code handles its, so one unhandled is the module's.
   if (typeof addEventListener === 'function') addEventListener('unhandledrejection', e => {
     const r = e.reason;
-    journal.push(`t=${clock.now} data: unhandled rejection: ${r && typeof r === 'object' && r.message !== undefined ? r.message : String(r)}`);
+    rt.journal.push(`t=${rt.clock.now} data: unhandled rejection: ${r && typeof r === 'object' && r.message !== undefined ? r.message : String(r)}`);
     leftOpen();
   });
   // `modules` loads native.js (an app with a module artifact), after first
   // paint (rt.js `painted`), whether or not anything asks `later`.
-  load = modules && (() => painted().then(modules));
-  if (modules && typeof requestAnimationFrame === 'function') pageModule().catch(e => journal.push(`t=${clock.now} native: ${e.message}`));
+  load = modules && (() => rt.painted().then(modules));
+  if (modules && typeof requestAnimationFrame === 'function') pageModule().catch(e => rt.journal.push(`t=${rt.clock.now} native: ${e.message}`));
   let keys = null, asking = '', thrown = null, threwRead = false, threwWatches = null;
   // The answer an async function was called under, put back around each of
   // its steps by the bundle's async helper (js/bake/src/typescript.mjs
@@ -617,7 +619,7 @@ export function install(data, mixed = false, modules = null) {
   let seeded = !source.kept;
   const seed = () => {
     seeded = true;
-    for (const { source: sourceName, answers } of checkpoint().kept?.values() ?? []) {
+    for (const { source: sourceName, answers } of rt.checkpoint().kept?.values() ?? []) {
       const types = Object.hasOwn(sourceTypes, sourceName) ? sourceTypes[sourceName] : undefined;
       if (!types) {
         continue;
@@ -642,12 +644,12 @@ export function install(data, mixed = false, modules = null) {
     asking = target ?? name; watching = name;
     for (const sources of moduleWatched.values()) sources.delete(name);
     // The origin of the commit that asked it (LLP 1133.002 D12), which a fetch it makes carries (LLP 1133.036 D6).
-    const call = answering.call = { stream: null, mutation, forced, name: target ?? name, turn: true, origin: Origin.now(), watches: new Set() }, target_ = target ?? name;
+    const call = answering.call = { stream: null, mutation, forced, name: target ?? name, turn: true, origin: rt.Origin.now(), watches: new Set() }, target_ = target ?? name;
     if (call.origin !== 'app') answering.untraced.add(call);
     // What the source sent goes once the commit that asked it stands: an answer in flight's (a resource's, or a mutation's that
     // answers with a promise) whatever it then answers, a refused commit saying so (LLP 1016.000 D7, amended 2026-10-18).
     const effectsOf = answer => {
-      const said = why => journal.push(`t=${clock.now} ${answer ? 'answer' : 'send'} ${target_} failed: ${why}; socket frames were refused`);
+      const said = why => rt.journal.push(`t=${rt.clock.now} ${answer ? 'answer' : 'send'} ${target_} failed: ${why}; socket frames were refused`);
       return call.effects?.map(effect => Object.assign(() => { try { effect(); } catch (e) { said(e?.message ?? e); } }, answer ? { refused: said } : {}));
     };
     let r;
@@ -697,7 +699,7 @@ export function install(data, mixed = false, modules = null) {
   data.uploads = ledger; // the uploads a resource asks are asked once (LLP 1016.000 D10)
   data.answer = mixed ? (name, args, store, target, mutation, forced) => { try { return ts(name, args, store, target, mutation, forced); } catch { return null; } } : ts;
   // An overlay (`overlay.js`): what a resource shows while writes affect it, in overlay mode; `undefined` without one.
-  overlaying.say = line => journal.push(`t=${clock.now} ${line}`);
+  overlaying.say = line => rt.journal.push(`t=${rt.clock.now} ${line}`);
   data.overlay = source.overlay && ((name, args, answer, writes) => {
     const types = sourceTypes[name]; if (!types) return undefined;
     const keep = [], ws = writes.map(w => { const t = sourceTypes[w.source]; return Object.freeze({ id: w.id, mutation: w.mutation, source: w.source, answered: w.answered,

@@ -633,6 +633,13 @@ fn main() -> ExitCode {
             if out_files.editor {
                 let _ = std::fs::write(dir.join("editor.flag"), "");
             }
+            // A plan that sends (a mutation): its TypeScript seam stays in the
+            // entry, since a send is refused while its source is not ready
+            // (LLP 1047.003 D6).
+            let _ = std::fs::remove_file(dir.join("sends.flag"));
+            if !plan.mutations.is_empty() {
+                let _ = std::fs::write(dir.join("sends.flag"), "");
+            }
             // A dialog, an alert or a popover (prompt-glue.js, alert-message.js,
             // menu-rows.js): glue the page adds for them (LLP 1047.002 D1).
             let _ = std::fs::remove_file(dir.join("dialogs.flag"));

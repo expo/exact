@@ -71,7 +71,7 @@ test('the shared fixture hears on the web what it hears natively', async () => {
     await page.goto(server.url.href);
     await page.evaluate(async () => {
       const rt = await import('/host/web-js/rt.js');
-      const { install } = await import('/host/web-js/ts-data.js');
+      const { install } = await import('/host/web-js/ts-link.js').then(() => import('/host/web-js/ts-data.js'));
       const { answering } = await import('/host/web-js/ts-fetch.js');
       install(rt.data);
       // An answer as the runtime asks one, its value once it lands; a task after it, so what a browser queues as a

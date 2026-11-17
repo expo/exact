@@ -95,7 +95,7 @@ test.each([false, true])('implementation live readers refresh and share their pr
     await page.goto(server.url.href);
     await page.evaluate(async wrapper => {
       const rt = await import('/host/web-js/rt.js');
-      const { install } = await import('/host/web-js/ts-data.js');
+      const { install } = await import('/host/web-js/ts-link.js').then(() => import('/host/web-js/ts-data.js'));
       const { modules } = await import('/host/web-js/modules.js');
       rt.clock.agent = true;
       install(rt.data);
@@ -205,7 +205,7 @@ test('a data-code reader asleep under its when stays listed and lets its provide
     await page.goto(server.url.href);
     await page.evaluate(async () => {
       const rt = await import('/host/web-js/rt.js');
-      const { install } = await import('/host/web-js/ts-data.js');
+      const { install } = await import('/host/web-js/ts-link.js').then(() => import('/host/web-js/ts-data.js'));
       const { modules } = await import('/host/web-js/modules.js');
       rt.clock.agent = true;
       install(rt.data);
