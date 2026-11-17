@@ -576,7 +576,15 @@ component App
       for (const name of shipped) {
         expect(readFileSync(resolve(release, name), 'utf8'), name).not.toContain('const AGENT_ADMITTED = true;');
       }
+      // Nor the input piece's hold and press readout, the agent's, or the wasm host's pointer and link paths (LLP
+      // 1047.002 D4.1).
+      const piece = readFileSync(resolve(release, shipped.find(name => /^input-glue-.*\.js$/.test(name))), 'utf8');
+      for (const marker of ['holdQuiet', 'pressShown', 'exactPointerDown', 'exact_route_match']) expect(piece, marker).not.toContain(marker);
     }
+    // A development page keeps the agent's and still not the wasm host's.
+    const piece = readFileSync(resolve(dev, readdirSync(dev).find(name => /^input-glue-.*\.js$/.test(name))), 'utf8');
+    expect(piece).toContain('holdQuiet');
+    expect(piece).not.toContain('exactPointerDown');
     // With no bake, the page links its web manifest and no envelope, and the install pages name a release.
     const page = readFileSync(resolve(webOnly, 'index.html'), 'utf8');
     expect(page).toContain('<link rel="manifest" href="./manifest.json">');

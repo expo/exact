@@ -22,9 +22,13 @@ export const HOST_WEB_GLUE = [
   'fragment.js',
 ];
 
-/** Copy the host/web glue from the repository at `root` into `dir`. */
+/** Copy the host/web glue from the repository at `root` into `dir`, the input piece without the wasm host's paths
+ * (input-glue.js `WASM_HOST`, LLP 1047.002 D4.1): this runtime hears its own pointers and routes its own links. */
 export function stageHostGlue(root, dir) {
   for (const f of HOST_WEB_GLUE) cpSync(resolve(root, 'host/web', f), resolve(dir, f));
+  const piece = resolve(dir, 'input-glue.js'), code = readFileSync(piece, 'utf8'), line = 'const WASM_HOST = true;';
+  if (!code.includes(line)) throw new Error(`host/web/input-glue.js: glue.mjs replaces a line it no longer has: ${line}`);
+  writeFileSync(piece, code.replace(line, 'const WASM_HOST = false;'));
 }
 
 /**

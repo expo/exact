@@ -732,6 +732,14 @@ writeFileSync(resolve(gen, 'mount.js'), localImports(production
   ? mountSource.replace(checkpointFaultImport, 'const checkpointFaults = () => [];') : mountSource));
 // The web host's own pieces the runtime loads (glue.mjs).
 stageHostGlue(root, gen);
+// The input piece imports the dialog glue for the wasm host; this page imports it where the plan has a dialog (main.js,
+// above).
+{
+  const file = resolve(gen, 'input-glue.js'), lines = ['import "./prompt-glue.js";', 'import "./alert-message.js";'];
+  const code = readFileSync(file, 'utf8');
+  for (const line of lines) if (!code.includes(line)) throw new Error(`host/web/input-glue.js: build.mjs replaces a line it no longer has: ${line}`);
+  writeFileSync(file, lines.reduce((text, line) => text.replace(line, ''), code));
+}
 // Keep navigation one runtime module and admission a separate lazy module on the JS target.
 writeFileSync(resolve(gen, 'navigation.js'), await bundleHostModule(root, 'navigation.js', { grants: true, production }));
 if (siteBase !== '/') {
