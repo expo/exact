@@ -1385,9 +1385,7 @@ impl<D: DataSource + Default + 'static> App<D> {
         }
         if self.appearance.take() {
             if let (Some(window), Some(p)) = (&self.window, &mut self.presenter) {
-                if let Some(error) = p.refresh_windows_place() {
-                    eprintln!("exact-windows: place: {error}");
-                }
+                p.refresh_windows_place();
                 system_theme(p, window.theme().unwrap_or(Theme::Light));
                 if let Some(scale) = self.appearance.text_scale() {
                     if let Some(error) = p.set_text_scale(scale) {

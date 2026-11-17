@@ -67,7 +67,8 @@ export const classifications = [
     ["painted:host/painted/src/presenter/palette.rs", "Presenter::set_palette"],
     ["painted:host/painted/src/presenter/pointer.rs", "Presenter::set_pointer_kind"],
     ["painted:host/painted/src/presenter/preferences.rs",
-      "Presenter::apply_live Presenter::follow_local_offset Presenter::page_execution Presenter::restore_time Presenter::set_modes Presenter::set_page " +
+      "Presenter::apply_live Presenter::follow_local_offset Presenter::page_execution Presenter::refresh_place Presenter::refresh_windows_place " +
+      "Presenter::restore_time Presenter::set_modes Presenter::set_page " +
       "Presenter::set_place Presenter::set_preferences Presenter::set_root_font_size Presenter::set_safe_area Presenter::set_segments Presenter::set_system_scheme " +
       "Presenter::set_time Presenter::set_view_scheme"],
     ["painted:host/painted/src/presenter/scrollbar.rs", "Presenter::set_scrollbars"],

@@ -19,10 +19,13 @@ impl<D: DataSource> Presenter<D> {
     }
 
     /// Reread Windows language, regional format and zone after a settings
-    /// notification. Keep the launch seed and the agent's supplied facts.
+    /// notification, logging a place the runner refuses. Keep the launch
+    /// seed and the agent's supplied facts.
     #[cfg(windows)]
-    pub fn refresh_windows_place(&mut self) -> Option<String> {
-        self.refresh_place(crate::zone::current_place)
+    pub fn refresh_windows_place(&mut self) {
+        if let Some(error) = self.refresh_place(crate::zone::current_place) {
+            eprintln!("exact-windows: place: {error}");
+        }
     }
 
     #[cfg(any(windows, test))]
